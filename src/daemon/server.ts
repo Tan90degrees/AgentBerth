@@ -204,7 +204,14 @@ export class DaemonServer {
     return { run: null, snapshot: '', seq: 0, cols: 100, rows: 30 };
   }
   private async finish(sessionId: string, live: LiveTerminal, exitCode: number): Promise<void> {
+    if (live.closed) return;
     live.closed = true;
+    // taskkill ends the shell tree, but node-pty's ConPTY output worker and native
+    // handles still require disposal. Without it a stopped terminal keeps the
+    // daemon (and the Windows test process) alive indefinitely.
+    if (process.platform === 'win32') {
+      try { live.pty.kill(); } catch (error) { this.logError(error); }
+    }
     const screen = await this.screen(live);
     this.store.finish(live.run.id, live.stopping ? 'stopped' : 'exited', exitCode, null, screen.snapshot, screen.seq, screen.cols, screen.rows);
     if (this.live.get(sessionId) === live) this.live.delete(sessionId);
