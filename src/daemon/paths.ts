@@ -10,7 +10,7 @@ export async function directory(input: string): Promise<string> {
   return canonical;
 }
 
-export function terminalEnvironment(): Record<string, string> {
+export function terminalEnvironment(executable = ''): Record<string, string> {
   const env: Record<string, string> = {};
   const keys = new Set<string>();
   for (const [key, value] of Object.entries(process.env)) {
@@ -22,6 +22,12 @@ export function terminalEnvironment(): Record<string, string> {
   }
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
+  if (process.platform === 'win32' && path.basename(executable).toLowerCase() === 'bash.exe') {
+    // Git Bash login profiles otherwise move to HOME or discard the Windows PATH.
+    env.CHERE_INVOKING = '1';
+    env.MSYSTEM ??= 'MINGW64';
+    env.MSYS2_PATH_TYPE = 'inherit';
+  }
   return env;
 }
 
@@ -66,7 +72,7 @@ export async function resolveTerminal(config: TerminalConfig): Promise<{ file: s
       selected = { file: path.join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'cmd.exe'), args: ['/D'] }; break;
     case 'bash': {
       if (windows) {
-        const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs')].filter(Boolean) as string[];
+        const roots = [process.env.ProgramFiles ?? 'C:\\Program Files', process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs')].filter(Boolean) as string[];
         const gitBash = roots.map(root => path.join(root, 'Git', 'bin', 'bash.exe')).find(existsSync);
         if (!gitBash) throw new Error('未找到 Git Bash，请使用自定义终端指定 bash.exe 的完整路径');
         selected = { file: gitBash, args: ['--login', '-i'] };

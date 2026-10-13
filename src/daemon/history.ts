@@ -19,6 +19,14 @@ export function sameDirectory(a: string, b: string, platform = process.platform)
   return normalize(a) === normalize(b);
 }
 
+export async function matchesProject(cwd: unknown, projectPath: string): Promise<boolean> {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
+  if (sameDirectory(cwd, projectPath)) return true;
+  // Windows 8.3 paths and directory symlinks can name the same canonical project.
+  try { return sameDirectory(await realpath(cwd), await realpath(projectPath)); }
+  catch { return false; }
+}
+
 export async function readHistory(file: string, agent: Agent, projectPath: string): Promise<History> {
   if (!['codex', 'claude', 'opencode'].includes(agent)) throw new Error('当前 Agent 不支持导入原生对话记录');
   const canonical = await realpath(file);
@@ -68,7 +76,7 @@ export async function readHistory(file: string, agent: Agent, projectPath: strin
     }
   } finally { lines.close(); stream.destroy(); }
   if (typeof sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) throw new Error('记录缺少有效的原生会话 ID');
-  if (typeof cwd !== 'string' || !sameDirectory(cwd, projectPath)) throw new Error('对话记录的工作目录与当前项目不一致');
+  if (!await matchesProject(cwd, projectPath)) throw new Error('对话记录的工作目录与当前项目不一致');
   const selected = messages.length ? messages : events;
   const bounded: HistoryMessage[] = [];
   for (let index = selected.length - 1; index >= 0; index--) {
@@ -97,7 +105,7 @@ async function readOpenCode(canonical: string, projectPath: string): Promise<His
   try { data = JSON.parse(text); } catch { throw new Error('OpenCode 记录不是有效 JSON，请使用 opencode export 导出会话'); }
   const nativeSessionId = data?.info?.id;
   if (typeof nativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(nativeSessionId)) throw new Error('记录缺少有效的原生会话 ID');
-  if (typeof data?.info?.directory !== 'string' || !sameDirectory(data.info.directory, projectPath)) throw new Error('对话记录的工作目录与当前项目不一致');
+  if (!await matchesProject(data?.info?.directory, projectPath)) throw new Error('对话记录的工作目录与当前项目不一致');
   if (!Array.isArray(data.messages)) throw new Error('OpenCode 记录缺少 messages，请使用 opencode export 导出会话');
   const messages: HistoryMessage[] = [];
   let chars = 0;

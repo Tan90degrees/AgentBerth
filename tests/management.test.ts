@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,12 +10,41 @@ import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import { DEFAULT_SETTINGS, type Attachment, type Project, type Run, type Session, type Settings, type State } from '../src/shared/protocol';
 import { shell, resolveTerminal } from '../src/daemon/paths';
+import { matchesProject } from '../src/daemon/history';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function eventually(check: () => Promise<boolean>) {
   for (let n = 0; n < 100; n++) { if (await check()) return; await wait(60); }
   throw new Error('Condition did not become true');
 }
+
+test('transcript directories accept canonical aliases but reject other and relative directories', async t => {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-path-alias-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5 }));
+  const real = path.join(folder, 'project'); mkdirSync(real);
+  const alias = path.join(folder, 'alias'); symlinkSync(real, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(await matchesProject(alias, realpathSync(real)), true);
+  assert.equal(await matchesProject(folder, realpathSync(folder)), true);
+  assert.equal(await matchesProject(folder, real), false);
+  assert.equal(await matchesProject('.', real), false);
+});
+
+test('Bash profile starts inside the project and preserves inherited executable lookup', { timeout: 15000 }, async t => {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-bash-project-'));
+  const server = new DaemonServer(path.join(folder, 'data'));
+  const connection = await DaemonConnection.open(await server.listen(), () => {});
+  t.after(async () => { connection.close(); await server.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5 }); });
+  const project = await connection.rpc<Project>('createProject', { name: 'bash project', path: folder });
+  const session = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'bash', agent: 'shell', terminal: { profile: 'bash', executable: '', args: [] } });
+  const run = await connection.rpc<Run>('start', { sessionId: session.id, cols: 140, rows: 30 });
+  await connection.rpc('attach', { sessionId: session.id });
+  await connection.rpc('input', { sessionId: session.id, runId: run.id, data: 'printf "BERTH_CWD_%s\\n" "$PWD"; command -v git\r' });
+  await eventually(async () => (await connection.rpc<string>('output', { runId: run.id })).includes('BERTH_CWD_'));
+  // Wait for actual command output, not merely the input echoed by the PTY.
+  const expected = process.platform === 'win32' ? project.path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase()) : project.path;
+  await eventually(async () => (await connection.rpc<Attachment>('attach', { sessionId: session.id })).snapshot.includes('BERTH_CWD_' + expected));
+  assert.match(await connection.rpc<string>('output', { runId: run.id }), /(?:bin|cmd)\/git/);
+});
 
 test('0.1 database migrates without losing projects, transcripts, run screens or IDs', t => {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-migration-'));
