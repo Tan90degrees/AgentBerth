@@ -301,7 +301,10 @@ try {
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '16');
   await page.locator('.projects .project-item').click();
   const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), after.sessions[0].id);
-  assert.match(snapshot.snapshot, /DESKTOP_SMOKE_READY/);
+  assert.match(snapshot.snapshot, /FLOW_DONE/);
+  const retainedLog = await page.evaluate(runId => window.berth.rpc('output', { runId }), original.id);
+  assert.match(retainedLog, /DESKTOP_SMOKE_READY/);
+  assert.match(retainedLog, /FLOW_DONE/);
   step('start a fresh terminal after full quit, then stop it');
   await page.getByRole('button', { name: '启动终端', exact: true }).click();
   await page.getByRole('button', { name: '停止终端', exact: true }).waitFor();
