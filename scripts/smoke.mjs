@@ -195,7 +195,11 @@ try {
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('驻留');
   await page.locator('.session-list .session-item').waitFor();
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
-  await page.waitForFunction(async id => (await window.berth.rpc('attach', { sessionId: id })).snapshot.includes('FLOW_DONE'), before.sessions[0].id);
+  const streamDeadline = Date.now() + 15000;
+  while (!(await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id)).snapshot.includes('FLOW_DONE')) {
+    assert.ok(Date.now() < streamDeadline, 'Terminal stream did not finish');
+    await page.waitForTimeout(60);
+  }
   const frameGaps = await page.evaluate(() => { window.smokeMeasureFrames = false; return window.smokeFrameGaps; });
   const sortedGaps = frameGaps.slice(3).sort((a, b) => a - b), p95 = sortedGaps[Math.floor(sortedGaps.length * .95)] ?? 0;
   console.log(`Interactive stream: ${frameGaps.length} frames, p95 gap ${p95.toFixed(1)}ms`);
