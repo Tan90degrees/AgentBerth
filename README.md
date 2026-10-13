@@ -34,9 +34,55 @@ npm ci
 npm run dev
 ```
 
-`npm run dev` 会先编译桌面与后台代码，再启动 Vite 和 Electron。页面修改自动更新；main、preload、daemon 修改后需要重新启动相关进程。后台使用 Electron 自带的 Node 运行时，与原生模块 ABI 保持一致，不依赖用户另装的 Node 来运行打包应用。
+`npm ci` 的 postinstall 会先安装 Electron 二进制，再为其编译 `node-pty`。安装过程失败或被 `--ignore-scripts` 跳过后，可运行 `npm run setup` 单独完成安装。脚本使用当前锁定的 Electron 版本、官方安装器与内置校验和，沿用已有下载缓存，不需要重装全部依赖。
+
+`npm run dev` 会先检查本机 Electron 二进制是否完整，再编译桌面与后台代码，启动 Vite 和 Electron。缺少二进制时立即提示 `npm run setup`，不会在加载入口时隐式下载。页面修改自动更新；main、preload、daemon 修改后需要重新启动相关进程。后台使用 Electron 自带的 Node 运行时，与原生模块 ABI 保持一致，不依赖用户另装的 Node 来运行打包应用。
 
 应用关闭按钮默认隐藏到托盘。托盘“退出工作台（终端继续运行）”会退出 Electron 工作台；独立 daemon 和 PTY 继续运行。再次启动应用即可接回。
+
+### Electron 下载失败
+
+`Downloading Electron binary...` 后的 `TypeError: fetch failed` 表示二进制下载请求失败，应用尚未启动。常见原因是无法访问 GitHub Release 下载源、未配置 Node 的 HTTP 代理或证书链问题；仅凭这条报错无法判断具体原因。npm 的包 registry 与 Electron 的二进制下载源独立，修改 registry 不会同时改变 Electron 下载地址。
+
+在项目根目录的 **PowerShell** 中任选一种方式，然后执行 `npm run setup`：
+
+```powershell
+# 方式一：使用 Electron 官方文档列出的镜像
+$env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+$env:ELECTRON_CUSTOM_DIR = "{{ version }}"
+npm run setup
+if ($LASTEXITCODE -eq 0) { npm run dev }
+```
+
+```powershell
+# 方式二：已有 HTTP 代理；7890 必须换成你的实际 HTTP/混合代理端口
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+$env:HTTP_PROXY = $env:HTTPS_PROXY
+$env:NODE_USE_ENV_PROXY = "1"
+npm run setup
+if ($LASTEXITCODE -eq 0) { npm run dev }
+```
+
+如果此前设置过镜像，改用官方源加代理时，先移除当前终端的镜像配置：
+
+```powershell
+Remove-Item Env:ELECTRON_MIRROR, Env:ELECTRON_CUSTOM_DIR -ErrorAction SilentlyContinue
+```
+
+上述配置仅作用于当前 PowerShell。`setup` 也会将已有 npm HTTP(S) 代理选项传给安装子进程，并在未显式设置 `NODE_USE_ENV_PROXY` 时启用 Node 24 的环境代理支持。不会自动切换下载源或修改用户全局 npm 配置。
+
+镜像可访问性及所需版本是否已同步取决于镜像服务。遇到 HTTP 404，请使用已配置代理的官方源。Electron 二进制镜像也不替代原生模块编译所需的 Electron headers 下载源。
+
+旧版本没有 `setup` 命令时，可先配置上述环境变量，再执行本地安装器：
+
+```powershell
+node .\node_modules\electron\install.js
+if ($LASTEXITCODE -eq 0) { npm run dev }
+```
+
+如果仍失败，可设置 `$env:DEBUG = "@electron/get*"` 后重试安装器，查看下载目标与缓存信息；代理/网络问题需检查实际错误，证书问题需配置可信 CA。无需删除整个 `node_modules`。
+
+参考：[Electron 安装与镜像配置](https://www.electronjs.org/docs/latest/tutorial/installation)、[Node.js 环境代理支持](https://nodejs.org/learn/http/enterprise-network-configuration)。
 
 ## 第一次使用
 

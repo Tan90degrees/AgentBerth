@@ -10,12 +10,14 @@
     "node": ">=24"
   },
   "scripts": {
-    "postinstall": "electron-rebuild -f -w node-pty",
+    "postinstall": "node scripts/setup.mjs",
+    "setup": "node scripts/setup.mjs",
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/test.mjs",
+    "test": "npm run test:scripts && node scripts/test.mjs",
+    "test:scripts": "node --test tests/setup.test.mjs",
     "test:desktop": "npm run build && node scripts/smoke.mjs",
     "check": "npm run typecheck && npm test && npm run build",
     "dist:win": "npm run build && electron-builder --win nsis --x64"

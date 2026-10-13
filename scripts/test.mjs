@@ -1,9 +1,12 @@
 import { build } from 'esbuild';
 import { globSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import electron from 'electron';
+import { electronExecutable } from './electron-runtime.mjs';
 import { buildBackend } from './build.mjs';
 
+let electron;
+try { electron = electronExecutable(); }
+catch (error) { console.error(error.message); process.exit(1); }
 await buildBackend();
 const tests = globSync('tests/*.test.ts');
 await build({ entryPoints: tests, outdir: 'dist/tests', outExtension: { '.js': '.cjs' }, bundle: true, platform: 'node', format: 'cjs', packages: 'external', target: 'node24' });
