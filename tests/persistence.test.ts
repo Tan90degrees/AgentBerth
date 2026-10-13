@@ -45,7 +45,7 @@ test('independent daemon survives launcher exit and upgrades only after draining
   const next = JSON.parse(readFileSync(path.join(data, 'runtime.json'), 'utf8')) as RuntimeInfo;
   assert.notEqual(next.pid, runtime.pid); runtime = next;
   const upgraded = await connection.rpc<State>('state');
-  assert.equal(upgraded.apiVersion, 4);
+  assert.equal(upgraded.apiVersion, 5);
   assert.equal(upgraded.sessions[0].id, run.sessionId);
   assert.equal(upgraded.sessions[0].latestRun!.status, 'stopped');
 });

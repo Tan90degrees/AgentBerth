@@ -1,7 +1,8 @@
-import { access, realpath, stat } from 'node:fs/promises';
-import { constants, existsSync } from 'node:fs';
+import { realpath, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Session, TerminalConfig } from '../shared/protocol';
+import { resolveExecutable } from './executables';
 
 export async function directory(input: string): Promise<string> {
   if (!path.isAbsolute(input)) throw new Error('项目路径必须是绝对路径');
@@ -48,20 +49,6 @@ export function shell(): { file: string; args: string[] } {
   return { file: configured && path.isAbsolute(configured) && existsSync(configured) ? configured : '/bin/bash', args: ['-i'] };
 }
 
-async function executable(file: string): Promise<string> {
-  if (!file.trim() || /[\r\n\x00]/.test(file)) throw new Error('请指定终端可执行文件，启动参数单独填写');
-  const windows = process.platform === 'win32';
-  if (windows && /\.(cmd|bat|ps1)$/i.test(file)) throw new Error('终端须为 .exe 可执行文件，例如 pwsh.exe 或 cmd.exe');
-  if (!path.isAbsolute(file) && /[\\/]/.test(file)) throw new Error('终端路径必须是绝对路径，或 PATH 中的程序名');
-  const envPath = Object.entries(process.env).find(([key]) => key.toLowerCase() === 'path')?.[1] ?? '';
-  const names = windows && !path.extname(file) ? [file + '.exe', file] : [file];
-  const candidates = path.isAbsolute(file) ? [file] : envPath.split(path.delimiter).filter(Boolean).filter(part => path.isAbsolute(part.replace(/^"|"$/g, ''))).flatMap(part => names.map(name => path.join(part.replace(/^"|"$/g, ''), name)));
-  for (const candidate of candidates) {
-    try { if (!(await stat(candidate)).isFile()) continue; await access(candidate, windows ? constants.F_OK : constants.X_OK); return candidate; } catch { /* Try the next PATH entry. */ }
-  }
-  throw new Error(`找不到终端程序 ${file}；请确认安装位置或选择完整路径`);
-}
-
 export async function resolveTerminal(config: TerminalConfig): Promise<{ file: string; args: string[] }> {
   let selected: { file: string; args: string[] };
   const windows = process.platform === 'win32';
@@ -71,8 +58,7 @@ export async function resolveTerminal(config: TerminalConfig): Promise<{ file: s
       if (!windows) throw new Error('Windows PowerShell 仅适用于 Windows');
       selected = shell(); break;
     case 'pwsh': {
-      const installed = windows ? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe') : '';
-      selected = { file: installed && existsSync(installed) ? installed : 'pwsh', args: ['-NoLogo', '-NoExit'] }; break;
+      selected = { file: config.executable.trim() || 'pwsh', args: ['-NoLogo', '-NoExit'] }; break;
     }
     case 'cmd':
       if (!windows) throw new Error('CMD 仅适用于 Windows');
@@ -88,7 +74,7 @@ export async function resolveTerminal(config: TerminalConfig): Promise<{ file: s
     }
     case 'custom': selected = { file: config.executable.trim(), args: config.args.filter(arg => arg !== '') }; break;
   }
-  return { file: await executable(selected.file), args: selected.args };
+  return { file: await resolveExecutable(selected.file), args: selected.args };
 }
 
 export function launchCommand(session: Session, resume: boolean): string {

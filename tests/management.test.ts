@@ -67,7 +67,7 @@ test('0.1 database migrates without losing projects, transcripts, run screens or
   assert.equal(store.run(runId).shell, '');
   assert.equal(store.savedScreen(runId).snapshot, 'old-screen');
   assert.deepEqual(store.settings(), DEFAULT_SETTINGS);
-  const config: Settings = { defaultAgent: 'opencode', fontSize: 18, terminal: { profile: 'custom', executable: shell().file, args: shell().args } };
+  const config: Settings = { ...DEFAULT_SETTINGS, defaultAgent: 'opencode', fontSize: 18, terminal: { profile: 'custom', executable: shell().file, args: shell().args } };
   store.saveSettings(config);
   store.updateSession(sessionId, '编辑后', 'codex', '', config.terminal);
   store.close(); store = new Store(folder);

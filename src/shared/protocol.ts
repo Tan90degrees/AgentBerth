@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 4;
+export const API_VERSION = 5;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const agentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export type Agent = z.infer<typeof agentSchema>;
@@ -16,10 +16,11 @@ export type TerminalConfig = z.infer<typeof terminalSchema>;
 export const settingsSchema = z.object({
   terminal: terminalSchema,
   defaultAgent: agentSchema,
+  defaultCommand: singleLine.default(''),
   fontSize: z.number().int().min(10).max(24),
 }).strict();
 export type Settings = z.infer<typeof settingsSchema>;
-export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', fontSize: 14 };
+export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', defaultCommand: '', fontSize: 14 };
 const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };

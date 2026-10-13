@@ -8,6 +8,14 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 const step = text => console.log(`Smoke: ${text}`);
+async function assertTerminalGutter(page) {
+  await page.waitForFunction(() => {
+    const screen = document.querySelector('.terminal-mount .xterm-screen'), bar = document.querySelector('.terminal-mount .scrollbar.vertical'), mount = document.querySelector('.terminal-mount');
+    if (!screen || !bar || !mount) return false;
+    const s = screen.getBoundingClientRect(), b = bar.getBoundingClientRect(), m = mount.getBoundingClientRect();
+    return s.width > 0 && b.width >= 12 && s.right <= b.left + 1 && s.bottom <= m.bottom + 1 && b.right <= m.right + 1;
+  });
+}
 async function closeApplication(app) {
   if (!app) return;
   const launcherProcess = app.process();
@@ -70,6 +78,33 @@ try {
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
   step('save shell and default Agent settings');
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  if (process.platform === 'win32') {
+    step('auto-detect PowerShell 7 and launch its real executable');
+    await page.getByLabel('默认终端', { exact: true }).selectOption('pwsh');
+    assert.equal(await page.getByLabel('PowerShell 7 程序', { exact: true }).inputValue(), '');
+    await page.getByRole('button', { name: '保存设置', exact: true }).click();
+    await page.getByText('设置已保存', { exact: true }).waitFor();
+    await page.locator('.projects .project-item').click();
+    await page.getByRole('button', { name: '新建会话', exact: true }).click();
+    await page.getByLabel('会话名称', { exact: true }).fill('PowerShell 检测验证');
+    await page.getByLabel('Agent 类型', { exact: true }).selectOption('shell');
+    await page.getByRole('button', { name: '创建并启动', exact: true }).click();
+    await page.getByRole('button', { name: '停止终端', exact: true }).waitFor();
+    const psSession = (await page.evaluate(() => window.berth.rpc('state'))).sessions[0];
+    assert.match(psSession.latestRun.shell, /pwsh\.exe$/i);
+    await page.locator('.xterm-helper-textarea').focus();
+    await page.keyboard.type('Write-Output ("REAL_PWSH_" + $PSVersionTable.PSEdition)'); await page.keyboard.press('Enter');
+    const deadline = Date.now() + 12000;
+    while (!(await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), psSession.id)).snapshot.includes('REAL_PWSH_Core')) { assert.ok(Date.now() < deadline); await page.waitForTimeout(80); }
+    await assertTerminalGutter(page);
+    await page.getByRole('button', { name: '停止终端', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
+    await page.getByRole('heading', { name: '终端已停止', exact: true }).waitFor();
+    assert.equal(await page.locator('.terminal-mount').count(), 0);
+    await page.getByRole('button', { name: '删除会话', exact: true }).click();
+    await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+  }
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'cmd' : 'bash');
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByLabel('终端字号', { exact: true }).fill('16');
@@ -92,6 +127,7 @@ try {
   assert.match(original.shell, process.platform === 'win32' ? /cmd\.exe$/i : /bash$/);
   assert.equal(await page.getByRole('button', { name: '删除会话', exact: true }).isEnabled(), false);
   assert.equal(await page.getByRole('button', { name: '删除项目', exact: true }).isEnabled(), false);
+  await assertTerminalGutter(page);
   step('keyboard switcher keeps PTY focus and copies configuration without launching');
   await page.keyboard.press('Control+Shift+P');
   await page.getByRole('dialog', { name: '快速切换', exact: true }).waitFor();
@@ -206,6 +242,7 @@ try {
   assert.ok(frameGaps.length > 10 && p95 < 350, 'Navigation stalled during output: p95 ' + p95);
   assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')));
 
+  await assertTerminalGutter(page);
   step('changing defaults preserves actual running shell identity');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'powershell' : 'auto');
@@ -316,6 +353,19 @@ try {
   await page.getByRole('button', { name: '停止终端', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
   await page.getByRole('button', { name: '启动终端', exact: true }).waitFor();
+  step('stopped terminal shows a clean state and opens retained output read-only');
+  await page.getByRole('heading', { name: '终端已停止', exact: true }).waitFor();
+  assert.equal(await page.locator('.terminal-mount').count(), 0);
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-stopped' : 'stopped'}.png` });
+  await page.getByRole('button', { name: '查看本次输出', exact: true }).click();
+  await page.locator('.output-host .xterm-screen').waitFor();
+  await page.getByText('本次运行输出 · 只读', { exact: true }).waitFor();
+  assert.equal(await page.locator('.xterm-helper-textarea').evaluate(element => element.readOnly), true);
+  await assertTerminalGutter(page);
+  await page.getByRole('button', { name: '返回列表', exact: true }).click();
+  await page.locator('.run-item').first().waitFor();
+  await page.getByRole('tab', { name: '终端', exact: true }).click();
+  await page.getByRole('heading', { name: '终端已停止', exact: true }).waitFor();
   step('edit stopped launch configuration, start using session shell override and delete session');
   await page.getByRole('button', { name: '编辑会话', exact: true }).click();
   await page.getByLabel('会话名称', { exact: true }).fill('编辑后的会话');
@@ -348,6 +398,53 @@ try {
   await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
   await page.getByRole('heading', { name: '选择或创建一个会话', exact: true }).waitFor();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions.length, 0);
+  step('default custom Agent command is editable, inherited by new sessions and independent of existing sessions');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByLabel('默认 Agent', { exact: true }).selectOption('custom');
+  await page.getByLabel('默认启动命令', { exact: true }).fill('echo DEFAULT_CUSTOM_READY');
+  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await page.getByText('设置已保存', { exact: true }).waitFor();
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-custom-settings' : 'custom-settings'}.png` });
+  await page.locator('.projects .project-item').click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  assert.equal(await page.getByLabel('Agent 类型', { exact: true }).inputValue(), 'custom');
+  assert.equal(await page.getByLabel('启动命令', { exact: true }).inputValue(), 'echo DEFAULT_CUSTOM_READY');
+  await page.getByLabel('会话名称', { exact: true }).fill('默认自定义 Agent');
+  await page.getByRole('button', { name: '创建并启动', exact: true }).click();
+  await page.getByRole('button', { name: '停止终端', exact: true }).waitFor();
+  const customSession = (await page.evaluate(() => window.berth.rpc('state'))).sessions[0];
+  assert.equal(customSession.command, 'echo DEFAULT_CUSTOM_READY');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByLabel('默认启动命令', { exact: true }).fill('echo NEXT_CUSTOM_READY');
+  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await page.getByText('设置已保存', { exact: true }).waitFor();
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].command, 'echo DEFAULT_CUSTOM_READY');
+  await page.locator('.projects .project-item').click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  assert.equal(await page.getByLabel('启动命令', { exact: true }).inputValue(), 'echo NEXT_CUSTOM_READY');
+  await page.getByLabel('会话名称', { exact: true }).fill('默认命令后续会话');
+  await page.getByLabel('创建后立即启动', { exact: true }).uncheck();
+  await page.getByRole('button', { name: '创建会话', exact: true }).click();
+  await page.getByRole('button', { name: '删除会话', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
+  await page.getByRole('button', { name: '停止终端', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
+  await page.getByRole('heading', { name: '终端已停止', exact: true }).waitFor();
+  await page.getByRole('button', { name: '删除会话', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  await page.getByLabel('会话名称', { exact: true }).fill('自然退出验证');
+  await page.getByLabel('启动命令', { exact: true }).fill('exit 0');
+  await page.getByRole('button', { name: '创建并启动', exact: true }).click();
+  await page.getByRole('heading', { name: '终端已结束', exact: true }).waitFor();
+  assert.equal(await page.locator('.terminal-mount').count(), 0);
+  await page.getByRole('button', { name: '删除会话', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
+  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await page.getByText('设置已保存', { exact: true }).waitFor();
+  await page.locator('.projects .project-item').click();
   step('create OpenCode without starting, link ID and import native export through IPC');
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
   await page.getByLabel('会话名称', { exact: true }).fill('OpenCode 会话');
@@ -395,6 +492,7 @@ try {
   assert.notEqual(daemonPid, previousDaemon);
   const restarted = await page.evaluate(() => window.berth.rpc('state'));
   assert.equal(restarted.settings.defaultAgent, 'opencode');
+  assert.equal(restarted.settings.defaultCommand, 'echo NEXT_CUSTOM_READY');
   assert.equal(restarted.sessions[0].nativeSessionId, 'ses_smoke');
   await page.locator('.projects .project-item').click();
   step('change project directory and remove registration while retaining actual files');
@@ -409,7 +507,7 @@ try {
   await page.getByRole('button', { name: '添加第一个项目', exact: true }).waitFor();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).projects.length, 0);
   await stat(exportPath); await stat(moved);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands and reserved scrollbar space.`);
 } catch (error) {
   console.error(error);
   if (application) {

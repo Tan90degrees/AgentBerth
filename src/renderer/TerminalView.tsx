@@ -7,6 +7,7 @@ import type { Attachment, ServerEvent } from '../shared/protocol';
 const options = {
   theme: { background: '#0c1017', foreground: '#d5dce8', cursor: '#65dfc0', selectionBackground: '#284446', black: '#19202d', red: '#ee8094', green: '#76d6a5', yellow: '#e3c688', blue: '#82acff', magenta: '#c4a2ef', cyan: '#78d8e5', white: '#d5dce8' },
   fontFamily: 'Cascadia Code, Consolas, Menlo, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
+  overviewRuler: { width: 14 },
 };
 
 export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onError }: { sessionId: string; fontSize?: number; autoFocus?: boolean; onError: (error: string) => void }) {
@@ -78,7 +79,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
   }, [sessionId, fontSize]);
-  return <div className="terminal-host" ref={host} data-testid="terminal" />;
+  return <div className="terminal-host" data-testid="terminal"><div className="terminal-mount" ref={host} /></div>;
 });
 
 export function OutputView({ text, fontSize = 14 }: { text: string; fontSize?: number }) {
@@ -89,5 +90,5 @@ export function OutputView({ text, fontSize = 14 }: { text: string; fontSize?: n
     const observer = new ResizeObserver(() => fit.fit()); observer.observe(host.current!);
     return () => { observer.disconnect(); terminal.dispose(); };
   }, [text, fontSize]);
-  return <div className="terminal-host output-host" ref={host} />;
+  return <div className="terminal-host output-host"><div className="terminal-mount" ref={host} /></div>;
 }

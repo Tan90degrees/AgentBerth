@@ -145,6 +145,7 @@ export class Store {
   }
   saveSettings(value: Settings): Settings {
     const validated = settingsSchema.parse(value);
+    if (validated.defaultAgent === 'custom' && !validated.defaultCommand.trim()) throw new Error('请填写自定义 Agent 的默认启动命令');
     this.db.prepare('INSERT INTO settings (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value').run(JSON.stringify(validated));
     return validated;
   }
