@@ -1,0 +1,53 @@
+name: CI
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Desktop smoke (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:desktop
+      - name: Desktop smoke (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:desktop
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ runner.os }}
+          path: test-results/*.png
+          if-no-files-found: ignore
+  windows-package:
+    name: Windows installer
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgentBerth-Windows-x64
+          path: release/*.exe

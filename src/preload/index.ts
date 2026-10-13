@@ -1,0 +1,16 @@
+import { contextBridge, ipcRenderer } from 'electron';
+import type { DesktopApi, ServerEvent } from '../shared/protocol';
+
+const api: DesktopApi = {
+  rpc: (method, params = {}) => ipcRenderer.invoke('berth:rpc', method, params),
+  onEvent: listener => {
+    const callback = (_event: Electron.IpcRendererEvent, message: ServerEvent) => listener(message);
+    ipcRenderer.on('berth:event', callback);
+    return () => ipcRenderer.removeListener('berth:event', callback);
+  },
+  chooseDirectory: () => ipcRenderer.invoke('berth:directory'),
+  chooseTranscript: () => ipcRenderer.invoke('berth:transcript'),
+  openProject: folder => ipcRenderer.invoke('berth:openProject', folder),
+  reconnect: () => ipcRenderer.invoke('berth:reconnect'),
+};
+contextBridge.exposeInMainWorld('berth', api);
