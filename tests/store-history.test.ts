@@ -11,8 +11,8 @@ import { requestSchema } from '../src/shared/protocol';
 
 test('projects deduplicate and sessions retain separate run history across daemon restarts', t => {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-store-'));
-  t.after(() => rmSync(folder, { recursive: true, force: true }));
-  const store = new Store(folder);
+  let store = new Store(folder);
+  t.after(() => { store.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const project = store.createProject('项目', folder);
   assert.equal(store.createProject('另一个名字', folder).id, project.id);
   const a = store.createSession(project.id, '控制算法', 'codex', '');
@@ -22,8 +22,7 @@ test('projects deduplicate and sessions retain separate run history across daemo
   const second = store.createRun(a.id, 'codex', 120, 40);
   store.createRun(b.id, '', 80, 24);
   store.close();
-  const recovered = new Store(folder);
-  t.after(() => recovered.close());
+  const recovered = store = new Store(folder);
   assert.equal(recovered.state().sessions.length, 2);
   assert.equal(recovered.runs(a.id).length, 2);
   assert.equal(recovered.run(second.id).status, 'interrupted');

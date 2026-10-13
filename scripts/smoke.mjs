@@ -10,10 +10,15 @@ const execute = promisify(execFile);
 const step = text => console.log(`Smoke: ${text}`);
 async function closeApplication(app) {
   if (!app) return;
+  const launcherProcess = app.process();
+  // A detached daemon may retain inherited pipe handles. Node's child "close"
+  // event can then arrive after "exit"; wait for the actual launcher exit.
+  let onExit;
+  const exited = launcherProcess.exitCode !== null || launcherProcess.signalCode !== null ? Promise.resolve() : new Promise(resolve => { onExit = resolve; launcherProcess.once('exit', onExit); });
   let timer;
   try {
-    await Promise.race([app.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Electron workbench did not close within 10s')), 10000); })]);
-  } finally { clearTimeout(timer); }
+    await Promise.race([exited, app.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Electron workbench did not exit within 10s')), 10000); })]);
+  } finally { clearTimeout(timer); if (onExit) launcherProcess.removeListener('exit', onExit); }
 }
 async function forceCleanup(app) {
   if (!app) return;
@@ -51,7 +56,7 @@ try {
   await page.getByRole('button', { name: '添加第一个项目' }).click();
   await page.getByLabel('项目名称', { exact: true }).fill('AgentBerth 开发');
   await page.locator('.dialog input').nth(1).fill(folder);
-  await page.getByRole('button', { name: '添加项目', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '添加项目', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
   await page.getByLabel('会话名称', { exact: true }).fill('后台驻留验证');
   await page.getByLabel('Agent 类型', { exact: true }).selectOption('shell');
@@ -110,7 +115,13 @@ try {
   throw error;
 } finally {
   if (application) { try { await closeApplication(application); } catch (error) { console.error(error.message); await forceCleanup(application); } }
-  if (daemonPid) { try { process.kill(daemonPid, 'SIGTERM'); } catch {} }
+  if (!daemonPid) { try { daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid; } catch {} }
+  if (daemonPid) {
+    try {
+      if (process.platform === 'win32') await execute('taskkill.exe', ['/PID', String(daemonPid), '/T', '/F'], { windowsHide: true, timeout: 5000 });
+      else process.kill(daemonPid, 'SIGTERM');
+    } catch {}
+  }
   await new Promise(resolve => setTimeout(resolve, 600));
   await rm(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
