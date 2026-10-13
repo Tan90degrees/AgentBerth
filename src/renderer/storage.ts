@@ -11,6 +11,18 @@ export function saveStored(key: string, value: string | null, storage?: Writable
 function readJson(key: string, storage?: ReadableStorage): unknown {
   try { const text = readStored(key, storage); return text && text.length < 1024 * 1024 ? JSON.parse(text) : null; } catch { return null; }
 }
+export const DEFAULT_SIDEBAR_WIDTH = 280;
+export function clampSidebarWidth(value: number, viewportWidth: number): number {
+  return Math.round(Math.max(216, Math.min(value, 480, Math.max(216, viewportWidth - 620))));
+}
+export function loadSidebarWidth(storage?: ReadableStorage): number {
+  const value = Number(readStored('berth.sidebarWidth', storage));
+  return Number.isFinite(value) && value >= 216 && value <= 480 ? value : DEFAULT_SIDEBAR_WIDTH;
+}
+export function loadCollapsedProjects(storage?: ReadableStorage): string[] {
+  const value = readJson('berth.collapsedProjects', storage);
+  return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)))].slice(0, 200) : [];
+}
 export function loadSelections(storage?: ReadableStorage): Record<string, string> {
   const value = readJson('berth.selections', storage);
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};

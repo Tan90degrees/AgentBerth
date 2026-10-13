@@ -27,7 +27,8 @@ let quitting = false;
 async function shutdown() {
   if (quitting) return;
   quitting = true;
-  await server.close();
+  try { await server.close(); }
+  catch (error) { quitting = false; console.error(error); return; }
   closeSync(descriptor); rmSync(lock, { force: true });
   process.exit(0);
 }

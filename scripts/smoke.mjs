@@ -17,7 +17,7 @@ async function closeApplication(app) {
   const exited = launcherProcess.exitCode !== null || launcherProcess.signalCode !== null ? Promise.resolve() : new Promise(resolve => { onExit = resolve; launcherProcess.once('exit', onExit); });
   let timer;
   try {
-    await Promise.race([exited, app.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Electron workbench did not exit within 10s')), 10000); })]);
+    await Promise.race([exited, app.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Electron workbench did not exit within 20s')), 20000); })]);
   } finally { clearTimeout(timer); if (onExit) launcherProcess.removeListener('exit', onExit); }
 }
 async function forceCleanup(app) {
@@ -62,11 +62,12 @@ try {
   await page.getByLabel('项目名称', { exact: true }).fill('AgentBerth 易用性');
   await page.getByRole('button', { name: '保存项目', exact: true }).click();
   await page.getByRole('heading', { name: 'AgentBerth 易用性', exact: true }).waitFor();
-  await page.getByLabel('搜索项目', { exact: true }).fill('不存在的项目');
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('不存在的项目');
+  await page.locator('.projects .project-item').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.projects .project-item').count(), 0);
-  await page.getByLabel('搜索项目', { exact: true }).fill('易用性');
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('易用性');
   await page.locator('.projects .project-item').waitFor();
-  await page.getByLabel('搜索项目', { exact: true }).fill('');
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
   step('save shell and default Agent settings');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'cmd' : 'bash');
@@ -156,6 +157,51 @@ try {
   await page.getByLabel('会话名称', { exact: true }).fill('后台驻留验证');
   await page.getByRole('button', { name: '保存会话', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  step('single sidebar collapses projects without recreating or stopping the terminal');
+  assert.equal(await page.locator('.session-sidebar').count(), 0);
+  await page.evaluate(() => { window.smokeTerminal = document.querySelector('.xterm'); });
+  await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
+  await page.locator('.session-list .session-item').waitFor({ state: 'hidden' });
+  assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')));
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
+  await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).click();
+  await page.locator('.session-list .session-item').waitFor();
+  step('keep navigation and resize responsive while real terminal output streams');
+  const streamScript = path.join(folder, 'stream.cjs');
+  await writeFile(streamScript, "let n=0;const tick=setInterval(()=>{process.stdout.write('FLOW_'+n+' '+'.'.repeat(240)+'\\n');if(++n===400){clearInterval(tick);console.log('FLOW_DONE');}},5);");
+  const streamCommand = process.platform === 'win32' ? `"${process.execPath}" "${streamScript}"` : `'${process.execPath.replaceAll("'", "'\\''")}' '${streamScript.replaceAll("'", "'\\''")}'`;
+  await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: streamCommand + '\r' });
+  await page.evaluate(() => {
+    window.smokeFrameGaps = []; window.smokeMeasureFrames = true;
+    let previous = performance.now();
+    function sample(now) { window.smokeFrameGaps.push(now - previous); previous = now; if (window.smokeMeasureFrames) requestAnimationFrame(sample); }
+    requestAnimationFrame(sample);
+  });
+  step('drag sidebar, check keyboard/reset controls and persist width');
+  const separator = page.getByRole('separator', { name: '调整侧栏宽度', exact: true });
+  const handle = await separator.boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 150);
+  await page.mouse.down(); await page.mouse.move(handle.x + 85, handle.y + 150, { steps: 15 }); await page.mouse.up();
+  let sidebarWidth = Math.round(await page.locator('.sidebar').evaluate(element => element.getBoundingClientRect().width));
+  assert.ok(sidebarWidth >= 350 && sidebarWidth <= 380, String(sidebarWidth));
+  assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')));
+  await separator.focus(); await page.keyboard.press('ArrowLeft');
+  assert.equal(Number(await separator.getAttribute('aria-valuenow')), sidebarWidth - 10);
+  await separator.dblclick();
+  assert.equal(Number(await separator.getAttribute('aria-valuenow')), 280);
+  await separator.focus(); await page.keyboard.press('ArrowRight');
+  sidebarWidth = 290;
+  assert.equal(await page.evaluate(() => localStorage.getItem('berth.sidebarWidth')), String(sidebarWidth));
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('驻留');
+  await page.locator('.session-list .session-item').waitFor();
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
+  await page.waitForFunction(async id => (await window.berth.rpc('attach', { sessionId: id })).snapshot.includes('FLOW_DONE'), before.sessions[0].id);
+  const frameGaps = await page.evaluate(() => { window.smokeMeasureFrames = false; return window.smokeFrameGaps; });
+  const sortedGaps = frameGaps.slice(3).sort((a, b) => a - b), p95 = sortedGaps[Math.floor(sortedGaps.length * .95)] ?? 0;
+  console.log(`Interactive stream: ${frameGaps.length} frames, p95 gap ${p95.toFixed(1)}ms`);
+  assert.ok(frameGaps.length > 10 && p95 < 350, 'Navigation stalled during output: p95 ' + p95);
+  assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')));
+
   step('changing defaults preserves actual running shell identity');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'powershell' : 'auto');
@@ -186,12 +232,14 @@ try {
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-settings' : 'settings'}.png` });
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   await page.locator('.projects .project-item').click();
-  await page.getByLabel('搜索会话', { exact: true }).fill('不存在');
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('不存在');
+  await page.locator('.session-list .session-item').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.session-list .session-item').count(), 0);
-  await page.getByLabel('搜索会话', { exact: true }).fill('驻留');
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('驻留');
   await page.locator('.session-list .session-item').waitFor();
-  await page.getByLabel('搜索会话', { exact: true }).fill('');
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
   await page.getByLabel('筛选会话', { exact: true }).selectOption('opencode');
+  await page.locator('.session-list .session-item').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.session-list .session-item').count(), 0);
   await page.getByLabel('筛选会话', { exact: true }).selectOption('all');
   step('unsaved settings survive page navigation and remain unapplied');
@@ -211,13 +259,23 @@ try {
   // Closing the native window hides it; second-instance launch can show it again.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false);
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
+  const hidden = await page.evaluate(() => window.berth.rpc('state'));
+  assert.equal(hidden.sessions[0].latestRun.pid, original.pid);
+  assert.equal(hidden.sessions[0].latestRun.status, 'running');
+  await application.evaluate(({ app, BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); app.emit('activate'); });
+  await page.locator('.xterm-helper-textarea').waitFor();
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-workbench' : 'workbench'}.png` });
   assert.equal(errors.length, 0, errors.join('\n'));
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   // Playwright's close exits the entire Electron main process, not just the window.
-  step('exit whole workbench');
+  step('tray quit path stops all terminals and the detached daemon');
+  await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
+  const quittingDaemon = daemonPid;
   await closeApplication(application); application = null;
+  assert.throws(() => process.kill(quittingDaemon, 0), /ESRCH/);
+  assert.throws(() => process.kill(original.pid, 0), /ESRCH/);
+  await assert.rejects(stat(path.join(folder, 'data', 'runtime.json')), /ENOENT/);
+  await assert.rejects(stat(path.join(folder, 'data', 'daemon.lock')), /ENOENT/);
   step('reopen workbench');
   application = await electron.launch({ executablePath, args: launchArgs, env, timeout: 20000 });
   page = await application.firstWindow({ timeout: 20000 });
@@ -226,6 +284,12 @@ try {
   const after = await page.evaluate(() => window.berth.rpc('state'));
   assert.equal(after.sessions[0].latestRun.id, original.id);
   assert.equal(after.sessions[0].latestRun.pid, original.pid);
+  assert.equal(after.sessions[0].latestRun.status, 'stopped');
+  daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
+  assert.notEqual(daemonPid, quittingDaemon);
+  assert.equal(Number(await page.getByRole('separator').getAttribute('aria-valuenow')), sidebarWidth);
+  assert.equal(await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).getAttribute('aria-expanded'), 'false');
+  await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).click();
   assert.equal(after.settings.terminal.profile, 'custom');
   assert.equal(after.settings.terminal.executable, original.shell);
   assert.equal(after.settings.defaultAgent, 'opencode');
@@ -238,7 +302,10 @@ try {
   await page.locator('.projects .project-item').click();
   const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), after.sessions[0].id);
   assert.match(snapshot.snapshot, /DESKTOP_SMOKE_READY/);
-  step('stop terminal');
+  step('start a fresh terminal after full quit, then stop it');
+  await page.getByRole('button', { name: '启动终端', exact: true }).click();
+  await page.getByRole('button', { name: '停止终端', exact: true }).waitFor();
+  assert.notEqual((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.id, original.id);
   await page.getByRole('button', { name: '停止终端', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
   await page.getByRole('button', { name: '启动终端', exact: true }).waitFor();
@@ -335,7 +402,7 @@ try {
   await page.getByRole('button', { name: '添加第一个项目', exact: true }).waitFor();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).projects.length, 0);
   await stat(exportPath); await stat(moved);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, same-PID lifecycle, OpenCode history, idle backend upgrade.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade.`);
 } catch (error) {
   console.error(error);
   if (application) {

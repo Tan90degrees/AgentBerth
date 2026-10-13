@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -9,7 +9,7 @@ const options = {
   fontFamily: 'Cascadia Code, Consolas, Menlo, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
 };
 
-export function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onError }: { sessionId: string; fontSize?: number; autoFocus?: boolean; onError: (error: string) => void }) {
+export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onError }: { sessionId: string; fontSize?: number; autoFocus?: boolean; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
@@ -32,6 +32,7 @@ export function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onErr
       seq = data.seq; terminal.write(data.text);
     };
     const off = window.berth.onEvent(event => {
+      if (event.event === 'state' && runId) running = event.data.sessions.find(session => session.id === sessionId)?.latestRun?.status === 'running';
       if (event.event !== 'output' || event.data.sessionId !== sessionId) return;
       if (!ready) {
         pendingBytes += event.data.text.length;
@@ -42,10 +43,14 @@ export function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onErr
     const input = terminal.onData(data => {
       if (ready && running && runId) void window.berth.rpc('input', { sessionId, runId, data }).catch(error => errorHandler.current(String(error)));
     });
+    let lastCols = 0, lastRows = 0;
     const resize = () => {
       if (disposed || !ready || !host.current?.clientWidth) return;
       fit.fit();
-      if (running && runId) void window.berth.rpc('resize', { sessionId, runId, cols: Math.min(300, Math.max(20, terminal.cols)), rows: Math.min(100, Math.max(5, terminal.rows)) }).catch(error => errorHandler.current(String(error)));
+      const cols = Math.min(300, Math.max(20, terminal.cols)), rows = Math.min(100, Math.max(5, terminal.rows));
+      if (cols === lastCols && rows === lastRows) return;
+      lastCols = cols; lastRows = rows;
+      if (running && runId) void window.berth.rpc('resize', { sessionId, runId, cols, rows }).catch(error => errorHandler.current(String(error)));
     };
     let resizeTimer: ReturnType<typeof setTimeout>;
     const observer = new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); });
@@ -55,6 +60,7 @@ export function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onErr
       runId = attachment.run?.id ?? null;
       running = attachment.run?.status === 'running';
       seq = attachment.seq;
+      lastCols = attachment.cols; lastRows = attachment.rows;
       terminal.resize(attachment.cols, attachment.rows);
       terminal.write(attachment.snapshot, () => {
         if (disposed) return;
@@ -73,7 +79,7 @@ export function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onErr
     };
   }, [sessionId, fontSize]);
   return <div className="terminal-host" ref={host} data-testid="terminal" />;
-}
+});
 
 export function OutputView({ text, fontSize = 14 }: { text: string; fontSize?: number }) {
   const host = useRef<HTMLDivElement>(null);

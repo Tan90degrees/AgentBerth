@@ -18,6 +18,7 @@ interface LiveTerminal {
   run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
   log: RunLog;
+  output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null;
 }
 interface Client { subscriptions: Set<string>; pending: number }
 
@@ -106,6 +107,10 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
       case 'state': return this.store.state();
+      case 'shutdown':
+        await this.stopAll();
+        setTimeout(this.onShutdown, 50); // Acknowledge cleanup before closing the authenticated connection.
+        return null;
       case 'shutdownIdle':
         if (this.live.size || this.starting.size) throw new Error('请先停止全部终端，再更新后台');
         if (this.historyBusy.size || this.editingProjects.size || [...this.clients.values()].some(other => other.pending > (other === client ? 1 : 0))) throw new Error('后台正在处理数据，请稍后重试');
@@ -186,7 +191,11 @@ export class DaemonServer {
         live.pty.resize(request.params.cols, request.params.rows); live.terminal.resize(request.params.cols, request.params.rows); return null;
       }
       case 'runs': this.store.session(request.params.sessionId); return this.store.runs(request.params.sessionId);
-      case 'output': this.store.run(request.params.runId); return new RunLog(this.logs, request.params.runId).read();
+      case 'output': {
+        const run = this.store.run(request.params.runId), live = this.live.get(run.sessionId);
+        if (live?.run.id === run.id) this.flushOutput(live);
+        return new RunLog(this.logs, request.params.runId).read();
+      }
       case 'history': return this.store.history(request.params.sessionId);
       case 'importHistory': return this.importHistory(request.params.sessionId, request.params.path);
       case 'refreshHistory': {
@@ -248,21 +257,16 @@ export class DaemonServer {
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
     }
     this.store.setPid(run.id, child.pid);
-    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: new RunLog(this.logs, run.id) };
+    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: new RunLog(this.logs, run.id), output: [], outputBytes: 0, outputTimer: null };
     this.live.set(sessionId, live);
     this.pruneLogs();
     child.onData(text => {
-      const seq = ++live.seq;
       const bytes = Buffer.byteLength(text);
       live.queuedBytes += bytes;
       if (live.queuedBytes > 1024 * 1024) child.pause();
-      try { live.log.append(text); } catch (error) { this.logError(error); }
-      terminal.write(text, () => {
-        live.committedSeq = seq;
-        live.queuedBytes -= bytes;
-        if (live.queuedBytes < 512 * 1024 && !live.closed) child.resume();
-        this.broadcast({ event: 'output', data: { sessionId, runId: run.id, seq, text } });
-      });
+      live.output.push(text); live.outputBytes += bytes;
+      if (live.outputBytes >= 64 * 1024) this.flushOutput(live);
+      else live.outputTimer ??= setTimeout(() => this.flushOutput(live), 16);
     });
     child.onExit(({ exitCode }) => { void this.finish(sessionId, live, exitCode); });
     if (command) child.write(`${command}\r`);
@@ -285,8 +289,22 @@ export class DaemonServer {
   }
 
   private async screen(live: LiveTerminal): Promise<{ snapshot: string; seq: number; cols: number; rows: number }> {
+    this.flushOutput(live);
     // This callback follows all prior writes. seq and the screen describe the same point in time.
     return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: live.serialize.serialize({ scrollback: 200 }), seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
+  }
+  private flushOutput(live: LiveTerminal): void {
+    if (live.outputTimer) clearTimeout(live.outputTimer);
+    live.outputTimer = null;
+    if (!live.output.length) return;
+    const text = live.output.join(''), bytes = live.outputBytes, seq = ++live.seq;
+    live.output = []; live.outputBytes = 0;
+    try { live.log.append(text); } catch (error) { this.logError(error); }
+    live.terminal.write(text, () => {
+      live.committedSeq = seq; live.queuedBytes -= bytes;
+      if (live.queuedBytes < 512 * 1024 && !live.closed) live.pty.resume();
+      this.broadcast({ event: 'output', data: { sessionId: live.run.sessionId, runId: live.run.id, seq, text } });
+    });
   }
   private async attach(sessionId: string): Promise<Attachment> {
     const session = this.store.session(sessionId);
@@ -334,11 +352,18 @@ export class DaemonServer {
   private logError(error: unknown): void {
     try { const log = new RunLog(this.dataDirectory, 'daemon'); log.append(`${new Date().toISOString()} ${String(error)}\n`); } catch { /* Disk failure must not throw from PTY callbacks. */ }
   }
-  async close(): Promise<void> {
+  private async stopAll(): Promise<void> {
     this.closing = true;
-    await Promise.all([...this.live.keys()].map(sessionId => this.stop(sessionId).catch(error => this.logError(error))));
-    const deadline = Date.now() + 4000;
-    while (this.live.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    try {
+      const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));
+      for (const result of results) if (result.status === 'rejected') this.logError(result.reason);
+      const deadline = Date.now() + 5000;
+      while (this.live.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+      if (this.live.size) throw new Error('部分终端尚未停止，请重试退出；后台已保留以便继续清理');
+    } catch (error) { this.closing = false; throw error; }
+  }
+  async close(): Promise<void> {
+    await this.stopAll();
     for (const socket of this.clients.keys()) socket.terminate();
     await new Promise<void>(resolve => this.ws.close(() => resolve()));
     await new Promise<void>(resolve => this.http.close(() => resolve()));

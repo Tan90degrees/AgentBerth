@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { connectDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
+import { connectDaemon, shutdownDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
 import { requestSchema, type Method, type ServerEvent } from '../shared/protocol';
 
 let window: BrowserWindow | null = null;
@@ -11,6 +11,8 @@ let tray: Tray | null = null;
 let connection: DaemonConnection | null = null;
 let connecting: Promise<void> | null = null;
 let quitting = false;
+let quitReady = false;
+let exitPromise: Promise<void> | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let restarting = false;
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
@@ -19,7 +21,7 @@ if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must b
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', showWindow);
-  app.on('before-quit', () => { quitting = true; if (reconnectTimer) clearTimeout(reconnectTimer); connection?.close(); });
+  app.on('before-quit', event => { if (!quitReady) { event.preventDefault(); void quitApplication(); } });
   app.on('window-all-closed', () => { /* Tray keeps the workbench accessible. PTYs belong to the independent daemon. */ });
   app.on('activate', showWindow);
   void app.whenReady().then(async () => {
@@ -31,22 +33,43 @@ else {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '打开 AgentBerth', click: showWindow },
       { type: 'separator' },
-      { label: '退出工作台（终端继续运行）', click: () => app.quit() },
+      { label: '退出 AgentBerth（停止全部终端）', click: () => app.quit() },
     ]));
     tray.on('double-click', showWindow);
     try { await reconnect(); } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
   });
 }
 
-function showWindow() { if (!window) createWindow(); window?.show(); window?.focus(); }
+function refreshWindow() { if (connection?.connected && !quitting) emit({ event: 'connection', data: { connected: true } }); }
+function showWindow() { if (!window) createWindow(); window?.show(); window?.focus(); refreshWindow(); }
+function quitApplication(): Promise<void> {
+  if (exitPromise) return exitPromise;
+  quitting = true;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  tray?.setToolTip('AgentBerth · 正在停止终端并退出');
+  exitPromise = (async () => {
+    if (connecting) await connecting.catch(() => {});
+    await shutdownDaemon(dataDirectory);
+    connection?.close(true); connection = null;
+    quitReady = true; tray?.destroy(); tray = null;
+    app.quit();
+  })().catch(error => {
+    quitting = false;
+    tray?.setToolTip('AgentBerth · 退出失败，请重试');
+    showWindow();
+    dialog.showErrorBox('AgentBerth 退出未完成', `${String(error)}\n请再次从托盘选择退出，确保后台及全部终端停止。`);
+  }).finally(() => { exitPromise = null; });
+  return exitPromise;
+}
 function emit(event: ServerEvent) {
-  if (window && !window.isDestroyed()) window.webContents.send('berth:event', event);
-  if (event.event === 'connection' && !event.data.connected && !quitting && !restarting) {
+  if (window && !window.isDestroyed() && (event.event !== 'output' || (window.isVisible() && !window.isMinimized()))) window.webContents.send('berth:event', event);
+  if (event.event === 'connection' && !event.data.connected && !quitting && !restarting && !exitPromise) {
     connection = null;
     if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; void reconnect().catch(error => emit({ event: 'connection', data: { connected: false, error: String(error) } })); }, 2000);
   }
 }
 async function reconnect(): Promise<void> {
+  if (quitting) throw new Error('正在停止终端并退出');
   if (connecting) return connecting;
   connecting = (async () => {
     connection = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
@@ -58,7 +81,8 @@ async function reconnect(): Promise<void> {
 function createWindow() {
   window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', backgroundColor: '#0d1119', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window.setMenuBarVisibility(false);
-  window.on('close', event => { if (!quitting) { event.preventDefault(); window?.hide(); } });
+  window.on('close', event => { if (!quitReady) { event.preventDefault(); window?.hide(); } });
+  window.on('restore', refreshWindow);
   window.on('closed', () => { window = null; });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => { event.preventDefault(); });
@@ -73,6 +97,7 @@ function trusted(event: Electron.IpcMainInvokeEvent): void {
 }
 ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string, unknown>) => {
   trusted(event);
+  if (quitting || method === 'shutdown' || method === 'shutdownIdle') throw new Error('请从托盘退出应用，或在设置中更新后台');
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;

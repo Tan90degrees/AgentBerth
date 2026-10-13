@@ -8,7 +8,7 @@ import { Store } from '../src/daemon/store';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import { DEFAULT_SETTINGS, type Project, type Run, type Session, type State } from '../src/shared/protocol';
-import { loadSelections, loadSettingsDraft, readStored, saveStored } from '../src/renderer/storage';
+import { clampSidebarWidth, loadCollapsedProjects, loadSidebarWidth, loadSelections, loadSettingsDraft, readStored, saveStored } from '../src/renderer/storage';
 import { matchesQuery } from '../src/renderer/QuickSwitcher';
 
 test('unavailable/corrupt UI storage falls back safely and validated drafts keep terminal arguments intact', () => {
@@ -72,4 +72,31 @@ test('failure details survive daemon restart and are not marked interrupted', t 
   store.close(); store = new Store(folder);
   assert.equal(store.session(session.id).latestRun!.status, 'failed');
   assert.match(store.session(session.id).latestRun!.error!, /请选择正确路径/);
+});
+
+
+test('navigation preferences reject corrupt widths and IDs and keep room for the terminal', () => {
+  const id = randomUUID(), data = new Map([
+    ['berth.sidebarWidth', '350'], ['berth.collapsedProjects', JSON.stringify([id, id, 'unknown'])],
+  ]);
+  const storage = { getItem: (key: string) => data.get(key) ?? null };
+  assert.equal(loadSidebarWidth(storage), 350); assert.deepEqual(loadCollapsedProjects(storage), [id]);
+  assert.equal(clampSidebarWidth(480, 1000), 380); assert.equal(clampSidebarWidth(100, 1440), 216);
+  for (const value of ['NaN', '-1', '9999']) { data.set('berth.sidebarWidth', value); assert.equal(loadSidebarWidth(storage), 280); }
+  data.set('berth.collapsedProjects', '{partial'); assert.deepEqual(loadCollapsedProjects(storage), []);
+});
+
+test('batched workspace snapshot matches individual sessions and latest run ordering', t => {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-list-snapshot-')), store = new Store(folder);
+  t.after(() => { store.close(); rmSync(folder, { recursive: true, force: true }); });
+  const project = store.createProject('many', folder);
+  const sessions = Array.from({ length: 120 }, (_, index) => store.createSession(project.id, String(index), 'shell', '', index % 2 ? null : { profile: 'bash', executable: '', args: ['-i'] }));
+  for (const session of sessions.slice(0, 30)) for (let n = 0; n < 3; n++) {
+    const run = store.createRun(session.id, 'echo ' + n, 80, 24, '/bin/bash');
+    store.finish(run.id, 'exited', 0, null, 'screen', 1, 80, 24);
+  }
+  store.archive(sessions[0].id);
+  const snapshot = store.state();
+  assert.equal(snapshot.sessions.length, 119);
+  for (const session of snapshot.sessions) assert.deepEqual(session, store.session(session.id));
 });

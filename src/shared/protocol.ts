@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 3;
+export const API_VERSION = 4;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const agentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export type Agent = z.infer<typeof agentSchema>;
@@ -35,6 +35,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('deleteSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('saveSettings'), params: settingsSchema }),
   z.object({ id, method: z.literal('shutdownIdle'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('shutdown'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/) }).strict() }),
   z.object({ id, method: z.literal('renameSession'), params: z.object({ sessionId: id, title }).strict() }),
   z.object({ id, method: z.literal('archiveSession'), params: z.object({ sessionId: id }).strict() }),

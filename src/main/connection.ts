@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -55,6 +55,53 @@ function runtimeFile(directory: string): RuntimeInfo | null {
   } catch { return null; }
 }
 
+function isAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+}
+async function waitForExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 7000;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('后台尚未退出，请稍后重试');
+}
+
+// Never launch a new daemon while quitting, and never signal a PID from an
+// unauthenticated or replaced runtime descriptor.
+export async function shutdownDaemon(directory: string): Promise<void> {
+  const runtime = runtimeFile(directory);
+  if (!runtime) {
+    const lock = path.join(directory, 'daemon.lock');
+    if (existsSync(lock)) {
+      const pid = Number(readFileSync(lock, 'utf8'));
+      if (!Number.isInteger(pid) || pid < 1 || isAlive(pid)) throw new Error('后台正在启动或无法确认，请稍后重试退出');
+    }
+    return;
+  }
+  if (!isAlive(runtime.pid)) return;
+  const candidate = await DaemonConnection.open(runtime, () => {});
+  try {
+    let state = await candidate.rpc<State>('state');
+    if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
+    if (state.apiVersion >= 4) await candidate.rpc('shutdown');
+    else {
+      // Older backends have stop + idle shutdown. Drain first, then use their
+      // atomic idle gate; never forcibly abandon still-running process trees.
+      const deadline = Date.now() + 10000;
+      while (state.sessions.some(session => ['running', 'stopping'].includes(session.latestRun?.status ?? ''))) {
+        await Promise.all(state.sessions.filter(session => session.latestRun?.status === 'running').map(session => candidate.rpc('stop', { sessionId: session.id })));
+        if (Date.now() >= deadline) throw new Error('部分终端尚未停止，请重试退出');
+        await new Promise(resolve => setTimeout(resolve, 100));
+        state = await candidate.rpc<State>('state');
+      }
+      await stopIdleDaemon(directory);
+    }
+    await waitForExit(runtime.pid);
+  } finally { candidate.close(true); }
+}
+
 export async function stopIdleDaemon(directory: string): Promise<void> {
   const runtime = runtimeFile(directory);
   if (!runtime) throw new Error('无法确认后台进程，请重新连接后重试');
@@ -65,13 +112,7 @@ export async function stopIdleDaemon(directory: string): Promise<void> {
     if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
     if (state.apiVersion >= 2) await candidate.rpc('shutdownIdle');
     else process.kill(runtime.pid, 'SIGTERM'); // Explicit upgrade of an authenticated, idle 0.1 daemon.
-    const deadline = Date.now() + 7000;
-    while (Date.now() < deadline) {
-      try { process.kill(runtime.pid, 0); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    throw new Error('后台尚未退出，请稍后重试');
+    await waitForExit(runtime.pid);
   } finally { candidate.close(true); }
 }
 

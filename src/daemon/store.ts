@@ -33,6 +33,7 @@ export class Store {
         cols INTEGER NOT NULL DEFAULT 100, rows INTEGER NOT NULL DEFAULT 30
       );
       CREATE INDEX IF NOT EXISTS runs_by_session ON runs(sessionId, startedAt DESC);
+      CREATE INDEX IF NOT EXISTS runs_by_session_row ON runs(sessionId);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
     `);
     // Additive migration preserves 0.1 projects, native history and saved screens.
@@ -45,7 +46,12 @@ export class Store {
 
   state(): State {
     const projects = this.db.prepare('SELECT id, name, path, createdAt FROM projects ORDER BY createdAt DESC').all() as unknown as Project[];
-    const sessions = this.db.prepare('SELECT id FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all().map(row => this.session(String(row.id)));
+    const latest = this.db.prepare(`SELECT r.id, r.sessionId, r.pid, r.status, r.startedAt, r.endedAt, r.exitCode, r.command, r.shell, r.error
+      FROM sessions s JOIN runs r ON r.rowid = (SELECT rowid FROM runs WHERE sessionId = s.id ORDER BY rowid DESC LIMIT 1)
+      WHERE s.archived = 0`).all() as unknown as Run[];
+    const bySession = new Map(latest.map(run => [run.sessionId, run]));
+    const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
+      .map(row => ({ ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
     return { projects, sessions, maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, settings: this.settings(), apiVersion: API_VERSION };
   }
 
@@ -97,7 +103,8 @@ export class Store {
   session(id: string): Session {
     const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
     if (!row) throw new Error('会话不存在');
-    return { ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: this.runs(id)[0] ?? null } as unknown as Session;
+    const latestRun = this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 1').get(id) ?? null;
+    return { ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
   }
 
   createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null): Session {
