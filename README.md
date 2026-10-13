@@ -14,6 +14,23 @@
 - 为 Codex / Claude Code 会话手动关联原生 JSONL 记录，校验项目目录，查看用户与助手文本，刷新记录并按原生 ID 恢复会话。
 - SQLite 持久化项目、会话和运行元数据；有界输出日志和后台终端数量。
 
+## 下载 Windows 软件包
+
+打开 [GitHub Actions](https://github.com/Tan90degrees/AgentBerth/actions)，选择所需提交对应的 **CI and Windows packages** 运行，在 **Artifacts** 中下载 **AgentBerth-Windows-x64**。Windows 打包任务独立执行，不必等待 Linux 检查；推送 `main`、`feat/**`、`fix/**` 或更新 PR 会自动构建。工作流合入默认分支后，也可以在该工作流页面点击 **Run workflow** 选择分支手动构建。
+
+下载的 artifact 解压后包含：
+
+| 文件 | 使用方式 |
+|---|---|
+| `AgentBerth-0.1.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.1.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
+| `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
+
+软件包自带 Electron、Node 运行时和 `node-pty`，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code 仍需在本机单独安装、登录，并能从 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。升级前先停止全部后台任务并退出 daemon。
+
+第一版软件包没有代码签名，Windows 可能显示“未知发布者”。正常包应对应成功的 Windows 打包任务且 `build-info.json` 中 `packagedSmoke` 为 `success`；若测试失败，构建产物会保留供排查，但不代表已验证可用。
+
 ## 开发环境与启动
 
 需要 Node.js **24+**、npm，以及本机已安装和登录的 Agent CLI。项目不会替你登录 Agent 或修改其权限设置。
@@ -128,7 +145,8 @@ if ($LASTEXITCODE -eq 0) { npm run dev }
 ```powershell
 npm run check          # TypeScript + 真实 PTY 测试 + 生产构建
 npm run test:desktop   # Playwright 驱动真实 Electron 窗口
-npm run dist:win       # Windows 本机生成 NSIS x64 安装包
+npm run dist:win       # Windows 本机生成 NSIS x64 安装包与 ZIP
+npm run test:packaged  # Windows 测试 release/win-unpacked/AgentBerth.exe
 ```
 
 Linux 无显示器环境：
@@ -139,7 +157,7 @@ xvfb-run -a npm run test:desktop
 
 测试使用临时项目与数据目录，不运行真实 Agent，不访问用户真实对话。真实 PTY 测试覆盖无 UI 时持续输出、同 PID 恢复、会话隔离、并发启动、鉴权、进程树清理、持久化与日志轮转。桌面测试覆盖项目创建、终端输入、收起/接回、原生窗口关闭、整个工作台退出后重新打开和停止任务。
 
-GitHub Actions 配置 Windows / Linux 检查和桌面测试；通过后生成 Windows 安装包 artifact。第一版安装包尚未进行代码签名。
+GitHub Actions 配置 Windows / Linux 检查和桌面测试；独立 Windows 打包任务执行类型检查、安装脚本测试、生产构建与打包后的真实终端测试，再上传安装包、ZIP 和校验值。第一版安装包尚未进行代码签名。
 
 ## 架构
 
