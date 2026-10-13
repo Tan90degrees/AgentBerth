@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 2;
+export const API_VERSION = 3;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const agentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export type Agent = z.infer<typeof agentSchema>;
@@ -72,6 +72,7 @@ export interface DesktopApi {
   chooseDirectory(): Promise<string | null>;
   chooseTranscript(): Promise<string | null>;
   chooseExecutable(): Promise<string | null>;
+  copyText(text: string): Promise<void>;
   openProject(path: string): Promise<void>;
   reconnect(): Promise<void>;
   restartBackend(): Promise<void>;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
@@ -82,6 +82,7 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:transcript', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl', 'json'] }] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:executable', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: '终端程序', extensions: ['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:copy', async (event, text: string) => { trusted(event); if (typeof text !== 'string' || text.length > 65536) throw new Error('复制内容过长或格式无效'); clipboard.writeText(text); });
 ipcMain.handle('berth:openProject', async (event, folder: string) => {
   trusted(event);
   if (!connection) await reconnect();

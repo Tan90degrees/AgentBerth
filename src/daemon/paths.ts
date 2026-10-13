@@ -5,9 +5,16 @@ import type { Session, TerminalConfig } from '../shared/protocol';
 
 export async function directory(input: string): Promise<string> {
   if (!path.isAbsolute(input)) throw new Error('项目路径必须是绝对路径');
-  const canonical = await realpath(input);
-  if (!(await stat(canonical)).isDirectory()) throw new Error('项目路径不是目录');
-  return canonical;
+  try {
+    const canonical = await realpath(input);
+    if (!(await stat(canonical)).isDirectory()) throw new Error('项目路径不是目录');
+    return canonical;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') throw new Error(`项目目录不存在或已移动，请编辑项目重新选择目录：${input}`);
+    if (code === 'EACCES' || code === 'EPERM') throw new Error(`无法访问项目目录，请检查目录访问权限：${input}`);
+    throw error;
+  }
 }
 
 export function terminalEnvironment(executable = ''): Record<string, string> {

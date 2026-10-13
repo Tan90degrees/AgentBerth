@@ -20,6 +20,10 @@ Starting sessions reserve their identity before asynchronous directory/executabl
 
 Terminal selection resolves a direct executable and argument array; custom executable paths are never parsed as shell command strings. Preferences affect future runs while a per-session override takes precedence. Agent commands run inside the chosen interactive shell.
 
+Renderer caches only selected project/session IDs and a validated settings draft with its base preferences. Drafts remain separate from applied daemon settings, survive page changes and launcher restart, and report an actual base conflict when settings changed elsewhere. Corrupt or unavailable browser storage falls back safely. Dialogs protect dirty values, trap keyboard focus, restore the invoking control, and disable input during submission. The current terminal never takes focus from an open dialog or search field.
+
+A global switcher searches metadata without executing commands. Session duplication uses the existing creation API and copies only launch configuration; it starts unchecked and never copies process or native-conversation identity. Clipboard writes pass through a trusted, size-limited IPC endpoint. Failed directory/executable preflight creates a failed run, preserves the error across daemon restarts, and can be corrected and retried without replacing history.
+
 ## Terminal reattachment
 
 Each PTY write receives a monotonic sequence number. The daemon feeds an xterm headless instance and broadcasts output after parsing. An attach request subscribes before obtaining a parser barrier. Its screen and sequence describe the same point. The renderer buffers events while restoring the snapshot and applies only later sequence numbers for the same run ID.

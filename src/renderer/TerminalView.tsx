@@ -9,10 +9,11 @@ const options = {
   fontFamily: 'Cascadia Code, Consolas, Menlo, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
 };
 
-export function TerminalView({ sessionId, fontSize = 14, onError }: { sessionId: string; fontSize?: number; onError: (error: string) => void }) {
+export function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onError }: { sessionId: string; fontSize?: number; autoFocus?: boolean; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
+  const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
   useEffect(() => {
     const terminal = new Terminal({ ...options, fontSize });
     const fit = new FitAddon();
@@ -61,7 +62,9 @@ export function TerminalView({ sessionId, fontSize = 14, onError }: { sessionId:
         for (const event of pending) apply(event);
         pending = [];
         if (!attachment.run) terminal.writeln('\x1b[38;2;119;137;159m会话已就绪。点击“启动终端”，开始这个项目的工作。\x1b[0m');
-        resize(); terminal.focus();
+        resize();
+        const element = document.activeElement;
+        if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
       });
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
     return () => {
@@ -72,13 +75,13 @@ export function TerminalView({ sessionId, fontSize = 14, onError }: { sessionId:
   return <div className="terminal-host" ref={host} data-testid="terminal" />;
 }
 
-export function OutputView({ text }: { text: string }) {
+export function OutputView({ text, fontSize = 14 }: { text: string; fontSize?: number }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const terminal = new Terminal({ ...options, disableStdin: true, cursorBlink: false });
+    const terminal = new Terminal({ ...options, fontSize, disableStdin: true, cursorBlink: false });
     const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host.current!); fit.fit(); terminal.write(text);
     const observer = new ResizeObserver(() => fit.fit()); observer.observe(host.current!);
     return () => { observer.disconnect(); terminal.dispose(); };
-  }, [text]);
+  }, [text, fontSize]);
   return <div className="terminal-host output-host" ref={host} />;
 }

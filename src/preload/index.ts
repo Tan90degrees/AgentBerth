@@ -11,6 +11,7 @@ const api: DesktopApi = {
   chooseDirectory: () => ipcRenderer.invoke('berth:directory'),
   chooseTranscript: () => ipcRenderer.invoke('berth:transcript'),
   chooseExecutable: () => ipcRenderer.invoke('berth:executable'),
+  copyText: text => ipcRenderer.invoke('berth:copy', text),
   openProject: folder => ipcRenderer.invoke('berth:openProject', folder),
   reconnect: () => ipcRenderer.invoke('berth:reconnect'),
   restartBackend: () => ipcRenderer.invoke('berth:restart'),

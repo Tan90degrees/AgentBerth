@@ -223,8 +223,19 @@ export class DaemonServer {
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
     const session = this.store.session(sessionId);
     const command = launchCommand(session, resume);
-    const cwd = await directory(this.store.project(session.projectId).path);
-    const selected = await resolveTerminal(session.terminal ?? this.store.settings().terminal);
+    const config = session.terminal ?? this.store.settings().terminal;
+    let cwd: string;
+    let selected: { file: string; args: string[] };
+    try {
+      cwd = await directory(this.store.project(session.projectId).path);
+      selected = await resolveTerminal(config);
+    } catch (error) {
+      if (!this.closing) {
+        const failed = this.store.createRun(sessionId, command, cols, rows, config.profile === 'custom' ? config.executable : '');
+        this.store.finish(failed.id, 'failed', null, error instanceof Error ? error.message : String(error), '', 0, cols, rows); this.changed();
+      }
+      throw error;
+    }
     if (this.closing) throw new Error('后台无法再启动终端');
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true });
