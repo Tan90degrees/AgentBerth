@@ -2,8 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { Agent, History, Project, Run, Session, State } from '../shared/protocol';
-import { MAX_ACTIVE_TERMINALS } from '../shared/protocol';
+import type { Agent, History, Project, Run, Session, Settings, State, TerminalConfig } from '../shared/protocol';
+import { API_VERSION, DEFAULT_SETTINGS, MAX_ACTIVE_TERMINALS, settingsSchema } from '../shared/protocol';
+
+const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
 
 export class Store {
   private db: DatabaseSync;
@@ -31,8 +33,12 @@ export class Store {
         cols INTEGER NOT NULL DEFAULT 100, rows INTEGER NOT NULL DEFAULT 30
       );
       CREATE INDEX IF NOT EXISTS runs_by_session ON runs(sessionId, startedAt DESC);
-      PRAGMA user_version = 1;
+      CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
     `);
+    // Additive migration preserves 0.1 projects, native history and saved screens.
+    if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'terminal')) this.db.exec('ALTER TABLE sessions ADD COLUMN terminal TEXT');
+    if (!this.db.prepare('PRAGMA table_info(runs)').all().some(row => row.name === 'shell')) this.db.exec("ALTER TABLE runs ADD COLUMN shell TEXT NOT NULL DEFAULT ''");
+    this.db.exec('PRAGMA user_version = 2');
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
   }
@@ -40,7 +46,7 @@ export class Store {
   state(): State {
     const projects = this.db.prepare('SELECT id, name, path, createdAt FROM projects ORDER BY createdAt DESC').all() as unknown as Project[];
     const sessions = this.db.prepare('SELECT id FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all().map(row => this.session(String(row.id)));
-    return { projects, sessions, maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform };
+    return { projects, sessions, maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, settings: this.settings(), apiVersion: API_VERSION };
   }
 
   project(id: string): Project {
@@ -59,39 +65,103 @@ export class Store {
     return this.project(id);
   }
 
-  session(id: string): Session {
-    const row = this.db.prepare('SELECT id, projectId, title, agent, command, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
-    if (!row) throw new Error('会话不存在');
-    return { ...row, latestRun: this.runs(id)[0] ?? null } as unknown as Session;
+  updateProject(id: string, name: string, canonicalPath: string): Project {
+    const previous = this.project(id);
+    const key = process.platform === 'win32' ? canonicalPath.toLowerCase() : canonicalPath;
+    const duplicate = this.db.prepare('SELECT id FROM projects WHERE pathKey = ? AND id != ?').get(key, id);
+    if (duplicate) throw new Error('这个目录已属于另一个项目');
+    this.transaction(() => {
+      this.db.prepare('UPDATE projects SET name = ?, path = ?, pathKey = ? WHERE id = ?').run(name, canonicalPath, key, id);
+      const previousKey = process.platform === 'win32' ? previous.path.toLowerCase() : previous.path;
+      if (previousKey !== key) this.db.prepare('UPDATE sessions SET nativeSessionId = NULL, transcriptPath = NULL, history = ?, updatedAt = ? WHERE projectId = ?').run(JSON.stringify(emptyHistory()), new Date().toISOString(), id);
+    });
+    return this.project(id);
   }
 
-  createSession(projectId: string, title: string, agent: Agent, command: string): Session {
+  projectSessionIds(id: string): string[] {
+    this.project(id);
+    return this.db.prepare('SELECT id FROM sessions WHERE projectId = ?').all(id).map(row => String(row.id));
+  }
+
+  deleteProject(id: string): string[] {
+    this.project(id);
+    const runIds = this.db.prepare('SELECT runs.id FROM runs JOIN sessions ON sessions.id = runs.sessionId WHERE sessions.projectId = ?').all(id).map(row => String(row.id));
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM runs WHERE sessionId IN (SELECT id FROM sessions WHERE projectId = ?)').run(id);
+      this.db.prepare('DELETE FROM sessions WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    });
+    return runIds;
+  }
+
+  session(id: string): Session {
+    const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
+    if (!row) throw new Error('会话不存在');
+    return { ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: this.runs(id)[0] ?? null } as unknown as Session;
+  }
+
+  createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null): Session {
     this.project(projectId);
     if (Number(this.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE archived = 0').get()!.count) >= 2000) throw new Error('最多管理 2000 个未归档会话');
     const id = randomUUID();
     const now = new Date().toISOString();
-    this.db.prepare('INSERT INTO sessions (id, projectId, title, agent, command, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, agent, command, now, now);
+    this.db.prepare('INSERT INTO sessions (id, projectId, title, agent, command, terminal, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, agent, command, terminal ? JSON.stringify(terminal) : null, now, now);
     return this.session(id);
   }
 
   rename(id: string, title: string): void { this.session(id); this.db.prepare('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?').run(title, new Date().toISOString(), id); }
   archive(id: string): void { this.session(id); this.db.prepare('UPDATE sessions SET archived = 1 WHERE id = ?').run(id); }
 
-  createRun(sessionId: string, command: string, cols: number, rows: number): Run {
+  updateSession(id: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null): Session {
+    const previous = this.session(id);
+    this.transaction(() => {
+      if (previous.agent !== agent) this.saveHistory(id, emptyHistory());
+      this.db.prepare('UPDATE sessions SET title = ?, agent = ?, command = ?, terminal = ?, updatedAt = ? WHERE id = ?').run(title, agent, command, terminal ? JSON.stringify(terminal) : null, new Date().toISOString(), id);
+    });
+    return this.session(id);
+  }
+
+  deleteSession(id: string): string[] {
+    this.session(id);
+    const runIds = this.db.prepare('SELECT id FROM runs WHERE sessionId = ?').all(id).map(row => String(row.id));
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM runs WHERE sessionId = ?').run(id);
+      this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+    });
+    return runIds;
+  }
+
+  settings(): Settings {
+    const row = this.db.prepare('SELECT value FROM settings WHERE id = 1').get();
+    if (row) { const parsed = settingsSchema.safeParse(JSON.parse(String(row.value))); if (parsed.success) return parsed.data; }
+    return structuredClone(DEFAULT_SETTINGS);
+  }
+  saveSettings(value: Settings): Settings {
+    const validated = settingsSchema.parse(value);
+    this.db.prepare('INSERT INTO settings (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value').run(JSON.stringify(validated));
+    return validated;
+  }
+  private transaction<T>(operation: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { const value = operation(); this.db.exec('COMMIT'); return value; }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  createRun(sessionId: string, command: string, cols: number, rows: number, shell = ''): Run {
     this.session(sessionId);
     const id = randomUUID();
     const now = new Date().toISOString();
-    this.db.prepare("INSERT INTO runs (id, sessionId, status, startedAt, command, cols, rows) VALUES (?, ?, 'running', ?, ?, ?, ?)").run(id, sessionId, now, command, cols, rows);
+    this.db.prepare("INSERT INTO runs (id, sessionId, status, startedAt, command, cols, rows, shell) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)").run(id, sessionId, now, command, cols, rows, shell);
     this.db.prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(now, sessionId);
     return this.run(id);
   }
 
   run(id: string): Run {
-    const row = this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, error FROM runs WHERE id = ?').get(id);
+    const row = this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error FROM runs WHERE id = ?').get(id);
     if (!row) throw new Error('运行记录不存在');
     return row as unknown as Run;
   }
-  runs(id: string): Run[] { return this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, error FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 100').all(id) as unknown as Run[]; }
+  runs(id: string): Run[] { return this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 100').all(id) as unknown as Run[]; }
   setPid(id: string, pid: number): void { this.db.prepare('UPDATE runs SET pid = ? WHERE id = ?').run(pid, id); }
   stopping(id: string): void { this.db.prepare("UPDATE runs SET status = 'stopping' WHERE id = ?").run(id); }
   running(id: string): void { this.db.prepare("UPDATE runs SET status = 'running' WHERE id = ?").run(id); }

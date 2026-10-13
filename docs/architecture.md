@@ -10,7 +10,15 @@ The Electron main process starts the daemon with its own executable in `ELECTRON
 
 A per-data-directory exclusive lock prevents multiple daemons opening the same metadata database. The endpoint has a version and random token; the daemon binds only to IPv4 loopback. Browser-origin WebSocket handshakes and incorrect tokens are rejected. The renderer never receives the token or an unrestricted filesystem API.
 
-GUI shutdown leaves the daemon running by design. Daemon restart changes live statuses to interrupted and does not replay commands. Protocol upgrades must include a deliberate drain/upgrade strategy; version 1 does not automatically replace an existing process.
+GUI shutdown leaves the daemon running by design. Daemon restart changes live statuses to interrupted and does not replay commands. The wire protocol remains compatible with 0.1 and state advertises API capabilities. A legacy connection retains terminal viewing/stopping and shows a deliberate upgrade action. The main process authenticates the endpoint before replacing an idle legacy daemon; current daemons atomically refuse shutdown when live/starting PTYs or pending operations exist. Active tasks are never upgraded automatically.
+
+## Management and preferences
+
+SQLite migration adds nullable session terminal overrides, the shell executable used by each run, and validated global preferences. Existing IDs, native history and screens are preserved. Renaming keeps running processes unchanged; changing launch settings requires an idle session. Project relocation and agent changes clear incompatible native history links without rewriting previous runs.
+
+Starting sessions reserve their identity before asynchronous directory/executable validation. Project edits and transcript imports also reserve their scope, preventing deletion or incompatible edits from racing with pending operations. Deletions use a transaction to remove foreign-key dependents, including archived sessions and older runs beyond the visible history limit, then remove only workbench log segments. No project directory or original agent transcript is deleted.
+
+Terminal selection resolves a direct executable and argument array; custom executable paths are never parsed as shell command strings. Preferences affect future runs while a per-session override takes precedence. Agent commands run inside the chosen interactive shell.
 
 ## Terminal reattachment
 
@@ -22,7 +30,7 @@ Terminal scrollback, snapshot length, log segment count, JSONL file size, import
 
 ## Native conversations
 
-The initial adapters read explicitly chosen Codex and Claude Code JSONL files. Working directories must match the project; native IDs must be shell-safe identifiers. The app imports text without editing the original file. Codex response items are preferred over duplicate message events. Claude text blocks are displayed while tool payloads are excluded.
+Adapters read explicitly chosen Codex/Claude Code JSONL and OpenCode JSON exports. OpenCode exports retain info.id/directory and message info/parts; UTF-8 and PowerShell UTF-16LE are decoded. Working directories must match the project; native IDs must be shell-safe identifiers. The app imports text without editing the original file. Codex response items are preferred over duplicate events; Claude/OpenCode text parts omit tools and reasoning. A manual native ID association provides a resume action without claiming to import message text.
 
 History refresh is explicit. File-format coverage is intentionally bounded: compressed rollouts, branch graphs, tools, images, and reasoning blocks are not reconstructed. Future automatic discovery must account for concurrent sessions in the same directory instead of binding whichever file happens to have the newest modification time.
 

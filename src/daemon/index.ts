@@ -22,7 +22,7 @@ function acquireLock(): number {
 }
 const descriptor = acquireLock();
 writeFileSync(descriptor, String(process.pid));
-const server = new DaemonServer(dataDirectory);
+const server = new DaemonServer(dataDirectory, () => { void shutdown(); });
 let quitting = false;
 async function shutdown() {
   if (quitting) return;

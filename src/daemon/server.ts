@@ -8,7 +8,8 @@ import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
-import { directory, launchCommand, shell, terminalEnvironment } from './paths';
+import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
+import { sameDirectory } from './history';
 import { RunLog } from './logs';
 import { readHistory } from './history';
 import { terminateTree } from './processes';
@@ -30,8 +31,10 @@ export class DaemonServer {
   private closing = false;
   private logs: string;
   private historyBusy = new Set<string>();
+  private starting = new Set<string>();
+  private editingProjects = new Set<string>();
 
-  constructor(readonly dataDirectory: string) {
+  constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}) {
     this.store = new Store(dataDirectory);
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
@@ -103,15 +106,71 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
       case 'state': return this.store.state();
-      case 'createProject': { const project = this.store.createProject(request.params.name, await directory(request.params.path)); this.changed(); return project; }
+      case 'shutdownIdle':
+        if (this.live.size || this.starting.size) throw new Error('请先停止全部终端，再更新后台');
+        if (this.historyBusy.size || this.editingProjects.size || [...this.clients.values()].some(other => other.pending > (other === client ? 1 : 0))) throw new Error('后台正在处理数据，请稍后重试');
+        this.closing = true;
+        setTimeout(this.onShutdown, 50);
+        return null;
+      case 'createProject': {
+        const canonical = await directory(request.params.path);
+        if (this.closing) throw new Error('后台正在退出');
+        const project = this.store.createProject(request.params.name, canonical); this.changed(); return project;
+      }
+      case 'updateProject': {
+        const { projectId, name } = request.params;
+        if (this.editingProjects.has(projectId)) throw new Error('项目正在更新，请稍后重试');
+        this.editingProjects.add(projectId);
+        try {
+          const previous = this.store.project(projectId);
+          const canonical = await directory(request.params.path);
+          if (this.closing) throw new Error('后台正在退出');
+          if (!sameDirectory(previous.path, canonical)) for (const id of this.store.projectSessionIds(projectId)) this.requireIdle(id);
+          const project = this.store.updateProject(projectId, name, canonical); this.changed(); return project;
+        } finally { this.editingProjects.delete(projectId); }
+      }
+      case 'deleteProject': {
+        const id = request.params.projectId;
+        this.requireProjectAvailable(id);
+        for (const sessionId of this.store.projectSessionIds(id)) this.requireIdle(sessionId);
+        this.removeLogs(this.store.deleteProject(id)); this.changed(); return null;
+      }
       case 'createSession': {
+        this.requireProjectAvailable(request.params.projectId);
         if (request.params.agent === 'custom' && (!request.params.command.trim() || /[\r\n\x00]/.test(request.params.command))) throw new Error('请填写单行启动命令');
-        const session = this.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command);
+        const session = this.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal);
         this.changed(); return session;
+      }
+      case 'updateSession': {
+        const { sessionId, title, agent, command, terminal } = request.params;
+        const previous = this.store.session(sessionId);
+        this.requireProjectAvailable(previous.projectId);
+        if (this.historyBusy.has(sessionId)) throw new Error('会话正在读取对话记录，请稍后编辑');
+        const launchChanged = agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal);
+        if (launchChanged) this.requireIdle(sessionId);
+        if (agent === 'custom' && !command.trim()) throw new Error('请填写单行启动命令');
+        const session = this.store.updateSession(sessionId, title, agent, command, terminal); this.changed(); return session;
+      }
+      case 'deleteSession': {
+        const id = request.params.sessionId;
+        this.requireProjectAvailable(this.store.session(id).projectId); this.requireIdle(id);
+        this.removeLogs(this.store.deleteSession(id)); this.changed(); return null;
+      }
+      case 'saveSettings': {
+        await resolveTerminal(request.params.terminal);
+        if (this.closing) throw new Error('后台正在退出');
+        const settings = this.store.saveSettings(request.params); this.changed(); return settings;
+      }
+      case 'linkNativeSession': {
+        const session = this.store.session(request.params.sessionId);
+        this.requireProjectAvailable(session.projectId); this.requireIdle(session.id);
+        if (!['codex', 'claude', 'opencode'].includes(session.agent)) throw new Error('当前 Agent 不支持原生会话恢复');
+        const history = { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
+        this.store.saveHistory(session.id, history); this.changed(); return history;
       }
       case 'renameSession': this.store.rename(request.params.sessionId, request.params.title); this.changed(); return null;
       case 'archiveSession':
-        if (this.live.has(request.params.sessionId)) throw new Error('请先停止终端，再归档会话');
+        this.requireIdle(request.params.sessionId);
         this.store.archive(request.params.sessionId); this.changed(); return null;
       case 'start': return this.start(request.params.sessionId, request.params.resume, request.params.cols, request.params.rows);
       case 'stop': await this.stop(request.params.sessionId); return null;
@@ -139,30 +198,38 @@ export class DaemonServer {
   }
 
   private async importHistory(sessionId: string, file: string): Promise<unknown> {
+    this.requireProjectAvailable(this.store.session(sessionId).projectId);
     if (this.historyBusy.has(sessionId)) throw new Error('此会话正在读取对话记录');
     if (this.historyBusy.size >= 2) throw new Error('正在读取其他对话记录，请稍后重试');
     this.historyBusy.add(sessionId);
     try {
       const session = this.store.session(sessionId);
       const history = await readHistory(file, session.agent, this.store.project(session.projectId).path);
+      if (this.closing) throw new Error('后台正在退出');
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); }
   }
 
   private async start(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
-    if (this.live.has(sessionId)) throw new Error('此会话的终端已在运行');
-    if (this.live.size >= MAX_ACTIVE_TERMINALS) throw new Error(`最多同时运行 ${MAX_ACTIVE_TERMINALS} 个终端`);
+    const session = this.store.session(sessionId);
+    this.requireProjectAvailable(session.projectId);
+    if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
+    if (this.live.size + this.starting.size >= MAX_ACTIVE_TERMINALS) throw new Error(`最多同时运行 ${MAX_ACTIVE_TERMINALS} 个终端`);
+    this.starting.add(sessionId);
+    try { return await this.spawn(sessionId, resume, cols, rows); }
+    finally { this.starting.delete(sessionId); }
+  }
+
+  private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
     const session = this.store.session(sessionId);
     const command = launchCommand(session, resume);
     const cwd = await directory(this.store.project(session.projectId).path);
-    // Recheck after async path validation so concurrent starts cannot duplicate a session.
-    if (this.live.has(sessionId)) throw new Error('此会话的终端已在运行');
-    if (this.live.size >= MAX_ACTIVE_TERMINALS || this.closing) throw new Error('后台无法再启动终端');
-    const run = this.store.createRun(sessionId, command, cols, rows);
+    const selected = await resolveTerminal(session.terminal ?? this.store.settings().terminal);
+    if (this.closing) throw new Error('后台无法再启动终端');
+    const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true });
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
-    const selected = shell();
     let child: pty.IPty;
     try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment() }); }
     catch (error) {
@@ -190,6 +257,20 @@ export class DaemonServer {
     if (command) child.write(`${command}\r`);
     this.changed();
     return live.run;
+  }
+
+  private requireProjectAvailable(id: string): void {
+    this.store.project(id);
+    if (this.editingProjects.has(id)) throw new Error('项目正在更新，请稍后重试');
+  }
+  private requireIdle(id: string): void {
+    if (this.live.has(id) || this.starting.has(id)) throw new Error('请先停止终端，再编辑启动配置或删除');
+    if (this.historyBusy.has(id)) throw new Error('会话正在读取对话记录，请稍后重试');
+  }
+  private removeLogs(runIds: string[]): void {
+    for (const id of runIds) for (const suffix of ['', '.1', '.2', '.3']) {
+      try { rmSync(path.join(this.logs, `${id}.log${suffix}`), { force: true }); } catch (error) { this.logError(error); }
+    }
   }
 
   private async screen(live: LiveTerminal): Promise<{ snapshot: string; seq: number; cols: number; rows: number }> {

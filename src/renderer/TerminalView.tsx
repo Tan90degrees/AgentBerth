@@ -9,12 +9,12 @@ const options = {
   fontFamily: 'Cascadia Code, Consolas, Menlo, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
 };
 
-export function TerminalView({ sessionId, onError }: { sessionId: string; onError: (error: string) => void }) {
+export function TerminalView({ sessionId, fontSize = 14, onError }: { sessionId: string; fontSize?: number; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
   useEffect(() => {
-    const terminal = new Terminal(options);
+    const terminal = new Terminal({ ...options, fontSize });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(new WebLinksAddon((_event, _url) => { /* External navigation is disabled in the terminal. */ }));
@@ -68,7 +68,7 @@ export function TerminalView({ sessionId, onError }: { sessionId: string; onErro
       disposed = true; clearTimeout(resizeTimer); observer.disconnect(); input.dispose(); off(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
-  }, [sessionId]);
+  }, [sessionId, fontSize]);
   return <div className="terminal-host" ref={host} data-testid="terminal" />;
 }
 

@@ -3,9 +3,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
-import { PROTOCOL_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
+import { PROTOCOL_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
 
 export class DaemonConnection {
+  private silent = false;
   private pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   constructor(private socket: WebSocket, private onEvent: (event: ServerEvent) => void) {
     socket.on('message', bytes => {
@@ -20,7 +21,7 @@ export class DaemonConnection {
     socket.on('close', () => {
       for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error('后台连接已断开')); }
       this.pending.clear();
-      this.onEvent({ event: 'connection', data: { connected: false } });
+      if (!this.silent) this.onEvent({ event: 'connection', data: { connected: false } });
     });
     socket.on('error', () => {});
   }
@@ -42,7 +43,8 @@ export class DaemonConnection {
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
-  close(): void { this.socket.close(); }
+  close(silent = false): void { this.silent = silent; this.socket.close(); }
+  get connected(): boolean { return this.socket.readyState === WebSocket.OPEN; }
 }
 
 function runtimeFile(directory: string): RuntimeInfo | null {
@@ -51,6 +53,26 @@ function runtimeFile(directory: string): RuntimeInfo | null {
     if (value.version !== PROTOCOL_VERSION || !Number.isInteger(value.port) || value.port < 1 || value.port > 65535 || !/^[a-f0-9]{64}$/.test(value.token) || !Number.isInteger(value.pid) || value.pid < 1) return null;
     return value as RuntimeInfo;
   } catch { return null; }
+}
+
+export async function stopIdleDaemon(directory: string): Promise<void> {
+  const runtime = runtimeFile(directory);
+  if (!runtime) throw new Error('无法确认后台进程，请重新连接后重试');
+  const candidate = await DaemonConnection.open(runtime, () => {});
+  try {
+    const state = await candidate.rpc<State>('state');
+    if (state.sessions.some(session => ['running', 'stopping'].includes(session.latestRun?.status ?? ''))) throw new Error('请先停止全部终端，再更新后台');
+    if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
+    if (state.apiVersion >= 2) await candidate.rpc('shutdownIdle');
+    else process.kill(runtime.pid, 'SIGTERM'); // Explicit upgrade of an authenticated, idle 0.1 daemon.
+    const deadline = Date.now() + 7000;
+    while (Date.now() < deadline) {
+      try { process.kill(runtime.pid, 0); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error('后台尚未退出，请稍后重试');
+  } finally { candidate.close(true); }
 }
 
 export async function connectDaemon(directory: string, daemonFile: string, executable: string, onEvent: (event: ServerEvent) => void): Promise<DaemonConnection> {

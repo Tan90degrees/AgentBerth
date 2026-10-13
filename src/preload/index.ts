@@ -10,7 +10,9 @@ const api: DesktopApi = {
   },
   chooseDirectory: () => ipcRenderer.invoke('berth:directory'),
   chooseTranscript: () => ipcRenderer.invoke('berth:transcript'),
+  chooseExecutable: () => ipcRenderer.invoke('berth:executable'),
   openProject: folder => ipcRenderer.invoke('berth:openProject', folder),
   reconnect: () => ipcRenderer.invoke('berth:reconnect'),
+  restartBackend: () => ipcRenderer.invoke('berth:restart'),
 };
 contextBridge.exposeInMainWorld('berth', api);

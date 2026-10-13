@@ -1,17 +1,41 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
+export const API_VERSION = 2;
 export const MAX_ACTIVE_TERMINALS = 16;
-export const agentSchema = z.enum(['shell', 'codex', 'claude', 'custom']);
+export const agentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export type Agent = z.infer<typeof agentSchema>;
+export const terminalProfileSchema = z.enum(['auto', 'powershell', 'pwsh', 'cmd', 'bash', 'custom']);
+const singleLine = z.string().max(4096).refine(value => !/[\r\n\x00]/.test(value), '须为单行文本');
+export const terminalSchema = z.object({
+  profile: terminalProfileSchema,
+  executable: singleLine.default(''),
+  args: z.array(singleLine).max(32).default([]),
+}).strict();
+export type TerminalConfig = z.infer<typeof terminalSchema>;
+export const settingsSchema = z.object({
+  terminal: terminalSchema,
+  defaultAgent: agentSchema,
+  fontSize: z.number().int().min(10).max(24),
+}).strict();
+export type Settings = z.infer<typeof settingsSchema>;
+export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', fontSize: 14 };
 const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };
+const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null) };
 
 export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('createProject'), params: z.object({ name: title, path: z.string().min(1).max(4096) }).strict() }),
-  z.object({ id, method: z.literal('createSession'), params: z.object({ projectId: id, title, agent: agentSchema, command: z.string().max(4096).default('') }).strict() }),
+  z.object({ id, method: z.literal('updateProject'), params: z.object({ projectId: id, name: title, path: z.string().min(1).max(4096) }).strict() }),
+  z.object({ id, method: z.literal('deleteProject'), params: z.object({ projectId: id }).strict() }),
+  z.object({ id, method: z.literal('createSession'), params: z.object({ projectId: id, ...sessionConfig }).strict() }),
+  z.object({ id, method: z.literal('updateSession'), params: z.object({ sessionId: id, ...sessionConfig }).strict() }),
+  z.object({ id, method: z.literal('deleteSession'), params: z.object({ sessionId: id }).strict() }),
+  z.object({ id, method: z.literal('saveSettings'), params: settingsSchema }),
+  z.object({ id, method: z.literal('shutdownIdle'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/) }).strict() }),
   z.object({ id, method: z.literal('renameSession'), params: z.object({ sessionId: id, title }).strict() }),
   z.object({ id, method: z.literal('archiveSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('start'), params: z.object({ sessionId: id, resume: z.boolean().default(false), ...size }).strict() }),
@@ -30,9 +54,9 @@ export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
 export interface Project { id: string; name: string; path: string; createdAt: string }
-export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; error: string | null }
-export interface Session { id: string; projectId: string; title: string; agent: Agent; command: string; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
-export interface State { projects: Project[]; sessions: Session[]; maxActiveTerminals: number; platform: string }
+export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null }
+export interface Session { id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
+export interface State { projects: Project[]; sessions: Session[]; maxActiveTerminals: number; platform: string; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface Attachment { run: Run | null; snapshot: string; seq: number; cols: number; rows: number }
@@ -47,6 +71,8 @@ export interface DesktopApi {
   onEvent(listener: (event: ServerEvent) => void): () => void;
   chooseDirectory(): Promise<string | null>;
   chooseTranscript(): Promise<string | null>;
+  chooseExecutable(): Promise<string | null>;
   openProject(path: string): Promise<void>;
   reconnect(): Promise<void>;
+  restartBackend(): Promise<void>;
 }

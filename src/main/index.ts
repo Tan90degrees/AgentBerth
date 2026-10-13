@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { connectDaemon, type DaemonConnection } from './connection';
+import { connectDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
 import { requestSchema, type Method, type ServerEvent } from '../shared/protocol';
 
 let window: BrowserWindow | null = null;
@@ -12,6 +12,7 @@ let connection: DaemonConnection | null = null;
 let connecting: Promise<void> | null = null;
 let quitting = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
+let restarting = false;
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
 if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must be an absolute path');
 
@@ -40,7 +41,7 @@ else {
 function showWindow() { if (!window) createWindow(); window?.show(); window?.focus(); }
 function emit(event: ServerEvent) {
   if (window && !window.isDestroyed()) window.webContents.send('berth:event', event);
-  if (event.event === 'connection' && !event.data.connected && !quitting) {
+  if (event.event === 'connection' && !event.data.connected && !quitting && !restarting) {
     connection = null;
     if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; void reconnect().catch(error => emit({ event: 'connection', data: { connected: false, error: String(error) } })); }, 2000);
   }
@@ -74,11 +75,13 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   trusted(event);
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
+  if (connecting) await connecting;
   if (!connection) await reconnect();
   return connection!.rpc(method, request.data.params);
 });
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:transcript', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl'] }] }); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:transcript', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl', 'json'] }] }); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:executable', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: '终端程序', extensions: ['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:openProject', async (event, folder: string) => {
   trusted(event);
   if (!connection) await reconnect();
@@ -88,3 +91,18 @@ ipcMain.handle('berth:openProject', async (event, folder: string) => {
   if (error) throw new Error(error);
 });
 ipcMain.handle('berth:reconnect', async event => { trusted(event); if (!connection) await reconnect(); });
+ipcMain.handle('berth:restart', async event => {
+  trusted(event);
+  if (connecting) await connecting;
+  restarting = true;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  connecting = (async () => {
+    await stopIdleDaemon(dataDirectory);
+    connection?.close(true); connection = null;
+    connection = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
+    emit({ event: 'connection', data: { connected: true } });
+    emit({ event: 'state', data: await connection.rpc('state') });
+  })().finally(() => { connecting = null; restarting = false; });
+  try { await connecting; }
+  catch (error) { if (!connection?.connected) { connection = null; emit({ event: 'connection', data: { connected: false, error: String(error) } }); } throw error; }
+});
