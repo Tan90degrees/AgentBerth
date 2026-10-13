@@ -156,6 +156,14 @@ try {
   await page.getByLabel('会话名称', { exact: true }).fill('后台驻留验证');
   await page.getByRole('button', { name: '保存会话', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  step('changing defaults preserves actual running shell identity');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'powershell' : 'auto');
+  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await page.getByText('设置已保存', { exact: true }).waitFor();
+  await page.locator('.projects .project-item').click();
+  assert.ok((await page.locator('.terminal-footer').innerText()).includes(path.basename(original.shell)));
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   step('choose custom executable using native dialog while PTY keeps running');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByLabel('默认终端', { exact: true }).selectOption('custom');
