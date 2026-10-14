@@ -22,6 +22,9 @@ async function eventually(check, description, timeout = 15000) {
   while (!await check()) { assert.ok(Date.now() < deadline, description); await new Promise(resolve => setTimeout(resolve, 70)); }
 }
 async function contextItem(page, label, kind = 'session', title) {
+  // Async create/delete handlers select their result before dismissing the
+  // dialog. Do not open the previous row's menu while that request is pending.
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
   if (await page.getByRole('menu').count()) await page.keyboard.press('Escape');
   const row = title ? page.locator(kind === 'project' ? '.project-item' : '.session-item').filter({ hasText: title }) : page.locator(kind === 'project' ? '.project-row.current-project .project-item' : '.session-item.selected');
   await row.click({ button: 'right' });
@@ -615,6 +618,7 @@ try {
   await page.getByLabel('会话名称', { exact: true }).fill('默认命令后续会话');
   await page.getByLabel('创建后立即启动', { exact: true }).uncheck();
   await page.getByRole('button', { name: '创建会话', exact: true }).click();
+  await page.getByRole('heading', { name: '默认命令后续会话', exact: true }).waitFor();
   await menuAction(page, '删除会话', 'session');
   await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
   await menuAction(page, '停止终端', 'session');
