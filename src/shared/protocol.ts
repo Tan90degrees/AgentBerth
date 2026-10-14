@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 7;
+export const API_VERSION = 8;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -28,7 +28,7 @@ export const agentDefinitionSchema = z.object({
   name: title,
   command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
   resumeCommand: singleLine.default('').transform(value => value.trim()).refine(value => !value.trim() || (value.includes('{sessionId}') && !/\{(?!sessionId\})/.test(value)), '恢复命令须包含 {sessionId}，且只支持此占位符'),
-  plugin: z.object({ executable: singleLine.refine(value => !!value.trim(), '请填写插件程序'), args: z.array(singleLine).max(32).default([]), history: z.boolean(), resume: z.boolean() }).strict().nullable().default(null),
+  plugin: z.object({ executable: singleLine.refine(value => !!value.trim(), '请填写插件程序'), args: z.array(singleLine).max(32).default([]), history: z.boolean(), resume: z.boolean(), runtime: z.enum(['node', 'executable']).optional(), sourceId: z.string().max(100).optional() }).strict().nullable().default(null),
 }).strict();
 export type AgentDefinitionConfig = z.infer<typeof agentDefinitionSchema>;
 export interface AgentDefinition extends AgentDefinitionConfig { id: string }
@@ -48,6 +48,8 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('createAgent'), params: agentDefinitionSchema }),
   z.object({ id, method: z.literal('updateAgent'), params: agentDefinitionSchema.extend({ agentId: agentSchema }) }),
   z.object({ id, method: z.literal('deleteAgent'), params: z.object({ agentId: agentSchema }).strict() }),
+  z.object({ id, method: z.literal('probeAgentPlugin'), params: agentDefinitionSchema }),
+  z.object({ id, method: z.literal('checkAgentPlugin'), params: z.object({ agentId: agentSchema }).strict() }),
   z.object({ id, method: z.literal('shutdownIdle'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('shutdown'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/) }).strict() }),
@@ -69,7 +71,7 @@ export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
 export interface Project { id: string; name: string; path: string; createdAt: string }
-export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null }
+export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
 export interface Session { id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
@@ -88,6 +90,9 @@ export interface DesktopApi {
   chooseDirectory(): Promise<string | null>;
   chooseTranscript(): Promise<string | null>;
   chooseExecutable(): Promise<string | null>;
+  importAgentPlugin(): Promise<AgentDefinitionConfig | null>;
+  exportPluginKit(): Promise<string | null>;
+  pluginDevelopmentPrompt(folder?: string): Promise<string>;
   copyText(text: string): Promise<void>;
   readClipboard(): Promise<string>;
   openExternal(url: string): Promise<void>;

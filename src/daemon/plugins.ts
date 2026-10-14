@@ -21,20 +21,21 @@ export class AgentPlugins {
   private closing = false;
   constructor(private timeout = 10000) {}
 
-  private call(agent: AgentDefinition, method: 'history' | 'resume', session: Session, projectPath: string, file: string | null): Promise<unknown> {
+  private call(agent: AgentDefinition, method: 'history' | 'resume' | 'describe', session: Session | null, projectPath: string, file: string | null): Promise<unknown> {
     if (this.closing) return Promise.reject(new Error('后台正在退出'));
-    if (!agent.plugin?.[method]) return Promise.reject(new Error('此 Agent 未启用相应插件能力'));
+    if (!agent.plugin || (method !== 'describe' && !agent.plugin[method])) return Promise.reject(new Error('此 Agent 未启用相应插件能力'));
     if (!path.isAbsolute(agent.plugin.executable)) return Promise.reject(new Error('插件程序须使用完整路径'));
     if (this.active.size >= 4) return Promise.reject(new Error('插件正在处理其他请求，请稍后重试'));
     const controller = new AbortController();
-    const request = { version: 1, method, agent: { id: agent.id, name: agent.name }, projectPath, session: { id: session.id, title: session.title, command: session.command, nativeSessionId: session.nativeSessionId }, path: file };
+    const request = method === 'describe' ? { version: 1, method, agent: { id: agent.id, name: agent.name } } : { version: 1, method, agent: { id: agent.id, name: agent.name }, projectPath, session: { id: session!.id, title: session!.title, command: session!.command, nativeSessionId: session!.nativeSessionId }, path: file };
     const task = this.run(agent.plugin, request, projectPath, controller.signal).finally(() => this.active.delete(controller));
     this.active.set(controller, task);
     return task;
   }
   private run(plugin: NonNullable<AgentDefinition['plugin']>, request: unknown, cwd: string, signal: AbortSignal): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      const child = spawn(plugin.executable, plugin.args, { cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+      const node = plugin.runtime === 'node';
+      const child = spawn(node ? process.execPath : plugin.executable, node ? [plugin.executable, ...plugin.args] : plugin.args, { cwd, env: node ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
       let failure: Error | null = null;
       let bytes = 0;
       let stderr = '';
@@ -69,6 +70,14 @@ export class AgentPlugins {
       if (signal.aborted) abort();
       else child.stdin.end(JSON.stringify(request) + '\n');
     });
+  }
+  async check(agent: AgentDefinition): Promise<{ name: string; message: string }> {
+    if (!agent.plugin) throw new Error('当前类型未安装插件');
+    const schema = z.object({ version: z.literal(1), name: z.string().min(1).max(100), capabilities: z.object({ history: z.boolean(), resume: z.boolean() }).strict() }).strict();
+    const result = schema.safeParse(await this.call(agent, 'describe', null, path.dirname(agent.plugin!.executable), null));
+    if (!result.success) throw new Error('插件自检返回格式无效，请让开发 Agent 实现 describe 接口');
+    if ((agent.plugin!.history && !result.data.capabilities.history) || (agent.plugin!.resume && !result.data.capabilities.resume)) throw new Error('插件实际支持的能力与声明不一致，请重新导入修正后的插件');
+    return { name: result.data.name, message: '插件连接正常' };
   }
   async history(agent: AgentDefinition, session: Session, projectPath: string, file: string | null): Promise<History> {
     let canonical: string | null = null;

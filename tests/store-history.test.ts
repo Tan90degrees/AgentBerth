@@ -15,7 +15,7 @@ test('projects deduplicate and sessions retain separate run history across daemo
   t.after(() => { store.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const project = store.createProject('项目', folder);
   assert.equal(store.createProject('另一个名字', folder).id, project.id);
-  const a = store.createSession(project.id, '控制算法', 'codex', '');
+  const a = store.createSession(project.id, '控制算法', 'shell', '');
   const b = store.createSession(project.id, '调试', 'shell', '');
   const first = store.createRun(a.id, 'codex', 100, 30);
   store.finish(first.id, 'exited', 0, null, 'screen', 1, 100, 30);

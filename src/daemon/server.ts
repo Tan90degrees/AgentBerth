@@ -21,7 +21,7 @@ import { windowsPtyFor } from '../shared/desktop';
 interface LiveTerminal {
   run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
-  log: RunLog;
+  log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null;
 }
 interface Client { subscriptions: Set<string>; pending: number }
@@ -181,13 +181,16 @@ export class DaemonServer {
         }
         if (config.plugin) {
           if (!path.isAbsolute(config.plugin.executable)) throw new Error('插件程序须使用完整路径');
-          await resolveTerminal({ profile: 'custom', executable: config.plugin.executable, args: config.plugin.args });
+          if (config.plugin.runtime === 'node') { if (!statSync(config.plugin.executable).isFile()) throw new Error('插件入口文件不存在'); }
+          else await resolveTerminal({ profile: 'custom', executable: config.plugin.executable, args: config.plugin.args });
         }
         if (this.closing) throw new Error('后台正在退出');
         // Recheck after resolving an executable: a concurrent request may have started a session.
         if (agentId) { this.store.agent(agentId); for (const session of this.store.state().sessions.filter(item => item.agent === agentId)) this.requireIdle(session.id); }
         const agent = this.store.saveAgent(config, agentId); this.changed(); return agent;
       }
+      case 'probeAgentPlugin': return this.plugins.check({ id: 'preview', ...request.params });
+      case 'checkAgentPlugin': return this.plugins.check(this.store.agent(request.params.agentId));
       case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.changed(); return null;
       case 'linkNativeSession': {
         const session = this.store.session(request.params.sessionId);
@@ -213,9 +216,10 @@ export class DaemonServer {
         const live = this.terminal(request.params.sessionId, request.params.runId);
         live.pty.resize(request.params.cols, request.params.rows); live.terminal.resize(request.params.cols, request.params.rows); return null;
       }
-      case 'runs': this.store.session(request.params.sessionId); return this.store.runs(request.params.sessionId);
+      case 'runs': return this.store.session(request.params.sessionId).agent === 'shell' ? this.store.runs(request.params.sessionId).filter(run => run.recordOutput) : [];
       case 'output': {
         const run = this.store.run(request.params.runId), live = this.live.get(run.sessionId);
+        if (!run.recordOutput || this.store.session(run.sessionId).agent !== 'shell') throw new Error('仅普通终端保留运行输出；Agent 请使用原生对话历史');
         if (live?.run.id === run.id) this.flushOutput(live);
         return new RunLog(this.logs, request.params.runId).read();
       }
@@ -287,7 +291,7 @@ export class DaemonServer {
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
     }
     this.store.setPid(run.id, child.pid);
-    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: new RunLog(this.logs, run.id), output: [], outputBytes: 0, outputTimer: null };
+    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     this.live.set(sessionId, live);
     this.pruneLogs();
     child.onData(text => {
@@ -318,10 +322,10 @@ export class DaemonServer {
     }
   }
 
-  private async screen(live: LiveTerminal): Promise<{ snapshot: string; seq: number; cols: number; rows: number }> {
+  private async screen(live: LiveTerminal, serialize = true): Promise<{ snapshot: string; seq: number; cols: number; rows: number }> {
     this.flushOutput(live);
     // This callback follows all prior writes. seq and the screen describe the same point in time.
-    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: live.serialize.serialize({ scrollback: 200 }), seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
+    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: serialize ? live.serialize.serialize({ scrollback: 200 }) : '', seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
   }
   private flushOutput(live: LiveTerminal): void {
     if (live.outputTimer) clearTimeout(live.outputTimer);
@@ -329,7 +333,7 @@ export class DaemonServer {
     if (!live.output.length) return;
     const text = live.output.join(''), bytes = live.outputBytes, seq = ++live.seq;
     live.output = []; live.outputBytes = 0;
-    try { live.log.append(text); } catch (error) { this.logError(error); }
+    try { live.log?.append(text); } catch (error) { this.logError(error); }
     live.terminal.write(text, () => {
       live.committedSeq = seq; live.queuedBytes -= bytes;
       if (live.queuedBytes < 512 * 1024 && !live.closed) live.pty.resume();
@@ -352,7 +356,7 @@ export class DaemonServer {
     if (process.platform === 'win32') {
       try { live.pty.kill(); } catch (error) { this.logError(error); }
     }
-    const screen = await this.screen(live);
+    const screen = await this.screen(live, !!live.run.recordOutput);
     this.store.finish(live.run.id, live.stopping ? 'stopped' : 'exited', exitCode, null, screen.snapshot, screen.seq, screen.cols, screen.rows);
     if (this.live.get(sessionId) === live) this.live.delete(sessionId);
     live.terminal.dispose();

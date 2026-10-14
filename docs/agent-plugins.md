@@ -1,72 +1,33 @@
-# 自定义 Agent 与插件协议 v1
+# 自定义 Agent 与插件
 
-在 **设置 → 自定义 Agent 类型 → 新增 Agent 类型** 中分别保存名称和单行启动命令，例如 Aider、Gemini CLI 或同一 CLI 的不同配置。新建会话和默认 Agent 可选择任意已保存类型。最多 64 个类型，名称不重复；类型 ID 稳定，重命名保留关联。已有旧版自定义会话不变。
+## 使用现有插件
 
-每个会话保存独立启动命令。编辑类型的启动命令只影响新建会话；编辑类型的历史／恢复能力影响使用此类型的会话，需先停止这些会话的终端并等待历史请求结束。类型被会话（包括旧归档）或默认设置引用时禁止删除。改变会话的 Agent 类型会清除旧原生历史关联，运行记录保留。
+1. 在 **设置 → 自定义 Agent 类型 → 导入插件** 选择插件目录里的 `agentberth-plugin.json`。
+2. 名称、启动命令、历史和恢复能力会自动填写。点 **保存并启用插件**，软件先自检再保存。
+3. 新建会话选择该 Agent 类型；在对话历史页点 **读取对话**。插件自动发现原生记录；已有记录可刷新，也可手动选择文件或关联原生 ID。
 
-## 不写插件也能恢复
+软件自动复制插件资源到自身管理目录，导入后移动或删除下载目录不会影响使用。Node 插件使用软件自带运行时，无需另外安装 Node、寻找程序路径或填写 JSON 参数。独立可执行插件同样可通过清单导入。实际 Agent CLI 仍使用本机安装和登录状态。
 
-类型的可选恢复命令可填写 `my-agent --resume {sessionId}`。只支持 `{sessionId}` 占位符，ID 限制为 1–128 个字母、数字、下划线或连字符。关联原生会话 ID 后，在会话工具栏选择恢复。启动／恢复命令交给用户选定的 Shell；请填写该 Shell 支持的语法。
+更新时重新导入相同插件 ID 的清单；预览后保存即可更新同一个类型。已有会话保存自己的启动命令，插件能力使用更新后的配置。更新前停止使用此类型的终端。可用“检查插件”查看连接和能力是否正常；失败时错误提示会保留诊断信息。
 
-## 接入插件
+## 让编程 Agent 开发插件
 
-启用本地扩展插件，选择程序的**完整路径**，参数填写 JSON 字符串数组。如程序为 `C:\Program Files\nodejs\node.exe`，参数为 `["D:/plugins/agent-plugin.cjs"]`；Linux 例如程序 `/usr/bin/node`，参数 `["/home/me/plugins/agent-plugin.cjs"]`。程序可以使用任何语言，只需支持下面的 stdio 协议。无需修改 AgentBerth 源码；插件代码不在 renderer 中执行。
+在设置点击 **导出开发套件**，选择保存位置。软件生成新目录，包含完整开发指南、清单和可运行模板，并自动复制开发指令。把指令粘贴给编程 Agent，告诉它你要适配的 CLI 和历史/恢复需求即可。
 
-勾选历史和／或恢复能力。历史页“刷新记录”允许插件按项目和原生 ID 自动发现记录，也可用“关联记录文件”选择 JSON/JSONL。启用恢复插件后，其返回命令优先于恢复模板。
+也可以直接点击 **复制 Agent 开发指令**，无需先导出；指令包含完整指南。仓库中的 [AGENT_PLUGIN_DEVELOPMENT.md](AGENT_PLUGIN_DEVELOPMENT.md) 可直接交给 Agent 阅读，模板位于 [examples/plugin-template](../examples/plugin-template)。软件包 resources/docs 和 resources/examples 同样包含这些文件。
 
-程序在项目目录中直接启动，**不经过 Shell**，参数按数组传递。每次请求启动一个进程，stdin 为一个 JSON 对象加换行，随后 EOF；stdout 必须仅返回一个 JSON 对象，完成后退出 0，日志写 stderr。非零退出、格式错误、超时会显示错误，已保存历史保留。插件有本机程序权限，应仅配置可信的本地程序。插件应执行一次请求后退出，不创建常驻服务或脱离进程树的后台进程。
+完成后只需导入 Agent 交付的清单，不需要修改工作台源码或编辑程序参数。模板读取标准 JSON `agent-session.json`，并非现成的 Aider/Gemini 等真实 CLI 适配器；开发 Agent 应根据实际 CLI 文档和原生记录实现并测试。
 
-程序有 10 秒时限，stdout 与 stderr 合计最多 2 MiB，同一后台最多 4 个插件请求、同时最多 2 个历史读取；超时和退出应用会取消并清理运行中的插件进程树。历史最近最多 1000 条，每条最多 32768 字符，展示总量最多 512 KiB；选定的记录文件须小于 16 MiB。插件失败不会覆盖原有记录，也不会停止其他终端。
+## 日常配置
 
-请求示例：
+项目、会话的所有管理入口统一在左侧条目的右键或 ⋯ 菜单：新建、重命名、编辑、复制、删除、启动／停止和原生恢复。右键未选中的条目不会切走当前会话，删除与停止都有明确目标。也可聚焦条目后按 Shift+F10，方向键选择、Enter 执行、Esc 关闭。右侧只展示内容和状态。
 
-```json
-{
-  "version": 1,
-  "method": "history",
-  "agent": { "id": "agent:…", "name": "My Agent" },
-  "projectPath": "D:/Projects/demo",
-  "session": { "id": "…", "title": "调试", "command": "my-agent", "nativeSessionId": "native-123" },
-  "path": "D:/Projects/demo/session.json"
-}
-```
+不用历史/恢复扩展时，选择“新增 Agent 类型”，填写名称和启动命令即可。高级程序参数和旧版手动插件设置折叠在高级选项中。旧版 0.6 配置继续可用；若需要自检，请让插件实现 describe 接口，或改用新的清单导入方式。
 
-`method` 为 `history` 或 `resume`；自动读取时 `path` 为 null，尚未关联时 `nativeSessionId` 为 null。未来新增能力会增加版本或明确的能力字段，插件须拒绝未知版本和方法。
+项目和会话名称可留空，自动按目录或 Agent 生成；会话终端默认跟随设置，只有需要覆盖时才展开调整。单个项目可有多个独立会话，设置中的默认 Agent 用于之后新建的会话。
 
-历史返回：
+## 记录策略
 
-```json
-{
-  "version": 1,
-  "cwd": "D:/Projects/demo",
-  "nativeSessionId": "native-123",
-  "path": "D:/Projects/demo/session.json",
-  "messages": [
-    { "role": "user", "text": "修复问题", "timestamp": null },
-    { "role": "assistant", "text": "已完成", "timestamp": "2026-10-14T03:00:00Z" }
-  ],
-  "warnings": []
-}
-```
+**只有普通 Shell 会话保存运行输出和运行记录。** Codex、Claude Code、OpenCode、旧版自定义命令及保存的自定义 Agent 类型均不录制 TUI 屏幕，不显示运行记录或结束后的“查看本次输出”。它们保留当前运行状态和已有原生对话历史，实时画面仍支持隐藏窗口后接回。
 
-`cwd` 必须是当前项目目录（支持目录别名／符号链接）；原生 ID 可以为 null，否则须符合上述 ID 格式。自动读取时若已有关联 ID，插件必须返回同一 ID。`path` 可省略或为 null；选择文件导入时，工作台使用用户选定文件作为关联路径。`role` 仅接受 user/assistant，文本不渲染 HTML；timestamp 可省略或 null。未知字段或无效消息会拒绝整个响应。
-
-恢复返回：
-
-```json
-{ "version": 1, "command": "my-agent --resume native-123" }
-```
-
-只有合法原生 ID 才会调用恢复插件。返回命令须为非空单行、最多 4096 字符，不包含 NUL；它将作为新运行实例的命令保留。
-
-## 运行示例
-
-仓库提供 [examples/agent-plugin.cjs](../examples/agent-plugin.cjs)，Windows 软件包的 `resources/examples` 也包含该文件，文档在 `resources/docs`。需安装 Node.js 来运行这个示例；插件也可使用独立的可执行程序。
-
-1. 新增类型，命令填写你的 CLI 启动命令。
-2. 按上面的 Node 程序／参数例子配置插件，勾选“读取和刷新对话历史”。需要测试恢复时勾选“生成会话恢复命令”（示例使用 `--resume ID`，应适配自己的 CLI）。
-3. 在项目目录创建 `agent-session.json`，内容为 `{ "cwd": "当前项目完整路径", "nativeSessionId": "demo-123", "messages": [{ "role": "user", "text": "你好" }, { "role": "assistant", "text": "插件已连接" }] }`。
-4. 使用该类型创建会话，在对话历史页点击刷新记录，应显示两条消息并关联 demo-123。
-5. 更改文件中的消息后刷新验证更新，或选择其他 JSON/JSONL 文件验证显式导入。
-
-示例是可替换的格式适配器；接入其他 CLI 时修改历史解析和恢复参数即可。它不启动或登录任何实际 Agent 服务。
+默认终端指“普通终端”会话，并不限制为某个 Shell 程序：PowerShell、CMD、Bash 或自定义 Shell 都可用。Agent 自身的原生对话记录由内置读取器或插件管理，与终端输出分开。

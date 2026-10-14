@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { connectDaemon, shutdownDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
 import { requestSchema, type Method, type ServerEvent } from '../shared/protocol';
+import { installPluginManifest, exportPluginKit, developmentPrompt } from './plugin-files';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
 
 let window: BrowserWindow | null = null;
@@ -134,4 +135,21 @@ ipcMain.handle('berth:restart', async event => {
   })().finally(() => { connecting = null; restarting = false; });
   try { await connecting; }
   catch (error) { if (!connection?.connected) { connection = null; emit({ event: 'connection', data: { connected: false, error: String(error) } }); } throw error; }
+});
+
+const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
+ipcMain.handle('berth:importPlugin', async event => {
+  trusted(event);
+  const result = await dialog.showOpenDialog(window!, { title: '选择插件文件 agentberth-plugin.json', properties: ['openFile'], filters: [{ name: 'AgentBerth 插件', extensions: ['json'] }] });
+  return result.canceled ? null : installPluginManifest(result.filePaths[0], dataDirectory);
+});
+ipcMain.handle('berth:exportPluginKit', async event => {
+  trusted(event);
+  const result = await dialog.showOpenDialog(window!, { title: '选择插件开发目录的保存位置', properties: ['openDirectory', 'createDirectory'] });
+  return result.canceled ? null : exportPluginKit(result.filePaths[0], resourceRoot);
+});
+ipcMain.handle('berth:pluginPrompt', async (event, folder?: string) => {
+  trusted(event);
+  if (folder !== undefined && (typeof folder !== 'string' || folder.length > 4096 || /[\r\n\x00]/.test(folder))) throw new Error('插件目录无效');
+  return developmentPrompt(readFileSync(path.join(resourceRoot, 'docs', 'AGENT_PLUGIN_DEVELOPMENT.md'), 'utf8'), folder);
 });

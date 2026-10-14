@@ -47,7 +47,8 @@ test('full quit stops every terminal, foreground descendants and daemon, retaini
     const state = store.state();
     assert.equal(state.sessions.length, 2);
     assert.ok(state.sessions.every(session => session.latestRun?.status === 'stopped'));
-    assert.match(store.savedScreen(runs[0].id).snapshot, /QUIT_TREE_READY/);
+    assert.equal(store.savedScreen(runs[0].id).snapshot, '');
+    assert.equal(store.run(runs[0].id).recordOutput, 0);
   } finally { store.close(); }
   await shutdownDaemon(data); // Already stopped must remain stopped, not restart.
 });
@@ -60,9 +61,10 @@ test('batched terminal output preserves ordered text, final screen and log witho
   const connection = await DaemonConnection.open(await server.listen(), event => { if (event.event === 'output') events++; });
   t.after(async () => { connection.close(true); await server.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5 }); });
   const project = await connection.rpc<Project>('createProject', { name: 'burst', path: folder });
-  const session = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'burst', agent: 'custom', command: command(script) });
+  const session = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'burst', agent: 'shell' });
   const run = await connection.rpc<Run>('start', { sessionId: session.id, cols: 80, rows: 24 });
   await connection.rpc('attach', { sessionId: session.id });
+  await connection.rpc('input', { sessionId: session.id, runId: run.id, data: command(script) + '\r' });
   for (let n = 0; n < 150; n++) {
     if ((await connection.rpc<Attachment>('attach', { sessionId: session.id })).snapshot.includes('BURST_DONE')) break;
     await wait(40);
