@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../src/daemon/store';
@@ -93,7 +94,7 @@ test('plugin import preserves selected path, refresh uses linked identity, and r
   const file = path.join(folder, '历史.jsonl'); writeFileSync(file, '{}');
   const a = adapter(folder, `process.stdout.write(JSON.stringify({version:1,cwd:r.projectPath,path:'ignored',nativeSessionId:'native-123',messages:Array.from({length:20},(_,i)=>({role:'assistant',text:String(i)+'x'.repeat(32000)}))}));`);
   const h = await plugins.history(a, session, folder, file);
-  assert.equal(h.path, realpathSync(file)); assert.equal(h.messages.length, 16); assert.ok(h.warnings.some(item => item.includes('512 KiB')));
+  assert.equal(h.path, await realpath(file)); assert.equal(h.messages.length, 16); assert.ok(h.warnings.some(item => item.includes('512 KiB')));
   assert.ok(h.messages.at(-1)!.text.startsWith('19'));
 });
 
