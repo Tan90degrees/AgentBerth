@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 6;
+export const API_VERSION = 7;
 export const MAX_ACTIVE_TERMINALS = 16;
-export const agentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
+export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
+export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
 export type Agent = z.infer<typeof agentSchema>;
 export const terminalProfileSchema = z.enum(['auto', 'powershell', 'pwsh', 'cmd', 'bash', 'custom']);
 const singleLine = z.string().max(4096).refine(value => !/[\r\n\x00]/.test(value), '须为单行文本');
@@ -23,6 +24,15 @@ export type Settings = z.infer<typeof settingsSchema>;
 export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', defaultCommand: '', fontSize: 14 };
 const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
+export const agentDefinitionSchema = z.object({
+  name: title,
+  command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
+  resumeCommand: singleLine.default('').refine(value => !value.trim() || (value.includes('{sessionId}') && !/\{(?!sessionId\})/.test(value)), '恢复命令须包含 {sessionId}，且只支持此占位符'),
+  plugin: z.object({ executable: singleLine.refine(value => !!value.trim(), '请填写插件程序'), args: z.array(singleLine).max(32).default([]), history: z.boolean(), resume: z.boolean() }).strict().nullable().default(null),
+}).strict();
+export type AgentDefinitionConfig = z.infer<typeof agentDefinitionSchema>;
+export interface AgentDefinition extends AgentDefinitionConfig { id: string }
+export const isCustomAgent = (agent: string) => agent === 'custom' || agent.startsWith('agent:');
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };
 const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null) };
 
@@ -35,6 +45,9 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('updateSession'), params: z.object({ sessionId: id, ...sessionConfig }).strict() }),
   z.object({ id, method: z.literal('deleteSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('saveSettings'), params: settingsSchema }),
+  z.object({ id, method: z.literal('createAgent'), params: agentDefinitionSchema }),
+  z.object({ id, method: z.literal('updateAgent'), params: agentDefinitionSchema.extend({ agentId: agentSchema }) }),
+  z.object({ id, method: z.literal('deleteAgent'), params: z.object({ agentId: agentSchema }).strict() }),
   z.object({ id, method: z.literal('shutdownIdle'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('shutdown'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/) }).strict() }),
@@ -59,7 +72,7 @@ export interface Project { id: string; name: string; path: string; createdAt: st
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null }
 export interface Session { id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
-export interface State { projects: Project[]; sessions: Session[]; maxActiveTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface Attachment { run: Run | null; snapshot: string; seq: number; cols: number; rows: number }

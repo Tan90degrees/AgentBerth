@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "A project-oriented workspace for persistent agent terminals",
@@ -68,13 +68,26 @@
     ],
     "npmRebuild": true,
     "win": {
-      "target": ["nsis", "zip"],
+      "target": [
+        "nsis",
+        "zip"
+      ],
       "artifactName": "AgentBerth-${version}-windows-${arch}.${ext}"
     },
     "nsis": {
       "artifactName": "AgentBerth-${version}-windows-${arch}-setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "extraResources": [
+      {
+        "from": "docs",
+        "to": "docs"
+      },
+      {
+        "from": "examples",
+        "to": "examples"
+      }
+    ]
   }
 }

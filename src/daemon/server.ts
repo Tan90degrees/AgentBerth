@@ -10,6 +10,7 @@ import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
+import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
 import { sameDirectory } from './history';
 import { RunLog } from './logs';
@@ -27,6 +28,7 @@ interface Client { subscriptions: Set<string>; pending: number }
 
 export class DaemonServer {
   private store: Store;
+  private plugins = new AgentPlugins();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
   private ws = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
   private clients = new Map<WebSocket, Client>();
@@ -169,10 +171,28 @@ export class DaemonServer {
         if (this.closing) throw new Error('后台正在退出');
         const settings = this.store.saveSettings(request.params); this.changed(); return settings;
       }
+      case 'createAgent':
+      case 'updateAgent': {
+        const { params } = request;
+        const { agentId, ...config } = 'agentId' in params ? params : { ...params, agentId: undefined };
+        if (agentId) {
+          this.store.agent(agentId);
+          for (const session of this.store.state().sessions.filter(item => item.agent === agentId)) this.requireIdle(session.id);
+        }
+        if (config.plugin) {
+          if (!path.isAbsolute(config.plugin.executable)) throw new Error('插件程序须使用完整路径');
+          await resolveTerminal({ profile: 'custom', executable: config.plugin.executable, args: config.plugin.args });
+        }
+        if (this.closing) throw new Error('后台正在退出');
+        // Recheck after resolving an executable: a concurrent request may have started a session.
+        if (agentId) { this.store.agent(agentId); for (const session of this.store.state().sessions.filter(item => item.agent === agentId)) this.requireIdle(session.id); }
+        const agent = this.store.saveAgent(config, agentId); this.changed(); return agent;
+      }
+      case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.changed(); return null;
       case 'linkNativeSession': {
         const session = this.store.session(request.params.sessionId);
         this.requireProjectAvailable(session.projectId); this.requireIdle(session.id);
-        if (!['codex', 'claude', 'opencode'].includes(session.agent)) throw new Error('当前 Agent 不支持原生会话恢复');
+        if (!['codex', 'claude', 'opencode'].includes(session.agent) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume))) throw new Error('当前 Agent 不支持原生会话恢复');
         const history = { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
         this.store.saveHistory(session.id, history); this.changed(); return history;
       }
@@ -203,20 +223,23 @@ export class DaemonServer {
       case 'importHistory': return this.importHistory(request.params.sessionId, request.params.path);
       case 'refreshHistory': {
         const session = this.store.session(request.params.sessionId);
-        if (!session.transcriptPath) throw new Error('请先关联原生对话记录');
+        if (!session.transcriptPath && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
         return this.importHistory(request.params.sessionId, session.transcriptPath);
       }
     }
   }
 
-  private async importHistory(sessionId: string, file: string): Promise<unknown> {
+  private async importHistory(sessionId: string, file: string | null): Promise<unknown> {
     this.requireProjectAvailable(this.store.session(sessionId).projectId);
     if (this.historyBusy.has(sessionId)) throw new Error('此会话正在读取对话记录');
     if (this.historyBusy.size >= 2) throw new Error('正在读取其他对话记录，请稍后重试');
     this.historyBusy.add(sessionId);
     try {
       const session = this.store.session(sessionId);
-      const history = await readHistory(file, session.agent, this.store.project(session.projectId).path);
+      const projectPath = this.store.project(session.projectId).path;
+      const history = session.agent.startsWith('agent:')
+        ? await this.plugins.history(this.store.agent(session.agent), session, projectPath, file)
+        : await readHistory(file!, session.agent, projectPath);
       if (this.closing) throw new Error('后台正在退出');
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); }
@@ -234,7 +257,10 @@ export class DaemonServer {
 
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
     const session = this.store.session(sessionId);
-    const command = launchCommand(session, resume);
+    const projectPath = this.store.project(session.projectId).path;
+    const command = resume && session.agent.startsWith('agent:')
+      ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
+      : launchCommand(session, resume);
     const config = session.terminal ?? this.store.settings().terminal;
     let cwd: string;
     let selected: { file: string; args: string[] };
@@ -359,6 +385,7 @@ export class DaemonServer {
   private async stopAll(): Promise<void> {
     this.closing = true;
     try {
+      await this.plugins.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));
       for (const result of results) if (result.status === 'rejected') this.logError(result.reason);
       const deadline = Date.now() + 5000;

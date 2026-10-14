@@ -86,7 +86,7 @@ export function launchCommand(session: Session, resume: boolean): string {
     throw new Error('当前 Agent 不支持原生会话恢复');
   }
   if (session.agent === 'shell') return '';
-  if (session.agent === 'custom') {
+  if (session.agent === 'custom' || session.agent.startsWith('agent:')) {
     if (!session.command.trim() || /[\r\n\x00]/.test(session.command)) throw new Error('自定义启动命令须为非空单行命令');
     return session.command;
   }

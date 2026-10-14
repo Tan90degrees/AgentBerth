@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { State } from '../shared/protocol';
-import { agentNames, statusNames } from './labels';
+import { agentLabels, statusNames } from './labels';
 import { Dialog } from './Dialog';
 
 export function matchesQuery(text: string, query: string): boolean {
@@ -12,6 +12,7 @@ export type SwitchTarget = { kind: 'project' | 'session' | 'action'; id: string;
 export function QuickSwitcher({ state, canCreate, hasProject, onSelect, onClose, returnFocus }: {
   state: State; canCreate: boolean; hasProject: boolean; onSelect: (target: SwitchTarget) => void; onClose: () => void; returnFocus: HTMLElement | null;
 }) {
+  const agentNames = agentLabels(state.agents);
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const byProject = new Map(state.projects.map(project => [project.id, project]));

@@ -5,8 +5,8 @@ import { matchesQuery } from './QuickSwitcher';
 import { clampSidebarWidth, DEFAULT_SIDEBAR_WIDTH, loadSidebarWidth, saveStored } from './storage';
 
 const active = (session: Session) => ['running', 'stopping'].includes(session.latestRun?.status ?? '');
-export function matchesSession(session: Session, project: Project, query: string, filter: string): boolean {
-  return matchesQuery(`${project.name} ${project.path} ${session.title} ${agentNames[session.agent]} ${session.command} ${session.nativeSessionId ?? ''}`, query)
+export function matchesSession(session: Session, project: Project, query: string, filter: string, names = agentNames): boolean {
+  return matchesQuery(`${project.name} ${project.path} ${session.title} ${names[session.agent] ?? '自定义 Agent'} ${session.command} ${session.nativeSessionId ?? ''}`, query)
     && (filter === 'all' || (filter === 'active' ? active(session) : filter === 'inactive' ? !active(session) : session.agent === filter));
 }
 
@@ -64,8 +64,8 @@ export function ResizableSidebar({ children }: { children: ReactNode }) {
   </aside>;
 }
 
-export const ProjectTree = memo(function ProjectTree({ projects, sessions, projectId, sessionId, collapsed, query, filter, disabled, onToggle, onProject, onSession, onNewSession }: {
-  projects: Project[]; sessions: Session[]; projectId: string; sessionId: string; collapsed: string[]; query: string; filter: string; disabled: boolean;
+export const ProjectTree = memo(function ProjectTree({ projects, sessions, projectId, sessionId, collapsed, query, filter, names = agentNames, disabled, onToggle, onProject, onSession, onNewSession }: {
+  projects: Project[]; sessions: Session[]; projectId: string; sessionId: string; collapsed: string[]; query: string; filter: string; names?: Record<string, string>; disabled: boolean;
   onToggle: (id: string) => void; onProject: (id: string) => void; onSession: (projectId: string, sessionId: string) => void; onNewSession: (id: string) => void;
 }) {
   const grouped = useMemo(() => {
@@ -75,9 +75,9 @@ export const ProjectTree = memo(function ProjectTree({ projects, sessions, proje
   }, [sessions]);
   const searching = !!query.trim() || filter !== 'all';
   const visible = useMemo(() => projects.flatMap(project => {
-    const all = grouped.get(project.id) ?? [], children = all.filter(session => matchesSession(session, project, query, filter));
+    const all = grouped.get(project.id) ?? [], children = all.filter(session => matchesSession(session, project, query, filter, names));
     return children.length || (filter === 'all' && matchesQuery(`${project.name} ${project.path}`, query)) ? [{ project, all, children }] : [];
-  }), [projects, grouped, query, filter]);
+  }), [projects, grouped, query, filter, names]);
   return <nav className="projects" aria-label="项目与会话"><ul className="project-tree">{visible.map(({ project, all, children }) => {
     const expanded = searching || !collapsed.includes(project.id), count = all.filter(active).length;
     return <li key={project.id} className="project-branch" data-project-id={project.id}>
@@ -90,8 +90,8 @@ export const ProjectTree = memo(function ProjectTree({ projects, sessions, proje
         </button>
         <button className="project-new icon-button" aria-label={`在 ${project.name} 新建会话`} title="新建会话" disabled={disabled} onClick={() => onNewSession(project.id)}>+</button>
       </div>
-      {expanded && <ul className="session-list" id={`sessions-${project.id}`}>{children.map(session => <li key={session.id}><button className={`session-item ${sessionId === session.id ? 'selected' : ''}`} aria-current={sessionId === session.id ? 'page' : undefined} onClick={() => onSession(project.id, session.id)} title={`${agentNames[session.agent]} · ${statusNames[session.latestRun?.status ?? ''] ?? '待启动'}${session.nativeSessionId ? ' · 已关联对话' : ''}`}>
-        <span className={`dot ${active(session) ? 'live' : ''}`} /><span className="session-title">{session.title}</span><span className="session-agent">{agentNames[session.agent]}</span>
+      {expanded && <ul className="session-list" id={`sessions-${project.id}`}>{children.map(session => <li key={session.id}><button className={`session-item ${sessionId === session.id ? 'selected' : ''}`} aria-current={sessionId === session.id ? 'page' : undefined} onClick={() => onSession(project.id, session.id)} title={`${names[session.agent] ?? '自定义 Agent'} · ${statusNames[session.latestRun?.status ?? ''] ?? '待启动'}${session.nativeSessionId ? ' · 已关联对话' : ''}`}>
+        <span className={`dot ${active(session) ? 'live' : ''}`} /><span className="session-title">{session.title}</span><span className="session-agent">{names[session.agent] ?? '自定义 Agent'}</span>
       </button></li>)}{!children.length && <li className="tree-empty">{searching ? '没有匹配的会话' : <button className="text-button" disabled={disabled} onClick={() => onNewSession(project.id)}>新建第一个会话</button>}</li>}</ul>}
     </li>;
   })}</ul>{!visible.length && <p className="sidebar-empty">{searching ? '没有匹配的项目或会话' : '添加项目目录，开始第一个会话。'}</p>}</nav>;

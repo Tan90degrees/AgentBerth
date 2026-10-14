@@ -4,8 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { Agent, History, Project, Run, Session, Settings, State, TerminalConfig } from '../shared/protocol';
-import { API_VERSION, DEFAULT_SETTINGS, MAX_ACTIVE_TERMINALS, settingsSchema } from '../shared/protocol';
+import type { Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig } from '../shared/protocol';
+import { API_VERSION, DEFAULT_SETTINGS, MAX_ACTIVE_TERMINALS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
 
@@ -36,12 +36,13 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS runs_by_session ON runs(sessionId, startedAt DESC);
       CREATE INDEX IF NOT EXISTS runs_by_session_row ON runs(sessionId);
+      CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
     `);
     // Additive migration preserves 0.1 projects, native history and saved screens.
     if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'terminal')) this.db.exec('ALTER TABLE sessions ADD COLUMN terminal TEXT');
     if (!this.db.prepare('PRAGMA table_info(runs)').all().some(row => row.name === 'shell')) this.db.exec("ALTER TABLE runs ADD COLUMN shell TEXT NOT NULL DEFAULT ''");
-    this.db.exec('PRAGMA user_version = 2');
+    this.db.exec('PRAGMA user_version = 3');
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
   }
@@ -54,7 +55,7 @@ export class Store {
     const bySession = new Map(latest.map(run => [run.sessionId, run]));
     const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
       .map(row => ({ ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
-    return { projects, sessions, maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings: this.settings(), apiVersion: API_VERSION };
+    return { projects, sessions, agents: this.agents(), maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings: this.settings(), apiVersion: API_VERSION };
   }
 
   project(id: string): Project {
@@ -111,6 +112,7 @@ export class Store {
 
   createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null): Session {
     this.project(projectId);
+    command = this.sessionCommand(agent, command);
     if (Number(this.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE archived = 0').get()!.count) >= 2000) throw new Error('最多管理 2000 个未归档会话');
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -123,6 +125,7 @@ export class Store {
 
   updateSession(id: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null): Session {
     const previous = this.session(id);
+    command = this.sessionCommand(agent, command);
     this.transaction(() => {
       if (previous.agent !== agent) this.saveHistory(id, emptyHistory());
       this.db.prepare('UPDATE sessions SET title = ?, agent = ?, command = ?, terminal = ?, updatedAt = ? WHERE id = ?').run(title, agent, command, terminal ? JSON.stringify(terminal) : null, new Date().toISOString(), id);
@@ -147,10 +150,40 @@ export class Store {
   }
   saveSettings(value: Settings): Settings {
     const validated = settingsSchema.parse(value);
+    if (validated.defaultAgent.startsWith('agent:')) this.agent(validated.defaultAgent);
     if (validated.defaultAgent === 'custom' && !validated.defaultCommand.trim()) throw new Error('请填写自定义 Agent 的默认启动命令');
     this.db.prepare('INSERT INTO settings (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value').run(JSON.stringify(validated));
     return validated;
   }
+  agents(): AgentDefinition[] {
+    return this.db.prepare('SELECT id, value FROM agents ORDER BY rowid').all().map(row => ({ id: String(row.id), ...agentDefinitionSchema.parse(JSON.parse(String(row.value))) }));
+  }
+  agent(id: string): AgentDefinition {
+    const row = this.db.prepare('SELECT value FROM agents WHERE id = ?').get(id);
+    if (!row) throw new Error('Agent 类型不存在，请重新选择');
+    return { id, ...agentDefinitionSchema.parse(JSON.parse(String(row.value))) };
+  }
+  saveAgent(config: AgentDefinitionConfig, id = 'agent:' + randomUUID()): AgentDefinition {
+    const value = agentDefinitionSchema.parse(config);
+    const existing = this.db.prepare('SELECT id FROM agents WHERE id = ?').get(id);
+    if (!existing && this.agents().length >= 64) throw new Error('最多保存 64 种自定义 Agent');
+    if (this.agents().some(agent => agent.id !== id && agent.name.toLocaleLowerCase() === value.name.toLocaleLowerCase())) throw new Error('Agent 名称已存在');
+    this.db.prepare('INSERT INTO agents (id, value) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value').run(id, JSON.stringify(value));
+    return this.agent(id);
+  }
+  deleteAgent(id: string): void {
+    this.agent(id);
+    if (this.settings().defaultAgent === id) throw new Error('请先更换默认 Agent，再删除此类型');
+    if (this.db.prepare('SELECT id FROM sessions WHERE agent = ? LIMIT 1').get(id)) throw new Error('此类型仍被会话使用，请先修改或删除这些会话');
+    this.db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+  }
+  private sessionCommand(agent: Agent, command: string): string {
+    if (agent.startsWith('agent:')) command = command.trim() ? command : this.agent(agent).command;
+    if (agent.startsWith('agent:')) this.agent(agent);
+    if (isCustomAgent(agent) && (!command.trim() || /[\r\n\x00]/.test(command) || command.length > 4096)) throw new Error('请填写单行启动命令');
+    return command;
+  }
+
   private transaction<T>(operation: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try { const value = operation(); this.db.exec('COMMIT'); return value; }
