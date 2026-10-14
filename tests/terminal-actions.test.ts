@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { externalWebUrl, inputChunks, terminalDimensions } from '../src/shared/desktop';
+import { Terminal } from '@xterm/headless';
+import { externalWebUrl, inputChunks, terminalDimensions, windowsPtyFor } from '../src/shared/desktop';
 import { requestSchema } from '../src/shared/protocol';
 
 test('large terminal input remains ordered, Unicode intact and below the WebSocket payload limit', () => {
@@ -32,4 +33,20 @@ test('terminal fitting keeps the rendered grid inside daemon resize protocol bou
     assert.ok(dimensions.cols <= cols || dimensions.cols === 20);
     assert.ok(dimensions.rows <= rows || dimensions.rows === 5);
   }
+});
+
+test('Windows PTY compatibility preserves scrollback when ConPTY increases viewport rows', async () => {
+  assert.equal(windowsPtyFor('linux', '6.8.0'), undefined);
+  assert.equal(windowsPtyFor('win32', '10.0.17763')?.backend, 'winpty');
+  const windowsPty = windowsPtyFor('win32', '10.0.26100');
+  assert.equal(windowsPty?.backend, 'conpty');
+  const terminal = new Terminal({ cols: 40, rows: 5, scrollback: 100, allowProposedApi: true, windowsPty });
+  try {
+    await new Promise<void>(resolve => terminal.write(Array.from({ length: 15 }, (_, n) => `line-${n}\r\n`).join(''), resolve));
+    const base = terminal.buffer.active.baseY, line = terminal.buffer.active.getLine(base)?.translateToString(true);
+    assert.ok(base > 0);
+    terminal.resize(40, 8);
+    assert.equal(terminal.buffer.active.baseY, base);
+    assert.equal(terminal.buffer.active.getLine(base)?.translateToString(true), line);
+  } finally { terminal.dispose(); }
 });

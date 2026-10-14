@@ -1,3 +1,5 @@
+import { release } from 'node:os';
+import { windowsPtyFor } from '../shared/desktop';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -52,7 +54,7 @@ export class Store {
     const bySession = new Map(latest.map(run => [run.sessionId, run]));
     const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
       .map(row => ({ ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
-    return { projects, sessions, maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, settings: this.settings(), apiVersion: API_VERSION };
+    return { projects, sessions, maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings: this.settings(), apiVersion: API_VERSION };
   }
 
   project(id: string): Project {

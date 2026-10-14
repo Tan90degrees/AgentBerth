@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { connectDaemon, DaemonConnection, stopIdleDaemon } from '../src/main/connection';
-import type { Attachment, RuntimeInfo, State } from '../src/shared/protocol';
+import { API_VERSION, type Attachment, type RuntimeInfo, type State } from '../src/shared/protocol';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 test('independent daemon survives launcher exit and upgrades only after draining terminals', { timeout: 30000 }, async t => {
@@ -45,7 +45,7 @@ test('independent daemon survives launcher exit and upgrades only after draining
   const next = JSON.parse(readFileSync(path.join(data, 'runtime.json'), 'utf8')) as RuntimeInfo;
   assert.notEqual(next.pid, runtime.pid); runtime = next;
   const upgraded = await connection.rpc<State>('state');
-  assert.equal(upgraded.apiVersion, 5);
+  assert.equal(upgraded.apiVersion, API_VERSION);
   assert.equal(upgraded.sessions[0].id, run.sessionId);
   assert.equal(upgraded.sessions[0].latestRun!.status, 'stopped');
 });

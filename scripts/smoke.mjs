@@ -13,7 +13,8 @@ async function assertTerminalGutter(page) {
     const screen = document.querySelector('.terminal-mount .xterm-screen'), bar = document.querySelector('.terminal-mount .scrollbar.vertical'), mount = document.querySelector('.terminal-mount');
     if (!screen || !bar || !mount) return false;
     const s = screen.getBoundingClientRect(), b = bar.getBoundingClientRect(), m = mount.getBoundingClientRect();
-    return s.width > 0 && b.width >= 12 && s.right <= b.left + 1 && s.bottom <= m.bottom + 1 && b.right <= m.right + 1;
+    const rows = screen.querySelector('.xterm-rows')?.childElementCount ?? 0, rowHeight = rows ? s.height / rows : 0;
+    return s.width > 0 && b.width >= 12 && s.right <= b.left + 1 && s.bottom <= m.bottom + 1 && b.right <= m.right + 1 && rowHeight > 0 && m.bottom - s.bottom < rowHeight + 1;
   });
 }
 async function eventually(check, description, timeout = 15000) {
@@ -132,6 +133,7 @@ try {
   const before = await page.evaluate(() => window.berth.rpc('state'));
   const original = before.sessions[0].latestRun;
   assert.equal(original.status, 'running');
+  if (process.platform === 'win32') assert.deepEqual(before.windowsPty, { backend: 'conpty', buildNumber: Number(os.release().split('.')[2]) });
   assert.match(original.shell, process.platform === 'win32' ? /cmd\.exe$/i : /bash$/);
   assert.equal(await page.getByRole('button', { name: '删除会话', exact: true }).isEnabled(), false);
   assert.equal(await page.getByRole('button', { name: '删除项目', exact: true }).isEnabled(), false);
@@ -161,9 +163,11 @@ try {
   await writeFile(searchScript, `console.log('TERMINAL_SEARCH_UPPER');console.log('terminal_search_upper');console.log('中文🙂查找结果');console.log(${JSON.stringify(wrappedText)});console.log(${JSON.stringify(wrappedText)});console.log(${JSON.stringify(webUrl)});`);
   await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: shellCommand(searchScript) + '\r' });
   await eventually(async () => (await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id)).snapshot.includes(webUrl), 'Search output did not arrive');
+  const searchHostHeight = (await page.locator('.terminal-mount').boundingBox()).height;
   await page.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+F');
   const searchBar = page.getByRole('search', { name: '终端查找', exact: true });
   await page.getByLabel('查找终端文字', { exact: true }).fill('中文🙂查找结果');
+  assert.equal((await page.locator('.terminal-mount').boundingBox()).height, searchHostHeight, 'Search resized the PTY viewport');
   await searchBar.getByRole('status').filter({ hasText: '已定位' }).waitFor();
   await page.getByRole('button', { name: '复制选中', exact: true }).click();
   await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === '中文🙂查找结果', 'Selection copy did not reach clipboard');
@@ -184,6 +188,7 @@ try {
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-terminal-search' : 'terminal-search'}.png` });
   await page.getByLabel('查找终端文字', { exact: true }).focus(); await page.keyboard.press('Escape');
   await searchBar.waitFor({ state: 'hidden' });
+  assert.equal((await page.locator('.terminal-mount').boundingBox()).height, searchHostHeight);
   await page.getByRole('button', { name: '到底部', exact: true }).click();
   await assertTerminalGutter(page);
   step('Ctrl-click opens terminal web links through trusted main-process IPC');
@@ -623,7 +628,7 @@ try {
   await page.getByRole('button', { name: '添加第一个项目', exact: true }).waitFor();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).projects.length, 0);
   await stat(exportPath); await stat(moved);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands and reserved scrollbar space.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling.`);
 } catch (error) {
   console.error(error);
   if (application) {

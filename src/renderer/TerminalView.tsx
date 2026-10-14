@@ -2,7 +2,7 @@ import { memo, useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import type { Attachment, ServerEvent } from '../shared/protocol';
+import type { Attachment, ServerEvent, WindowsPty } from '../shared/protocol';
 import { inputChunks, terminalDimensions } from '../shared/desktop';
 import { useTerminalActions } from './TerminalActions';
 
@@ -26,14 +26,14 @@ function fitTerminal(terminal: Terminal, fit: FitAddon) {
   return dimensions;
 }
 
-export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, onError }: { sessionId: string; fontSize?: number; autoFocus?: boolean; onError: (error: string) => void }) {
+export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, windowsPty, onError }: { sessionId: string; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
   const { bind, setReady, controls } = useTerminalActions(onError);
   useEffect(() => {
-    const terminal = new Terminal({ ...options, fontSize });
+    const terminal = new Terminal({ ...options, fontSize, windowsPty });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     loadWebLinks(terminal, error => errorHandler.current(error));
@@ -82,7 +82,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       const { cols, rows } = dimensions;
       if (cols === lastCols && rows === lastRows) return;
       lastCols = cols; lastRows = rows;
-      if (running && runId) void window.berth.rpc('resize', { sessionId, runId, cols, rows }).catch(error => errorHandler.current(String(error)));
+      if (running && runId) void window.berth.rpc('resize', { sessionId, runId, cols, rows }).catch(error => { if (!disposed && running) errorHandler.current(String(error)); });
     };
     let resizeTimer: ReturnType<typeof setTimeout>;
     const observer = new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); });
@@ -110,16 +110,16 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       disposed = true; clearTimeout(resizeTimer); observer.disconnect(); input.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
-  }, [sessionId, fontSize, bind, setReady]);
+  }, [sessionId, fontSize, windowsPty, bind, setReady]);
   return <div className="terminal-surface">{controls}<div className="terminal-host" data-testid="terminal"><div className="terminal-mount" ref={host} /></div></div>;
 });
 
-export function OutputView({ text, fontSize = 14, onError }: { text: string; fontSize?: number; onError: (error: string) => void }) {
+export function OutputView({ text, fontSize = 14, windowsPty, onError }: { text: string; fontSize?: number; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const errorHandler = useRef(onError); errorHandler.current = onError;
   const { bind, setReady, controls } = useTerminalActions(onError, true);
   useEffect(() => {
-    const terminal = new Terminal({ ...options, fontSize, disableStdin: true, cursorBlink: false });
+    const terminal = new Terminal({ ...options, fontSize, windowsPty, disableStdin: true, cursorBlink: false });
     const fit = new FitAddon(); terminal.loadAddon(fit); loadWebLinks(terminal, error => errorHandler.current(error)); terminal.open(host.current!);
     const unbind = bind(terminal, () => false);
     let disposed = false, resizeTimer: ReturnType<typeof setTimeout>;
@@ -127,6 +127,6 @@ export function OutputView({ text, fontSize = 14, onError }: { text: string; fon
     resize(); terminal.write(text, () => { if (!disposed) setReady(true); });
     const observer = new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); }); observer.observe(host.current!);
     return () => { disposed = true; clearTimeout(resizeTimer); observer.disconnect(); unbind(); terminal.dispose(); };
-  }, [text, fontSize, bind, setReady]);
+  }, [text, fontSize, windowsPty, bind, setReady]);
   return <div className="terminal-surface">{controls}<div className="terminal-host output-host"><div className="terminal-mount" ref={host} /></div></div>;
 }

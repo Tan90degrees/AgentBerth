@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { release } from 'node:os';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import * as pty from 'node-pty';
@@ -13,6 +14,7 @@ import { sameDirectory } from './history';
 import { RunLog } from './logs';
 import { readHistory } from './history';
 import { terminateTree } from './processes';
+import { windowsPtyFor } from '../shared/desktop';
 
 interface LiveTerminal {
   run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon;
@@ -247,7 +249,7 @@ export class DaemonServer {
     }
     if (this.closing) throw new Error('后台无法再启动终端');
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
-    const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true });
+    const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: windowsPtyFor(process.platform, release()) });
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
     let child: pty.IPty;

@@ -1,3 +1,5 @@
+import type { WindowsPty } from './protocol';
+
 export const MAX_CLIPBOARD_TEXT = 1024 * 1024;
 export const MAX_PASTE_TEXT = 65536;
 
@@ -23,4 +25,12 @@ export function inputChunks(text: string): string[] {
 
 export function terminalDimensions(cols: number, rows: number): { cols: number; rows: number } {
   return { cols: Math.min(300, Math.max(20, Math.floor(cols))), rows: Math.min(100, Math.max(5, Math.floor(rows))) };
+}
+
+
+export function windowsPtyFor(platform: string, release: string): WindowsPty | undefined {
+  if (platform !== 'win32') return undefined;
+  const buildNumber = Number(release.split('.')[2]) || 0;
+  // Match node-pty's default backend selection for the system ConPTY.
+  return { backend: buildNumber >= 18309 ? 'conpty' : 'winpty', buildNumber };
 }

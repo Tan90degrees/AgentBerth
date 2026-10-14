@@ -75,13 +75,13 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   };
   const closeSearch = () => { setSearchOpen(false); setFound(null); owner.current?.search.clearDecorations(); owner.current?.terminal.clearSelection(); owner.current?.terminal.focus(); };
   const controls = <>
-    <div className="terminal-toolbar" aria-label={readOnly ? '输出操作' : '终端操作'}>
+    {!searchOpen && <div className="terminal-toolbar" aria-label={readOnly ? '输出操作' : '终端操作'}>
       <span className="terminal-tool-status" role="status" title="选中文字后复制；Ctrl+点击打开网页链接">{message || (readOnly ? '只读输出' : '选中文字后可复制')}</span>
       <button disabled={!selection} onMouseDown={event => event.preventDefault()} onClick={() => void copy()} title="Ctrl+Shift+C">复制选中</button>
       {!readOnly && <button disabled={!ready} onClick={() => void paste()} title="Ctrl+Shift+V">粘贴</button>}
       <button disabled={!ready} onClick={openSearch} title="Ctrl+Shift+F">查找</button>
       <button disabled={!ready} onClick={() => { owner.current?.terminal.scrollToBottom(); owner.current?.terminal.focus(); }}>到底部</button>
-    </div>
+    </div>}
     {searchOpen && <div className="terminal-search" role="search" aria-label="终端查找">
       <input ref={input} autoFocus aria-label="查找终端文字" placeholder="查找当前保留的输出…" value={query} maxLength={256} onChange={event => setQuery(event.target.value)} onKeyDown={event => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeSearch(); }
@@ -89,7 +89,9 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
       }} />
       <button className={caseSensitive ? 'enabled' : ''} aria-label="区分大小写" aria-pressed={caseSensitive} onClick={() => setCaseSensitive(value => !value)}>Aa</button>
       <button aria-label="上一个匹配" disabled={!query} onClick={() => find(true)}>↑</button><button aria-label="下一个匹配" disabled={!query} onClick={() => find(false)}>↓</button>
-      <span role="status">{found === null ? '' : found ? '已定位' : '未找到'}</span><button aria-label="关闭终端查找" onClick={closeSearch}>×</button>
+      <span role="status" title={message}>{found === null ? '' : found ? '已定位' : '未找到'}</span>
+      <button disabled={!selection} onMouseDown={event => event.preventDefault()} onClick={() => void copy()} title={message === '已复制选中文本' ? message : 'Ctrl+Shift+C'}>复制选中</button>
+      <button aria-label="关闭终端查找" onClick={closeSearch}>×</button>
     </div>}
   </>;
   return { bind, setReady, controls };
