@@ -175,7 +175,13 @@ try {
   await page.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+C');
   await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === '中文🙂查找结果', 'Keyboard copy failed');
   await page.getByLabel('查找终端文字', { exact: true }).fill(wrappedText);
-  await searchBar.getByRole('status').filter({ hasText: '已定位' }).waitFor();
+  try { await searchBar.getByRole('status').filter({ hasText: '已定位' }).waitFor(); }
+  catch (reason) {
+    const attachment = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id);
+    const raw = await page.evaluate(runId => window.berth.rpc('output', { runId }), original.id);
+    console.error('Terminal search diagnostics: ' + JSON.stringify({ windowsPty: before.windowsPty, cols: attachment.cols, rows: attachment.rows, snapshot: attachment.snapshot, raw: raw.slice(-20000) }));
+    throw reason;
+  }
   await page.getByRole('button', { name: '下一个匹配', exact: true }).click();
   await page.getByRole('button', { name: '上一个匹配', exact: true }).click();
   await page.getByRole('button', { name: '复制选中', exact: true }).click();

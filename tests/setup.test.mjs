@@ -73,9 +73,12 @@ function setupFixture(t) {
   const project = path.join(installation.directory, 'project');
   const directory = path.join(project, 'node_modules/electron');
   const rebuild = path.join(project, 'node_modules/@electron/rebuild');
+  const pty = path.join(project, 'node_modules/node-pty/scripts');
   mkdirSync(path.join(project, 'scripts'), { recursive: true });
   mkdirSync(directory, { recursive: true });
   mkdirSync(path.join(rebuild, 'lib'), { recursive: true });
+  mkdirSync(pty, { recursive: true });
+  writeFileSync(path.join(pty, 'post-install.js'), "require('node:fs').appendFileSync(process.env.SETUP_TRACE, 'conpty\\n');");
   for (const name of ['setup.mjs', 'electron-runtime.mjs']) {
     copyFileSync(new URL(`../scripts/${name}`, import.meta.url), path.join(project, 'scripts', name));
   }
@@ -122,8 +125,9 @@ test('setup installs before rebuilding for pinned ABI and skips the installer on
   const { trace, run } = setupFixture(t);
   const first = run(false);
   assert.equal(first.status, 0, first.stderr);
-  assert.equal(readFileSync(trace, 'utf8'), 'install\nrebuild\n');
+  const rebuilt = process.platform === 'win32' ? 'rebuild\nconpty\n' : 'rebuild\n';
+  assert.equal(readFileSync(trace, 'utf8'), 'install\n' + rebuilt);
   const second = run(false);
   assert.equal(second.status, 0, second.stderr);
-  assert.equal(readFileSync(trace, 'utf8'), 'install\nrebuild\nrebuild\n');
+  assert.equal(readFileSync(trace, 'utf8'), 'install\n' + rebuilt + rebuilt);
 });
