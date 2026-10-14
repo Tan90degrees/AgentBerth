@@ -75,6 +75,8 @@ export interface DesktopApi {
   chooseTranscript(): Promise<string | null>;
   chooseExecutable(): Promise<string | null>;
   copyText(text: string): Promise<void>;
+  readClipboard(): Promise<string>;
+  openExternal(url: string): Promise<void>;
   openProject(path: string): Promise<void>;
   reconnect(): Promise<void>;
   restartBackend(): Promise<void>;

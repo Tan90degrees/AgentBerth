@@ -16,6 +16,14 @@ async function assertTerminalGutter(page) {
     return s.width > 0 && b.width >= 12 && s.right <= b.left + 1 && s.bottom <= m.bottom + 1 && b.right <= m.right + 1;
   });
 }
+async function eventually(check, description, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+  while (!await check()) { assert.ok(Date.now() < deadline, description); await new Promise(resolve => setTimeout(resolve, 70)); }
+}
+async function fileExists(file) { try { await stat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
+function shellCommand(script) {
+  return process.platform === 'win32' ? `"${process.execPath}" "${script}"` : `'${process.execPath.replaceAll("'", "'\\''")}' '${script.replaceAll("'", "'\\''")}'`;
+}
 async function closeApplication(app) {
   if (!app) return;
   const launcherProcess = app.process();
@@ -128,6 +136,79 @@ try {
   assert.equal(await page.getByRole('button', { name: '删除会话', exact: true }).isEnabled(), false);
   assert.equal(await page.getByRole('button', { name: '删除项目', exact: true }).isEnabled(), false);
   await assertTerminalGutter(page);
+  step('explicit clipboard paste preserves large Unicode input, order and bracketed paste');
+  const pasteScript = path.join(folder, 'paste-reader.cjs'), pasteReady = path.join(folder, 'paste.ready'), pasteResult = path.join(folder, 'paste.json');
+  await writeFile(pasteScript, `const fs=require('node:fs');process.stdin.setRawMode(true);process.stdin.setEncoding('utf8');let text='';process.stdin.on('data',data=>{text+=data;if(text.endsWith('\\x1b[201~')){const end=text.indexOf('|BERTH_PASTE_END|');fs.writeFileSync(${JSON.stringify(pasteResult)},JSON.stringify({text:text.slice(6,end),bracketed:text.startsWith('\\x1b[200~')&&end>=6}));process.stdout.write('\\x1b[?2004l');process.stdin.setRawMode(false);process.exit(0);}});process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');fs.writeFileSync(${JSON.stringify(pasteReady)},'ready');`);
+  await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: shellCommand(pasteScript) + '\r' });
+  await eventually(() => fileExists(pasteReady), 'Paste reader did not start');
+  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('PASTE_READER_READY'));
+  const pasteText = '中🙂文'.repeat(15000);
+  await application.evaluate(async ({ clipboard }, text) => { await clipboard.writeText(text); }, pasteText + '|BERTH_PASTE_END|');
+  await page.getByRole('button', { name: '粘贴', exact: true }).click();
+  await eventually(() => fileExists(pasteResult), 'Large paste did not reach the real PTY');
+  const receivedPaste = JSON.parse(await readFile(pasteResult, 'utf8'));
+  assert.equal(receivedPaste.text, pasteText); assert.equal(receivedPaste.bracketed, true);
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
+  const keyboardResult = path.join(folder, 'keyboard-paste.txt');
+  await application.evaluate(async ({ clipboard }, text) => { await clipboard.writeText(text); }, `echo KEYBOARD_PASTE_READY > "${keyboardResult}"`);
+  await page.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+V');
+  await page.locator('.terminal-toolbar [role="status"]').filter({ hasText: '已粘贴' }).waitFor();
+  await page.keyboard.press('Enter');
+  await eventually(() => fileExists(keyboardResult), 'Keyboard paste did not execute in the shell');
+  assert.match(await readFile(keyboardResult, 'utf8'), /KEYBOARD_PASTE_READY/);
+  step('search and copy Chinese, emoji, wrapped output and case-sensitive matches');
+  const searchScript = path.join(folder, 'search-output.cjs'), wrappedText = 'WRAP_' + '中文🙂'.repeat(45) + '_END', webUrl = 'https://example.com/berth';
+  await writeFile(searchScript, `console.log('TERMINAL_SEARCH_UPPER');console.log('terminal_search_upper');console.log('中文🙂查找结果');console.log(${JSON.stringify(wrappedText)});console.log(${JSON.stringify(wrappedText)});console.log(${JSON.stringify(webUrl)});`);
+  await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: shellCommand(searchScript) + '\r' });
+  await eventually(async () => (await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id)).snapshot.includes(webUrl), 'Search output did not arrive');
+  await page.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+F');
+  const searchBar = page.getByRole('search', { name: '终端查找', exact: true });
+  await page.getByLabel('查找终端文字', { exact: true }).fill('中文🙂查找结果');
+  await searchBar.getByRole('status').filter({ hasText: '已定位' }).waitFor();
+  await page.getByRole('button', { name: '复制选中', exact: true }).click();
+  await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === '中文🙂查找结果', 'Selection copy did not reach clipboard');
+  await application.evaluate(async ({ clipboard }) => { await clipboard.writeText('RESET'); });
+  await page.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+C');
+  await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === '中文🙂查找结果', 'Keyboard copy failed');
+  await page.getByLabel('查找终端文字', { exact: true }).fill(wrappedText);
+  await searchBar.getByRole('status').filter({ hasText: '已定位' }).waitFor();
+  await page.getByRole('button', { name: '下一个匹配', exact: true }).click();
+  await page.getByRole('button', { name: '上一个匹配', exact: true }).click();
+  await page.getByRole('button', { name: '复制选中', exact: true }).click();
+  await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === wrappedText, 'Wrapped Unicode selection was altered');
+  await page.getByLabel('查找终端文字', { exact: true }).fill('TERMINAL_SEARCH_upper');
+  await page.getByRole('button', { name: '区分大小写', exact: true }).click();
+  await searchBar.getByRole('status').filter({ hasText: '未找到' }).waitFor();
+  await page.getByRole('button', { name: '区分大小写', exact: true }).click();
+  await searchBar.getByRole('status').filter({ hasText: '已定位' }).waitFor();
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-terminal-search' : 'terminal-search'}.png` });
+  await page.getByLabel('查找终端文字', { exact: true }).focus(); await page.keyboard.press('Escape');
+  await searchBar.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '到底部', exact: true }).click();
+  await assertTerminalGutter(page);
+  step('Ctrl-click opens terminal web links through trusted main-process IPC');
+  await application.evaluate(({ shell }) => { globalThis.smokeLinks = []; globalThis.smokeOpenExternal = shell.openExternal; shell.openExternal = async url => { globalThis.smokeLinks.push(url); }; });
+  const invalidLinks = await page.evaluate(async () => Promise.all(['file:///C:/Windows/notepad.exe', 'javascript:alert(1)', 'https://user:password@example.com'].map(url => window.berth.openExternal(url).then(() => false, () => true))));
+  assert.ok(invalidLinks.every(Boolean));
+  const linkPosition = await page.evaluate(url => {
+    const row = [...document.querySelectorAll('.xterm-rows > div')].findLast(element => element.textContent.includes(url));
+    if (!row) throw new Error('Visible link row missing');
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT); let node;
+    while (node = walker.nextNode()) {
+      const offset = node.textContent.indexOf(url);
+      if (offset < 0) continue;
+      const range = document.createRange(); range.setStart(node, offset + 8); range.setEnd(node, offset + 12);
+      const rect = range.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    }
+    throw new Error('Link text node missing');
+  }, webUrl);
+  await page.mouse.move(linkPosition.x, linkPosition.y); await page.waitForTimeout(100);
+  await page.mouse.click(linkPosition.x, linkPosition.y);
+  assert.deepEqual(await application.evaluate(() => globalThis.smokeLinks), []);
+  await page.keyboard.down('Control'); await page.mouse.click(linkPosition.x, linkPosition.y); await page.keyboard.up('Control');
+  await eventually(async () => (await application.evaluate(() => globalThis.smokeLinks)).length === 1, 'Ctrl-click did not open a web link');
+  assert.deepEqual(await application.evaluate(() => globalThis.smokeLinks), [webUrl]);
+  await application.evaluate(({ shell }) => { shell.openExternal = globalThis.smokeOpenExternal; });
   step('keyboard switcher keeps PTY focus and copies configuration without launching');
   await page.keyboard.press('Control+Shift+P');
   await page.getByRole('dialog', { name: '快速切换', exact: true }).waitFor();
@@ -146,9 +227,33 @@ try {
   const copied = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.title === '切换测试会话');
   assert.equal(copied.latestRun, null); assert.equal(copied.nativeSessionId, null);
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.id === before.sessions[0].id).latestRun.pid, original.pid);
+  step('cycle sessions by keyboard without changing the running PID or stealing dialogs');
+  await page.keyboard.press('Control+Tab');
+  await page.getByRole('heading', { name: '后台驻留验证', exact: true }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea'));
+  await page.keyboard.press('Control+Shift+Tab');
+  await page.getByRole('heading', { name: '切换测试会话', exact: true }).waitFor();
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('驻留');
+  await page.waitForFunction(() => document.querySelectorAll('.session-item').length === 1);
+  await page.keyboard.press('Control+Tab');
+  await page.getByRole('heading', { name: '后台驻留验证', exact: true }).waitFor();
+  await page.keyboard.press('Control+Tab');
+  await page.getByRole('heading', { name: '后台驻留验证', exact: true }).waitFor();
+  await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
+  await page.waitForFunction(() => document.querySelectorAll('.session-item').length === 2);
+  await page.keyboard.press('Control+Tab');
+  await page.getByRole('heading', { name: '切换测试会话', exact: true }).waitFor();
+  await page.keyboard.press('Control+Shift+P');
+  await page.getByRole('dialog', { name: '快速切换', exact: true }).waitFor();
+  await page.keyboard.press('Control+Tab');
+  await page.getByRole('heading', { name: '切换测试会话', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
   step('dirty form stays intact after Escape, cancel and repeated keyboard navigation');
   await page.keyboard.press('Control+Shift+N');
   await page.getByLabel('会话名称', { exact: true }).fill('保留表单内容');
+  await page.keyboard.press('Control+Tab');
+  assert.equal(await page.getByLabel('会话名称', { exact: true }).inputValue(), '保留表单内容');
+  await page.getByRole('heading', { name: '切换测试会话', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   await page.getByRole('heading', { name: '放弃未保存的修改？', exact: true }).waitFor();
   await page.getByRole('button', { name: '继续编辑', exact: true }).click();
@@ -361,9 +466,20 @@ try {
   await page.locator('.output-host .xterm-screen').waitFor();
   await page.getByText('本次运行输出 · 只读', { exact: true }).waitFor();
   assert.equal(await page.locator('.xterm-helper-textarea').evaluate(element => element.readOnly), true);
+  assert.equal(await page.getByRole('button', { name: '粘贴', exact: true }).count(), 0);
   await assertTerminalGutter(page);
   await page.getByRole('button', { name: '返回列表', exact: true }).click();
   await page.locator('.run-item').first().waitFor();
+  step('retained run output supports read-only search and selection copy');
+  await page.locator('.run-item').filter({ hasText: original.id.slice(0, 8) }).click();
+  await page.getByRole('button', { name: '查找', exact: true }).click();
+  await page.getByLabel('查找终端文字', { exact: true }).fill('FLOW_DONE');
+  await page.getByRole('search').getByRole('status').filter({ hasText: '已定位' }).waitFor();
+  await page.getByRole('button', { name: '复制选中', exact: true }).click();
+  await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === 'FLOW_DONE', 'Read-only output copy failed');
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
+  await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
+  await assertTerminalGutter(page);
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   await page.getByRole('heading', { name: '终端已停止', exact: true }).waitFor();
   step('edit stopped launch configuration, start using session shell override and delete session');
