@@ -6,6 +6,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { externalWebUrl, inputChunks, terminalDimensions, windowsPtyFor } from '../src/shared/desktop';
 import { requestSchema } from '../src/shared/protocol';
+import { terminalTextRows } from '../src/renderer/terminal-search';
 
 test('large terminal input remains ordered, Unicode intact and below the WebSocket payload limit', () => {
   const text = '中🙂文'.repeat(15000) + '\x00\x1b\n'.repeat(3000) + '末尾';
@@ -71,4 +72,25 @@ test('Unicode widths and wrapped emoji text survive a daemon snapshot restored b
     assert.deepEqual(lines(restored), lines(source));
     assert.equal(restored.buffer.active.cursorX, source.buffer.active.cursorX);
   } finally { source.dispose(); restored.dispose(); }
+});
+
+test('ConPTY physical wraps reconstruct wide Unicode text without padding or added newlines', async () => {
+  const terminal = new Terminal({ cols: 20, rows: 12, scrollback: 100, allowProposedApi: true });
+  terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
+  const text = 'WRAP_' + '中文🙂'.repeat(15) + '_END';
+  let physical = '', width = 0;
+  for (const char of text) {
+    const cells = /[中文🙂]/u.test(char) ? 2 : 1;
+    if (width + cells > 20) { physical += ' '.repeat(20 - width) + '\r\n'; width = 0; }
+    physical += char; width += cells;
+  }
+  try {
+    await new Promise<void>(resolve => terminal.write(physical, resolve));
+    assert.equal(terminal.buffer.active.getLine(1)?.isWrapped, false);
+    assert.ok(terminalTextRows(terminal).length > 1);
+    assert.equal(terminalTextRows(terminal, true)[0].text, text);
+    terminal.reset();
+    await new Promise<void>(resolve => terminal.write('one\r\ntwo', resolve));
+    assert.deepEqual(terminalTextRows(terminal, true).filter(row => row.text).map(row => row.text), ['one', 'two']);
+  } finally { terminal.dispose(); }
 });

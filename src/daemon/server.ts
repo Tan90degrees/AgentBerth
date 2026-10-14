@@ -255,7 +255,7 @@ export class DaemonServer {
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
     let child: pty.IPty;
-    try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file), ...(process.platform === 'win32' ? { useConptyDll: true } : {}) }); }
+    try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) }); }
     catch (error) {
       terminal.dispose();
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;

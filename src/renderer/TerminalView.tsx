@@ -33,7 +33,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
-  const { bind, setReady, controls } = useTerminalActions(onError);
+  const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty);
   useEffect(() => {
     const terminal = new Terminal({ ...options, fontSize, windowsPty });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
@@ -120,7 +120,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
 export function OutputView({ text, fontSize = 14, windowsPty, onError }: { text: string; fontSize?: number; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const errorHandler = useRef(onError); errorHandler.current = onError;
-  const { bind, setReady, controls } = useTerminalActions(onError, true);
+  const { bind, setReady, controls } = useTerminalActions(onError, true, !!windowsPty);
   useEffect(() => {
     const terminal = new Terminal({ ...options, fontSize, windowsPty, disableStdin: true, cursorBlink: false });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';

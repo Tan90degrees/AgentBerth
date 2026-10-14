@@ -34,7 +34,7 @@
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
-软件包自带 Electron、Node 运行时、`node-pty` 和配套的 ConPTY 运行时，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code / OpenCode 需在本机单独安装、配置，并能从所选 Shell 的 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。升级前停止全部后台任务；安装新版后通过提示或 **设置 → 更新后台** 加载新后台，0.1 数据会自动迁移并保留。
+软件包自带 Electron、Node 运行时和 `node-pty`，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code / OpenCode 需在本机单独安装、配置，并能从所选 Shell 的 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。升级前停止全部后台任务；安装新版后通过提示或 **设置 → 更新后台** 加载新后台，0.1 数据会自动迁移并保留。
 
 第一版软件包没有代码签名，Windows 可能显示“未知发布者”。正常包应对应成功的 Windows 打包任务且 `build-info.json` 中 `packagedSmoke` 为 `success`；若测试失败，构建产物会保留供排查，但不代表已验证可用。
 
@@ -58,7 +58,7 @@ npm ci
 npm run dev
 ```
 
-`npm ci` 的 postinstall 会先安装 Electron 二进制，再为其编译 `node-pty`；Windows 会同步准备依赖内固定版本的 ConPTY 运行时。安装过程失败或被 `--ignore-scripts` 跳过后，可运行 `npm run setup` 单独完成安装。脚本使用当前锁定的 Electron 版本、官方安装器与内置校验和，沿用已有下载缓存，不需要重装全部依赖。
+`npm ci` 的 postinstall 会先安装 Electron 二进制，再为其编译 `node-pty`。安装过程失败或被 `--ignore-scripts` 跳过后，可运行 `npm run setup` 单独完成安装。脚本使用当前锁定的 Electron 版本、官方安装器与内置校验和，沿用已有下载缓存，不需要重装全部依赖。
 
 `npm run dev` 会先检查本机 Electron 二进制是否完整，再编译桌面与后台代码，启动 Vite 和 Electron。缺少二进制时立即提示 `npm run setup`，不会在加载入口时隐式下载。页面修改自动更新；main、preload、daemon 修改后需要重新启动相关进程。后台使用 Electron 自带的 Node 运行时，与原生模块 ABI 保持一致，不依赖用户另装的 Node 来运行打包应用。
 

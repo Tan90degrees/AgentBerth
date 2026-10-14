@@ -31,7 +31,6 @@ export function terminalDimensions(cols: number, rows: number): { cols: number; 
 export function windowsPtyFor(platform: string, release: string): WindowsPty | undefined {
   if (platform !== 'win32') return undefined;
   const buildNumber = Number(release.split('.')[2]) || 0;
-  // node-pty selects winpty on old systems; supported systems use its pinned,
-  // modern ConPTY DLL, whose VT/reflow capabilities also apply on Windows 10.
-  return buildNumber >= 18309 ? { backend: 'conpty', buildNumber: Math.max(buildNumber, 21376) } : { backend: 'winpty', buildNumber };
+  // Match node-pty's default backend selection for the system ConPTY.
+  return { backend: buildNumber >= 18309 ? 'conpty' : 'winpty', buildNumber };
 }

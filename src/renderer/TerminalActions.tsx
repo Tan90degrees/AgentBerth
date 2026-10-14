@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Terminal, IDisposable } from '@xterm/xterm';
-import { SearchAddon } from '@xterm/addon-search';
+import { TerminalSearch } from './terminal-search';
 
-interface Owner { terminal: Terminal; search: SearchAddon; canPaste: () => boolean; disposed: boolean; subscriptions: IDisposable[] }
-export function useTerminalActions(onError: (error: string) => void, readOnly = false) {
+interface Owner { terminal: Terminal; search: TerminalSearch; canPaste: () => boolean; disposed: boolean; subscriptions: IDisposable[] }
+export function useTerminalActions(onError: (error: string) => void, readOnly = false, inferWindowsWrap = false) {
   const owner = useRef<Owner | null>(null);
   const error = useRef(onError); error.current = onError;
   const input = useRef<HTMLInputElement>(null);
@@ -17,7 +17,7 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 2200); return () => clearTimeout(timer); }, [message]);
 
   const copy = useCallback(async () => {
-    const current = owner.current, text = current?.terminal.getSelection();
+    const current = owner.current, text = current?.search.selectionText();
     if (!current || current.disposed) return;
     if (!text) { setMessage('请先选中文本'); return; }
     try { await window.berth.copyText(text); if (!current.disposed) setMessage('已复制选中文本'); }
@@ -37,7 +37,7 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   }, []);
   const openSearch = useCallback(() => { setSearchOpen(true); requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); }); }, []);
   const bind = useCallback((terminal: Terminal, canPaste: () => boolean) => {
-    const search = new SearchAddon(); terminal.loadAddon(search);
+    const search = new TerminalSearch(terminal, inferWindowsWrap);
     const current: Owner = { terminal, search, canPaste, disposed: false, subscriptions: [] };
     owner.current = current; setReady(false); setSelection(false); setFound(null);
     current.subscriptions.push(terminal.onSelectionChange(() => { if (!current.disposed) setSelection(terminal.hasSelection()); }));
@@ -53,11 +53,10 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
       return false;
     });
     return () => {
-      current.disposed = true; current.subscriptions.forEach(subscription => subscription.dispose());
+      current.disposed = true; current.subscriptions.forEach(subscription => subscription.dispose()); current.search.dispose();
       if (owner.current === current) owner.current = null;
-      // Terminal disposal also disposes its search addon.
     };
-  }, [copy, paste, openSearch]);
+  }, [copy, paste, openSearch, inferWindowsWrap]);
   useEffect(() => {
     if (!searchOpen || !ready) return;
     const timer = setTimeout(() => {
