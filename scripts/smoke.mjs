@@ -642,6 +642,8 @@ try {
   step('save multiple custom Agent types and enable history/resume using the shipped plugin');
   const pluginScript = packaged ? path.join(path.dirname(executablePath), 'resources', 'examples', 'agent-plugin.cjs') : path.resolve('examples/agent-plugin.cjs');
   await stat(pluginScript);
+  const delayedPlugin = path.join(folder, 'delayed-plugin.cjs');
+  await writeFile(delayedPlugin, `setTimeout(()=>require(${JSON.stringify(pluginScript)}),600);`);
   if (packaged) await stat(path.join(path.dirname(executablePath), 'resources', 'docs', 'agent-plugins.md'));
   const pluginExecutable = await application.evaluate(() => process.execPath);
   const pluginData = path.join(folder, 'agent-session.json');
@@ -666,7 +668,7 @@ try {
   await page.getByLabel('类型启动命令', { exact: true }).fill('echo BETA_READY');
   await page.getByLabel('启用 Agent 插件', { exact: true }).check();
   await page.getByLabel('插件程序', { exact: true }).fill(pluginExecutable);
-  await page.getByLabel('插件参数', { exact: true }).fill(JSON.stringify([pluginScript]));
+  await page.getByLabel('插件参数', { exact: true }).fill(JSON.stringify([delayedPlugin]));
   await page.getByLabel('插件会话恢复', { exact: true }).check();
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -691,6 +693,16 @@ try {
   await page.getByRole('button', { name: '刷新记录', exact: true }).click();
   await page.getByText('独立插件已连接', { exact: true }).waitFor();
   assert.equal(await page.locator('.messages .message').count(), 2);
+  step('switching sessions while a history plugin responds cannot replace another session history');
+  await page.getByRole('button', { name: '刷新记录', exact: true }).click();
+  await page.locator('.session-item').filter({ hasText: 'OpenCode 会话' }).click();
+  await page.getByRole('tab', { name: '对话历史', exact: true }).click();
+  await page.locator('.history-meta code').filter({ hasText: 'ses_smoke' }).waitFor();
+  await eventually(() => page.getByRole('button', { name: '刷新记录', exact: true }).isEnabled(), 'Delayed history request did not finish');
+  assert.equal(await page.locator('.history-meta code').innerText(), 'ses_smoke');
+  await page.locator('.session-item').filter({ hasText: 'Beta 扩展会话' }).click();
+  await page.getByRole('tab', { name: '对话历史', exact: true }).click();
+  await page.getByText('独立插件已连接', { exact: true }).waitFor();
   sample.messages[1].text = '刷新插件成功'; await writeFile(pluginData, JSON.stringify(sample));
   await page.getByRole('button', { name: '刷新记录', exact: true }).click();
   await page.getByText('刷新插件成功', { exact: true }).waitFor();
