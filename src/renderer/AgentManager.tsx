@@ -42,7 +42,7 @@ export function AgentManager({ agents, defaultAgent, used, disabled, busy, error
         <label className="checkbox-label"><input aria-label="插件对话历史" type="checkbox" checked={draft.history} onChange={event => change({ history: event.target.checked })} />读取和刷新对话历史</label>
         <label className="checkbox-label"><input aria-label="插件会话恢复" type="checkbox" checked={draft.resume} onChange={event => change({ resume: event.target.checked })} />生成会话恢复命令</label>
         <p className="form-hint">仅调用你配置的本地程序，插件拥有本机程序权限。程序直接启动，参数按数组传入；10 秒超时，最多 2 MiB 返回内容，退出应用时取消请求。</p></>}
-      <footer><button type="button" data-dismiss="dialog" className="subtle">取消</button><button className="primary" disabled={busy}>保存 Agent 类型</button></footer>
+      <footer><button type="button" data-dismiss="dialog" className="subtle">取消</button><button className="primary" disabled={busy || disabled}>保存 Agent 类型</button></footer>
     </form></Dialog>}
   </section>;
 }

@@ -651,6 +651,14 @@ try {
   await page.getByRole('button', { name: '新增 Agent 类型', exact: true }).click();
   await page.getByLabel('类型名称', { exact: true }).fill('Alpha CLI');
   await page.getByLabel('类型启动命令', { exact: true }).fill('echo ALPHA_READY');
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: false } }));
+  await eventually(() => page.getByRole('button', { name: '保存 Agent 类型', exact: true }).isDisabled(), 'Offline Agent save was enabled');
+  await page.keyboard.press('Escape');
+  await page.getByRole('heading', { name: '放弃未保存的修改？', exact: true }).waitFor();
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click();
+  assert.equal(await page.getByLabel('类型名称', { exact: true }).inputValue(), 'Alpha CLI');
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: true } }));
+  await eventually(() => page.getByRole('button', { name: '保存 Agent 类型', exact: true }).isEnabled(), 'Agent draft did not reconnect');
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '新增 Agent 类型', exact: true }).click();
