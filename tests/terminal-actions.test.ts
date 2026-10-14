@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Terminal } from '@xterm/headless';
+import { SerializeAddon } from '@xterm/addon-serialize';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { externalWebUrl, inputChunks, terminalDimensions, windowsPtyFor } from '../src/shared/desktop';
 import { requestSchema } from '../src/shared/protocol';
 
@@ -49,4 +51,24 @@ test('Windows PTY compatibility preserves scrollback when ConPTY increases viewp
     assert.equal(terminal.buffer.active.baseY, base);
     assert.equal(terminal.buffer.active.getLine(base)?.translateToString(true), line);
   } finally { terminal.dispose(); }
+});
+
+test('Unicode widths and wrapped emoji text survive a daemon snapshot restored by the same provider', async () => {
+  const source = new Terminal({ cols: 20, rows: 5, scrollback: 100, allowProposedApi: true });
+  const restored = new Terminal({ cols: 20, rows: 5, scrollback: 100, allowProposedApi: true });
+  try {
+    for (const terminal of [source, restored]) { terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11'; }
+    const serialize = new SerializeAddon(); source.loadAddon(serialize);
+    await new Promise<void>(resolve => source.write('中🙂文', resolve));
+    assert.equal(source.buffer.active.cursorX, 6);
+    assert.equal(source.buffer.active.getLine(0)?.getCell(2)?.getWidth(), 2);
+    await new Promise<void>(resolve => source.write('\r\n' + '中文🙂'.repeat(15), resolve));
+    await new Promise<void>(resolve => restored.write(serialize.serialize({ scrollback: 100 }), resolve));
+    const lines = (terminal: Terminal) => Array.from({ length: terminal.buffer.active.length }, (_, n) => {
+      const line = terminal.buffer.active.getLine(n)!; return { text: line.translateToString(true), wrapped: line.isWrapped };
+    });
+    assert.ok(lines(source).some(line => line.wrapped));
+    assert.deepEqual(lines(restored), lines(source));
+    assert.equal(restored.buffer.active.cursorX, source.buffer.active.cursorX);
+  } finally { source.dispose(); restored.dispose(); }
 });

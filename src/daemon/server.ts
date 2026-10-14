@@ -5,6 +5,7 @@ import path from 'node:path';
 import { release } from 'node:os';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
@@ -250,6 +251,7 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台无法再启动终端');
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: windowsPtyFor(process.platform, release()) });
+    terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
     let child: pty.IPty;

@@ -2,6 +2,7 @@ import { memo, useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import type { Attachment, ServerEvent, WindowsPty } from '../shared/protocol';
 import { inputChunks, terminalDimensions } from '../shared/desktop';
 import { useTerminalActions } from './TerminalActions';
@@ -10,6 +11,7 @@ const options = {
   theme: { background: '#0c1017', foreground: '#d5dce8', cursor: '#65dfc0', selectionBackground: '#284446', black: '#19202d', red: '#ee8094', green: '#76d6a5', yellow: '#e3c688', blue: '#82acff', magenta: '#c4a2ef', cyan: '#78d8e5', white: '#d5dce8' },
   fontFamily: 'Cascadia Code, Consolas, Menlo, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
   overviewRuler: { width: 14 },
+  allowProposedApi: true, // Required by xterm's Unicode version provider.
 };
 
 function loadWebLinks(terminal: Terminal, onError: (error: string) => void) {
@@ -34,6 +36,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
   const { bind, setReady, controls } = useTerminalActions(onError);
   useEffect(() => {
     const terminal = new Terminal({ ...options, fontSize, windowsPty });
+    terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     loadWebLinks(terminal, error => errorHandler.current(error));
@@ -120,6 +123,7 @@ export function OutputView({ text, fontSize = 14, windowsPty, onError }: { text:
   const { bind, setReady, controls } = useTerminalActions(onError, true);
   useEffect(() => {
     const terminal = new Terminal({ ...options, fontSize, windowsPty, disableStdin: true, cursorBlink: false });
+    terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const fit = new FitAddon(); terminal.loadAddon(fit); loadWebLinks(terminal, error => errorHandler.current(error)); terminal.open(host.current!);
     const unbind = bind(terminal, () => false);
     let disposed = false, resizeTimer: ReturnType<typeof setTimeout>;

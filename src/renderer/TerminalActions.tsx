@@ -90,7 +90,7 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
       <button className={caseSensitive ? 'enabled' : ''} aria-label="区分大小写" aria-pressed={caseSensitive} onClick={() => setCaseSensitive(value => !value)}>Aa</button>
       <button aria-label="上一个匹配" disabled={!query} onClick={() => find(true)}>↑</button><button aria-label="下一个匹配" disabled={!query} onClick={() => find(false)}>↓</button>
       <span role="status" title={message}>{found === null ? '' : found ? '已定位' : '未找到'}</span>
-      <button disabled={!selection} onMouseDown={event => event.preventDefault()} onClick={() => void copy()} title={message === '已复制选中文本' ? message : 'Ctrl+Shift+C'}>复制选中</button>
+      <button className={message === '已复制选中文本' ? 'enabled' : ''} disabled={!selection} onMouseDown={event => event.preventDefault()} onClick={() => void copy()} title={message === '已复制选中文本' ? message : 'Ctrl+Shift+C'}>复制选中</button>
       <button aria-label="关闭终端查找" onClick={closeSearch}>×</button>
     </div>}
   </>;
