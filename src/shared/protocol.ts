@@ -27,7 +27,7 @@ const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
   name: title,
   command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
-  resumeCommand: singleLine.default('').refine(value => !value.trim() || (value.includes('{sessionId}') && !/\{(?!sessionId\})/.test(value)), '恢复命令须包含 {sessionId}，且只支持此占位符'),
+  resumeCommand: singleLine.default('').transform(value => value.trim()).refine(value => !value.trim() || (value.includes('{sessionId}') && !/\{(?!sessionId\})/.test(value)), '恢复命令须包含 {sessionId}，且只支持此占位符'),
   plugin: z.object({ executable: singleLine.refine(value => !!value.trim(), '请填写插件程序'), args: z.array(singleLine).max(32).default([]), history: z.boolean(), resume: z.boolean() }).strict().nullable().default(null),
 }).strict();
 export type AgentDefinitionConfig = z.infer<typeof agentDefinitionSchema>;

@@ -37,6 +37,7 @@ export class AgentPlugins {
       const child = spawn(plugin.executable, plugin.args, { cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
       let failure: Error | null = null;
       let bytes = 0;
+      let stderr = '';
       const output: Buffer[] = [];
       let killing: Promise<void> | null = null;
       const kill = () => killing ??= (async () => {
@@ -52,7 +53,7 @@ export class AgentPlugins {
       signal.addEventListener('abort', abort, { once: true });
       const timer = setTimeout(() => fail('插件请求超时（10 秒），请检查插件程序'), this.timeout);
       child.stdout.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) fail('插件输出超过 2 MiB'); else output.push(chunk); });
-      child.stderr.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) fail('插件输出超过 2 MiB'); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString('utf8')).slice(-4096); bytes += chunk.length; if (bytes > 2 * 1024 * 1024) fail('插件输出超过 2 MiB'); });
       child.on('error', error => { failure ??= new Error(`无法启动插件：${error.message}`); });
       child.stdin.on('error', () => { /* Early exit is reported by close below. */ });
       child.on('close', code => {
@@ -60,7 +61,7 @@ export class AgentPlugins {
         void (async () => {
           await kill();
           if (failure) throw failure;
-          if (code !== 0) throw new Error(`插件退出码 ${code ?? '未知'}；请检查插件程序`);
+          if (code !== 0) throw new Error(`插件退出码 ${code ?? '未知'}${stderr.trim() ? '：' + stderr.trim().slice(-1000) : '；请检查插件程序'}`);
           try { return JSON.parse(Buffer.concat(output).toString('utf8').replace(/^\uFEFF/, '')); }
           catch { throw new Error('插件须向 stdout 返回单个 JSON 对象；日志请写入 stderr'); }
         })().then(resolve, reject);

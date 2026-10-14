@@ -668,6 +668,7 @@ try {
   await page.getByLabel('默认 Agent', { exact: true }).selectOption(beta.id);
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
+  await page.locator('.agent-manager').scrollIntoViewIfNeeded();
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-agent-types' : 'agent-types'}.png` });
   await page.locator('.projects .project-item').click();
   await page.getByRole('button', { name: '新建会话', exact: true }).click();

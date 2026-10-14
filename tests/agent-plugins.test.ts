@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../src/daemon/store';
@@ -75,6 +75,7 @@ test('Agent protocol accepts stable custom IDs and rejects multiline commands an
   assert.ok(!agentDefinitionSchema.safeParse({ name: '类型', command: 'a\nb' }).success);
   assert.ok(!agentDefinitionSchema.safeParse({ name: '类型', command: 'a', resumeCommand: 'a {cwd}' }).success);
   assert.ok(!agentDefinitionSchema.safeParse({ name: '类型', command: 'a', resumeCommand: 'a' }).success);
+  assert.equal(agentDefinitionSchema.parse({ name: '类型', command: 'a', resumeCommand: '  ' }).resumeCommand, '');
 });
 
 test('history plugin receives session context, preserves Unicode and validates directory and native identity', async t => {
@@ -92,7 +93,7 @@ test('plugin import preserves selected path, refresh uses linked identity, and r
   const file = path.join(folder, '历史.jsonl'); writeFileSync(file, '{}');
   const a = adapter(folder, `process.stdout.write(JSON.stringify({version:1,cwd:r.projectPath,path:'ignored',nativeSessionId:'native-123',messages:Array.from({length:20},(_,i)=>({role:'assistant',text:String(i)+'x'.repeat(32000)}))}));`);
   const h = await plugins.history(a, session, folder, file);
-  assert.equal(h.path, file); assert.equal(h.messages.length, 16); assert.ok(h.warnings.some(item => item.includes('512 KiB')));
+  assert.equal(h.path, realpathSync(file)); assert.equal(h.messages.length, 16); assert.ok(h.warnings.some(item => item.includes('512 KiB')));
   assert.ok(h.messages.at(-1)!.text.startsWith('19'));
 });
 
@@ -114,8 +115,8 @@ test('malformed, excessive, failed and disabled plugins fail without accepting p
   await assert.rejects(plugins.history(a, session, folder, null), /格式/);
   adapter(folder, `process.stdout.write('x'.repeat(3*1024*1024));`);
   await assert.rejects(plugins.history(a, session, folder, null), /2 MiB/);
-  adapter(folder, `process.exitCode=3;`);
-  await assert.rejects(plugins.history(a, session, folder, null), /退出码 3/);
+  adapter(folder, `console.error('PLUGIN_ERROR_DETAIL');process.exitCode=3;`);
+  await assert.rejects(plugins.history(a, session, folder, null), /退出码 3：PLUGIN_ERROR_DETAIL/);
   await assert.rejects(plugins.history({ ...a, plugin: null }, session, folder, null), /未启用/);
   await assert.rejects(plugins.history({ ...a, plugin: { ...a.plugin!, executable: 'node' } }, session, folder, null), /完整路径/);
 });
