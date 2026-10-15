@@ -150,7 +150,7 @@ try {
   await gitDialog.getByRole('button',{name:'发布当前分支',exact:true}).click();await gitDialog.getByText('上游 origin/feature/ui · 领先 0 / 落后 0',{exact:true}).waitFor();
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Git branch switch back failed');
-  await page.screenshot({path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
+  await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
   await gitDialog.getByRole('button',{name:'关闭 Git 面板',exact:true}).click();
   step('save shell and default Agent settings');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -167,10 +167,10 @@ try {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.emulateMedia({ colorScheme: 'light' });
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}settings-dark.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}settings-dark.png` });
   await page.getByRole('radio', { name: '浅色', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}settings-light.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}settings-light.png` });
   step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
   const appInfo = await page.evaluate(() => window.berth.appInfo());
   assert.equal(appInfo.version, JSON.parse(await readFile('package.json','utf8')).version); assert.equal(appInfo.packaged, packaged);
@@ -186,7 +186,7 @@ try {
   await page.getByRole('button', { name: '打开数据目录', exact: true }).click();
   await eventually(async () => (await application.evaluate(() => globalThis.smokeDataOpened)) === path.join(folder, 'data'), 'Data directory opener did not target application data');
   await application.evaluate(({ shell }) => { shell.openPath = globalThis.smokeDataOriginal; });
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-about' : 'about'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-about' : 'about'}.png` });
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: false } }));
   await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
@@ -261,7 +261,7 @@ try {
   assert.equal(gitRun.id,original.id);assert.equal(gitRun.pid,original.pid);assert.equal(gitRun.status,'running');
   await eventually(async()=>await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).isEnabled(),'Git operation did not complete');
   await gitDialog.evaluate(element=>{element.scrollTop=0;});
-  await page.screenshot({path:`test-results/${packaged?'packaged-git-live-terminal':'git-live-terminal'}.png`});
+  await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-live-terminal':'git-live-terminal'}.png`});
   await gitDialog.getByRole('button',{name:'关闭 Git 面板',exact:true}).click();
   await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('echo LIVE_GIT_IO_READY');await page.keyboard.press('Enter');
   await eventually(async()=>(await page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}),before.sessions[0].id)).snapshot.split('LIVE_GIT_IO_READY').length>=3,'Terminal I/O stopped after Git changes');
@@ -282,7 +282,7 @@ try {
   assert.ok((await page.locator('.workspace-resources').boundingBox()).height<=22,'Workspace resource display takes too much height');
   assert.ok(await page.evaluate(()=>window.resourceTerminal===document.querySelector('.xterm')),'Resource samples remounted the terminal');
   assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).sessions[0].latestRun.pid,original.pid);
-  await page.screenshot({path:`test-results/${packaged?'packaged-resources':'resources'}.png`});
+  await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-resources':'resources'}.png`});
 
   step('switch live terminal appearance in place without losing PID, grid, buffer or I/O');
   await page.evaluate(() => { window.themeTerminal = document.querySelector('.terminal-mount .xterm'); });
@@ -299,7 +299,7 @@ try {
     const run = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.id === shellSession.id).latestRun;
     assert.equal(run.id, original.id); assert.equal(run.pid, original.pid);
     await assertTerminalGutter(page);
-    await page.screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}theme-${theme}.png` });
+    await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}theme-${theme}.png` });
   }
   await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.type('echo APPEARANCE_IO_READY'); await page.keyboard.press('Enter');
@@ -319,7 +319,7 @@ try {
   assert.ok(await page.evaluate(() => window.smokeHeaderTerminal === document.querySelector('.xterm')));
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   await assertTerminalGutter(page);
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-compact-folded' : 'compact-folded'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-compact-folded' : 'compact-folded'}.png` });
   await page.getByRole('button', { name: '展开顶部信息', exact: true }).click();
   await assertTerminalGutter(page);
   step('explicit clipboard paste preserves large Unicode input, order and bracketed paste');
@@ -374,7 +374,7 @@ try {
   await searchBar.getByRole('status').filter({ hasText: '未找到' }).waitFor();
   await page.getByRole('button', { name: '区分大小写', exact: true }).click();
   await searchBar.getByRole('status').filter({ hasText: '已定位' }).waitFor();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-terminal-search' : 'terminal-search'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-terminal-search' : 'terminal-search'}.png` });
   await page.getByLabel('查找终端文字', { exact: true }).focus(); await page.keyboard.press('Escape');
   await searchBar.waitFor({ state: 'hidden' });
   assert.equal((await page.locator('.terminal-mount').boundingBox()).height, searchHostHeight);
@@ -502,7 +502,7 @@ try {
   await page.getByRole('menu', { name: '项目操作', exact: true }).waitFor();
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.getByRole('menuitem', { name: '重命名项目', exact: true }).evaluate(element => element === document.activeElement), true);
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-sidebar-menu' : 'sidebar-menu'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-sidebar-menu' : 'sidebar-menu'}.png` });
   await page.keyboard.press('Escape');
   await page.locator('.session-list .session-item').filter({ hasText: '切换测试会话' }).click();
   await menuAction(page, '删除会话', 'session');
@@ -594,7 +594,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_READY'));
   await page.waitForFunction(() => [...document.querySelectorAll('.xterm-rows > div')].at(-1)?.textContent.includes('TUI_FOOTER'));
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-tui-resize' : 'tui-resize'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-tui-resize' : 'tui-resize'}.png` });
   await page.evaluate(({ sessionId, runId }) => window.berth.rpc('input', { sessionId, runId, data: '\x03' }), { sessionId: before.sessions[0].id, runId: original.id });
   await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_DONE'));
   await application.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0].setBounds(bounds), bounds);
@@ -626,7 +626,7 @@ try {
   await page.getByLabel('启动参数', { exact: true }).fill(process.platform === 'win32' ? '/D' : '-i');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-settings' : 'settings'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-settings' : 'settings'}.png` });
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   await page.locator('.projects .project-item').click();
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('不存在');
@@ -661,7 +661,7 @@ try {
   assert.equal(hidden.sessions[0].latestRun.status, 'running');
   await application.evaluate(({ app, BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); app.emit('activate'); });
   await page.locator('.xterm-helper-textarea').waitFor();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-workbench' : 'workbench'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-workbench' : 'workbench'}.png` });
   assert.equal(errors.length, 0, errors.join('\n'));
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   // Playwright's close exits the entire Electron main process, not just the window.
@@ -725,7 +725,7 @@ try {
   step('stopped terminal shows a clean state and opens retained output read-only');
   await page.getByRole('heading', { name: '终端已停止', exact: true }).waitFor();
   assert.equal(await page.locator('.terminal-mount').count(), 0);
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-stopped' : 'stopped'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-stopped' : 'stopped'}.png` });
   await page.getByRole('button', { name: '查看本次输出', exact: true }).click();
   await page.locator('.output-host .xterm-screen').waitFor();
   await page.getByText('本次运行输出 · 只读', { exact: true }).waitFor();
@@ -747,7 +747,7 @@ try {
   await page.getByRole('search').getByRole('status').filter({ hasText: '已定位' }).waitFor();
   await page.getByRole('button', { name: '复制选中', exact: true }).click();
   await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === 'FLOW_DONE', 'Read-only output copy failed');
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
   await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
   await assertTerminalGutter(page);
   step('delete a finished record from its output view and clear remaining history with confirmation');
@@ -765,7 +765,7 @@ try {
   await page.getByRole('button', { name: '确认清除记录', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.getByRole('heading', { name: '尚无运行记录', exact: true }).waitFor();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
   step('edit stopped launch configuration, start using session shell override and delete session');
@@ -808,7 +808,7 @@ try {
   await page.getByLabel('默认启动命令', { exact: true }).fill('echo DEFAULT_CUSTOM_READY');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-custom-settings' : 'custom-settings'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-custom-settings' : 'custom-settings'}.png` });
   await page.locator('.projects .project-item').click();
   await menuAction(page, '新建会话', 'project');
   assert.equal(await page.getByLabel('Agent 类型', { exact: true }).inputValue(), 'custom');
@@ -873,7 +873,7 @@ try {
   }, exportPath);
   await page.getByRole('button', { name: '关联 JSON', exact: true }).click();
   await page.getByText('对话与项目已关联', { exact: true }).waitFor();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-opencode' : 'opencode'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-opencode' : 'opencode'}.png` });
   await page.getByRole('button', { name: '复制 ID', exact: true }).click();
   assert.equal(await application.evaluate(({ clipboard }) => clipboard.readText()), 'ses_smoke');
   step('preserve multiple OpenCode imports and paginate the saved conversation catalog');
@@ -895,7 +895,7 @@ try {
   await page.getByRole('button',{name:'关联会话 ses_smoke',exact:true}).click();
   await page.getByText('对话与项目已关联',{exact:true}).waitFor();
   await eventually(async()=>await page.locator('.native-list').getAttribute('aria-busy')==='false','Native history list still loading');
-  await page.screenshot({path:`test-results/${packaged?'packaged-native-catalog':'native-catalog'}.png`});
+  await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-native-catalog':'native-catalog'}.png`});
   step('copy linked Agent configuration without duplicating its native identity or process');
   await menuAction(page, '复制会话', 'session');
   await page.getByLabel('会话名称', { exact: true }).fill('OpenCode 配置副本');
@@ -970,7 +970,7 @@ try {
   assert.equal(await page.getByLabel('类型启动命令', { exact: true }).count(), 0);
   assert.equal(await page.getByLabel('启用 Agent 插件', { exact: true }).count(), 0);
   await page.getByRole('dialog').getByText('echo BETA_READY', { exact: true }).waitFor();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-plugin-import' : 'plugin-import'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-plugin-import' : 'plugin-import'}.png` });
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '检查插件 Beta 插件', exact: true }).click();
@@ -998,7 +998,7 @@ try {
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
   await page.locator('.agent-manager').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-agent-types' : 'agent-types'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-agent-types' : 'agent-types'}.png` });
   await page.locator('.projects .project-item').click();
   await menuAction(page, '新建会话', 'project');
   assert.equal(await page.getByLabel('Agent 类型', { exact: true }).inputValue(), beta.id);
@@ -1031,7 +1031,7 @@ try {
   await page.getByText('刷新插件成功', { exact: true }).waitFor();
   await page.getByRole('button', { name: '关闭提示', exact: true }).click();
   await writeFile(pluginData, JSON.stringify(sample));
-  await page.screenshot({ path: `test-results/${packaged ? 'packaged-plugin-history' : 'plugin-history'}.png` });
+  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-plugin-history' : 'plugin-history'}.png` });
   step('discover multiple plugin conversations, page, preview independently and choose an association');
   const nativeDirectory = path.join(folder,'agent-sessions'); await mkdir(nativeDirectory);
   for(let i=0;i<8;i++) await writeFile(path.join(nativeDirectory,`${i}.json`),JSON.stringify({cwd:folder,nativeSessionId:`native-extra-${i}`,messages:[{role:'user',text:`多会话问题 ${i}🙂`},{role:'assistant',text:`多会话回答 ${i}`}]}));
@@ -1044,7 +1044,7 @@ try {
   await pluginBrowser.getByRole('button',{name:'上一页',exact:true}).click();
   await pluginBrowser.getByText('共 9 条 · 第 1 页',{exact:true}).waitFor();
   await eventually(async()=>await pluginBrowser.locator('.native-list').getAttribute('aria-busy')==='false','Discovery page still loading');
-  await page.screenshot({path:`test-results/${packaged?'packaged-native-discovery-pages':'native-discovery-pages'}.png`});
+  await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-native-discovery-pages':'native-discovery-pages'}.png`});
   await page.getByLabel('搜索原生会话',{exact:true}).fill('native-extra-6');
   await pluginBrowser.getByText('共 1 条 · 第 1 页',{exact:true}).waitFor();
   await page.getByRole('button',{name:'预览会话 native-extra-6',exact:true}).click();
@@ -1056,7 +1056,7 @@ try {
   await page.getByRole('button',{name:'关联会话 native-plugin-123',exact:true}).click();
   await page.getByText('刷新插件成功',{exact:true}).waitFor();
   await eventually(async()=>await page.locator('.native-list').getAttribute('aria-busy')==='false','Native history list still loading');
-  await page.screenshot({path:`test-results/${packaged?'packaged-native-discovery':'native-discovery'}.png`});
+  await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-native-discovery':'native-discovery'}.png`});
   await menuAction(page, '恢复原生会话', 'session');
   await waitRunState(page, true);
   const pluginRun = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.id === betaSession.id).latestRun;
@@ -1080,7 +1080,7 @@ try {
   const unchanged = (await page.evaluate(()=>window.berth.rpc('state'))).sessions.find(item=>item.id===betaSession.id).latestRun;
   assert.equal(unchanged.id,pluginRun.id);assert.equal(unchanged.pid,pluginRun.pid);assert.equal(unchanged.command,pluginRun.command);assert.equal(unchanged.status,'running');
   await eventually(async()=>await page.locator('.native-list').getAttribute('aria-busy')==='false','Native history list still loading');
-  await page.screenshot({path:`test-results/${packaged?'packaged-native-running-link':'native-running-link'}.png`});
+  await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-native-running-link':'native-running-link'}.png`});
 
   await menuAction(page, '停止终端', 'session');
   await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
@@ -1154,7 +1154,7 @@ try {
       if (page) {
         console.error(`Window: ${page.url()}`);
         console.error((await page.locator('body').innerText({ timeout: 2000 })).slice(0, 2000));
-        await page.screenshot({ path: 'test-results/smoke-failure.png', timeout: 5000 });
+        await page.screenshot({ animations: 'disabled', path: 'test-results/smoke-failure.png', timeout: 5000 });
       }
     } catch {}
   }
