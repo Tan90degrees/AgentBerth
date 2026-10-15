@@ -631,7 +631,7 @@ try {
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-tui-resize' : 'tui-resize'}.png` });
   step('graphics context loss falls back without restarting the live terminal');
-  await page.evaluate(() => { window.lossTerminal = document.querySelector('.xterm'); const canvas = document.querySelector('.terminal-mount .xterm-screen canvas'); const gl=canvas?.getContext('webgl2'); const extension=gl?.getExtension('WEBGL_lose_context'); if(!extension)throw new Error('Context-loss fixture unavailable'); extension.loseContext(); });
+  await page.evaluate(() => { window.lossTerminal = document.querySelector('.xterm'); const gl=[...document.querySelectorAll('.terminal-mount .xterm-screen canvas')].map(canvas=>canvas.getContext('webgl2')).find(Boolean); const extension=gl?.getExtension('WEBGL_lose_context'); if(!extension)throw new Error('Context-loss fixture unavailable'); extension.loseContext(); });
   await page.waitForFunction(() => document.querySelector('.terminal-mount')?.dataset.renderer === 'dom');
   assert.ok(await page.evaluate(() => window.lossTerminal === document.querySelector('.xterm')));
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
