@@ -421,17 +421,19 @@ try {
   await assertTerminalGutter(page);
   step('resize a full-screen Unicode TUI, settle both grids, switch away and restore without restarting');
   const tuiScript = path.join(folder, 'resize-tui.cjs');
-  await writeFile(tuiScript, `let done=false;process.stdout.write('\\x1b[?1049h');function draw(){const c=process.stdout.columns||80,r=process.stdout.rows||24;process.stdout.write('\\x1b[H\\x1b[2JTUI_RESIZE_READY\\x1b[2;1HSIZE_'+c+'x'+r+'\\x1b[3;1H'+('中文🙂'.repeat(Math.max(1,Math.floor((c-6)/6))))+'\\x1b['+r+';1HTUI_FOOTER\\x1b[K');}draw();process.stdout.on('resize',draw);const timer=setInterval(draw,60);function finish(){if(done)return;done=true;clearInterval(timer);process.stdout.removeListener('resize',draw);process.stdout.write('\\x1b[?1049lTUI_RESIZE_DONE\\r\\n');process.exit(0);}process.on('SIGINT',finish);setTimeout(finish,12000);`);
+  await writeFile(tuiScript, `let done=false;process.stdout.write('\\x1b[?1049h');function draw(){const [c,r]=process.stdout.getWindowSize();process.stdout.write('\\x1b[H\\x1b[2JTUI_RESIZE_READY\\x1b[2;1HSIZE_'+c+'x'+r+'\\x1b[3;1H'+('中文🙂'.repeat(Math.max(1,Math.floor((c-6)/6))))+'\\x1b['+r+';1HTUI_FOOTER\\x1b[K');}draw();process.stdout.on('resize',draw);const timer=setInterval(draw,60);function finish(){if(done)return;done=true;clearInterval(timer);process.stdout.removeListener('resize',draw);process.stdin.setRawMode(false);process.stdin.pause();process.stdout.write('\\x1b[?1049lTUI_RESIZE_DONE\\r\\n');process.exit(0);}process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',data=>{if(data.includes(3))finish();});process.on('SIGINT',finish);setTimeout(finish,60000);`);
   await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: shellCommand(tuiScript) + '\r' });
   await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_READY'));
   const bounds = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
   for (const [width, height] of [[1100, 720], [1280, 820], [1030, 710], [1200, 780]]) {
     await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(...size), [width, height]);
+    let gridDiagnostic;
     await eventually(async () => {
       const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id);
       const size = await page.locator('.terminal-mount').evaluate(element => ({ cols: Number(element.dataset.cols), rows: Number(element.dataset.rows), text: element.textContent }));
+      gridDiagnostic = { window: [width,height], renderer: [size.cols,size.rows], daemon: [snapshot.cols,snapshot.rows], text: size.text.slice(0,200), snapshot: snapshot.snapshot.slice(-200) };
       return size.cols === snapshot.cols && size.rows === snapshot.rows && size.text.includes('SIZE_'+size.cols+'x'+size.rows);
-    }, 'Renderer/PTY dimensions or full-screen TUI did not settle');
+    }, 'Renderer/PTY dimensions or full-screen TUI did not settle').catch(error => { console.error('TUI grid diagnostic:',gridDiagnostic); throw error; });
     await assertTerminalGutter(page);
   }
   assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')), 'Resize remounted the terminal');
