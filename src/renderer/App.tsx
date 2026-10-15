@@ -2,6 +2,7 @@ import appIcon from '../../assets/app.png';
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { API_VERSION, DEFAULT_SETTINGS, isCustomAgent, type Agent, type AgentDefinition, type History, type Method, type Project, type Run, type Session, type Settings, type State, type TerminalConfig } from '../shared/protocol';
 import { TerminalView } from './TerminalView';
+import { AppearanceToggle } from './AppearanceControls';
 import { ResourceBadge, ResourceMonitor } from './Resources';
 import { GitBranch, GitDialog } from './GitManager';
 import { HistoryPanel } from './HistoryPanel';
@@ -261,7 +262,7 @@ export function App() {
       <div className="sidebar-heading"><span>项目与会话</span><button className="icon-button" aria-label="添加项目" onClick={newProject} disabled={manageDisabled}><Icon kind="plus" /></button></div>
       {state.projects.length > 0 && <div className="tree-search"><input className="search" placeholder="搜索项目、会话或目录…" value={search} onChange={event => setSearch(event.target.value)} aria-label="搜索项目和会话" /><select className="session-filter" aria-label="筛选会话" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部会话</option><option value="active">运行中</option><option value="inactive">未运行</option>{Object.entries(agentNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{(search || filter !== 'all') && <button className="clear-filter" onClick={clearFilter}>清除筛选</button>}</div>}
       <ProjectTree projects={state.projects} sessions={state.sessions} projectId={page === 'workspace' ? projectId : ''} sessionId={page === 'workspace' ? sessionId : ''} collapsed={collapsed} query={deferredSearch} filter={filter} names={agentNames} disabled={manageDisabled} onToggle={toggleProject} onProject={selectProject} onSession={selectSession} onNewSession={newSession} onMenu={setTreeMenu} />
-      <button className={`settings-link ${page === 'settings' ? 'selected' : ''}`} onClick={() => { setPage('settings'); setError(''); }} title="Ctrl+," aria-label="设置"><Icon kind="settings" />设置{draftDirty && <span className="draft-dot" title="有未保存的设置草稿" />}</button>
+      <div className="sidebar-settings"><button className={`settings-link ${page === 'settings' ? 'selected' : ''}`} onClick={() => { setPage('settings'); setError(''); }} title="Ctrl+," aria-label="设置"><Icon kind="settings" />设置{draftDirty && <span className="draft-dot" title="有未保存的设置草稿" />}</button><AppearanceToggle /></div>
       <div className="workspace-resources"><span>工作台</span><ResourceBadge scope="workspace" full /></div>
       <div className="sidebar-bottom"><span className={`dot ${connected ? 'live' : ''}`} /><span>{connected ? '后台已连接' : '后台未连接'}</span><button className="text-button" disabled={busy} onClick={() => void window.berth?.reconnect().catch(reason => setError(String(reason)))}>重连</button></div>
     </ResizableSidebar>

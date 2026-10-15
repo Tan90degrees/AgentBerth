@@ -154,6 +154,23 @@ try {
   await gitDialog.getByRole('button',{name:'关闭 Git 面板',exact:true}).click();
   step('save shell and default Agent settings');
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  step('appearance follows system, supports keyboard choice and explicit override');
+  await page.getByRole('radio', { name: '跟随系统', exact: true }).click();
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+  await page.getByRole('radio', { name: '浅色', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.getByRole('radio', { name: '深色', exact: true }).getAttribute('aria-checked'), 'true');
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.emulateMedia({ colorScheme: 'light' });
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}settings-dark.png` });
+  await page.getByRole('radio', { name: '浅色', exact: true }).click();
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}settings-light.png` });
   step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
   const appInfo = await page.evaluate(() => window.berth.appInfo());
   assert.equal(appInfo.version, JSON.parse(await readFile('package.json','utf8')).version); assert.equal(appInfo.packaged, packaged);
@@ -266,6 +283,27 @@ try {
   assert.ok(await page.evaluate(()=>window.resourceTerminal===document.querySelector('.xterm')),'Resource samples remounted the terminal');
   assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).sessions[0].latestRun.pid,original.pid);
   await page.screenshot({path:`test-results/${packaged?'packaged-resources':'resources'}.png`});
+
+  step('switch live terminal appearance in place without losing PID, grid, buffer or I/O');
+  await page.evaluate(() => { window.themeTerminal = document.querySelector('.terminal-mount .xterm'); });
+  const themeGrid = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), shellSession.id);
+  for (const [theme, label, background] of [['dark', '深色', 'rgb(33, 33, 33)'], ['light', '浅色', 'rgb(255, 255, 255)']]) {
+    await page.getByRole('button', { name: `切换为${label}模式`, exact: true }).click();
+    await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
+    await eventually(async () => await application.evaluate(({ nativeTheme }) => nativeTheme.themeSource) === theme, 'Native chrome did not match explicit theme');
+    assert.ok(await page.evaluate(() => window.themeTerminal === document.querySelector('.terminal-mount .xterm')), 'Appearance remounted the PTY view');
+    assert.equal(await page.locator('.terminal-host').evaluate(el => getComputedStyle(el).backgroundColor), background);
+    const themed = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), shellSession.id);
+    assert.equal(themed.cols, themeGrid.cols); assert.equal(themed.rows, themeGrid.rows);
+    assert.ok(themed.snapshot.includes('LIVE_GIT_IO_READY'));
+    const run = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.id === shellSession.id).latestRun;
+    assert.equal(run.id, original.id); assert.equal(run.pid, original.pid);
+    await assertTerminalGutter(page);
+    await page.screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}theme-${theme}.png` });
+  }
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.type('echo APPEARANCE_IO_READY'); await page.keyboard.press('Enter');
+  await eventually(async () => (await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), shellSession.id)).snapshot.split('APPEARANCE_IO_READY').length >= 3, 'Terminal I/O stopped after theme switch');
 
   assert.equal(await (await contextItem(page, '删除会话')).isEnabled(), false);
   assert.equal(await (await contextItem(page, '删除项目', 'project')).isEnabled(), false);
@@ -628,6 +666,7 @@ try {
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   // Playwright's close exits the entire Electron main process, not just the window.
   await page.getByRole('button', { name: '折叠顶部信息', exact: true }).click();
+  await page.getByRole('button', { name: '切换为深色模式', exact: true }).click();
   step('tray quit path stops all terminals and the detached daemon');
   await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
   const quittingDaemon = daemonPid;
@@ -657,6 +696,8 @@ try {
   assert.equal(after.settings.terminal.executable, original.shell);
   assert.equal(after.settings.defaultAgent, 'opencode');
   assert.equal(after.settings.fontSize, 16);
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+  assert.equal(await page.evaluate(() => localStorage.getItem('berth.appearance')), 'dark');
   step('unsaved settings survive workbench restart and can be discarded');
   await page.keyboard.press('Control+,');
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '19');
@@ -691,6 +732,12 @@ try {
   assert.equal(await page.locator('.xterm-helper-textarea').evaluate(element => element.readOnly), true);
   assert.equal(await page.getByRole('button', { name: '粘贴', exact: true }).count(), 0);
   await assertTerminalGutter(page);
+  await page.evaluate(() => { window.themeOutput = document.querySelector('.output-host .xterm'); });
+  await page.getByRole('button', { name: '切换为浅色模式', exact: true }).click();
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+  assert.ok(await page.evaluate(() => window.themeOutput === document.querySelector('.output-host .xterm')), 'Appearance remounted read-only output');
+  await page.getByRole('button', { name: '切换为深色模式', exact: true }).click();
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
   await page.getByRole('button', { name: '返回列表', exact: true }).click();
   await page.locator('.run-item').first().waitFor();
   step('retained run output supports read-only search and selection copy');

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron';
 import path from 'node:path';
 import { release } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -92,7 +92,8 @@ async function reconnect(): Promise<void> {
   return connecting;
 }
 function createWindow() {
-  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, backgroundColor: '#0d1119', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, show: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window.once('ready-to-show',()=>{if(!quitting)window?.show();});
   window.setMenuBarVisibility(false);
   window.on('close', event => { if (!quitReady) { event.preventDefault(); window?.hide(); } });
   window.on('restore', refreshWindow);
@@ -118,6 +119,8 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   if(method==='resources')return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128)});
   return connection!.rpc(method, request.data.params);
 });
+ipcMain.handle('berth:appearance',(event,mode:unknown)=>{trusted(event);if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';window?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
+nativeTheme.on('updated',()=>{window?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:transcript', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl', 'json'] }] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:executable', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: '终端程序', extensions: ['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });

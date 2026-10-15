@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
 export const API_VERSION = 14;
@@ -122,6 +123,7 @@ export interface RuntimeInfo { version: number; pid: number; port: number; token
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface DesktopApi {
   appInfo(): Promise<AppInfo>;
+  setAppearance(mode: AppearanceMode): Promise<void>;
   openDataDirectory(): Promise<void>;
   rpc<T = unknown>(method: Method, params?: Record<string, unknown>): Promise<T>;
   onEvent(listener: (event: ServerEvent) => void): () => void;
