@@ -85,6 +85,20 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') console.error(`Renderer: ${message.text()}`); });
+  step('verify application branding and native icons, including the packaged Windows executable');
+  const nativeIcons = await application.evaluate(async ({ app, nativeImage }) => {
+    const iconPath = (app.isPackaged ? process.resourcesPath : process.cwd()) + '/assets/' + (process.platform === 'win32' ? 'app.ico' : 'app.png');
+    function inspect(image) {
+      if (image.isEmpty()) return { empty: true, mint: 0 };
+      const bitmap = image.toBitmap(); let mint = 0;
+      for (let i=0;i<bitmap.length;i+=4) if (bitmap[i+3]>128 && bitmap[i+1]>bitmap[i]+15 && bitmap[i+1]>bitmap[i+2]+15) mint++;
+      return { empty: false, mint, size: image.getSize() };
+    }
+    return { asset: inspect(nativeImage.createFromPath(iconPath)), executable: app.isPackaged && process.platform === 'win32' ? inspect(await app.getFileIcon(process.execPath, { size: 'large' })) : null };
+  });
+  assert.equal(nativeIcons.asset.empty, false); assert.ok(nativeIcons.asset.mint > 5, 'Native icon has no visible mint brand mark');
+  if (nativeIcons.executable) { assert.equal(nativeIcons.executable.empty, false); assert.ok(nativeIcons.executable.mint > 5, 'Packaged EXE retained a missing/default icon'); }
+  await page.waitForFunction(() => { const image = document.querySelector('img.brand-mark'); return image?.complete && image.naturalWidth === 512; });
   step('create project and session');
   await page.getByRole('button', { name: '添加第一个项目' }).waitFor();
   await page.getByRole('button', { name: '添加第一个项目' }).click();
@@ -104,6 +118,30 @@ try {
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
   step('save shell and default Agent settings');
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
+  const appInfo = await page.evaluate(() => window.berth.appInfo());
+  assert.equal(appInfo.version, JSON.parse(await readFile('package.json','utf8')).version); assert.equal(appInfo.packaged, packaged);
+  await page.getByText(`AgentBerth · 泊栈 v${appInfo.version}`, { exact: true }).waitFor();
+  await page.getByRole('button', { name: '复制诊断信息', exact: true }).click();
+  await page.getByText('诊断信息已复制', { exact: true }).waitFor();
+  const diagnostic = await application.evaluate(({ clipboard }) => clipboard.readText());
+  assert.ok(diagnostic.includes(appInfo.version) && diagnostic.includes('Electron:') && diagnostic.includes('后台 API:'));
+  assert.ok(!diagnostic.includes(folder) && !diagnostic.includes('AgentBerth 易用性'));
+  const runtimeToken = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'),'utf8')).token;
+  assert.ok(!diagnostic.includes(runtimeToken));
+  await application.evaluate(({ shell }) => { globalThis.smokeDataOriginal = shell.openPath; globalThis.smokeDataOpened = ''; shell.openPath = async folder => { globalThis.smokeDataOpened = folder; return ''; }; });
+  await page.getByRole('button', { name: '打开数据目录', exact: true }).click();
+  await eventually(async () => (await application.evaluate(() => globalThis.smokeDataOpened)) === path.join(folder, 'data'), 'Data directory opener did not target application data');
+  await application.evaluate(({ shell }) => { shell.openPath = globalThis.smokeDataOriginal; });
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-about' : 'about'}.png` });
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: false } }));
+  await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
+  await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).click();
+  await page.getByText('完整开发指令已复制，可直接粘贴给 Agent', { exact: true }).waitFor();
+  assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes('describe'));
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: true } }));
+  await page.locator('.sidebar-bottom').getByText('后台已连接', { exact: true }).waitFor();
   if (process.platform === 'win32') {
     step('auto-detect PowerShell 7 and launch its real executable');
     await page.getByLabel('默认终端', { exact: true }).selectOption('pwsh');
@@ -868,7 +906,7 @@ try {
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();
   await page.getByRole('button', { name: '删除 Agent Beta 已保存', exact: true }).click();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).agents.length, 0);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, one-file plugin import and self-check, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, one-file plugin import and self-check, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
 } catch (error) {
   console.error(error);
   if (application) {

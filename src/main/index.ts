@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import path from 'node:path';
+import { release } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,8 @@ let quitReady = false;
 let exitPromise: Promise<void> | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let restarting = false;
+const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
+const iconFile = path.join(resourceRoot, 'assets', process.platform === 'win32' ? 'app.ico' : 'app.png');
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
 if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must be an absolute path');
 
@@ -28,9 +31,11 @@ else {
   app.on('activate', showWindow);
   void app.whenReady().then(async () => {
     mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+    if (process.platform === 'win32') app.setAppUserModelId('dev.agentberth.desktop');
     createWindow();
-    const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABZElEQVQ4T6WTwU0DMRBF32ZHKAHQAU4JdIAOQAEUgFIACaAFUEJIAZQAOgAJgBLg9ziLkYy87IaFdj+f7DcznjF4FNdIkjIcOyfhaNdI79dpZaVFA+RY/yKRWNh6jDE6SEeMQmlTlziVDFURuoRTFvAaGVklMSLHMoBuDUf/hghbwDl4lNpRmJruSYMi6opGGmAUcAHUaFoBXAD1JuIWwDsQMEL4CAxAfcSBgBoKYKkoNbSAXuCrNo2VnrGTs3tuPdPMNMUgLTkJNAO2B7MACszBdt/kys/oHhAdllvqZmMS/zlgBuRPqs7VnxCuDV8KdPB9lvOrOBLcCvrtycTdYL3EErCvIF/Vsbs5+btxMEk40UqZM/l66OAh6EMWfEcVS/wWcZPgZwOWABbALbsVCyluFwoc1HUAJUJqb+RJtgezFRRnsvTHm35J9xmEnwj/jWsCV76nh2TS/eVyEpMv/POLSR4UzNwv8mr0sw1UtvEb/J/AcPtOgwdjrfAAAAAElFTkSuQmCC');
-    tray = new Tray(icon);
+    const icon = nativeImage.createFromPath(iconFile);
+    if (icon.isEmpty()) throw new Error('应用图标资源未正确打包');
+    tray = new Tray(iconFile);
     tray.setToolTip('AgentBerth · 会话后台运行');
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '打开 AgentBerth', click: showWindow },
@@ -81,7 +86,7 @@ async function reconnect(): Promise<void> {
   return connecting;
 }
 function createWindow() {
-  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', backgroundColor: '#0d1119', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, backgroundColor: '#0d1119', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window.setMenuBarVisibility(false);
   window.on('close', event => { if (!quitReady) { event.preventDefault(); window?.hide(); } });
   window.on('restore', refreshWindow);
@@ -137,7 +142,6 @@ ipcMain.handle('berth:restart', async event => {
   catch (error) { if (!connection?.connected) { connection = null; emit({ event: 'connection', data: { connected: false, error: String(error) } }); } throw error; }
 });
 
-const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
 ipcMain.handle('berth:importPlugin', async event => {
   trusted(event);
   const result = await dialog.showOpenDialog(window!, { title: '选择插件文件 agentberth-plugin.json', properties: ['openFile'], filters: [{ name: 'AgentBerth 插件', extensions: ['json'] }] });
@@ -152,4 +156,13 @@ ipcMain.handle('berth:pluginPrompt', async (event, folder?: string) => {
   trusted(event);
   if (folder !== undefined && (typeof folder !== 'string' || folder.length > 4096 || /[\r\n\x00]/.test(folder))) throw new Error('插件目录无效');
   return developmentPrompt(readFileSync(path.join(resourceRoot, 'docs', 'AGENT_PLUGIN_DEVELOPMENT.md'), 'utf8'), folder);
+});
+
+ipcMain.handle('berth:appInfo', event => {
+  trusted(event);
+  return { version: app.getVersion(), platform: process.platform, arch: process.arch, osRelease: release(), electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged };
+});
+ipcMain.handle('berth:dataDirectory', async event => {
+  trusted(event);
+  const error = await shell.openPath(dataDirectory); if (error) throw new Error(error);
 });

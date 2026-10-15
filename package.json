@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "A project-oriented workspace for persistent agent terminals",
@@ -17,7 +17,7 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:scripts && node scripts/test.mjs",
-    "test:scripts": "node --test tests/setup.test.mjs",
+    "test:scripts": "node --test tests/setup.test.mjs tests/release.test.mjs",
     "test:desktop": "npm run build && node scripts/smoke.mjs",
     "test:packaged": "node scripts/smoke.mjs --packaged",
     "check": "npm run typecheck && npm test && npm run build",
@@ -72,12 +72,15 @@
         "nsis",
         "zip"
       ],
-      "artifactName": "AgentBerth-${version}-windows-${arch}.${ext}"
+      "artifactName": "AgentBerth-${version}-windows-${arch}.${ext}",
+      "icon": "assets/app.ico"
     },
     "nsis": {
       "artifactName": "AgentBerth-${version}-windows-${arch}-setup.${ext}",
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/app.ico",
+      "uninstallerIcon": "assets/app.ico"
     },
     "extraResources": [
       {
@@ -87,6 +90,14 @@
       {
         "from": "examples",
         "to": "examples"
+      },
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": [
+          "app.png",
+          "app.ico"
+        ]
       }
     ]
   }

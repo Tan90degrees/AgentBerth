@@ -87,7 +87,10 @@ export type ServerEvent =
   | { event: 'connection'; data: { connected: boolean; error?: string } };
 export interface Response { id: string; result?: unknown; error?: string }
 export interface RuntimeInfo { version: number; pid: number; port: number; token: string }
+export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface DesktopApi {
+  appInfo(): Promise<AppInfo>;
+  openDataDirectory(): Promise<void>;
   rpc<T = unknown>(method: Method, params?: Record<string, unknown>): Promise<T>;
   onEvent(listener: (event: ServerEvent) => void): () => void;
   chooseDirectory(): Promise<string | null>;

@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopApi, ServerEvent } from '../shared/protocol';
 
 const api: DesktopApi = {
+  appInfo: () => ipcRenderer.invoke('berth:appInfo'),
+  openDataDirectory: () => ipcRenderer.invoke('berth:dataDirectory'),
   rpc: (method, params = {}) => ipcRenderer.invoke('berth:rpc', method, params),
   onEvent: listener => {
     const callback = (_event: Electron.IpcRendererEvent, message: ServerEvent) => listener(message);
