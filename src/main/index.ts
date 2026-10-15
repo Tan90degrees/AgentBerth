@@ -64,7 +64,7 @@ function quitApplication(): Promise<void> {
   return exitPromise;
 }
 function emit(event: ServerEvent) {
-  if (window && !window.isDestroyed() && (event.event !== 'output' || (window.isVisible() && !window.isMinimized()))) window.webContents.send('berth:event', event);
+  if (window && !window.isDestroyed() && ((event.event !== 'output' && event.event !== 'resize') || (window.isVisible() && !window.isMinimized()))) window.webContents.send('berth:event', event);
   if (event.event === 'connection' && !event.data.connected && !quitting && !restarting && !exitPromise) {
     connection = null;
     if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; void reconnect().catch(error => emit({ event: 'connection', data: { connected: false, error: String(error) } })); }, 2000);

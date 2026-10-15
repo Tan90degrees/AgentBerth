@@ -419,6 +419,32 @@ try {
   assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')));
 
   await assertTerminalGutter(page);
+  step('resize a full-screen Unicode TUI, settle both grids, switch away and restore without restarting');
+  const tuiScript = path.join(folder, 'resize-tui.cjs');
+  await writeFile(tuiScript, `let done=false;process.stdout.write('\\x1b[?1049h');function draw(){const c=process.stdout.columns||80,r=process.stdout.rows||24;process.stdout.write('\\x1b[H\\x1b[2JTUI_RESIZE_READY\\x1b[2;1HSIZE_'+c+'x'+r+'\\x1b[3;1H'+('中文🙂'.repeat(Math.max(1,Math.floor((c-6)/6))))+'\\x1b['+r+';1HTUI_FOOTER\\x1b[K');}draw();process.stdout.on('resize',draw);const timer=setInterval(draw,60);function finish(){if(done)return;done=true;clearInterval(timer);process.stdout.removeListener('resize',draw);process.stdout.write('\\x1b[?1049lTUI_RESIZE_DONE\\r\\n');process.exit(0);}process.on('SIGINT',finish);setTimeout(finish,12000);`);
+  await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: shellCommand(tuiScript) + '\r' });
+  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_READY'));
+  const bounds = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+  for (const [width, height] of [[1100, 720], [1280, 820], [1030, 710], [1200, 780]]) {
+    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(...size), [width, height]);
+    await eventually(async () => {
+      const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id);
+      const size = await page.locator('.terminal-mount').evaluate(element => ({ cols: Number(element.dataset.cols), rows: Number(element.dataset.rows), text: element.textContent }));
+      return size.cols === snapshot.cols && size.rows === snapshot.rows && size.text.includes('SIZE_'+size.cols+'x'+size.rows);
+    }, 'Renderer/PTY dimensions or full-screen TUI did not settle');
+    await assertTerminalGutter(page);
+  }
+  assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')), 'Resize remounted the terminal');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.locator('.projects .project-item').click();
+  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_READY'));
+  await page.waitForFunction(() => [...document.querySelectorAll('.xterm-rows > div')].at(-1)?.textContent.includes('TUI_FOOTER'));
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-tui-resize' : 'tui-resize'}.png` });
+  await page.evaluate(({ sessionId, runId }) => window.berth.rpc('input', { sessionId, runId, data: '\x03' }), { sessionId: before.sessions[0].id, runId: original.id });
+  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_DONE'));
+  await application.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0].setBounds(bounds), bounds);
+  await assertTerminalGutter(page);
   step('changing defaults preserves actual running shell identity');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'powershell' : 'auto');
@@ -840,7 +866,7 @@ try {
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();
   await page.getByRole('button', { name: '删除 Agent Beta 已保存', exact: true }).click();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).agents.length, 0);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, one-file plugin import and self-check, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, one-file plugin import and self-check, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach.`);
 } catch (error) {
   console.error(error);
   if (application) {

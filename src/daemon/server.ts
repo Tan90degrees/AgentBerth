@@ -83,7 +83,7 @@ export class DaemonServer {
   }
   private broadcast(event: ServerEvent): void {
     for (const [socket, client] of this.clients) {
-      if (event.event === 'output' && !client.subscriptions.has(event.data.sessionId)) continue;
+      if ((event.event === 'output' || event.event === 'resize') && !client.subscriptions.has(event.data.sessionId)) continue;
       this.send(socket, event);
     }
   }
@@ -214,7 +214,21 @@ export class DaemonServer {
       case 'resize': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
         const live = this.terminal(request.params.sessionId, request.params.runId);
-        live.pty.resize(request.params.cols, request.params.rows); live.terminal.resize(request.params.cols, request.params.rows); return null;
+        const { cols, rows } = request.params;
+        this.flushOutput(live);
+        // Reserve the sequence now, before later output is queued. Resize the
+        // PTY and headless grid between writes, then send the same boundary to
+        // every attached renderer before any new-size output is delivered.
+        const seq = ++live.seq;
+        return new Promise<null>((resolve, reject) => live.terminal.write('', () => {
+          if (live.closed) { reject(new Error('终端已结束，请重新启动')); return; }
+          try {
+            live.pty.resize(cols, rows); live.terminal.resize(cols, rows);
+            live.committedSeq = seq;
+            this.broadcast({ event: 'resize', data: { sessionId: live.run.sessionId, runId: live.run.id, seq, cols, rows } });
+            resolve(null);
+          } catch (error) { reject(error); }
+        }));
       }
       case 'runs': return this.store.session(request.params.sessionId).agent === 'shell' ? this.store.runs(request.params.sessionId).filter(run => run.recordOutput) : [];
       case 'output': {

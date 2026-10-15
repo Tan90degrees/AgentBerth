@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 8;
+export const API_VERSION = 9;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -78,9 +78,12 @@ export interface State { projects: Project[]; sessions: Session[]; agents?: Agen
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface Attachment { run: Run | null; snapshot: string; seq: number; cols: number; rows: number }
+export type TerminalEvent =
+  | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
+  | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
 export type ServerEvent =
   | { event: 'state'; data: State }
-  | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
+  | TerminalEvent
   | { event: 'connection'; data: { connected: boolean; error?: string } };
 export interface Response { id: string; result?: unknown; error?: string }
 export interface RuntimeInfo { version: number; pid: number; port: number; token: string }

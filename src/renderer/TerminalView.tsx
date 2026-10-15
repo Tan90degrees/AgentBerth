@@ -3,9 +3,11 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
-import type { Attachment, ServerEvent, WindowsPty } from '../shared/protocol';
+import type { Attachment, TerminalEvent, WindowsPty } from '../shared/protocol';
 import { inputChunks, terminalDimensions } from '../shared/desktop';
 import { useTerminalActions } from './TerminalActions';
+import { writeTerminalEvent } from '../shared/terminal-stream';
+import { ResizeQueue } from './terminal-resize';
 
 const options = {
   theme: { background: '#0c1017', foreground: '#d5dce8', cursor: '#65dfc0', selectionBackground: '#284446', black: '#19202d', red: '#ee8094', green: '#76d6a5', yellow: '#e3c688', blue: '#82acff', magenta: '#c4a2ef', cyan: '#78d8e5', white: '#d5dce8' },
@@ -20,15 +22,19 @@ function loadWebLinks(terminal: Terminal, onError: (error: string) => void) {
   }));
 }
 
-function fitTerminal(terminal: Terminal, fit: FitAddon) {
+function proposedSize(fit: FitAddon) {
   const proposed = fit.proposeDimensions();
-  if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return null;
-  const dimensions = terminalDimensions(proposed.cols, proposed.rows);
+  return proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows) ? terminalDimensions(proposed.cols, proposed.rows) : null;
+}
+
+function fitTerminal(terminal: Terminal, fit: FitAddon) {
+  const dimensions = proposedSize(fit);
+  if (!dimensions) return null;
   if (terminal.cols !== dimensions.cols || terminal.rows !== dimensions.rows) terminal.resize(dimensions.cols, dimensions.rows);
   return dimensions;
 }
 
-export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, windowsPty, onError }: { sessionId: string; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
+export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, windowsPty, orderedResize = true, onError }: { sessionId: string; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
@@ -41,17 +47,20 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     terminal.loadAddon(fit);
     loadWebLinks(terminal, error => errorHandler.current(error));
     terminal.open(host.current!);
+    const sizeChanged = terminal.onResize(({ cols, rows }) => {
+      if (host.current) { host.current.dataset.cols = String(cols); host.current.dataset.rows = String(rows); }
+    });
     let disposed = false;
     let ready = false;
     let runId: string | null = null;
     let running = false;
     const unbind = bind(terminal, () => ready && running && !!runId);
     let seq = 0;
-    let pending: Extract<ServerEvent, { event: 'output' }>['data'][] = [];
+    let pending: TerminalEvent[] = [];
     let pendingBytes = 0;
-    const apply = (data: Extract<ServerEvent, { event: 'output' }>['data']) => {
-      if (data.runId !== runId || data.seq <= seq) return;
-      seq = data.seq; terminal.write(data.text);
+    const apply = (event: TerminalEvent) => {
+      if (event.data.runId !== runId || event.data.seq <= seq) return;
+      seq = event.data.seq; writeTerminalEvent(terminal, event, () => !disposed);
     };
     const off = window.berth.onEvent(event => {
       if (event.event === 'state' && runId) {
@@ -59,12 +68,12 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
         running = latest?.id === runId && latest.status === 'running';
         setReady(ready && running);
       }
-      if (event.event !== 'output' || event.data.sessionId !== sessionId) return;
+      if ((event.event !== 'output' && event.event !== 'resize') || event.data.sessionId !== sessionId) return;
       if (!ready) {
-        pendingBytes += event.data.text.length;
+        pendingBytes += event.event === 'output' ? event.data.text.length : 32;
         if (pendingBytes > 2 * 1024 * 1024) { errorHandler.current('输出过快，请切换会话重新连接'); pending = []; return; }
-        pending.push(event.data);
-      } else apply(event.data);
+        pending.push(event);
+      } else apply(event);
     });
     let inputChain = Promise.resolve(), inputGeneration = 0;
     const input = terminal.onData(data => {
@@ -77,43 +86,48 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
         }).catch(reason => { inputGeneration++; if (!disposed) errorHandler.current(String(reason)); });
       }
     });
-    let lastCols = 0, lastRows = 0;
+    let resizeQueue: ResizeQueue | null = null;
     const resize = () => {
-      if (disposed || !ready || !host.current?.clientWidth) return;
-      const dimensions = fitTerminal(terminal, fit);
+      if (disposed || !ready || !host.current?.clientWidth || !host.current?.clientHeight) return;
+      const dimensions = proposedSize(fit);
       if (!dimensions) return;
-      const { cols, rows } = dimensions;
-      if (cols === lastCols && rows === lastRows) return;
-      lastCols = cols; lastRows = rows;
-      if (running && runId) void window.berth.rpc('resize', { sessionId, runId, cols, rows }).catch(error => { if (!disposed && running) errorHandler.current(String(error)); });
+      if (!orderedResize || !running || !runId) fitTerminal(terminal, fit);
+      if (running && runId) resizeQueue?.request(dimensions);
     };
-    let resizeTimer: ReturnType<typeof setTimeout>;
-    const observer = new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); });
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    // Sample while dragging, rather than waiting indefinitely for the final
+    // ResizeObserver event. A slow RPC keeps only the newest requested size.
+    const observer = new ResizeObserver(() => {
+      resizeTimer ??= setTimeout(() => { resizeTimer = undefined; resize(); }, 50);
+    });
     observer.observe(host.current!);
     void window.berth.rpc<Attachment>('attach', { sessionId }).then(attachment => {
       if (disposed) return;
       runId = attachment.run?.id ?? null;
       running = attachment.run?.status === 'running';
       seq = attachment.seq;
-      lastCols = attachment.cols; lastRows = attachment.rows;
+      resizeQueue = new ResizeQueue({ cols: attachment.cols, rows: attachment.rows }, async dimensions => {
+        if (!disposed && running && runId) await window.berth.rpc('resize', { sessionId, runId, ...dimensions });
+      }, error => { if (!disposed && running) errorHandler.current(String(error)); });
       terminal.resize(attachment.cols, attachment.rows);
       terminal.write(attachment.snapshot, () => {
         if (disposed) return;
         ready = true;
         setReady(running);
         for (const event of pending) apply(event);
-        pending = [];
-        if (!attachment.run) terminal.writeln('\x1b[38;2;119;137;159m会话已就绪。点击“启动终端”，开始这个项目的工作。\x1b[0m');
+        pending = []; pendingBytes = 0;
+        if (!attachment.run) terminal.writeln('\x1b[38;2;119;137;159m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');
         resize();
         const element = document.activeElement;
         if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
       });
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
+    void document.fonts.ready.then(() => { if (!disposed) resize(); });
     return () => {
-      disposed = true; clearTimeout(resizeTimer); observer.disconnect(); input.dispose(); off(); unbind(); terminal.dispose();
+      disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); sizeChanged.dispose(); input.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
-  }, [sessionId, fontSize, windowsPty, bind, setReady]);
+  }, [sessionId, fontSize, windowsPty, orderedResize, bind, setReady]);
   return <div className="terminal-surface">{controls}<div className="terminal-host" data-testid="terminal"><div className="terminal-mount" ref={host} /></div></div>;
 });
 
