@@ -49,3 +49,11 @@ test('a real CPU/memory child is included in the session tree and sampling shuts
  while(value.sessions.real.processCount<2||value.sessions.real.memoryBytes!<32*1024*1024||value.sessions.real.cpuPercent===null){assert.ok(Date.now()<deadline,JSON.stringify(value));await new Promise(r=>setTimeout(r,2700));value=await sampler.sample(target);}
  assert.ok(descendant>0);assert.ok(value.sessions.real.cpuPercent!>0);assert.equal(value.projects.project.memoryBytes,value.sessions.real.memoryBytes);assert.ok(value.workspace.memoryBytes!>=value.sessions.real.memoryBytes!);
 });
+
+test('closing during a pending process read releases the Windows helper and its pipes', {timeout:15000},async()=>{
+ const reader=new ProcessReader();try{
+  const rows=await reader.read(),helpers=process.platform==='win32'?rows.filter(row=>row.parent===process.pid).map(row=>row.pid):[];
+  const pending=reader.read();void pending.catch(()=>{});await reader.close();await Promise.allSettled([pending]);
+  for(const pid of helpers)assert.throws(()=>process.kill(pid,0),/ESRCH/);
+ }finally{await reader.close();}
+});

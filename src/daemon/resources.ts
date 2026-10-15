@@ -24,7 +24,7 @@ export class ProcessReader {
   private child:ChildProcessWithoutNullStreams|null=null;
   private waiting:{resolve:(rows:ProcessSample[])=>void;reject:(error:Error)=>void;timer:NodeJS.Timeout}|null=null;
   private idle:NodeJS.Timeout|undefined;
-  private output='';private closed=false;private exits=new Set<Promise<void>>();private abort=new AbortController();
+  private output='';private closed=false;private exits=new Set<Promise<void>>();private stopping=new Set<Promise<void>>();private abort=new AbortController();
   private units:Promise<[number,number]>|undefined;private namespace:Promise<string|null>|undefined;
   async read():Promise<ProcessSample[]>{
     if(this.closed)throw new Error('资源采样已停止');
@@ -56,8 +56,18 @@ export class ProcessReader {
     return new Promise((resolve,reject)=>{this.waiting={resolve,reject,timer:setTimeout(()=>this.fail(new Error('资源采样超时')),8000)};this.child!.stdin.write('sample\n');this.idle=setTimeout(()=>this.release(),20000);this.idle.unref();});
   }
   private fail(error:Error){const pending=this.waiting;this.waiting=null;if(pending){clearTimeout(pending.timer);pending.reject(error);}this.release();}
-  private release(){const child=this.child;this.child=null;clearTimeout(this.idle);if(child){child.stdin.end();child.kill();}}
-  async close(){this.closed=true;this.abort.abort();this.fail(new Error('资源采样已停止'));await Promise.allSettled([...this.exits]);}
+  private release(){
+    const child=this.child;this.child=null;clearTimeout(this.idle);if(!child)return;
+    const stop=(async()=>{
+      // A console child may leave inherited pipe handles open on Windows. Kill
+      // its entire tree before closing pipes, so daemon shutdown cannot hang.
+      try{if(process.platform==='win32'&&child.pid)await execute(path.join(process.env.SystemRoot??'C:\\Windows','System32','taskkill.exe'),['/PID',String(child.pid),'/T','/F'],{windowsHide:true,timeout:5000});else child.kill();}catch{child.kill();}
+      finally{child.stdin.destroy();child.stdout.destroy();child.stderr.destroy();}
+    })();this.stopping.add(stop);void stop.finally(()=>this.stopping.delete(stop));
+  }
+  async close(){this.closed=true;this.abort.abort();this.fail(new Error('资源采样已停止'));await Promise.allSettled([...this.stopping]);
+    let timer:NodeJS.Timeout|undefined;try{await Promise.race([Promise.allSettled([...this.exits]),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('资源采样进程尚未退出，请重试退出')),3000);})]);}finally{clearTimeout(timer);}
+  }
 }
 
 export class ResourceSampler {

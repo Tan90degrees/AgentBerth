@@ -64,6 +64,7 @@ function quitApplication(): Promise<void> {
     quitReady = true; tray?.destroy(); tray = null;
     app.quit();
   })().catch(error => {
+    console.error('AgentBerth 退出未完成：', error);
     quitting = false;
     importingPlugins = new AgentPlugins();
     tray?.setToolTip('AgentBerth · 退出失败，请重试');
