@@ -284,8 +284,7 @@ try {
   await page.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+V');
   await page.locator('.terminal-toolbar [role="status"]').filter({ hasText: '已粘贴' }).waitFor();
   await page.keyboard.press('Enter');
-  await eventually(() => fileExists(keyboardResult), 'Keyboard paste did not execute in the shell');
-  assert.match(await readFile(keyboardResult, 'utf8'), /KEYBOARD_PASTE_READY/);
+  await eventually(async()=>{try{return (await readFile(keyboardResult,'utf8')).includes('KEYBOARD_PASTE_READY');}catch{return false;}}, 'Keyboard paste did not execute and finish writing in the shell');
   step('search and copy Chinese, emoji, wrapped output and case-sensitive matches');
   const searchScript = path.join(folder, 'search-output.cjs'), wrappedText = 'WRAP_' + '中文🙂'.repeat(45) + '_END', webUrl = 'https://example.com/berth';
   await writeFile(searchScript, `console.log('TERMINAL_SEARCH_UPPER');console.log('terminal_search_upper');console.log('中文🙂查找结果');console.log(${JSON.stringify(wrappedText)});console.log(${JSON.stringify(wrappedText)});console.log(${JSON.stringify(webUrl)});`);
