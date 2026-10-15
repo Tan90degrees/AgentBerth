@@ -772,6 +772,7 @@ try {
   await nativeBrowser.getByText('共 1 条 · 第 1 页',{exact:true}).waitFor();
   await page.getByRole('button',{name:'关联会话 ses_smoke',exact:true}).click();
   await page.getByText('对话与项目已关联',{exact:true}).waitFor();
+  await eventually(async()=>await page.locator('.native-list').getAttribute('aria-busy')==='false','Native history list still loading');
   await page.screenshot({path:`test-results/${packaged?'packaged-native-catalog':'native-catalog'}.png`});
   step('copy linked Agent configuration without duplicating its native identity or process');
   await menuAction(page, '复制会话', 'session');
@@ -920,6 +921,8 @@ try {
   await pluginBrowser.getByText('共 9 条 · 第 2 页',{exact:true}).waitFor();
   await pluginBrowser.getByRole('button',{name:'上一页',exact:true}).click();
   await pluginBrowser.getByText('共 9 条 · 第 1 页',{exact:true}).waitFor();
+  await eventually(async()=>await pluginBrowser.locator('.native-list').getAttribute('aria-busy')==='false','Discovery page still loading');
+  await page.screenshot({path:`test-results/${packaged?'packaged-native-discovery-pages':'native-discovery-pages'}.png`});
   await page.getByLabel('搜索原生会话',{exact:true}).fill('native-extra-6');
   await pluginBrowser.getByText('共 1 条 · 第 1 页',{exact:true}).waitFor();
   await page.getByRole('button',{name:'预览会话 native-extra-6',exact:true}).click();
@@ -930,6 +933,7 @@ try {
   await page.getByLabel('搜索原生会话',{exact:true}).fill('native-plugin-123');
   await page.getByRole('button',{name:'关联会话 native-plugin-123',exact:true}).click();
   await page.getByText('刷新插件成功',{exact:true}).waitFor();
+  await eventually(async()=>await page.locator('.native-list').getAttribute('aria-busy')==='false','Native history list still loading');
   await page.screenshot({path:`test-results/${packaged?'packaged-native-discovery':'native-discovery'}.png`});
   await menuAction(page, '恢复原生会话', 'session');
   await waitRunState(page, true);
@@ -953,6 +957,7 @@ try {
   await page.getByText('刷新插件成功',{exact:true}).waitFor();
   const unchanged = (await page.evaluate(()=>window.berth.rpc('state'))).sessions.find(item=>item.id===betaSession.id).latestRun;
   assert.equal(unchanged.id,pluginRun.id);assert.equal(unchanged.pid,pluginRun.pid);assert.equal(unchanged.command,pluginRun.command);assert.equal(unchanged.status,'running');
+  await eventually(async()=>await page.locator('.native-list').getAttribute('aria-busy')==='false','Native history list still loading');
   await page.screenshot({path:`test-results/${packaged?'packaged-native-running-link':'native-running-link'}.png`});
 
   await menuAction(page, '停止终端', 'session');
@@ -992,6 +997,12 @@ try {
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
   await page.locator('.projects .project-item').click();
+  step('an unlinked conversation preview is cleared when the project directory changes');
+  await page.locator('.session-item').filter({hasText:'OpenCode 会话'}).click();
+  await page.getByRole('tab',{name:'对话历史',exact:true}).click();
+  await page.getByRole('button',{name:'解除当前关联',exact:true}).click();
+  await page.getByRole('button',{name:'预览会话 ses_smoke',exact:true}).click();
+  await page.getByText('对话与项目已关联',{exact:true}).waitFor();
   step('change project directory and remove registration while retaining actual files');
   const moved = path.join(folder, 'moved'); await mkdir(moved);
   await menuAction(page, '编辑项目', 'project');
@@ -999,6 +1010,8 @@ try {
   await page.getByRole('button', { name: '保存项目', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].nativeSessionId, null);
+  await page.getByText('共 0 条 · 第 1 页',{exact:true}).waitFor();
+  assert.equal(await page.getByText('对话与项目已关联',{exact:true}).count(),0);
   await menuAction(page, '删除项目', 'project');
   await page.getByRole('button', { name: '确认删除项目', exact: true }).click();
   await page.getByRole('button', { name: '添加第一个项目', exact: true }).waitFor();
