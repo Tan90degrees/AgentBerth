@@ -4,22 +4,26 @@ import { Dialog } from './Dialog';
 
 function useGitStatus(project: Project, enabled: boolean) {
   const [status,setStatus]=useState<GitStatus|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState('');
-  const alive=useRef(true),pending=useRef(false);
+  const alive=useRef(true),generation=useRef(0);
+  const pending=useRef<{key:string;generation:number}|null>(null);
   const refresh=useCallback(async()=>{
-    if(!enabled || pending.current)return;
-    pending.current=true;setLoading(true);
-    try {const value=await window.berth.rpc<GitStatus>('gitStatus',{projectId:project.id});if(alive.current){setStatus(value);setError('');}}
-    catch(reason){if(alive.current)setError(String(reason));}
-    finally{pending.current=false;if(alive.current)setLoading(false);}
+    if(!enabled)return;
+    const key=project.id+'\0'+project.path;
+    if(pending.current?.key===key&&pending.current.generation===generation.current)return;
+    const request={key,generation:generation.current};pending.current=request;setLoading(true);
+    try {const value=await window.berth.rpc<GitStatus>('gitStatus',{projectId:project.id});if(alive.current&&request.generation===generation.current){setStatus(value);setError('');}}
+    catch(reason){if(alive.current&&request.generation===generation.current)setError(String(reason));}
+    finally{if(pending.current===request){pending.current=null;if(alive.current)setLoading(false);}}
   },[project.id,project.path,enabled]);
+  const applyStatus=useCallback((value:GitStatus)=>{generation.current++;setStatus(value);setError('');},[]);
   useEffect(()=>{
     alive.current=true;void refresh();
-    const update=()=>{if(document.visibilityState==='visible')void refresh();};
+    const update=()=>{if(document.visibilityState==='visible'){generation.current++;void refresh();}};
     const timer=setInterval(()=>{if(document.visibilityState==='visible' && document.hasFocus())void refresh();},15000);
     window.addEventListener('focus',update);window.addEventListener('berth:git-refresh',update);
-    return()=>{alive.current=false;clearInterval(timer);window.removeEventListener('focus',update);window.removeEventListener('berth:git-refresh',update);};
+    return()=>{alive.current=false;generation.current++;clearInterval(timer);window.removeEventListener('focus',update);window.removeEventListener('berth:git-refresh',update);};
   },[refresh]);
-  return{status,loading,error,refresh,setStatus};
+  return{status,loading,error,refresh,setStatus:applyStatus};
 }
 const branchLabel=(status:GitStatus|null)=>status?.kind==='repository' ? status.branch || `游离 ${status.head?.slice(0,7)??'HEAD'}` : status?.kind==='not-repository'?'非 Git 项目':status?'Git 不可用':'Git…';
 export function GitBranch({project,enabled,onOpen}:{project:Project;enabled:boolean;onOpen:()=>void}){
@@ -34,7 +38,7 @@ export function GitDialog({project,enabled,onClose,onNotice,onError,returnFocus}
   const [remote,setRemote]=useState(''),[branch,setBranch]=useState(''),[working,setWorking]=useState<GitOperation['action']|null>(null),[failure,setFailure]=useState(''),[output,setOutput]=useState(''),[notice,setNotice]=useState('');
   const alive=useRef(true);useEffect(()=>()=>{alive.current=false;},[]);
   useEffect(()=>{if(status){setRemote(status.upstreamRemote&&status.remotes.includes(status.upstreamRemote)?status.upstreamRemote:status.remotes.includes('origin')?'origin':status.remotes[0]??'');setBranch('');}},[status?.branch,status?.upstreamRemote,status?.remotes.join('\0')]);
-  const blocked=!enabled||loading||!!working||!!status?.busy;
+  const blocked=!enabled||(!status&&loading)||!!working||!!status?.busy;
   const repository=status?.kind==='repository';
   const canWrite=repository&&!!status.branch&&!!status.head&&!status.operation&&!status.conflicts;
   const canChange=repository&&!status.operation&&!status.conflicts;
@@ -46,7 +50,7 @@ export function GitDialog({project,enabled,onClose,onNotice,onError,returnFocus}
       if(alive.current){setStatus(result.status);setOutput(result.output);setNotice(result.message);}
       onNotice(`${project.name}：${result.message}`);
     }catch(reason){const message=String(reason).replace(/^Error: /,'');if(alive.current)setFailure(message);onError(`${project.name}：${message}`);}
-    finally{if(alive.current){setWorking(null);void refresh();}window.dispatchEvent(new Event('berth:git-refresh'));}
+    finally{if(alive.current)setWorking(null);window.dispatchEvent(new Event('berth:git-refresh'));}
   }
   return <Dialog title={`Git · ${project.name}`} returnFocus={returnFocus} onClose={onClose} error={failure||error}>
     <div className="git-manager">

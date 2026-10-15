@@ -197,7 +197,16 @@ try {
   await gitDialog.getByText('本地分支与工作区改动（0）',{exact:true}).click();
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('feature/ui');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='feature/ui','Git branch switch did not refresh');
-  await gitDialog.getByRole('button',{name:'发布当前分支',exact:true}).click();await gitDialog.getByText('上游 origin/feature/ui · 领先 0 / 落后 0',{exact:true}).waitFor();
+  step('Git background refresh during pointer activation does not swallow publication');
+  const publication=gitDialog.getByRole('button',{name:'发布当前分支',exact:true});
+  await eventually(()=>publication.isEnabled(),'Git publication did not become ready');
+  const publicationBox=await publication.boundingBox();
+  await page.mouse.move(publicationBox.x+publicationBox.width/2,publicationBox.y+publicationBox.height/2);
+  await page.mouse.down();
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  assert.equal(await publication.isEnabled(),true,'Background refresh disabled a ready Git action');
+  await page.mouse.up();
+  await gitDialog.getByText('上游 origin/feature/ui · 领先 0 / 落后 0',{exact:true}).waitFor();
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Git branch switch back failed');
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
