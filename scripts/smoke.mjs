@@ -1,4 +1,6 @@
 import { _electron as electron } from 'playwright';
+import { Terminal as HeadlessTerminal } from '@xterm/headless';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -13,9 +15,34 @@ async function assertTerminalGutter(page) {
     const screen = document.querySelector('.terminal-mount .xterm-screen'), bar = document.querySelector('.terminal-mount .scrollbar.vertical'), mount = document.querySelector('.terminal-mount');
     if (!screen || !bar || !mount) return false;
     const s = screen.getBoundingClientRect(), b = bar.getBoundingClientRect(), m = mount.getBoundingClientRect();
-    const rows = screen.querySelector('.xterm-rows')?.childElementCount ?? 0, rowHeight = rows ? s.height / rows : 0;
+    const rows = Number(mount.dataset.rows), rowHeight = rows ? s.height / rows : 0;
     return s.width > 0 && b.width >= 12 && s.right <= b.left + 1 && s.bottom <= m.bottom + 1 && b.right <= m.right + 1 && rowHeight > 0 && m.bottom - s.bottom < rowHeight + 1;
   });
+}
+async function findTerminalText(page, text) {
+  await page.getByRole('button', { name: '查找', exact: true }).click();
+  await page.getByLabel('查找终端文字', { exact: true }).fill(text);
+  await page.getByRole('button', { name: '下一个匹配', exact: true }).click();
+  await page.getByRole('search').getByRole('status').filter({ hasText: '已定位' }).waitFor();
+  await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
+  await page.getByRole('button', { name: '到底部', exact: true }).click();
+}
+async function assertContinuousTuiBar(page, application) {
+  const metrics = await page.locator('.terminal-mount').evaluate(mount => {
+    const screen = mount.querySelector('.xterm-screen').getBoundingClientRect();
+    return { x: screen.x, y: screen.y, width: screen.width, height: screen.height, cols: Number(mount.dataset.cols), rows: Number(mount.dataset.rows), renderer: mount.dataset.renderer };
+  });
+  assert.equal(metrics.renderer, 'webgl', 'Pixel regression requires the accelerated renderer');
+  // The fixture paints a full-cell orange block at column 10 on every interior row.
+  const strip = { x: Math.round(metrics.x + metrics.width / metrics.cols * 9.5), y: Math.ceil(metrics.y + metrics.height / metrics.rows * 3), width: 1, height: Math.floor(metrics.height / metrics.rows * (metrics.rows - 5)) };
+  await eventually(async () => {
+    const gaps = await application.evaluate(async ({ BrowserWindow }, rect) => {
+      const image = await BrowserWindow.getAllWindows()[0].webContents.capturePage(rect), bytes = image.toBitmap();
+      let gaps = 0; for (let i = 0; i < bytes.length; i += 4) if (!(bytes[i + 2] > 180 && bytes[i + 1] > 50 && bytes[i + 1] < 170 && bytes[i] < 90)) gaps++;
+      return gaps;
+    }, strip);
+    return gaps === 0;
+  }, 'TUI block scrollbar contains visible gaps between terminal rows');
 }
 async function eventually(check, description, timeout = 15000) {
   const deadline = Date.now() + timeout;
@@ -67,13 +94,15 @@ const packaged = process.argv.includes('--packaged');
 if (packaged && process.platform !== 'win32') throw new Error('Packaged smoke requires the Windows package built on Windows');
 const executablePath = packaged ? path.resolve('release/win-unpacked/AgentBerth.exe') : undefined;
 if (executablePath) await stat(executablePath);
-const launchArgs = packaged ? [] : [path.resolve('.')];
+// Exercise real canvas glyphs on CI hosts without a physical GPU. Production chooses its native driver.
+const launchArgs = [...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
 if (process.platform === 'linux' && process.getuid?.() === 0) launchArgs.push('--no-sandbox');
 const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-desktop-'));
 await mkdir('test-results', { recursive: true });
 let application;
 let daemonPid;
 try {
+  launchArgs.push('--user-data-dir=' + path.join(folder, 'profile'));
   const env = { ...process.env, AGENTBERTH_DATA_DIR: path.join(folder, 'data') };
   delete env.ELECTRON_RUN_AS_NODE;
   step(`launch ${packaged ? executablePath : 'development application'}`);
@@ -100,6 +129,8 @@ try {
   assert.equal(nativeIcons.asset.empty, false); assert.ok(nativeIcons.asset.mint > 5, 'Native icon has no visible mint brand mark');
   if (nativeIcons.executable) { assert.equal(nativeIcons.executable.empty, false); assert.ok(nativeIcons.executable.mint > 5, 'Packaged EXE retained a missing/default icon'); }
   await page.waitForFunction(() => { const image = document.querySelector('img.brand-mark'); return image?.complete && image.naturalWidth === 512; });
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+  assert.equal(await page.evaluate(() => localStorage.getItem('berth.appearance')), null);
   step('create project and session');
   await page.getByRole('button', { name: '添加第一个项目' }).waitFor();
   await page.getByRole('button', { name: '添加第一个项目' }).click();
@@ -327,7 +358,7 @@ try {
   await writeFile(pasteScript, `const fs=require('node:fs');process.stdin.setRawMode(true);process.stdin.setEncoding('utf8');let text='';process.stdin.on('data',data=>{text+=data;if(text.endsWith('\\x1b[201~')){const end=text.indexOf('|BERTH_PASTE_END|');fs.writeFileSync(${JSON.stringify(pasteResult)},JSON.stringify({text:text.slice(6,end),bracketed:text.startsWith('\\x1b[200~')&&end>=6}));process.stdout.write('\\x1b[?2004l');process.stdin.setRawMode(false);process.exit(0);}});process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');fs.writeFileSync(${JSON.stringify(pasteReady)},'ready');`);
   await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: shellCommand(pasteScript) + '\r' });
   await eventually(() => fileExists(pasteReady), 'Paste reader did not start');
-  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('PASTE_READER_READY'));
+  await findTerminalText(page, 'PASTE_READER_READY');
   const pasteText = '中🙂文'.repeat(15000);
   await application.evaluate(async ({ clipboard }, text) => { await clipboard.writeText(text); }, pasteText + '|BERTH_PASTE_END|');
   await page.getByRole('button', { name: '粘贴', exact: true }).click();
@@ -384,18 +415,17 @@ try {
   await application.evaluate(({ shell }) => { globalThis.smokeLinks = []; globalThis.smokeOpenExternal = shell.openExternal; shell.openExternal = async url => { globalThis.smokeLinks.push(url); }; });
   const invalidLinks = await page.evaluate(async () => Promise.all(['file:///C:/Windows/notepad.exe', 'javascript:alert(1)', 'https://user:password@example.com'].map(url => window.berth.openExternal(url).then(() => false, () => true))));
   assert.ok(invalidLinks.every(Boolean));
-  const linkPosition = await page.evaluate(url => {
-    const row = [...document.querySelectorAll('.xterm-rows > div')].findLast(element => element.textContent.includes(url));
-    if (!row) throw new Error('Visible link row missing');
-    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT); let node;
-    while (node = walker.nextNode()) {
-      const offset = node.textContent.indexOf(url);
-      if (offset < 0) continue;
-      const range = document.createRange(); range.setStart(node, offset + 8); range.setEnd(node, offset + 12);
-      const rect = range.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-    }
-    throw new Error('Link text node missing');
-  }, webUrl);
+  const linkSnapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id);
+  const linkGrid = new HeadlessTerminal({ cols: linkSnapshot.cols, rows: linkSnapshot.rows, allowProposedApi: true, windowsPty: before.windowsPty });
+  linkGrid.loadAddon(new Unicode11Addon()); linkGrid.unicode.activeVersion = '11';
+  await new Promise(resolve => linkGrid.write(linkSnapshot.snapshot, resolve));
+  let linkCell;
+  for (let y=0; y<linkGrid.rows; y++) { const text=linkGrid.buffer.active.getLine(linkGrid.buffer.active.baseY+y)?.translateToString(true) ?? ''; const x=text.indexOf(webUrl); if(x>=0)linkCell={x:x+10,y}; }
+  assert.ok(linkCell, 'Visible link row missing'); linkGrid.dispose();
+  const linkPosition = await page.locator('.terminal-mount').evaluate((mount, cell) => {
+    const screen=mount.querySelector('.xterm-screen').getBoundingClientRect();
+    return { x:screen.x+(cell.x+.5)*screen.width/Number(mount.dataset.cols), y:screen.y+(cell.y+.5)*screen.height/Number(mount.dataset.rows) };
+  }, linkCell);
   await page.mouse.move(linkPosition.x, linkPosition.y); await page.waitForTimeout(100);
   await page.mouse.click(linkPosition.x, linkPosition.y);
   assert.deepEqual(await application.evaluate(() => globalThis.smokeLinks), []);
@@ -573,30 +603,40 @@ try {
   await assertTerminalGutter(page);
   step('resize a full-screen Unicode TUI, settle both grids, switch away and restore without restarting');
   const tuiScript = path.join(folder, 'resize-tui.cjs');
-  await writeFile(tuiScript, `let done=false;process.stdout.write('\\x1b[?1049h');function draw(){const [c,r]=process.stdout.getWindowSize();process.stdout.write('\\x1b[H\\x1b[2JTUI_RESIZE_READY\\x1b[2;1HSIZE_'+c+'x'+r+'\\x1b[3;1H'+('中文🙂'.repeat(Math.max(1,Math.floor((c-6)/6))))+'\\x1b['+r+';1HTUI_FOOTER\\x1b[K');}draw();process.stdout.on('resize',draw);const timer=setInterval(draw,60);function finish(){if(done)return;done=true;clearInterval(timer);process.stdout.removeListener('resize',draw);process.stdin.setRawMode(false);process.stdin.pause();process.stdout.write('\\x1b[?1049lTUI_RESIZE_DONE\\r\\n');process.exit(0);}process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',data=>{if(data.includes(3))finish();});process.on('SIGINT',finish);setTimeout(finish,60000);`);
+  await writeFile(tuiScript, `let done=false;process.stdout.write('\\x1b[?1049h');function draw(){const [c,r]=process.stdout.getWindowSize();process.stdout.write('\\x1b[H\\x1b[2JTUI_RESIZE_READY\\x1b[2;1HSIZE_'+c+'x'+r+'\\x1b[3;1H'+('中文🙂'.repeat(Math.max(1,Math.floor((c-6)/6))))+Array.from({length:Math.max(0,r-4)},(_,i)=>'\\x1b['+(i+3)+';10H\\x1b[38;2;255;102;0m█\\x1b[0m').join('')+'\\x1b['+r+';1HTUI_FOOTER\\x1b[K');}draw();process.stdout.on('resize',draw);const timer=setInterval(draw,60);function finish(){if(done)return;done=true;clearInterval(timer);process.stdout.removeListener('resize',draw);process.stdin.setRawMode(false);process.stdin.pause();process.stdout.write('\\x1b[?1049lTUI_RESIZE_DONE\\r\\n');process.exit(0);}process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',data=>{if(data.includes(3))finish();});process.on('SIGINT',finish);setTimeout(finish,60000);`);
   await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: shellCommand(tuiScript) + '\r' });
-  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_READY'));
+  await findTerminalText(page, 'TUI_RESIZE_READY');
   const bounds = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
   for (const [width, height] of [[1100, 720], [1280, 820], [1030, 710], [1200, 780]]) {
     await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(...size), [width, height]);
     let gridDiagnostic;
     await eventually(async () => {
       const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id);
-      const size = await page.locator('.terminal-mount').evaluate(element => ({ cols: Number(element.dataset.cols), rows: Number(element.dataset.rows), text: element.textContent }));
-      gridDiagnostic = { window: [width,height], renderer: [size.cols,size.rows], daemon: [snapshot.cols,snapshot.rows], text: size.text.slice(0,200), snapshot: snapshot.snapshot.slice(-200) };
-      return size.cols === snapshot.cols && size.rows === snapshot.rows && size.text.includes('SIZE_'+size.cols+'x'+size.rows);
+      const size = await page.locator('.terminal-mount').evaluate(element => ({ cols: Number(element.dataset.cols), rows: Number(element.dataset.rows), renderer: element.dataset.renderer }));
+      gridDiagnostic = { window: [width,height], renderer: [size.cols,size.rows], daemon: [snapshot.cols,snapshot.rows], mode: size.renderer, snapshot: snapshot.snapshot.slice(-200) };
+      return size.cols === snapshot.cols && size.rows === snapshot.rows && snapshot.snapshot.includes('SIZE_'+size.cols+'x'+size.rows);
     }, 'Renderer/PTY dimensions or full-screen TUI did not settle').catch(error => { console.error('TUI grid diagnostic:',gridDiagnostic); throw error; });
+    await findTerminalText(page, 'SIZE_'+gridDiagnostic.renderer[0]+'x'+gridDiagnostic.renderer[1]);
+    await assertContinuousTuiBar(page, application);
     await assertTerminalGutter(page);
   }
   assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')), 'Resize remounted the terminal');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.locator('.projects .project-item').click();
-  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_READY'));
-  await page.waitForFunction(() => [...document.querySelectorAll('.xterm-rows > div')].at(-1)?.textContent.includes('TUI_FOOTER'));
+  await findTerminalText(page, 'TUI_RESIZE_READY');
+  await findTerminalText(page, 'TUI_FOOTER');
+  await assertContinuousTuiBar(page, application);
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-tui-resize' : 'tui-resize'}.png` });
+  step('graphics context loss falls back without restarting the live terminal');
+  await page.evaluate(() => { window.lossTerminal = document.querySelector('.xterm'); const canvas = document.querySelector('.terminal-mount .xterm-screen canvas'); const gl=canvas?.getContext('webgl2'); const extension=gl?.getExtension('WEBGL_lose_context'); if(!extension)throw new Error('Context-loss fixture unavailable'); extension.loseContext(); });
+  await page.waitForFunction(() => document.querySelector('.terminal-mount')?.dataset.renderer === 'dom');
+  assert.ok(await page.evaluate(() => window.lossTerminal === document.querySelector('.xterm')));
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
+  await findTerminalText(page, 'TUI_RESIZE_READY');
+  await assertTerminalGutter(page);
   await page.evaluate(({ sessionId, runId }) => window.berth.rpc('input', { sessionId, runId, data: '\x03' }), { sessionId: before.sessions[0].id, runId: original.id });
-  await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('TUI_RESIZE_DONE'));
+  await findTerminalText(page, 'TUI_RESIZE_DONE');
   await application.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0].setBounds(bounds), bounds);
   await assertTerminalGutter(page);
   step('changing defaults preserves actual running shell identity');

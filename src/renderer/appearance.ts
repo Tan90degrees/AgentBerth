@@ -3,7 +3,7 @@ import { appearanceMode,resolveAppearance,type AppearanceMode,type ResolvedAppea
 import { readStored,saveStored } from './storage';
 
 const key='berth.appearance';
-let preference:AppearanceMode='system',resolved:ResolvedAppearance='light',media:MediaQueryList|null=null,initialized=false;
+let preference:AppearanceMode='dark',resolved:ResolvedAppearance='dark',media:MediaQueryList|null=null,initialized=false;
 const listeners=new Set<()=>void>();
 const subscribe=(listener:()=>void)=>{listeners.add(listener);return()=>{listeners.delete(listener);};};
 function apply(){

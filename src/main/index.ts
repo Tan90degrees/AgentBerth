@@ -10,6 +10,8 @@ import { installAgentFile, exportPluginKit, developmentPrompt } from './plugin-f
 import { AgentPlugins } from '../daemon/plugins';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
 
+nativeTheme.themeSource = 'dark';
+
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let connection: DaemonConnection | null = null;

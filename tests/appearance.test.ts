@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {appearanceMode,resolveAppearance,terminalThemes} from '../src/shared/appearance';
 
 test('appearance preference tolerates old/unavailable storage and follows system only when requested',()=>{
- for(const value of [null,undefined,'',false,{},'invalid'])assert.equal(appearanceMode(value),'system');
- assert.equal(appearanceMode('light'),'light');assert.equal(appearanceMode('dark'),'dark');
+ for(const value of [null,undefined,'',false,{},'invalid'])assert.equal(appearanceMode(value),'dark');
+ assert.equal(appearanceMode('system'),'system');assert.equal(appearanceMode('light'),'light');assert.equal(appearanceMode('dark'),'dark');
  assert.equal(resolveAppearance('system',true),'dark');assert.equal(resolveAppearance('system',false),'light');
  assert.equal(resolveAppearance('light',true),'light');assert.equal(resolveAppearance('dark',false),'dark');
 });

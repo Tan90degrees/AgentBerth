@@ -2,7 +2,7 @@ import type { ITheme } from '@xterm/xterm';
 
 export type AppearanceMode='system'|'light'|'dark';
 export type ResolvedAppearance='light'|'dark';
-export function appearanceMode(value:unknown):AppearanceMode{return value==='light'||value==='dark'?value:'system';}
+export function appearanceMode(value:unknown):AppearanceMode{return value==='light'||value==='system'?value:'dark';}
 export function resolveAppearance(mode:AppearanceMode,systemDark:boolean):ResolvedAppearance{return mode==='system'?(systemDark?'dark':'light'):mode;}
 export const terminalThemes:Record<ResolvedAppearance,ITheme>={
   dark:{overviewRulerBorder:'#393939',scrollbarSliderBackground:'#60606080',scrollbarSliderHoverBackground:'#808080a0',scrollbarSliderActiveBackground:'#a0a0a0b0',background:'#212121',foreground:'#ececec',cursor:'#ececec',cursorAccent:'#212121',selectionBackground:'#4c5562',selectionInactiveBackground:'#3a3a3a',black:'#171717',red:'#ee8585',green:'#83c99a',yellow:'#e4c682',blue:'#8ab4f8',magenta:'#cba6e4',cyan:'#7ec5cb',white:'#d4d4d4',brightBlack:'#929292',brightRed:'#ff9c9c',brightGreen:'#a2dbad',brightYellow:'#f1dda1',brightBlue:'#adcaff',brightMagenta:'#dfc2f1',brightCyan:'#a1dce0',brightWhite:'#ffffff'},
