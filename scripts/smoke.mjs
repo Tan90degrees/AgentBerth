@@ -754,6 +754,25 @@ try {
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-opencode' : 'opencode'}.png` });
   await page.getByRole('button', { name: '复制 ID', exact: true }).click();
   assert.equal(await application.evaluate(({ clipboard }) => clipboard.readText()), 'ses_smoke');
+  step('preserve multiple OpenCode imports and paginate the saved conversation catalog');
+  const nativeBrowser = page.getByRole('region', { name: '原生会话列表' });
+  for (let i=0;i<7;i++) {
+    const file = path.join(folder, `session-${i}.json`);
+    await writeFile(file, JSON.stringify({ info: { id: `ses_extra_${i}`, directory: folder }, messages: [{ info: { role: 'user' }, parts: [{type:'text',text:`保存会话 ${i} 🙂`}] }] }));
+    await page.evaluate(({sessionId,file}) => window.berth.rpc('importHistory',{sessionId,path:file}), {sessionId:(await page.evaluate(()=>window.berth.rpc('state'))).sessions.find(item=>item.title==='OpenCode 会话').id,file});
+  }
+  await nativeBrowser.getByText('共 8 条 · 第 1 页',{exact:true}).waitFor();
+  assert.equal(await nativeBrowser.locator('.native-item').count(),5);
+  await nativeBrowser.getByRole('button',{name:'下一页',exact:true}).click();
+  await nativeBrowser.getByText('共 8 条 · 第 2 页',{exact:true}).waitFor();
+  await eventually(async()=>await nativeBrowser.locator('.native-item').count()===3,'Saved history page did not change');
+  await nativeBrowser.getByRole('button',{name:'上一页',exact:true}).click();
+  await nativeBrowser.getByText('共 8 条 · 第 1 页',{exact:true}).waitFor();
+  await page.getByLabel('搜索原生会话',{exact:true}).fill('ses_smoke');
+  await nativeBrowser.getByText('共 1 条 · 第 1 页',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'关联会话 ses_smoke',exact:true}).click();
+  await page.getByText('对话与项目已关联',{exact:true}).waitFor();
+  await page.screenshot({path:`test-results/${packaged?'packaged-native-catalog':'native-catalog'}.png`});
   step('copy linked Agent configuration without duplicating its native identity or process');
   await menuAction(page, '复制会话', 'session');
   await page.getByLabel('会话名称', { exact: true }).fill('OpenCode 配置副本');
@@ -836,7 +855,7 @@ try {
   step('reimport the same type as one self-describing script, preserving its name and ID');
   const beforeImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
   const directScript = path.join(pluginBundle, 'standalone.cjs');
-  const source = (await readFile(pluginScript, 'utf8')).replace("id: 'my-agent', name: '我的 Agent', command: 'my-agent'", "id: 'beta-smoke', name: 'Beta 新名称', command: 'echo BETA_READY'");
+  const source = (await readFile(pluginScript, 'utf8')).replace("id:'my-agent',name:'我的 Agent',command:'my-agent'", "id:'beta-smoke',name:'Beta 新名称',command:'echo BETA_READY'");
   await writeFile(directScript, 'setTimeout(()=>{\n' + source + '\n},600);');
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, directScript);
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
@@ -890,6 +909,28 @@ try {
   await page.getByRole('button', { name: '关闭提示', exact: true }).click();
   await writeFile(pluginData, JSON.stringify(sample));
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-plugin-history' : 'plugin-history'}.png` });
+  step('discover multiple plugin conversations, page, preview independently and choose an association');
+  const nativeDirectory = path.join(folder,'agent-sessions'); await mkdir(nativeDirectory);
+  for(let i=0;i<8;i++) await writeFile(path.join(nativeDirectory,`${i}.json`),JSON.stringify({cwd:folder,nativeSessionId:`native-extra-${i}`,messages:[{role:'user',text:`多会话问题 ${i}🙂`},{role:'assistant',text:`多会话回答 ${i}`}]}));
+  await page.getByRole('button',{name:'发现会话',exact:true}).click();
+  const pluginBrowser = page.getByRole('region',{name:'原生会话列表'});
+  await pluginBrowser.getByText('共 9 条 · 第 1 页',{exact:true}).waitFor();
+  assert.equal(await pluginBrowser.locator('.native-item').count(),5);
+  await pluginBrowser.getByRole('button',{name:'下一页',exact:true}).click();
+  await pluginBrowser.getByText('共 9 条 · 第 2 页',{exact:true}).waitFor();
+  await pluginBrowser.getByRole('button',{name:'上一页',exact:true}).click();
+  await pluginBrowser.getByText('共 9 条 · 第 1 页',{exact:true}).waitFor();
+  await page.getByLabel('搜索原生会话',{exact:true}).fill('native-extra-6');
+  await pluginBrowser.getByText('共 1 条 · 第 1 页',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'预览会话 native-extra-6',exact:true}).click();
+  await page.getByText('多会话回答 6',{exact:true}).waitFor();
+  assert.equal((await page.evaluate(id=>window.berth.rpc('state').then(s=>s.sessions.find(item=>item.id===id).nativeSessionId),betaSession.id)),'native-plugin-123');
+  await page.getByRole('button',{name:'关联此会话',exact:true}).click();
+  await eventually(async()=>await page.evaluate(id=>window.berth.rpc('state').then(s=>s.sessions.find(item=>item.id===id).nativeSessionId),betaSession.id)==='native-extra-6','Selected conversation was not associated');
+  await page.getByLabel('搜索原生会话',{exact:true}).fill('native-plugin-123');
+  await page.getByRole('button',{name:'关联会话 native-plugin-123',exact:true}).click();
+  await page.getByText('刷新插件成功',{exact:true}).waitFor();
+  await page.screenshot({path:`test-results/${packaged?'packaged-native-discovery':'native-discovery'}.png`});
   await menuAction(page, '恢复原生会话', 'session');
   await waitRunState(page, true);
   const pluginRun = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.id === betaSession.id).latestRun;
@@ -897,6 +938,23 @@ try {
   assert.equal(pluginRun.recordOutput, 0);
   await assert.rejects(page.evaluate(runId => window.berth.rpc('output', { runId }), pluginRun.id), /仅普通终端/);
   assert.equal(pluginRun.command, 'echo BETA_READY --resume native-plugin-123');
+  step('link and unlink native IDs during a running TUI without changing its run, PID or command');
+  await page.getByRole('tab',{name:'对话历史',exact:true}).click();
+  await page.getByRole('button',{name:'关联会话 ID',exact:true}).click();
+  await page.getByLabel('原生会话 ID',{exact:true}).fill('runtime-native-id');
+  await page.getByRole('button',{name:'保存关联',exact:true}).click();
+  await page.getByRole('dialog').waitFor({state:'hidden'});
+  await eventually(async()=>await page.evaluate(id=>window.berth.rpc('state').then(s=>s.sessions.find(item=>item.id===id).nativeSessionId),betaSession.id)==='runtime-native-id','Running ID association failed');
+  await page.getByRole('button',{name:'解除当前关联',exact:true}).click();
+  await eventually(async()=>await page.evaluate(id=>window.berth.rpc('state').then(s=>s.sessions.find(item=>item.id===id).nativeSessionId),betaSession.id)===null,'Running ID unlink failed');
+  await page.getByRole('button',{name:'已保存的会话',exact:true}).click();
+  await page.getByLabel('搜索原生会话',{exact:true}).fill('native-plugin-123');
+  await page.getByRole('button',{name:'关联会话 native-plugin-123',exact:true}).click();
+  await page.getByText('刷新插件成功',{exact:true}).waitFor();
+  const unchanged = (await page.evaluate(()=>window.berth.rpc('state'))).sessions.find(item=>item.id===betaSession.id).latestRun;
+  assert.equal(unchanged.id,pluginRun.id);assert.equal(unchanged.pid,pluginRun.pid);assert.equal(unchanged.command,pluginRun.command);assert.equal(unchanged.status,'running');
+  await page.screenshot({path:`test-results/${packaged?'packaged-native-running-link':'native-running-link'}.png`});
+
   await menuAction(page, '停止终端', 'session');
   await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
   await eventually(async () => (await page.evaluate(id => window.berth.rpc('state').then(s => s.sessions.find(item => item.id === id).latestRun.status), betaSession.id)) === 'stopped', 'Plugin terminal did not stop');
@@ -950,7 +1008,7 @@ try {
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();
   await page.getByRole('button', { name: '删除 Agent Beta 已保存', exact: true }).click();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).agents.length, 0);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, name-only JSON/script imports, stable-ID reimport and self-check, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, multi-ID saved history pagination/search, plugin list pagination, independent previews, runtime ID association/unlink with unchanged PTY, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, name-only JSON/script imports, stable-ID reimport and self-check, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
 } catch (error) {
   console.error(error);
   if (application) {

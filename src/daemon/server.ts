@@ -8,7 +8,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
-import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
+import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
@@ -37,6 +37,7 @@ export class DaemonServer {
   private closing = false;
   private logs: string;
   private historyBusy = new Set<string>();
+  private historyWrites = new Set<string>();
   private starting = new Set<string>();
   private editingProjects = new Set<string>();
 
@@ -194,11 +195,19 @@ export class DaemonServer {
       case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.changed(); return null;
       case 'linkNativeSession': {
         const session = this.store.session(request.params.sessionId);
-        this.requireProjectAvailable(session.projectId); this.requireIdle(session.id);
-        if (!['codex', 'claude', 'opencode'].includes(session.agent) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume))) throw new Error('当前 Agent 不支持原生会话恢复');
-        const history = { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
+        this.requireHistoryAvailable(session.id);
+        if (!['codex', 'claude', 'opencode'].includes(session.agent) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
+        const history = this.store.nativeHistory(session.id, request.params.nativeSessionId) ?? { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
         this.store.saveHistory(session.id, history); this.changed(); return history;
       }
+      case 'unlinkNativeSession': {
+        const id = request.params.sessionId; this.requireHistoryAvailable(id);
+        const history = { messages: [], warnings: [], path: null, nativeSessionId: null };
+        this.store.saveHistory(id, history); this.changed(); return history;
+      }
+      case 'nativeHistories': return this.store.nativeHistories(request.params.sessionId, request.params);
+      case 'discoverNativeHistories': return this.discoverHistories(request.params.sessionId, request.params);
+      case 'nativeHistory': return this.previewHistory(request.params.sessionId, request.params.nativeSessionId, request.params.refresh);
       case 'renameSession': this.store.rename(request.params.sessionId, request.params.title); this.changed(); return null;
       case 'archiveSession':
         this.requireIdle(request.params.sessionId);
@@ -259,10 +268,8 @@ export class DaemonServer {
   }
 
   private async importHistory(sessionId: string, file: string | null): Promise<unknown> {
-    this.requireProjectAvailable(this.store.session(sessionId).projectId);
-    if (this.historyBusy.has(sessionId)) throw new Error('此会话正在读取对话记录');
-    if (this.historyBusy.size >= 2) throw new Error('正在读取其他对话记录，请稍后重试');
-    this.historyBusy.add(sessionId);
+    this.reserveHistory(sessionId);
+    this.historyWrites.add(sessionId);
     try {
       const session = this.store.session(sessionId);
       const projectPath = this.store.project(session.projectId).path;
@@ -271,6 +278,46 @@ export class DaemonServer {
         : await readHistory(file!, session.agent, projectPath);
       if (this.closing) throw new Error('后台正在退出');
       this.store.saveHistory(sessionId, history); this.changed(); return history;
+    } finally { this.historyBusy.delete(sessionId); this.historyWrites.delete(sessionId); }
+  }
+
+  private requireHistoryAvailable(sessionId: string): void {
+    this.requireProjectAvailable(this.store.session(sessionId).projectId);
+    if (this.starting.has(sessionId)) throw new Error('终端正在启动，请稍后修改原生会话关联');
+    if (this.historyBusy.has(sessionId)) throw new Error('此会话正在读取对话记录，请稍后重试');
+  }
+  private reserveHistory(sessionId: string): void {
+    this.requireHistoryAvailable(sessionId);
+    if (this.historyBusy.size >= 2) throw new Error('正在读取其他对话记录，请稍后重试');
+    this.historyBusy.add(sessionId);
+  }
+  private async discoverHistories(sessionId: string, pagination: HistoryQuery) {
+    this.requireHistoryAvailable(sessionId);
+    const session = this.store.session(sessionId);
+    if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return { items: [], nextCursor: null, warnings: ['此类型未提供会话发现；可导入多个原生记录文件或手动关联 ID'] };
+    this.reserveHistory(sessionId);
+    try {
+      const result = await this.plugins.list(this.store.agent(session.agent), session, this.store.project(session.projectId).path, pagination);
+      if (this.closing) throw new Error('后台正在退出');
+      return result;
+    } finally { this.historyBusy.delete(sessionId); }
+  }
+  private async previewHistory(sessionId: string, nativeSessionId: string, refresh: boolean): Promise<History> {
+    this.requireHistoryAvailable(sessionId);
+    const cached = this.store.nativeHistory(sessionId, nativeSessionId);
+    if (cached && !refresh) return cached;
+    const session = this.store.session(sessionId);
+    const agent = session.agent.startsWith('agent:') ? this.store.agent(session.agent) : null;
+    if (!agent && !cached?.path) throw new Error('此记录尚未导入，请先选择原生记录文件');
+    this.reserveHistory(sessionId);
+    try {
+      const history = !agent ? await readHistory(cached!.path!, session.agent, this.store.project(session.projectId).path) : agent.plugin?.history
+        ? await this.plugins.history(agent, { ...session, nativeSessionId, transcriptPath: cached?.path ?? null }, this.store.project(session.projectId).path, cached?.path ?? null)
+        : { messages: [], warnings: ['此类型仅提供会话列表，没有文本读取能力'], path: null, nativeSessionId };
+      if (history.nativeSessionId !== nativeSessionId) throw new Error('插件返回的会话 ID 与选中会话不一致');
+      if (this.closing) throw new Error('后台正在退出');
+      this.store.saveHistoryEntry(sessionId, history);
+      return history;
     } finally { this.historyBusy.delete(sessionId); }
   }
 
@@ -278,6 +325,7 @@ export class DaemonServer {
     const session = this.store.session(sessionId);
     this.requireProjectAvailable(session.projectId);
     if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
+    if (this.historyWrites.has(sessionId)) throw new Error('会话正在关联对话记录，请稍后启动');
     if (this.live.size + this.starting.size >= MAX_ACTIVE_TERMINALS) throw new Error(`最多同时运行 ${MAX_ACTIVE_TERMINALS} 个终端`);
     this.starting.add(sessionId);
     try { return await this.spawn(sessionId, resume, cols, rows); }

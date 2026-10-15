@@ -7,6 +7,7 @@
 ## 当前能力
 
 - 顶部信息采用紧凑布局，可折叠详情并记住状态；折叠后保留会话状态和历史标签，管理操作统一放在左侧右键／⋯ 菜单。
+- 原生历史可保留多条会话 ID，支持搜索、分页、预览、关联与解除；运行中可修改关联，插件可用可选 list 接口分页发现会话。
 - 保存多种自定义 Agent 类型并设为默认；导入一个 JSON 配置或自描述脚本，只需设置名称；命令与能力自动读取，脚本使用软件自带 Node 运行时。可导出开发套件和复制完整 Agent 开发指令，参见 [使用说明](docs/agent-plugins.md) 与 [Agent 开发指南](docs/AGENT_PLUGIN_DEVELOPMENT.md)。
 
 - 单侧栏按项目展开/收拢会话，搜索覆盖项目与会话；可拖拽调宽，宽度与收拢状态自动保存，方向键微调、双击恢复默认宽度。
@@ -36,8 +37,8 @@
 
 | 文件 | 使用方式 |
 |---|---|
-| `AgentBerth-0.8.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `AgentBerth-0.8.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `AgentBerth-0.9.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.9.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
@@ -197,7 +198,7 @@ OpenCode 会话在项目目录中执行 `opencode export <sessionID> > session.j
 
 应用、安装程序、快捷方式、任务栏和托盘使用统一的薄荷绿 B／终端图标。图标来源与尺寸转换方法见 [assets/README.md](assets/README.md)。
 
-首版范围与已知限制见 [v0.8.0 发布说明](docs/releases/v0.8.0.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
+当前版本范围与已知限制见 [v0.9.0 发布说明](docs/releases/v0.9.0.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
 
 ## 验证与打包
 

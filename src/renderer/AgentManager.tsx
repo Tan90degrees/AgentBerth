@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { AgentDefinition, AgentDefinitionConfig } from '../shared/protocol';
 import { Dialog } from './Dialog';
 
-const capabilities = (agent: AgentDefinitionConfig) => [agent.plugin?.history && '原生对话历史', (agent.plugin?.resume || agent.resumeCommand) && '会话恢复'].filter(Boolean).join(' · ') || '终端会话';
+const capabilities = (agent: AgentDefinitionConfig) => [agent.plugin?.list && '会话列表', agent.plugin?.history && '原生对话历史', (agent.plugin?.resume || agent.resumeCommand) && '会话恢复'].filter(Boolean).join(' · ') || '终端会话';
 export function AgentManager({ agents, defaultAgent, used, disabled, busy, error, onSave, onDelete, onError }: {
   agents: AgentDefinition[]; defaultAgent: string; used: string[]; disabled: boolean; busy: boolean; error: string; onError: (value: string) => void;
   onSave: (value: AgentDefinitionConfig, id?: string) => Promise<AgentDefinition | undefined>; onDelete: (id: string) => Promise<unknown>;

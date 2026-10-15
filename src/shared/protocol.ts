@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 10;
+export const API_VERSION = 11;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -29,13 +29,16 @@ export const agentDefinitionSchema = z.object({
   sourceId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
   command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
   resumeCommand: singleLine.default('').transform(value => value.trim()).refine(value => !value.trim() || (value.includes('{sessionId}') && !/\{(?!sessionId\})/.test(value)), '恢复命令须包含 {sessionId}，且只支持此占位符'),
-  plugin: z.object({ executable: singleLine.refine(value => !!value.trim(), '请填写插件程序'), args: z.array(singleLine).max(32).default([]), history: z.boolean(), resume: z.boolean(), runtime: z.enum(['node', 'executable']).optional(), sourceId: z.string().max(100).optional() }).strict().nullable().default(null),
+  plugin: z.object({ executable: singleLine.refine(value => !!value.trim(), '请填写插件程序'), args: z.array(singleLine).max(32).default([]), history: z.boolean(), resume: z.boolean(), list: z.boolean().optional(), runtime: z.enum(['node', 'executable']).optional(), sourceId: z.string().max(100).optional() }).strict().nullable().default(null),
 }).strict();
 export type AgentDefinitionConfig = z.infer<typeof agentDefinitionSchema>;
 export interface AgentDefinition extends AgentDefinitionConfig { id: string }
 export const isCustomAgent = (agent: string) => agent === 'custom' || agent.startsWith('agent:');
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };
 const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null) };
+export const nativeSessionIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
+export const historyQuerySchema = z.object({ cursor: z.string().max(2048).nullable().default(null), limit: z.number().int().min(1).max(50).default(10), query: z.string().trim().max(100).default('') }).strict();
+export type HistoryQuery = z.infer<typeof historyQuerySchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
@@ -53,7 +56,11 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('checkAgentPlugin'), params: z.object({ agentId: agentSchema }).strict() }),
   z.object({ id, method: z.literal('shutdownIdle'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('shutdown'), params: z.object({}).strict() }),
-  z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/) }).strict() }),
+  z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: nativeSessionIdSchema }).strict() }),
+  z.object({ id, method: z.literal('unlinkNativeSession'), params: z.object({ sessionId: id }).strict() }),
+  z.object({ id, method: z.literal('nativeHistories'), params: historyQuerySchema.extend({ sessionId: id }) }),
+  z.object({ id, method: z.literal('discoverNativeHistories'), params: historyQuerySchema.extend({ sessionId: id }) }),
+  z.object({ id, method: z.literal('nativeHistory'), params: z.object({ sessionId: id, nativeSessionId: nativeSessionIdSchema, refresh: z.boolean().default(false) }).strict() }),
   z.object({ id, method: z.literal('renameSession'), params: z.object({ sessionId: id, title }).strict() }),
   z.object({ id, method: z.literal('archiveSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('start'), params: z.object({ sessionId: id, resume: z.boolean().default(false), ...size }).strict() }),
@@ -80,6 +87,8 @@ export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number 
 export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
+export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }
+export interface NativeHistoryPage { items: NativeHistoryItem[]; nextCursor: string | null; total?: number; warnings: string[] }
 export interface Attachment { run: Run | null; snapshot: string; seq: number; cols: number; rows: number }
 export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }

@@ -2,7 +2,7 @@
 
 ## Identity
 
-A project owns a canonical directory. A session owns a title, agent type, launch configuration, and an optional native conversation identity. A run owns a concrete PTY PID, timestamps, output, and an exit result. Restarting a session adds a run; it never rewrites the earlier run into a supposedly surviving process.
+A project owns a canonical directory. A session owns a title, agent type, launch configuration, and one optional current native conversation identity. A project/Agent-scoped catalog retains many native histories independently of that current association. A run owns a concrete PTY PID, timestamps, output, and an exit result. Restarting a session adds a run; it never rewrites the earlier run into a supposedly surviving process.
 
 ## Lifetime
 
@@ -36,7 +36,9 @@ Terminal scrollback, snapshot length, log segment count, JSONL file size, import
 
 Adapters read explicitly chosen Codex/Claude Code JSONL and OpenCode JSON exports. OpenCode exports retain info.id/directory and message info/parts; UTF-8 and PowerShell UTF-16LE are decoded. Working directories must match the project; native IDs must be shell-safe identifiers. The app imports text without editing the original file. Codex response items are preferred over duplicate events; Claude/OpenCode text parts omit tools and reasoning. A manual native ID association provides a resume action without claiming to import message text.
 
-History refresh is explicit. File-format coverage is intentionally bounded: compressed rollouts, branch graphs, tools, images, and reasoning blocks are not reconstructed. Future automatic discovery must account for concurrent sessions in the same directory instead of binding whichever file happens to have the newest modification time.
+History refresh is explicit. File-format coverage is intentionally bounded: compressed rollouts, branch graphs, tools, images, and reasoning blocks are not reconstructed. SQLite schema 5 migrates the former single snapshot into a project/Agent-scoped native_histories catalog once. Saved history pagination uses timestamp/ID keyset cursors and metadata-only results. Selecting a row previews its cached or plugin-read messages; explicit association chooses the active snapshot. Unlink clears only the session association and preserves the catalog. Project relocation clears incompatible catalog entries.
+
+Optional plugin list capability supplies cursor-based project discovery, query and limit; each returned identity and directory is validated. Existing v1 plugins without list remain usable. Preview/discovery never change an association. Running PTYs permit association/unlink without receiving any command. Starting PTYs briefly reserve identity to keep resume construction consistent; imports reserve association writes, while read-only discovery does not block starting a terminal. Failed reads retain both the current snapshot and cached candidates.
 
 ## Validation
 

@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig } from '../shared/protocol';
+import type { Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, MAX_ACTIVE_TERMINALS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
@@ -36,6 +36,12 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS runs_by_session ON runs(sessionId, startedAt DESC);
       CREATE INDEX IF NOT EXISTS runs_by_session_row ON runs(sessionId);
+      CREATE TABLE IF NOT EXISTS native_histories (
+        projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, agent TEXT NOT NULL,
+        nativeSessionId TEXT NOT NULL, title TEXT NOT NULL, updatedAt TEXT NOT NULL, history TEXT NOT NULL,
+        PRIMARY KEY (projectId, agent, nativeSessionId)
+      );
+      CREATE INDEX IF NOT EXISTS histories_by_project ON native_histories(projectId, agent, updatedAt DESC, nativeSessionId);
       CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
     `);
@@ -46,7 +52,11 @@ export class Store {
       this.db.exec('ALTER TABLE runs ADD COLUMN recordOutput INTEGER NOT NULL DEFAULT 1');
       this.db.exec("UPDATE runs SET recordOutput = 0 WHERE sessionId IN (SELECT id FROM sessions WHERE agent != 'shell')");
     }
-    this.db.exec('PRAGMA user_version = 4');
+    if (Number(this.db.prepare('PRAGMA user_version').get()!.user_version) < 5) {
+      this.db.exec(`INSERT OR IGNORE INTO native_histories (projectId, agent, nativeSessionId, title, updatedAt, history)
+        SELECT projectId, agent, nativeSessionId, title, updatedAt, history FROM sessions WHERE nativeSessionId IS NOT NULL ORDER BY updatedAt DESC`);
+    }
+    this.db.exec('PRAGMA user_version = 5');
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
   }
@@ -86,6 +96,7 @@ export class Store {
     this.transaction(() => {
       this.db.prepare('UPDATE projects SET name = ?, path = ?, pathKey = ? WHERE id = ?').run(name, canonicalPath, key, id);
       const previousKey = process.platform === 'win32' ? previous.path.toLowerCase() : previous.path;
+      if (previousKey !== key) this.db.prepare('DELETE FROM native_histories WHERE projectId = ?').run(id);
       if (previousKey !== key) this.db.prepare('UPDATE sessions SET nativeSessionId = NULL, transcriptPath = NULL, history = ?, updatedAt = ? WHERE projectId = ?').run(JSON.stringify(emptyHistory()), new Date().toISOString(), id);
     });
     return this.project(id);
@@ -131,7 +142,7 @@ export class Store {
     const previous = this.session(id);
     command = this.sessionCommand(agent, command);
     this.transaction(() => {
-      if (previous.agent !== agent) this.saveHistory(id, emptyHistory());
+      if (previous.agent !== agent) this.writeHistory(id, emptyHistory());
       this.db.prepare('UPDATE sessions SET title = ?, agent = ?, command = ?, terminal = ?, updatedAt = ? WHERE id = ?').run(title, agent, command, terminal ? JSON.stringify(terminal) : null, new Date().toISOString(), id);
     });
     return this.session(id);
@@ -179,6 +190,7 @@ export class Store {
     this.agent(id);
     if (this.settings().defaultAgent === id) throw new Error('请先更换默认 Agent，再删除此类型');
     if (this.db.prepare('SELECT id FROM sessions WHERE agent = ? LIMIT 1').get(id)) throw new Error('此类型仍被会话使用，请先修改或删除这些会话');
+    this.db.prepare('DELETE FROM native_histories WHERE agent = ?').run(id);
     this.db.prepare('DELETE FROM agents WHERE id = ?').run(id);
   }
   private sessionCommand(agent: Agent, command: string): string {
@@ -231,8 +243,44 @@ export class Store {
   savedScreen(id: string): { snapshot: string; seq: number; cols: number; rows: number } {
     return this.db.prepare('SELECT snapshot, seq, cols, rows FROM runs WHERE id = ?').get(id) as unknown as { snapshot: string; seq: number; cols: number; rows: number };
   }
+  saveHistoryEntry(id: string, history: History): void {
+    const session = this.session(id);
+    if (!history.nativeSessionId) return;
+    const existing = this.nativeHistory(id, history.nativeSessionId);
+    if (!existing && Number(this.db.prepare('SELECT COUNT(*) AS count FROM native_histories').get()!.count) >= 2000) throw new Error('最多保存 2000 条原生会话历史');
+    const title = (history.messages.find(message => message.role === 'user')?.text.trim() || history.nativeSessionId).slice(0, 200);
+    this.db.prepare(`INSERT INTO native_histories VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(projectId, agent, nativeSessionId)
+      DO UPDATE SET title = excluded.title, updatedAt = excluded.updatedAt, history = excluded.history`).run(session.projectId, session.agent, history.nativeSessionId, title, new Date().toISOString(), JSON.stringify(history));
+  }
   saveHistory(id: string, history: History): void {
+    this.transaction(() => this.writeHistory(id, history));
+  }
+  private writeHistory(id: string, history: History): void {
+    this.saveHistoryEntry(id, history);
     this.db.prepare('UPDATE sessions SET nativeSessionId = ?, transcriptPath = ?, history = ?, updatedAt = ? WHERE id = ?').run(history.nativeSessionId, history.path, JSON.stringify(history), new Date().toISOString(), id);
+  }
+  nativeHistory(id: string, nativeSessionId: string): History | null {
+    const session = this.session(id);
+    const row = this.db.prepare('SELECT history FROM native_histories WHERE projectId = ? AND agent = ? AND nativeSessionId = ?').get(session.projectId, session.agent, nativeSessionId);
+    return row ? JSON.parse(String(row.history)) as History : null;
+  }
+  nativeHistories(id: string, options: HistoryQuery): NativeHistoryPage {
+    const session = this.session(id);
+    let after: { time: string; id: string } | null = null;
+    if (options.cursor) {
+      try {
+        const value = JSON.parse(Buffer.from(options.cursor, 'base64url').toString('utf8'));
+        if (value.project !== session.projectId || value.agent !== session.agent || value.query !== options.query || typeof value.time !== 'string' || typeof value.id !== 'string') throw new Error();
+        after = value;
+      } catch { throw new Error('分页已失效，请刷新会话列表'); }
+    }
+    const scope = [session.projectId, session.agent, options.query];
+    const filter = 'projectId = ? AND agent = ? AND instr(lower(title || nativeSessionId), lower(?)) > 0';
+    const total = Number(this.db.prepare('SELECT COUNT(*) AS count FROM native_histories WHERE ' + filter).get(...scope)!.count);
+    const rows = this.db.prepare("SELECT nativeSessionId, title, updatedAt, json_extract(history, '$.path') AS path FROM native_histories WHERE " + filter + (after ? ' AND (updatedAt < ? OR (updatedAt = ? AND nativeSessionId > ?))' : '') + ' ORDER BY updatedAt DESC, nativeSessionId LIMIT ?').all(...scope, ...(after ? [after.time, after.time, after.id] : []), options.limit + 1);
+    const page = rows.slice(0, options.limit), last = page.at(-1);
+    const nextCursor = rows.length > options.limit && last ? Buffer.from(JSON.stringify({ project: session.projectId, agent: session.agent, query: options.query, time: last.updatedAt, id: last.nativeSessionId })).toString('base64url') : null;
+    return { items: page.map(row => ({ nativeSessionId: String(row.nativeSessionId), title: String(row.title), updatedAt: String(row.updatedAt), path: row.path === null ? null : String(row.path) })), nextCursor, total, warnings: [] };
   }
   history(id: string): History {
     const row = this.db.prepare('SELECT history FROM sessions WHERE id = ?').get(id);
