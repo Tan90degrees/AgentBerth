@@ -611,14 +611,27 @@ try {
   const bounds = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
   for (const [width, height] of [[1100, 720], [1280, 820], [1030, 710], [1200, 780]]) {
     await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(...size), [width, height]);
+    await eventually(async () => {
+      const native = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentBounds());
+      const view = await page.evaluate(() => ({width: innerWidth,height: innerHeight}));
+      return native.width === view.width && native.height === view.height;
+    }, 'Renderer viewport did not receive the native resize');
     let gridDiagnostic;
     await eventually(async () => {
       const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), before.sessions[0].id);
-      const size = await page.locator('.terminal-mount').evaluate(element => ({ cols: Number(element.dataset.cols), rows: Number(element.dataset.rows), renderer: element.dataset.renderer }));
+      const size = await page.locator('.terminal-mount').evaluate(element => (() => { const cols=Number(element.dataset.cols),rows=Number(element.dataset.rows),screen=element.querySelector('.xterm-screen').getBoundingClientRect();return {cols,rows,renderer:element.dataset.renderer,fitCols:Math.floor((element.clientWidth-14)/(screen.width/cols)),fitRows:Math.floor(element.clientHeight/(screen.height/rows))}; })());
       gridDiagnostic = { window: [width,height], renderer: [size.cols,size.rows], daemon: [snapshot.cols,snapshot.rows], mode: size.renderer, snapshot: snapshot.snapshot.slice(-200) };
-      return size.cols === snapshot.cols && size.rows === snapshot.rows && snapshot.snapshot.includes('SIZE_'+size.cols+'x'+size.rows);
+      return size.cols === size.fitCols && size.rows === size.fitRows && size.cols === snapshot.cols && size.rows === snapshot.rows && snapshot.snapshot.includes('SIZE_'+size.cols+'x'+size.rows);
     }, 'Renderer/PTY dimensions or full-screen TUI did not settle').catch(error => { console.error('TUI grid diagnostic:',gridDiagnostic); throw error; });
-    await findTerminalText(page, 'SIZE_'+gridDiagnostic.renderer[0]+'x'+gridDiagnostic.renderer[1]);
+    await eventually(async () => {
+      await page.getByRole('button', { name: '查找', exact: true }).click();
+      const size=await page.locator('.terminal-mount').evaluate(el=>({cols:el.dataset.cols,rows:el.dataset.rows}));
+      await page.getByLabel('查找终端文字', { exact: true }).fill('SIZE_'+size.cols+'x'+size.rows);
+      await page.getByRole('button', {name:'下一个匹配',exact:true}).click();
+      const found=(await page.getByRole('search').getByRole('status').innerText()).includes('已定位');
+      await page.getByRole('button', {name:'关闭终端查找',exact:true}).click();
+      return found;
+    }, 'Current TUI size was not searchable after resizing');
     await assertContinuousTuiBar(page, application);
     await assertTerminalGutter(page);
   }
