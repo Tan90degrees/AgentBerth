@@ -1,0 +1,141 @@
+# AgentBerth 插件开发指南（给编程 Agent）
+
+目标：用户只需“导入一个配置文件或脚本 → 设置名称 → 保存”。不要让用户填写命令、选择运行时、勾选启用扩展或编辑参数。文件负责声明所有配置，软件自动启用其能力。不要把 TUI 的屏幕输出当作对话历史。
+
+## 开工前确认
+
+询问用户所用 CLI 的名称、实际启动命令、CLI 版本、需要的历史读取/原生恢复能力，以及原生会话数据的位置和示例。若用户授权查阅本机 CLI 帮助或官方文档，再确定数据格式和恢复参数。不能臆造 CLI 参数、目录或历史结构。不要替用户登录、修改权限或启动真实任务。
+
+## 优先交付单个文件
+
+只需要启动 CLI 时，交付一个 JSON 配置（最多 64 KiB），无需任何插件程序：
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "my-cli",
+  "name": "My CLI",
+  "command": "my-cli"
+}
+```
+
+可选 `resumeCommand`，例如 `my-cli --resume {sessionId}`。不要填写 runtime、entry 或 capabilities；未实现的能力不需要占位字段。模板 `agent.json` 可直接参考。
+
+需要历史读取或动态恢复时，优先交付单个自描述 `.cjs`、`.mjs` 或 `.js` 脚本（最多 16 MiB），使用软件自带 Node 运行。导入时程序复制脚本并调用 describe，自动获取 id、名称、启动命令和能力，无需再交付清单。脚本必须自包含：优先使用 Node 内置模块，外部依赖打包进脚本；不能依赖原目录、其他未导入文件或外部 Node 安装。模板 `plugin.cjs` 本身即可直接导入。
+
+同一类型更新保留稳定 id，重新导入会更新已有类型并保留用户名称和会话关联。已有会话继续保存原来的启动命令；新命令用于以后新建的会话。脚本在本机执行，describe 不能启动真实 Agent、要求登录或修改用户数据。
+
+## 多文件资源（按需）
+
+仅在适配器确实需要资源文件或独立可执行程序时交付便携目录，包含 `agentberth-plugin.json`、入口及声明的资源。用户仍只选择一个清单文件。导入时软件复制入口与 `files` 声明的文件到自身目录，因此代码不能依赖原开发目录。禁止启动时下载代码或执行 npm install。程序不能创建常驻/脱离进程树的子进程。
+
+清单示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "my-cli-adapter",
+  "name": "My CLI",
+  "command": "my-cli",
+  "runtime": "node",
+  "entry": "plugin.cjs",
+  "args": [],
+  "files": [],
+  "capabilities": { "history": true, "resume": true }
+}
+```
+
+- id：稳定的小写 ID，允许字母、数字、点、短横线、下划线，最多 100 字符。更新插件保留 ID；不同插件用不同 ID。
+- name/command：用户界面名称和 CLI 单行启动命令。command 不得含换行或 NUL，最多 4096 字符；命令使用用户所选 Shell 的语法。
+- runtime：node 使用软件自带 Electron/Node，无需用户安装 Node；executable 使用目录内独立程序。
+- entry/files：必须是本目录内的相对文件路径，不允许 ..、绝对路径或外部符号链接。最多 64 个文件，每个不超过 16 MiB，合计不超过 32 MiB。不能声明整个项目目录。
+- args：可选程序参数。`{pluginDir}` 会替换为安装后的资源目录，用于资产路径；绝不能写开发机绝对路径。
+- capabilities：仅声明真实实现的能力。不支持恢复就设 resume=false；可用可选 resumeCommand，例如 `my-cli --resume {sessionId}`，代替恢复接口。所有新插件必须实现 describe 自检。
+
+## 调用协议 v1
+
+每次请求启动一次程序，cwd 是项目目录（describe 的 cwd 是插件目录）。stdin 是 UTF-8 单个 JSON 加换行，然后 EOF。stdout 仅允许 UTF-8 单个 JSON 对象，随后退出 0。日志写 stderr；异常用明确的诊断写 stderr 并非零退出。所有请求必须在 10 秒内完成，stdout/stderr 合计最多 2 MiB；程序不可保留常驻进程。
+
+### describe：自检（不得访问项目或执行 Agent）
+
+输入：`{"version":1,"method":"describe","agent":{"id":"agent:…","name":"My CLI"}}`
+
+返回（单脚本导入必须包含 id、name、command、capabilities）：
+
+```json
+{
+  "version": 1,
+  "id": "my-cli-adapter",
+  "name": "My CLI",
+  "command": "my-cli",
+  "capabilities": { "history": true, "resume": true }
+}
+```
+
+可选 resumeCommand 与 JSON 配置语法相同。只实现 describe 也可以，能力均设 false。旧版通过清单安装的适配器仍可省略 id/command，由清单提供；新脚本必须自描述。
+
+必须拒绝未知协议版本或方法。能力与清单保持一致。
+
+### history：发现/导入/刷新原生对话
+
+输入：
+
+```json
+{
+  "version": 1,
+  "method": "history",
+  "agent": { "id": "agent:…", "name": "My CLI" },
+  "projectPath": "D:/Projects/demo",
+  "session": { "id": "…", "title": "调试", "command": "my-cli", "nativeSessionId": null },
+  "path": null
+}
+```
+
+- path 非空：只读解析用户选定文件；绝不能改写原记录。
+- path 为空且 nativeSessionId 非空：自动查找此项目的该原生会话。
+- 两者为空：自动发现当前项目最近的原生会话；如多个记录且无法可靠选择，应报出明确提示，指导选择记录或关联 ID，不得从其他项目取数据。
+
+返回：
+
+```json
+{
+  "version": 1,
+  "cwd": "D:/Projects/demo",
+  "nativeSessionId": "native-123",
+  "path": "D:/Projects/demo/session.json",
+  "messages": [
+    { "role": "user", "text": "你好", "timestamp": null },
+    { "role": "assistant", "text": "已完成", "timestamp": "2026-10-14T06:00:00Z" }
+  ],
+  "warnings": []
+}
+```
+
+cwd 必须来自原生记录且对应当前项目，不能仅为了通过验证抄写输入 projectPath。原生 ID 仅允许 1–128 个字母、数字、下划线、连字符；CLI 使用其他 ID 字符时可用可逆 base64url 编码，并在 resume 中还原。自动读取必须保持已关联 ID。消息只取用户/助手的可读文本，排除工具载荷、系统提示和终端 ANSI；去重并按时间排序。最近最多 1000 条，每条不超过 32768 字符，总文本按 512 KiB 裁剪并给出 warnings。path 可省略或 null，返回实际文件时须是有效完整路径、文件小于 16 MiB。返回对象/消息不可添加未知字段。
+
+### resume：生成恢复命令（不得直接执行）
+
+输入结构与 history 相同，method=resume，path=null，session.nativeSessionId 为合法原生 ID。
+
+返回：`{"version":1,"command":"my-cli --resume native-123"}`
+
+生成适用于会话原命令与当前 Shell 的单行命令，最多 4096 字符，严禁换行/NUL。不要执行该命令；由工作台启动新的运行实例。若无法正确处理配置或引号，明确报错而不是返回猜测的命令。
+
+## 本地验证（Agent 必须完成）
+
+使用 node 子进程 spawn + stdin JSON + EOF 测试，或创建可重复的自动测试。不要靠手工在终端敲复杂的转义 JSON。测试至少覆盖：
+
+1. describe 可在无 CLI、无登录、无项目时成功，能力与清单一致。
+2. 两个项目和两个原生会话不会串记录；项目路径含空格、中文、Windows 8.3 别名或符号链接。
+3. 用户/助手中文与 emoji 保留，工具载荷不进入文本，ID、时间与顺序正确。
+4. 指定文件、自动发现、按原生 ID 刷新，未知或不存在的数据给明确错误。
+5. 文件截断、不完整末尾、错误 JSON、过大数据均可控；不写原文件。
+6. resume 只返回命令，恶意/无效 ID 不注入 Shell；不产生真实任务。
+7. 一次请求后进程与子进程退出，不依赖外部 Node 路径、开发目录或网络下载。
+8. 在 AgentBerth 导入配置或脚本，确认对话框只有名称输入，无运行时、命令和启用复选框；重新导入相同 id 不重复新增。含扩展的类型点“检查插件”，建会话后点“读取对话”；修改原生记录并刷新；验证普通 Shell 有运行记录，Agent TUI 无运行输出记录。
+
+## 模板说明与完成报告
+
+附带 plugin.cjs 是可运行的标准 JSON 示例，读取项目 `agent-session.json`（cwd/nativeSessionId/messages），示例恢复使用 `--resume ID`。它不是任何真实 CLI 的适配器；必须按目标 CLI 格式替换读入与恢复逻辑，不能谎称已适配。describe 包含完整元数据，可立即直接导入脚本并检查运行环境。只需启动的适配应交付 agent.json，不要引入多余历史接口。
+
+报告应包括：最终可导入文件的完整路径、支持的 CLI 版本/能力、自动发现规则、通过的测试、实际测试与模拟测试的边界。给用户的使用步骤限制在“导入配置或脚本 → 设置名称 → 保存”，然后按需创建会话、读取对话；不得要求用户编辑工作台源码或 JSON 参数。

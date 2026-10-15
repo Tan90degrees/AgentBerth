@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "my-agent",
+  "name": "我的 Agent",
+  "command": "my-agent",
+  "runtime": "node",
+  "entry": "plugin.cjs",
+  "capabilities": { "history": true, "resume": true }
+}

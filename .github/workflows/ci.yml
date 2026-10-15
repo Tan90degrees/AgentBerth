@@ -1,0 +1,134 @@
+name: CI and Windows packages
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: agentberth-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+        timeout-minutes: 5
+      - name: Desktop smoke (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:desktop
+        timeout-minutes: 3
+        env:
+          DEBUG: pw:browser
+      - name: Desktop smoke (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:desktop
+        timeout-minutes: 3
+        env:
+          DEBUG: pw:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ runner.os }}
+          path: test-results/*.png
+          if-no-files-found: ignore
+  windows-package:
+    name: Windows x64 installer and ZIP
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Electron and native dependencies
+        run: npm ci
+        timeout-minutes: 10
+      - name: Check types and setup scripts
+        run: npm run typecheck && npm run test:scripts
+      - name: Build installer and unpack-and-run ZIP
+        id: package
+        run: npm run dist:win
+        timeout-minutes: 10
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Test packaged application with real terminal
+        id: packaged-smoke
+        run: npm run test:packaged
+        timeout-minutes: 3
+        env:
+          DEBUG: pw:browser
+      - name: Write checksums and build information
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        env:
+          PACKAGED_SMOKE_RESULT: ${{ steps.packaged-smoke.outcome }}
+        run: |
+          $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.zip' }
+          if ($files.Count -ne 2) { throw 'Expected one installer and one ZIP' }
+          $checksums = $files | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $env:PACKAGED_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+            ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        with:
+          name: AgentBerth-Windows-x64
+          path: |
+            release/*.exe
+            release/*.zip
+            release/SHA256SUMS.txt
+            release/build-info.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-packaged-Windows
+          path: test-results/*.png
+          if-no-files-found: ignore
+  release:
+    name: Publish verified release
+    needs: [check, windows-package]
+    if: github.repository == 'Tan90degrees/AgentBerth' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: AgentBerth-Windows-x64
+          path: release
+      - name: Verify packages and publish release
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { pathToFileURL } = await import('node:url');
+            const { publishRelease } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/release.mjs`).href);
+            const result = await publishRelease({ github, context, core }, process.env.GITHUB_WORKSPACE, `${process.env.GITHUB_WORKSPACE}/release`);
+            await core.summary.addHeading(result.skipped ? 'Release already published' : 'Release published').addLink('Open release', result.url).write();
