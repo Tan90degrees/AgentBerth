@@ -10,6 +10,7 @@ import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
+import { GitWorkspace } from './git';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
 import { sameDirectory } from './history';
@@ -29,6 +30,8 @@ interface Client { subscriptions: Set<string>; pending: number }
 export class DaemonServer {
   private store: Store;
   private plugins = new AgentPlugins();
+  private git = new GitWorkspace();
+  private gitBusy = new Set<string>();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
   private ws = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
   private clients = new Map<WebSocket, Client>();
@@ -113,6 +116,22 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
       case 'state': return this.store.state();
+      case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
+      case 'gitOperation': {
+        const params = request.params, project = this.store.project(params.projectId);
+        this.requireProjectAvailable(project.id);
+        const status = await this.git.status(project.path);
+        if (this.closing) throw new Error('后台正在退出');
+        const within = (a: string,b: string) => { const relative=path.relative(a,b);return relative!== '..' && !relative.startsWith('..'+path.sep) && !path.isAbsolute(relative); };
+        const affected = this.store.state().projects.filter(item => within(status.root,item.path) || within(item.path,status.root));
+        for (const item of affected) this.requireProjectAvailable(item.id);
+        if (['pull','sync','switch'].includes(params.action)) for (const item of affected) for (const sessionId of this.store.projectSessionIds(item.id)) {
+          try { this.requireIdle(sessionId); } catch { throw new Error(`请先停止「${this.store.session(sessionId).title}」的终端或等待读取历史完成，再拉取、同步或切换分支`); }
+        }
+        for (const item of affected) this.gitBusy.add(item.id);
+        try { return await this.git.operate(project.path,params); }
+        finally { for (const item of affected) this.gitBusy.delete(item.id); }
+      }
       case 'shutdown':
         await this.stopAll();
         setTimeout(this.onShutdown, 50); // Acknowledge cleanup before closing the authenticated connection.
@@ -130,7 +149,7 @@ export class DaemonServer {
       }
       case 'updateProject': {
         const { projectId, name } = request.params;
-        if (this.editingProjects.has(projectId)) throw new Error('项目正在更新，请稍后重试');
+        this.requireProjectAvailable(projectId);
         this.editingProjects.add(projectId);
         try {
           const previous = this.store.project(projectId);
@@ -383,6 +402,7 @@ export class DaemonServer {
 
   private requireProjectAvailable(id: string): void {
     this.store.project(id);
+    if (this.gitBusy.has(id)) throw new Error('此项目正在执行 Git 操作，请稍后重试');
     if (this.editingProjects.has(id)) throw new Error('项目正在更新，请稍后重试');
   }
   private requireIdle(id: string): void {
@@ -462,6 +482,7 @@ export class DaemonServer {
   private async stopAll(): Promise<void> {
     this.closing = true;
     try {
+      await this.git.close();
       await this.plugins.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));
       for (const result of results) if (result.status === 'rejected') this.logError(result.reason);

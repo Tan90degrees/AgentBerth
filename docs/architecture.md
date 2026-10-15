@@ -43,3 +43,11 @@ Optional plugin list capability supplies cursor-based project discovery, query a
 ## Validation
 
 The normal test runner uses Electron's Node runtime because native node-pty modules are rebuilt for Electron. The desktop test uses Playwright's Electron driver against the production renderer and real preload / IPC / daemon / PTY chain. CI includes Windows (ConPTY) and Linux (PTY), plus a Windows NSIS artifact build after checks.
+
+## Git workspace
+
+Git is an optional installed CLI accessed by a strict RPC allowlist; arbitrary arguments, force-push and destructive reset actions are not exposed. Porcelain v2 NUL records provide bounded file metadata and branch tracking. The topbar refreshes local metadata on focus and every 15 seconds while visible; no background fetch runs.
+
+Operations carry the displayed root, branch, HEAD and remote branch. Mutations recheck this lease, serialize by common Git directory (including linked worktrees), and use explicit remote names and pinned source commits. Pull fetches a pinned commit then only fast-forwards with autostash disabled. A first push sets upstream only after success. Errors report completed stages without attempting rollback.
+
+The daemon reserves all related registered project paths during operations; changing worktree files additionally requires their PTYs and history readers to be idle. Fetch/push leave live terminals alone. Subprocesses use noninteractive credentials, bounded output and deadlines, and are tracked for full quit cleanup. Ordinary paths and filenames never become shell command strings. Fixture tests use local bare remotes and real Git/PTYs, avoiding user repositories and credentials.

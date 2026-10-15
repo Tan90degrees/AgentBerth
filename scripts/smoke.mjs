@@ -117,6 +117,41 @@ try {
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('易用性');
   await page.locator('.projects .project-item').waitFor();
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
+  step('manage a real Git repository: fetch, fast-forward pull, push, branch switch and first publication');
+  const gitFixture=path.join(folder,'.git-fixture');await mkdir(gitFixture);
+  const gitRemote=path.join(gitFixture,'remote.git'),gitPeer=path.join(gitFixture,'peer');
+  const runGit=async(cwd,args)=>(await execute('git',['-c','commit.gpgsign=false','-C',cwd,...args],{encoding:'utf8',windowsHide:true})).stdout.trim();
+  await runGit(folder,['init','--bare','--initial-branch=main',gitRemote]);
+  await runGit(folder,['init','--initial-branch=main']);
+  await runGit(folder,['config','user.name','Desktop Fixture']);await runGit(folder,['config','user.email','desktop@example.invalid']);await runGit(folder,['config','core.autocrlf','false']);
+  await writeFile(path.join(folder,'.gitignore'),'*\n!.gitignore\n!tracked.txt\n!remote.txt\n!local.txt\n');
+  await writeFile(path.join(folder,'tracked.txt'),'tracked\n');await runGit(folder,['add','.']);await runGit(folder,['commit','-m','initial']);
+  await runGit(folder,['remote','add','origin',gitRemote]);await runGit(folder,['push','-u','origin','main']);await runGit(folder,['clone',gitRemote,gitPeer]);
+  await runGit(gitPeer,['config','user.name','Desktop Peer']);await runGit(gitPeer,['config','user.email','peer@example.invalid']);await runGit(gitPeer,['config','core.autocrlf','false']);
+  await page.getByRole('button',{name:'Git 管理 AgentBerth 易用性',exact:true}).click();
+  let gitDialog=page.getByRole('dialog',{name:'Git · AgentBerth 易用性',exact:true});
+  await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Git branch was not displayed');
+  await gitDialog.getByText('上游 origin/main · 领先 0 / 落后 0',{exact:true}).waitFor();
+  await writeFile(path.join(gitPeer,'remote.txt'),'REMOTE_GIT_READY');await runGit(gitPeer,['add','.']);await runGit(gitPeer,['commit','-m','remote']);await runGit(gitPeer,['push']);
+  await gitDialog.getByRole('button',{name:'获取远端',exact:true}).click();
+  await gitDialog.getByText('上游 origin/main · 领先 0 / 落后 1',{exact:true}).waitFor();
+  await gitDialog.getByRole('button',{name:'拉取',exact:true}).click();await gitDialog.getByText('已快进拉取远端提交',{exact:true}).waitFor();
+  assert.equal(await readFile(path.join(folder,'remote.txt'),'utf8'),'REMOTE_GIT_READY');
+  await writeFile(path.join(folder,'tracked.txt'),'dirty');await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).click();
+  await gitDialog.getByText('未暂存 1',{exact:true}).waitFor();assert.equal(await gitDialog.getByRole('button',{name:'拉取',exact:true}).isDisabled(),true);
+  await writeFile(path.join(folder,'tracked.txt'),'tracked\n');await writeFile(path.join(folder,'local.txt'),'LOCAL_GIT_READY');await runGit(folder,['add','.']);await runGit(folder,['commit','-m','local']);
+  await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).click();await gitDialog.getByText('上游 origin/main · 领先 1 / 落后 0',{exact:true}).waitFor();
+  await gitDialog.getByRole('button',{name:'推送',exact:true}).click();await gitDialog.getByText('上游 origin/main · 领先 0 / 落后 0',{exact:true}).waitFor();
+  assert.equal(await runGit(gitRemote,['rev-parse','refs/heads/main']),await runGit(folder,['rev-parse','HEAD']));
+  await runGit(folder,['branch','feature/ui']);await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).click();
+  await gitDialog.getByText('本地分支与工作区改动（0）',{exact:true}).click();
+  await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('feature/ui');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
+  await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='feature/ui','Git branch switch did not refresh');
+  await gitDialog.getByRole('button',{name:'发布当前分支',exact:true}).click();await gitDialog.getByText('上游 origin/feature/ui · 领先 0 / 落后 0',{exact:true}).waitFor();
+  await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
+  await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Git branch switch back failed');
+  await page.screenshot({path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
+  await gitDialog.getByRole('button',{name:'关闭 Git 面板',exact:true}).click();
   step('save shell and default Agent settings');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
@@ -191,6 +226,15 @@ try {
   assert.equal(original.status, 'running');
   if (process.platform === 'win32') assert.deepEqual(before.windowsPty, { backend: 'conpty', buildNumber: Number(os.release().split('.')[2]) });
   assert.match(original.shell, process.platform === 'win32' ? /cmd\.exe$/i : /bash$/);
+  step('Git fetch stays available during a running terminal while pull and branch switch are guarded');
+  await page.getByRole('button',{name:'Git 管理 AgentBerth 易用性',exact:true}).click();
+  gitDialog=page.getByRole('dialog',{name:'Git · AgentBerth 易用性',exact:true});
+  await gitDialog.getByRole('button',{name:'获取远端',exact:true}).click();await gitDialog.getByText('已获取远端更新',{exact:true}).waitFor();
+  assert.equal(await gitDialog.getByRole('button',{name:'拉取',exact:true}).isDisabled(),true);
+  const gitRun=(await page.evaluate(()=>window.berth.rpc('state'))).sessions[0].latestRun;
+  assert.equal(gitRun.id,original.id);assert.equal(gitRun.pid,original.pid);
+  await gitDialog.getByRole('button',{name:'关闭 Git 面板',exact:true}).click();
+
   assert.equal(await (await contextItem(page, '删除会话')).isEnabled(), false);
   assert.equal(await (await contextItem(page, '删除项目', 'project')).isEnabled(), false);
   await page.keyboard.press('Escape');
@@ -1021,7 +1065,7 @@ try {
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();
   await page.getByRole('button', { name: '删除 Agent Beta 已保存', exact: true }).click();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).agents.length, 0);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, multi-ID saved history pagination/search, plugin list pagination, independent previews, runtime ID association/unlink with unchanged PTY, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, name-only JSON/script imports, stable-ID reimport and self-check, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: Git branch/status, fetch/pull/push/publication/switch with real bare remote, dirty/running guards and unchanged PTY, project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, multi-ID saved history pagination/search, plugin list pagination, independent previews, runtime ID association/unlink with unchanged PTY, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, name-only JSON/script imports, stable-ID reimport and self-check, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
 } catch (error) {
   console.error(error);
   if (application) {

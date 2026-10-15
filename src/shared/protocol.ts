@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 11;
+export const API_VERSION = 12;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -39,9 +39,17 @@ const sessionConfig = { title, agent: agentSchema, command: singleLine.default('
 export const nativeSessionIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 export const historyQuerySchema = z.object({ cursor: z.string().max(2048).nullable().default(null), limit: z.number().int().min(1).max(50).default(10), query: z.string().trim().max(100).default('') }).strict();
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
+export const gitOperationSchema = z.object({
+  projectId: id, action: z.enum(['fetch', 'pull', 'push', 'sync', 'switch']),
+  expected: z.object({ root: z.string().min(1).max(4096), branch: z.string().max(1024).nullable(), head: z.string().regex(/^[a-f0-9]{40,64}$/).nullable() }).strict(),
+  remote: z.string().min(1).max(256).optional(), branch: z.string().min(1).max(1024).optional(),
+}).strict();
+export type GitOperation = z.infer<typeof gitOperationSchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id }).strict() }),
+  z.object({ id, method: z.literal('gitOperation'), params: gitOperationSchema }),
   z.object({ id, method: z.literal('createProject'), params: z.object({ name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('updateProject'), params: z.object({ projectId: id, name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('deleteProject'), params: z.object({ projectId: id }).strict() }),
@@ -81,6 +89,15 @@ export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
 export interface Project { id: string; name: string; path: string; createdAt: string }
+export interface GitFile { path: string; originalPath?: string; index: string; worktree: string; conflict: boolean }
+export interface GitStatus {
+  kind: 'repository' | 'not-repository' | 'unavailable'; message?: string; busy: boolean;
+  root: string; commonDirectory: string; branch: string | null; head: string | null; upstream: string | null;
+  upstreamRemote: string | null; upstreamBranch: string | null; ahead: number; behind: number;
+  staged: number; modified: number; untracked: number; conflicts: number; total: number; files: GitFile[];
+  branches: string[]; remotes: string[]; operation: string | null; fetchedAt: string | null;
+}
+export interface GitResult { status: GitStatus; message: string; output: string }
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
 export interface Session { id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
