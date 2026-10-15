@@ -75,7 +75,7 @@ test('real TUI output and concurrent resizes replay to the same grid as the daem
   const hidden = await DaemonConnection.open(runtime, event => { if (event.event === 'output' || event.event === 'resize') hiddenEvents.push(event); });
   t.after(async () => { connection.close(); hidden.close(); await server.close(); await rm(folder, { recursive: true, force: true, maxRetries: 5 }); });
   const script = path.join(folder, 'tui.cjs');
-  await writeFile(script, `process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write('\\x1b[?1049h');let count=0;function draw(){const c=process.stdout.getWindowSize()[0],r=process.stdout.getWindowSize()[1];process.stdout.write('\\x1b[H\\x1b[2JFRAME_'+count+' '+c+'x'+r+'\\x1b[2;1H'+('中文🙂'.repeat(80))+'\\x1b['+r+';1HFOOT_'+count+'\\x1b[K');}process.stdout.on('resize',draw);const timer=setInterval(()=>{draw();if(++count===50){clearInterval(timer);process.stdout.removeListener('resize',draw);}},20);setInterval(()=>{},1000);`);
+  await writeFile(script, `process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write('\\x1b[?1049h');let count=0;function draw(){const c=process.stdout.getWindowSize()[0],r=process.stdout.getWindowSize()[1];process.stdout.write('\\x1b[H\\x1b[2JFRAME_'+count+' '+c+'x'+r+'\\x1b[2;1H'+('中文🙂'.repeat(80))+'\\x1b['+r+';1HFOOT_'+count+'\\x1b[K');}process.stdout.on('resize',draw);setInterval(()=>{draw();count++;},20);`);
   const project = await connection.rpc<Project>('createProject', { name: 'resize', path: folder });
   const quote = (value: string) => `'${value.replaceAll("'", process.platform === 'win32' ? "''" : "'\\''")}'`;
   const command = process.platform === 'win32' ? `$env:ELECTRON_RUN_AS_NODE='1'; & ${quote(process.execPath)} ${quote(script)}` : `ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(script)}`;
@@ -90,7 +90,7 @@ test('real TUI output and concurrent resizes replay to the same grid as the daem
   await Promise.all(sizes.map(size => connection.rpc('resize', { sessionId: session.id, runId: run.id, ...size })));
   let snapshot = await connection.rpc<Attachment>('attach', { sessionId: session.id });
   while (!snapshot.snapshot.includes(`${sizes.at(-1)!.cols}x${sizes.at(-1)!.rows}`)) {
-    assert.ok(Date.now() < deadline, 'TUI did not observe the final PTY size');
+    assert.ok(Date.now() < deadline, 'TUI did not observe the final PTY size: '+JSON.stringify({cols:snapshot.cols,rows:snapshot.rows,screen:snapshot.snapshot.slice(0,400)}));
     await new Promise(resolve => setTimeout(resolve, 30));
     snapshot = await connection.rpc<Attachment>('attach', { sessionId: session.id });
   }
