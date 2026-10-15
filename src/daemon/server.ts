@@ -125,9 +125,7 @@ export class DaemonServer {
         const within = (a: string,b: string) => { const relative=path.relative(a,b);return relative!== '..' && !relative.startsWith('..'+path.sep) && !path.isAbsolute(relative); };
         const affected = this.store.state().projects.filter(item => within(status.root,item.path) || within(item.path,status.root));
         for (const item of affected) this.requireProjectAvailable(item.id);
-        if (['pull','sync','switch'].includes(params.action)) for (const item of affected) for (const sessionId of this.store.projectSessionIds(item.id)) {
-          try { this.requireIdle(sessionId); } catch { throw new Error(`请先停止「${this.store.session(sessionId).title}」的终端或等待读取历史完成，再拉取、同步或切换分支`); }
-        }
+        for (const item of affected) if (this.gitBusy.has(item.id)) throw new Error('此仓库正在执行 Git 操作，请稍后重试');
         for (const item of affected) this.gitBusy.add(item.id);
         try { return await this.git.operate(project.path,params); }
         finally { for (const item of affected) this.gitBusy.delete(item.id); }
@@ -150,6 +148,7 @@ export class DaemonServer {
       case 'updateProject': {
         const { projectId, name } = request.params;
         this.requireProjectAvailable(projectId);
+        if (this.gitBusy.has(projectId)) throw new Error('Git 操作期间请等待完成后再修改项目');
         this.editingProjects.add(projectId);
         try {
           const previous = this.store.project(projectId);
@@ -162,6 +161,7 @@ export class DaemonServer {
       case 'deleteProject': {
         const id = request.params.projectId;
         this.requireProjectAvailable(id);
+        if (this.gitBusy.has(id)) throw new Error('Git 操作期间请等待完成后再删除项目');
         for (const sessionId of this.store.projectSessionIds(id)) this.requireIdle(sessionId);
         this.removeLogs(this.store.deleteProject(id)); this.changed(); return null;
       }
@@ -402,7 +402,6 @@ export class DaemonServer {
 
   private requireProjectAvailable(id: string): void {
     this.store.project(id);
-    if (this.gitBusy.has(id)) throw new Error('此项目正在执行 Git 操作，请稍后重试');
     if (this.editingProjects.has(id)) throw new Error('项目正在更新，请稍后重试');
   }
   private requireIdle(id: string): void {

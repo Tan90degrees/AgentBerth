@@ -29,7 +29,7 @@ export function GitBranch({project,enabled,onOpen}:{project:Project;enabled:bool
   </button>;
 }
 const actions={fetch:'获取远端',pull:'拉取',push:'推送',sync:'同步远端',switch:'切换分支'};
-export function GitDialog({project,enabled,running,activeProjects,platform,onClose,onNotice,onError,returnFocus}:{project:Project;enabled:boolean;running:boolean;activeProjects:Project[];platform:string;onClose:()=>void;onNotice:(message:string)=>void;onError:(message:string)=>void;returnFocus:HTMLElement|null}){
+export function GitDialog({project,enabled,onClose,onNotice,onError,returnFocus}:{project:Project;enabled:boolean;onClose:()=>void;onNotice:(message:string)=>void;onError:(message:string)=>void;returnFocus:HTMLElement|null}){
   const {status,loading,error,refresh,setStatus}=useGitStatus(project,enabled);
   const [remote,setRemote]=useState(''),[branch,setBranch]=useState(''),[working,setWorking]=useState<GitOperation['action']|null>(null),[failure,setFailure]=useState(''),[output,setOutput]=useState(''),[notice,setNotice]=useState('');
   const alive=useRef(true);useEffect(()=>()=>{alive.current=false;},[]);
@@ -37,10 +37,7 @@ export function GitDialog({project,enabled,running,activeProjects,platform,onClo
   const blocked=!enabled||loading||!!working||!!status?.busy;
   const repository=status?.kind==='repository';
   const canWrite=repository&&!!status.branch&&!!status.head&&!status.operation&&!status.conflicts;
-  const normalize=(value:string)=>{const result=value.replaceAll('\\','/').replace(/\/+$/,'');return platform==='win32'?result.toLowerCase():result;};
-  const root=normalize(status?.root??project.path);
-  const affectedRunning=running||activeProjects.some(value=>{const candidate=normalize(value.path);return candidate===root||candidate.startsWith(root+'/')||root.startsWith(candidate+'/');});
-  const canChange=repository&&!status.total&&!status.operation&&!affectedRunning;
+  const canChange=repository&&!status.operation&&!status.conflicts;
   async function act(action:GitOperation['action']){
     if(!status||!repository)return;
     setWorking(action);setFailure('');setNotice('');setOutput('');
@@ -62,8 +59,7 @@ export function GitDialog({project,enabled,running,activeProjects,platform,onClo
         <label>远端<select aria-label="Git 远端" value={remote} disabled={blocked} onChange={event=>setRemote(event.target.value)}>{!status.remotes.length&&<option value="">未配置远端</option>}{status.remotes.map(name=><option key={name} value={name}>{name}</option>)}</select></label>
         <p className="form-hint">目标：{remote?`${remote}/${status.upstreamBranch||status.branch||'—'}`:'请先在终端配置远端'}。推送只包含已提交的改动，拉取仅做快进。</p>
         <div className="git-actions"><button className="subtle" disabled={blocked||!remote} onClick={()=>void act('fetch')}>获取远端</button><button className="subtle" disabled={blocked||!remote||!canWrite||!canChange||!status.upstream} onClick={()=>void act('pull')}>拉取</button><button className="subtle" disabled={blocked||!remote||!canWrite} onClick={()=>void act('push')}>{status.upstream?'推送':'发布当前分支'}</button><button className="primary" disabled={blocked||!remote||!canWrite||!canChange} onClick={()=>void act('sync')}>同步远端</button></div>
-        {affectedRunning&&<p className="form-hint">项目终端运行中，可获取远端和推送；拉取或切换分支前请先停止相关终端。</p>}
-        {!!status.total&&<p className="form-hint">有未提交改动时保留工作区，暂不能拉取或切换分支。</p>}
+        {!!status.total&&<p className="form-hint">未提交改动会保留；若拉取或切换会覆盖改动，Git 会拒绝操作并提示相关文件。</p>}
         <details className="advanced-options"><summary>本地分支与工作区改动（{status.total}）</summary>
           <div className="git-switch"><select aria-label="切换 Git 分支" value={branch} disabled={blocked||!canChange} onChange={event=>setBranch(event.target.value)}><option value="">选择本地分支</option>{status.branches.map(name=><option key={name} value={name} disabled={name===status.branch}>{name}</option>)}</select><button className="subtle" disabled={blocked||!canChange||!branch} onClick={()=>void act('switch')}>切换分支</button></div>
           {!status.files.length?<p className="form-hint">工作区干净</p>:<ul className="git-files">{status.files.map((file,index)=><li key={index}><span className={file.conflict?'danger-text':''}>{file.conflict?'冲突':file.index==='?'?'未跟踪':`${file.index==='.'?'—':file.index} ${file.worktree==='.'?'—':file.worktree}`}</span><code>{file.originalPath?file.originalPath+' → ':''}{file.path}</code></li>)}</ul>}{status.total>status.files.length&&<p className="form-hint">只展示前 100 项，其余可在终端查看。</p>}

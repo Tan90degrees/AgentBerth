@@ -106,8 +106,8 @@ export class GitWorkspace {
     this.requireRepository(status);
     if(status.root!==expected.root || status.branch!==expected.branch || status.head!==expected.head)throw new Error('分支、提交或仓库已变化，请刷新后重新操作');
   }
-  private requireClean(status: GitStatus): void {
-    if(status.total || status.conflicts)throw new Error('工作区有未提交改动或未跟踪文件，请先提交或在终端暂存后重试');
+  private requireReady(status: GitStatus): void {
+    if(status.conflicts)throw new Error('工作区存在冲突，请先在终端解决冲突后重试');
     if(status.operation)throw new Error(`仓库正在${status.operation}，请先在终端完成或取消该操作`);
   }
   async operate(cwd: string, request: GitOperation): Promise<GitResult> {
@@ -118,7 +118,7 @@ export class GitWorkspace {
     this.locks.add(key);const output: string[]=[];let completed='';
     try {
       if(request.action==='switch') {
-        this.requireClean(status);
+        this.requireReady(status);
         if(!request.branch || !status.branches.includes(request.branch))throw new Error('请选择已有的本地分支，刷新后重试');
         await this.command(status.root,['switch','--',request.branch],true);
         completed=`已切换到 ${request.branch}`;
@@ -130,7 +130,7 @@ export class GitWorkspace {
           if(status.operation || status.conflicts)throw new Error('仓库有未完成的合并或冲突，请先在终端处理');
           if(status.upstream && status.upstreamRemote!==remote)throw new Error(`当前分支跟踪 ${status.upstream}，请选择其远端`);
         }
-        if(['pull','sync'].includes(request.action))this.requireClean(status);
+        if(['pull','sync'].includes(request.action))this.requireReady(status);
         const target=status.upstreamBranch || status.branch;
         if(request.action!=='fetch' && request.branch!==target)throw new Error('远端目标分支已变化，请刷新后重新操作');
         if(request.action==='pull' && !status.upstream)throw new Error('当前分支没有远端上游，请先推送发布此分支');
@@ -140,7 +140,7 @@ export class GitWorkspace {
           const fresh=await this.inspect(cwd);this.verify(fresh,request.action==='fetch'?{...request.expected,branch:fresh.branch,head:fresh.head}:request.expected);status=fresh;
           if(request.action!=='fetch' && (fresh.upstreamRemote!==remote || fresh.upstreamBranch!==target))throw new Error('上游配置已变化，请刷新重试');
           if(['pull','sync'].includes(request.action)) {
-            this.requireClean(status);
+            this.requireReady(status);
             const fetched=(await this.command(status.root,['rev-parse','--verify','FETCH_HEAD'])).trim();
             if(!/^[a-f0-9]{40,64}$/.test(fetched))throw new Error('获取的远端提交无效，请刷新重试');
             output.push(await this.command(status.root,['-c','merge.autoStash=false','merge','--ff-only','--no-edit','--no-autostash',fetched],true));
@@ -167,7 +167,11 @@ export class GitWorkspace {
       const updated=await this.inspect(cwd);
       updated.busy=false;
       return {status:updated,message:completed,output:gitMessage(output.join('\n'))};
-    } catch(error) { throw new Error((completed?completed+'；后续步骤未完成：':'')+gitMessage(error instanceof Error?error.message:String(error))); }
+    } catch(error) {
+      const detail=gitMessage(error instanceof Error?error.message:String(error));
+      const hint=/would be overwritten/i.test(detail)?'操作会覆盖本地改动，Git 已拒绝；请先提交或用 git stash 保存相关改动后重试。\n':/not possible to fast-forward|cannot fast-forward/i.test(detail)?'本地与远端已分叉，无法快进；请在终端合并或变基后重试。\n':'';
+      throw new Error((completed?completed+'；后续步骤未完成：':'')+hint+detail);
+    }
     finally { this.locks.delete(key); }
   }
   async close(): Promise<void> {this.closing=true;for(const controller of this.active.keys())controller.abort();await Promise.allSettled([...this.active.values()]);}

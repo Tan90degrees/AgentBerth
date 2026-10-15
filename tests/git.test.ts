@@ -53,9 +53,23 @@ test('fetch, fast-forward pull, pinned push, sync and first publication work wit
   await operation('switch',{branch:'main'});assert.equal((await service.status(a)).branch,'main');
 });
 
-test('dirty worktrees, changed previews and divergent branches are preserved rather than stashed, reset or force-pushed',async t=>{
+test('unrelated edits survive pull/switch while overlapping edits, changed previews and divergence are protected',async t=>{
   const{a,b,remote,service,operation}=await fixture(t);
-  await writeFile(path.join(a,'local-only.txt'),'keep me');await assert.rejects(operation('pull'),/未提交/);await assert.rejects(operation('sync'),/未提交/);await assert.rejects(operation('switch',{branch:'main'}),/未提交/);assert.equal(await readFile(path.join(a,'local-only.txt'),'utf8'),'keep me');await rm(path.join(a,'local-only.txt'));
+  await git(a,'branch','feature/same');
+  await writeFile(path.join(a,'local-only.txt'),'keep me');await writeFile(path.join(a,'base.txt'),'local edit');
+  await writeFile(path.join(b,'unrelated.txt'),'remote');await git(b,'add','.');await git(b,'commit','-m','unrelated');await git(b,'push');
+  await operation('pull');await operation('sync');await operation('switch',{branch:'feature/same'});
+  assert.equal(await readFile(path.join(a,'base.txt'),'utf8'),'local edit');assert.equal(await readFile(path.join(a,'local-only.txt'),'utf8'),'keep me');
+  await operation('switch',{branch:'main'});
+  await writeFile(path.join(b,'base.txt'),'remote edit');await git(b,'add','.');await git(b,'commit','-m','overlap');await git(b,'push');
+  const before=await git(a,'rev-parse','HEAD');
+  await assert.rejects(operation('pull'),/overwritten|local changes/);assert.equal(await git(a,'rev-parse','HEAD'),before);
+  assert.equal(await readFile(path.join(a,'base.txt'),'utf8'),'local edit');assert.equal(await git(a,'stash','list'),'');
+  await git(a,'checkout','--','base.txt');await operation('pull');
+  await writeFile(path.join(a,'base.txt'),'local edit again');
+  await assert.rejects(operation('switch',{branch:'feature/same'}),/overwritten|local changes/);
+  assert.equal((await service.status(a)).branch,'main');assert.equal(await readFile(path.join(a,'base.txt'),'utf8'),'local edit again');
+  await git(a,'checkout','--','base.txt');await rm(path.join(a,'local-only.txt'));
   const old=await service.status(a);await git(a,'switch','-c','changed');await assert.rejects(service.operate(a,{projectId:'x',action:'push',remote:'origin',expected:{root:old.root,head:old.head,branch:old.branch}}),/已变化/);await git(a,'switch','main');
   await writeFile(path.join(a,'a.txt'),'a');await git(a,'add','.');await git(a,'commit','-m','a');const local=await git(a,'rev-parse','HEAD');
   await writeFile(path.join(b,'b.txt'),'b');await git(b,'add','.');await git(b,'commit','-m','b');await git(b,'push');const theirs=await git(remote,'rev-parse','refs/heads/main');
@@ -63,19 +77,46 @@ test('dirty worktrees, changed previews and divergent branches are preserved rat
   await assert.rejects(operation('push'),/rejected|fetch first|non-fast-forward/);assert.equal(await git(remote,'rev-parse','refs/heads/main'),theirs);
 });
 
-test('an RPC refuses file-changing Git operations while any nested registered project owns a running PTY', {timeout:20000},async t=>{
-  const{dir,a}=await fixture(t);const sub=path.join(a,'nested');await mkdir(sub);const server=new DaemonServer(path.join(dir,'data'));const c=await DaemonConnection.open(await server.listen(),()=>{});
+test('RPC pull, sync and branch switching preserve a running nested project PTY and its input/output', {timeout:20000},async t=>{
+  const{dir,a,b}=await fixture(t);const sub=path.join(a,'nested');await mkdir(sub);const server=new DaemonServer(path.join(dir,'data'));const c=await DaemonConnection.open(await server.listen(),()=>{});
   // Close SQLite/PTY resources before fixture cleanup on Windows.
   const shutdown=async()=>{c.close();await server.close();};
   try{
     const p=await c.rpc<Project>('createProject',{name:'Root',path:a}),nested=await c.rpc<Project>('createProject',{name:'Nested',path:sub});
     const s=await c.rpc<Session>('createSession',{projectId:nested.id,title:'Nested shell',agent:'shell',command:''});const run=await c.rpc<Run>('start',{sessionId:s.id,cols:80,rows:24});
-    const status=await c.rpc<GitStatus>('gitStatus',{projectId:p.id});const expected={root:status.root,head:status.head,branch:status.branch};
-    await assert.rejects(c.rpc('gitOperation',{projectId:p.id,action:'pull',remote:'origin',expected}),/停止/);
-    const fetched=await c.rpc<GitResult>('gitOperation',{projectId:p.id,action:'fetch',remote:'origin',expected});assert.equal(fetched.status.kind,'repository');
+    await writeFile(path.join(b,'remote.txt'),'live pull');await git(b,'add','.');await git(b,'commit','-m','live pull');await git(b,'push');
+    const operation=async(action:GitOperation['action'],branch?:string)=>{const status=await c.rpc<GitStatus>('gitStatus',{projectId:p.id});return c.rpc<GitResult>('gitOperation',{projectId:p.id,action,remote:'origin',branch:branch||status.upstreamBranch||status.branch,expected:{root:status.root,head:status.head,branch:status.branch}});};
+    await operation('fetch');await operation('pull');assert.equal(await readFile(path.join(a,'remote.txt'),'utf8'),'live pull');
+    await git(a,'branch','feature/live');await operation('switch','feature/live');await operation('sync');await operation('switch','main');
     const current=(await c.rpc<State>('state')).sessions.find(value=>value.id===s.id)!;assert.equal(current.latestRun!.id,run.id);assert.equal(current.latestRun!.pid,run.pid);assert.equal(current.latestRun!.status,'running');
-    await assert.rejects(c.rpc('gitOperation',{projectId:p.id,action:'push',remote:'--bad',expected}),/远端/);
+    await c.rpc('attach',{sessionId:s.id});await c.rpc('resize',{sessionId:s.id,runId:run.id,cols:90,rows:28});await c.rpc('input',{sessionId:s.id,runId:run.id,data:'echo LIVE_GIT_PTY_OK\r'});
+    const deadline=Date.now()+5000;
+    while((await c.rpc<{snapshot:string}>('attach',{sessionId:s.id})).snapshot.split('LIVE_GIT_PTY_OK').length<3){assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,40));}
+    const status=await c.rpc<GitStatus>('gitStatus',{projectId:p.id});await assert.rejects(c.rpc('gitOperation',{projectId:p.id,action:'push',remote:'--bad',expected:{root:status.root,head:status.head,branch:status.branch}}),/远端/);
   }finally{await shutdown();}
+});
+
+test('a Git RPC exceeding 15 seconds leaves session creation, terminal start, history links and I/O available', {timeout:45000},async t=>{
+  const{dir,a}=await fixture(t),server=new DaemonServer(path.join(dir,'data')),c=await DaemonConnection.open(await server.listen(),()=>{});
+  let pending:Promise<GitResult>|undefined;
+  try{
+    const helper=path.join(dir,'delayed-upload.cjs'),marker=path.join(dir,'started');
+    const node=(await execute('node',['-p','process.execPath'],{encoding:'utf8',windowsHide:true})).stdout.trim();
+    await writeFile(helper,`require('node:fs').writeFileSync(${JSON.stringify(marker)},'ready');setTimeout(()=>{const c=require('node:child_process').spawn('git',['upload-pack',...process.argv.slice(2)],{stdio:'inherit',windowsHide:true});c.on('error',()=>process.exit(1));c.on('exit',code=>process.exit(code??1));},16000);`);
+    const quote=(value:string)=>'"'+value.replaceAll('\\','/')+'"';await git(a,'config','remote.origin.uploadpack',quote(node)+' '+quote(helper));
+    const p=await c.rpc<Project>('createProject',{name:'Live Git',path:a}),status=await c.rpc<GitStatus>('gitStatus',{projectId:p.id});
+    pending=c.rpc<GitResult>('gitOperation',{projectId:p.id,action:'fetch',remote:'origin',expected:{root:status.root,head:status.head,branch:status.branch}});
+    // Attach rejection handling immediately while performing concurrent requests.
+    void pending.catch(()=>{});
+    const deadline=Date.now()+8000;while(true){try{await readFile(marker);break;}catch{assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,40));}}
+    const s=await c.rpc<Session>('createSession',{projectId:p.id,title:'During fetch',agent:'shell',command:''});
+    const run=await c.rpc<Run>('start',{sessionId:s.id,cols:80,rows:24});await c.rpc('attach',{sessionId:s.id});await c.rpc('input',{sessionId:s.id,runId:run.id,data:'echo CONCURRENT_GIT_IO_OK\r'});
+    const native=await c.rpc<Session>('createSession',{projectId:p.id,title:'History',agent:'codex',command:''});await c.rpc('linkNativeSession',{sessionId:native.id,nativeSessionId:'live-fetch-history'});await c.rpc('unlinkNativeSession',{sessionId:native.id});
+    await assert.rejects(c.rpc('updateProject',{projectId:p.id,name:'Changed',path:a}),/Git/);
+    const result=await pending;assert.equal(result.status.kind,'repository');
+    assert.ok((await c.rpc<{snapshot:string}>('attach',{sessionId:s.id})).snapshot.includes('CONCURRENT_GIT_IO_OK'));
+    assert.equal((await c.rpc<State>('state')).sessions.find(value=>value.id===s.id)!.latestRun!.pid,run.pid);
+  }finally{c.close();await server.close();if(pending)await Promise.allSettled([pending]);}
 });
 
 test('slow fetches are serialized per repository and full shutdown cancels Git and its descendants', {timeout:25000},async t=>{
