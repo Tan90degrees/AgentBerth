@@ -154,7 +154,9 @@ test('daemon exposes Agent CRUD, plugin history and resume while retaining prior
   adapter(folder, `process.stdout.write(JSON.stringify({version:1,command:'echo RESUMED_PLUGIN'}));`);
   await c.rpc('start', { sessionId: s.id, resume: true, cols: 80, rows: 24 });
   assert.equal((await c.rpc<State>('state')).sessions[0].latestRun!.command, 'echo RESUMED_PLUGIN');
-  await assert.rejects(c.rpc('updateAgent', { agentId: saved.id, ...config }), /停止/);
+  const liveBefore = (await c.rpc<State>('state')).sessions[0].latestRun!;
+  await c.rpc('updateAgent', { agentId: saved.id, ...config, name: '运行中重命名' });
+  assert.equal((await c.rpc<State>('state')).sessions[0].latestRun!.pid, liveBefore.pid);
   await assert.rejects(c.rpc('deleteAgent', { agentId: saved.id }), /会话/);
   await c.rpc('stop', { sessionId: s.id });
   const deadline = Date.now() + 5000;

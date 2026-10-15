@@ -1139,6 +1139,30 @@ try {
   await eventually(async()=>await page.locator('.native-list').getAttribute('aria-busy')==='false','Native history list still loading');
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-native-running-link':'native-running-link'}.png`});
 
+  step('hot update an imported Agent plugin while its terminal stays running');
+  const hotScript=path.join(folder,'hot-plugin.cjs');
+  await writeFile(hotScript,source.replaceAll('echo BETA_READY','echo HOT_UPDATED_READY').replace('process.stdout.write(JSON.stringify(result));', "if(request.method==='history')result.messages.push({role:'assistant',text:'HOT_PLUGIN_CODE_READY'});process.stdout.write(JSON.stringify(result));"));
+  await page.getByRole('button',{name:'设置',exact:true}).click();
+  const beforeHotAgent=(await page.evaluate(()=>window.berth.rpc('state'))).agents.find(a=>a.id===beta.id);
+  await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},alphaConfig);
+  await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
+  await page.getByText('插件 ID 与当前类型不一致，请选择同一类型的更新文件',{exact:true}).waitFor();
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).agents.find(a=>a.id===beta.id).plugin.executable,beforeHotAgent.plugin.executable);
+  await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},hotScript);
+  await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
+  await page.getByText('插件已热更新，后续读取使用新版本',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('dialog').count(),0,'Hot update unexpectedly required editing metadata');
+  const hotState=await page.evaluate(()=>window.berth.rpc('state')),hotAgent=hotState.agents.find(a=>a.id===beta.id),hotSession=hotState.sessions.find(s=>s.id===betaSession.id);
+  assert.equal(hotAgent.name,'Beta 插件');assert.equal(hotAgent.command,'echo HOT_UPDATED_READY');
+  assert.equal(hotSession.command,betaSession.command);assert.equal(hotSession.nativeSessionId,'native-plugin-123');
+  assert.equal(hotSession.latestRun.id,pluginRun.id);assert.equal(hotSession.latestRun.pid,pluginRun.pid);assert.equal(hotSession.latestRun.status,'running');
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}plugin-hot-update.png`});
+  await page.locator('.projects .project-item').click();
+  await page.getByRole('tab',{name:'对话历史',exact:true}).click();
+  await page.getByRole('button',{name:'刷新记录',exact:true}).click();
+  await page.getByText('HOT_PLUGIN_CODE_READY',{exact:true}).waitFor();
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).sessions.find(s=>s.id===betaSession.id).latestRun.pid,pluginRun.pid);
+
   await menuAction(page, '停止终端', 'session');
   await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
   await eventually(async () => (await page.evaluate(id => window.berth.rpc('state').then(s => s.sessions.find(item => item.id === id).latestRun.status), betaSession.id)) === 'stopped', 'Plugin terminal did not stop');

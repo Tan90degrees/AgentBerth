@@ -31,6 +31,7 @@ interface Client { subscriptions: Set<string>; pending: number }
 export class DaemonServer {
   private store: Store;
   private plugins = new AgentPlugins();
+  private agentVersions = new Map<string, number>();
   private git = new GitWorkspace();
   private resources = new ResourceSampler();
   private gitBusy = new Set<string>();
@@ -198,23 +199,25 @@ export class DaemonServer {
       case 'updateAgent': {
         const { params } = request;
         const { agentId, ...config } = 'agentId' in params ? params : { ...params, agentId: undefined };
-        if (agentId) {
-          this.store.agent(agentId);
-          for (const session of this.store.state().sessions.filter(item => item.agent === agentId)) this.requireIdle(session.id);
-        }
+        const previous = agentId ? this.store.agent(agentId) : null;
+        const version = agentId ? this.agentVersion(agentId) : 0;
+        const identity = previous?.sourceId ?? previous?.plugin?.sourceId;
+        if (identity && identity !== (config.sourceId ?? config.plugin?.sourceId)) throw new Error('插件 ID 与当前类型不一致，请导入同一类型的更新文件');
         if (config.plugin) {
           if (!path.isAbsolute(config.plugin.executable)) throw new Error('插件程序须使用完整路径');
           if (config.plugin.runtime === 'node') { if (!statSync(config.plugin.executable).isFile()) throw new Error('插件入口文件不存在'); }
           else await resolveTerminal({ profile: 'custom', executable: config.plugin.executable, args: config.plugin.args });
+          if (previous && JSON.stringify(previous.plugin) !== JSON.stringify(config.plugin)) await this.plugins.check({ id: agentId!, ...config });
         }
         if (this.closing) throw new Error('后台正在退出');
-        // Recheck after resolving an executable: a concurrent request may have started a session.
-        if (agentId) { this.store.agent(agentId); for (const session of this.store.state().sessions.filter(item => item.agent === agentId)) this.requireIdle(session.id); }
-        const agent = this.store.saveAgent(config, agentId); this.changed(); return agent;
+        if (agentId) { this.store.agent(agentId); this.assertAgentVersion(agentId, version); }
+        const agent = this.store.saveAgent(config, agentId);
+        this.agentVersions.set(agent.id, version + 1);
+        this.changed(); return agent;
       }
       case 'probeAgentPlugin': return this.plugins.check({ id: 'preview', ...request.params });
       case 'checkAgentPlugin': return this.plugins.check(this.store.agent(request.params.agentId));
-      case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.changed(); return null;
+      case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.agentVersions.delete(request.params.agentId); this.changed(); return null;
       case 'linkNativeSession': {
         const session = this.store.session(request.params.sessionId);
         this.requireHistoryAvailable(session.id);
@@ -289,16 +292,23 @@ export class DaemonServer {
     }
   }
 
+  private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
+  private assertAgentVersion(id: string, version: number): void {
+    if (this.agentVersion(id) !== version) throw new Error('Agent 插件已更新，请重新读取或重试');
+  }
+
   private async importHistory(sessionId: string, file: string | null): Promise<unknown> {
     this.reserveHistory(sessionId);
     this.historyWrites.add(sessionId);
     try {
       const session = this.store.session(sessionId);
       const projectPath = this.store.project(session.projectId).path;
+      const version = this.agentVersion(session.agent);
       const history = session.agent.startsWith('agent:')
         ? await this.plugins.history(this.store.agent(session.agent), session, projectPath, file)
         : await readHistory(file!, session.agent, projectPath);
       if (this.closing) throw new Error('后台正在退出');
+      this.assertAgentVersion(session.agent, version);
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); this.historyWrites.delete(sessionId); }
   }
@@ -319,8 +329,10 @@ export class DaemonServer {
     if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return { items: [], nextCursor: null, warnings: ['此类型未提供会话发现；可导入多个原生记录文件或手动关联 ID'] };
     this.reserveHistory(sessionId);
     try {
+      const version = this.agentVersion(session.agent);
       const result = await this.plugins.list(this.store.agent(session.agent), session, this.store.project(session.projectId).path, pagination);
       if (this.closing) throw new Error('后台正在退出');
+      this.assertAgentVersion(session.agent, version);
       return result;
     } finally { this.historyBusy.delete(sessionId); }
   }
@@ -333,11 +345,13 @@ export class DaemonServer {
     if (!agent && !cached?.path) throw new Error('此记录尚未导入，请先选择原生记录文件');
     this.reserveHistory(sessionId);
     try {
+      const version = this.agentVersion(session.agent);
       const history = !agent ? await readHistory(cached!.path!, session.agent, this.store.project(session.projectId).path) : agent.plugin?.history
         ? await this.plugins.history(agent, { ...session, nativeSessionId, transcriptPath: cached?.path ?? null }, this.store.project(session.projectId).path, cached?.path ?? null)
         : { messages: [], warnings: ['此类型仅提供会话列表，没有文本读取能力'], path: null, nativeSessionId };
       if (history.nativeSessionId !== nativeSessionId) throw new Error('插件返回的会话 ID 与选中会话不一致');
       if (this.closing) throw new Error('后台正在退出');
+      this.assertAgentVersion(session.agent, version);
       this.store.saveHistoryEntry(sessionId, history);
       return history;
     } finally { this.historyBusy.delete(sessionId); }
@@ -357,6 +371,7 @@ export class DaemonServer {
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
     const session = this.store.session(sessionId);
     const projectPath = this.store.project(session.projectId).path;
+    const version = this.agentVersion(session.agent);
     const command = resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
       : launchCommand(session, resume);
@@ -374,6 +389,7 @@ export class DaemonServer {
       throw error;
     }
     if (this.closing) throw new Error('后台无法再启动终端');
+    if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: windowsPtyFor(process.platform, release()) });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';

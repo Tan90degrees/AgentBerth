@@ -226,3 +226,6 @@ input:hover, select:hover, textarea:hover { border-color: var(--text-muted); }
 }
 
 .loader { border: 2px solid var(--border); border-top-color: var(--text-secondary); }
+
+.agent-definitions [role='alert'] { display: block; margin-top: 6px; color: var(--danger); }
+.plugin-check.plugin-check-failed { color: var(--danger) !important; }
