@@ -10,6 +10,7 @@ import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
+import { ResourceSampler } from './resources';
 import { GitWorkspace } from './git';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
@@ -31,6 +32,7 @@ export class DaemonServer {
   private store: Store;
   private plugins = new AgentPlugins();
   private git = new GitWorkspace();
+  private resources = new ResourceSampler();
   private gitBusy = new Set<string>();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
   private ws = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
@@ -116,6 +118,7 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
       case 'state': return this.store.state();
+      case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
       case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
       case 'gitOperation': {
         const params = request.params, project = this.store.project(params.projectId);
@@ -481,6 +484,7 @@ export class DaemonServer {
   private async stopAll(): Promise<void> {
     this.closing = true;
     try {
+      await this.resources.close();
       await this.git.close();
       await this.plugins.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));

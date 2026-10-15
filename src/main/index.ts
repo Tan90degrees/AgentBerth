@@ -113,6 +113,7 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;
   if (!connection) await reconnect();
+  if(method==='resources')return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128)});
   return connection!.rpc(method, request.data.params);
 });
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });

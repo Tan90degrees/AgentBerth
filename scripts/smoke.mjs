@@ -249,6 +249,24 @@ try {
   await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('echo LIVE_GIT_IO_READY');await page.keyboard.press('Enter');
   await eventually(async()=>(await page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}),before.sessions[0].id)).snapshot.split('LIVE_GIT_IO_READY').length>=3,'Terminal I/O stopped after Git changes');
 
+  step('compact session, project and whole-workbench CPU/memory include process trees without remounting the terminal');
+  await page.evaluate(()=>{window.resourceTerminal=document.querySelector('.xterm');});
+  const sessionResource=page.locator('.session-header [data-resource-scope="session"]');
+  const projectResource=page.locator('.project-row [data-resource-scope="project"]');
+  const workspaceResource=page.locator('.workspace-resources [data-resource-scope="workspace"]');
+  await eventually(async()=>await sessionResource.getAttribute('data-resource-ready')==='true'&&await projectResource.first().getAttribute('data-resource-ready')==='true'&&await workspaceResource.getAttribute('data-resource-ready')==='true','Three resource levels did not receive memory readings');
+  await eventually(async()=>{const r=await page.evaluate(()=>window.berth.rpc('resources'));return r.workspace.cpuPercent!==null&&r.sessions[before.sessions[0].id]?.cpuPercent!==null;},'CPU sampling did not warm up');
+  const resources=await page.evaluate(()=>window.berth.rpc('resources'));
+  assert.equal(resources.desktopIncluded,true);assert.ok(resources.sessions[before.sessions[0].id].memoryBytes>0);
+  assert.ok(resources.projects[before.sessions[0].projectId].memoryBytes>=resources.sessions[before.sessions[0].id].memoryBytes);
+  assert.ok(resources.workspace.memoryBytes>=resources.projects[before.sessions[0].projectId].memoryBytes);
+  assert.match(await workspaceResource.getAttribute('title'),/包含桌面/);
+  assert.ok((await page.locator('.session-header').boundingBox()).height<=38,'Resources enlarged the session header');
+  assert.ok((await page.locator('.workspace-resources').boundingBox()).height<=22,'Workspace resource display takes too much height');
+  assert.ok(await page.evaluate(()=>window.resourceTerminal===document.querySelector('.xterm')),'Resource samples remounted the terminal');
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).sessions[0].latestRun.pid,original.pid);
+  await page.screenshot({path:`test-results/${packaged?'packaged-resources':'resources'}.png`});
+
   assert.equal(await (await contextItem(page, '删除会话')).isEnabled(), false);
   assert.equal(await (await contextItem(page, '删除项目', 'project')).isEnabled(), false);
   await page.keyboard.press('Escape');

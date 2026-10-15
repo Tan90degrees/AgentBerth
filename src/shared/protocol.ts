@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 13;
+export const API_VERSION = 14;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -48,6 +48,7 @@ export type GitOperation = z.infer<typeof gitOperationSchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id }).strict() }),
   z.object({ id, method: z.literal('gitOperation'), params: gitOperationSchema }),
   z.object({ id, method: z.literal('createProject'), params: z.object({ name: title, path: z.string().min(1).max(4096) }).strict() }),
@@ -89,6 +90,8 @@ export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
 export interface Project { id: string; name: string; path: string; createdAt: string }
+export interface ResourceUsage {cpuPercent:number|null;memoryBytes:number|null;processCount:number;partial:boolean}
+export interface ResourceSnapshot {sampledAt:string;cpuCount:number;sessions:Record<string,ResourceUsage&{runId:string}>;projects:Record<string,ResourceUsage>;workspace:ResourceUsage;desktopIncluded:boolean;error?:string}
 export interface GitFile { path: string; originalPath?: string; index: string; worktree: string; conflict: boolean }
 export interface GitStatus {
   kind: 'repository' | 'not-repository' | 'unavailable'; message?: string; busy: boolean;
