@@ -62,7 +62,8 @@ function quitApplication(): Promise<void> {
     await shutdownDaemon(dataDirectory);
     connection?.close(true); connection = null;
     quitReady = true; tray?.destroy(); tray = null;
-    app.quit();
+    // All owned workers and the daemon are gone; renderer/debugger unload must not delay explicit quit.
+    app.exit(0);
   })().catch(error => {
     console.error('AgentBerth 退出未完成：', error);
     quitting = false;
