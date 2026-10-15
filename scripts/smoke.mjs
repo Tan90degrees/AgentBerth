@@ -1,6 +1,7 @@
 import { _electron as electron } from 'playwright';
 import headless from '@xterm/headless';
 import unicode11 from '@xterm/addon-unicode11';
+import WebSocket from 'ws';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -72,6 +73,19 @@ async function waitRunState(page, running) {
 async function fileExists(file) { try { await stat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
 function shellCommand(script) {
   return process.platform === 'win32' ? `"${process.execPath}" "${script}"` : `'${process.execPath.replaceAll("'", "'\\''")}' '${script.replaceAll("'", "'\\''")}'`;
+}
+// Read the independent daemon while the renderer is hidden and may be suspended.
+async function readDaemonState(runtimeFile) {
+  const runtime=JSON.parse(await readFile(runtimeFile,'utf8'));
+  return new Promise((resolve,reject)=>{
+    const socket=new WebSocket(`ws://127.0.0.1:${runtime.port}`,{headers:{Authorization:'Bearer '+runtime.token},perMessageDeflate:false});
+    let settled=false;
+    const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);socket.close();if(error)reject(error);else resolve(value);};
+    const timer=setTimeout(()=>{socket.terminate();finish(new Error('Hidden-workbench daemon did not answer'));},15000);
+    socket.on('open',()=>socket.send(JSON.stringify({id:'hidden-state',method:'state',params:{}})));
+    socket.on('message',bytes=>{const response=JSON.parse(bytes.toString());if(response.id==='hidden-state')finish(response.error?new Error(response.error):null,response.result);});
+    socket.on('error',error=>finish(error));socket.on('close',()=>{if(!settled)finish(new Error('Hidden-workbench daemon connection closed'));});
+  });
 }
 async function closeApplication(app) {
   if (!app) return;
@@ -713,7 +727,7 @@ try {
   // Closing the native window hides it; second-instance launch can show it again.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false);
-  const hidden = await page.evaluate(() => window.berth.rpc('state'));
+  const hidden = await readDaemonState(path.join(folder,'data','runtime.json'));
   assert.equal(hidden.sessions[0].latestRun.pid, original.pid);
   assert.equal(hidden.sessions[0].latestRun.status, 'running');
   await application.evaluate(({ app, BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); app.emit('activate'); });

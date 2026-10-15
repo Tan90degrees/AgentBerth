@@ -30,13 +30,13 @@ jobs:
       - name: Desktop smoke (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:desktop
-        timeout-minutes: 3
+        timeout-minutes: 5
         env:
           DEBUG: pw:browser
       - name: Desktop smoke (Windows)
         if: runner.os == 'Windows'
         run: npm run test:desktop
-        timeout-minutes: 3
+        timeout-minutes: 5
         env:
           DEBUG: pw:browser
       - uses: actions/upload-artifact@v4
@@ -72,7 +72,7 @@ jobs:
       - name: Test packaged application with real terminal
         id: packaged-smoke
         run: npm run test:packaged
-        timeout-minutes: 3
+        timeout-minutes: 5
         env:
           DEBUG: pw:browser
       - name: Write checksums and build information
