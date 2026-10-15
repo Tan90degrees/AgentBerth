@@ -231,6 +231,17 @@ export class DaemonServer {
         }));
       }
       case 'runs': return this.store.session(request.params.sessionId).agent === 'shell' ? this.store.runs(request.params.sessionId).filter(run => run.recordOutput) : [];
+      case 'deleteRun': {
+        const run = this.store.run(request.params.runId);
+        this.requireProjectAvailable(this.store.session(run.sessionId).projectId);
+        if (this.live.get(run.sessionId)?.run.id === run.id) throw new Error('请先停止终端，再删除运行记录');
+        this.store.deleteRun(run.id); this.removeLogs([run.id]); this.changed(); return null;
+      }
+      case 'clearFinishedRuns': {
+        const id = request.params.sessionId;
+        this.requireProjectAvailable(this.store.session(id).projectId);
+        this.removeLogs(this.store.clearFinishedRuns(id)); this.changed(); return null;
+      }
       case 'output': {
         const run = this.store.run(request.params.runId), live = this.live.get(run.sessionId);
         if (!run.recordOutput || this.store.session(run.sessionId).agent !== 'shell') throw new Error('仅普通终端保留运行输出；Agent 请使用原生对话历史');

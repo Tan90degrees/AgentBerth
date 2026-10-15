@@ -7,7 +7,7 @@
 ## 当前能力
 
 - 顶部信息采用紧凑布局，可折叠详情并记住状态；折叠后保留会话状态和历史标签，管理操作统一放在左侧右键／⋯ 菜单。
-- 保存多种自定义 Agent 类型并设为默认；通过插件清单一键导入，自动安装、自检并使用软件自带 Node 运行时。可导出开发套件和复制完整 Agent 开发指令，参见 [使用说明](docs/agent-plugins.md) 与 [Agent 开发指南](docs/AGENT_PLUGIN_DEVELOPMENT.md)。
+- 保存多种自定义 Agent 类型并设为默认；导入一个 JSON 配置或自描述脚本，只需设置名称；命令与能力自动读取，脚本使用软件自带 Node 运行时。可导出开发套件和复制完整 Agent 开发指令，参见 [使用说明](docs/agent-plugins.md) 与 [Agent 开发指南](docs/AGENT_PLUGIN_DEVELOPMENT.md)。
 
 - 单侧栏按项目展开/收拢会话，搜索覆盖项目与会话；可拖拽调宽，宽度与收拢状态自动保存，方向键微调、双击恢复默认宽度。
 
@@ -162,7 +162,7 @@ if ($LASTEXITCODE -eq 0) { npm run dev }
 
 ## 对话历史与恢复
 
-终端实时画面、普通 Shell 的运行输出和 Agent 原生对话是三种不同的数据。仅普通 Shell 保留输出记录；Codex、Claude Code、OpenCode 和自定义 Agent 不保存 TUI 重绘，也不提供“运行记录”或结束后的输出查看。原生对话由内置读取器或插件读取。
+终端实时画面、普通 Shell 的运行输出和 Agent 原生对话是三种不同的数据。普通 Shell 的运行记录可逐条删除或清除全部已结束记录，同时清理输出日志并保留运行中的终端。仅普通 Shell 保留输出记录；Codex、Claude Code、OpenCode 和自定义 Agent 不保存 TUI 重绘，也不提供“运行记录”或结束后的输出查看。原生对话由内置读取器或插件读取。
 
 在 Codex 或 Claude Code 会话的 **对话历史** 中点击 **关联 JSONL**，选择其原生记录文件：
 

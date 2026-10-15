@@ -210,6 +210,17 @@ export class Store {
     return row as unknown as Run;
   }
   runs(id: string): Run[] { return this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error, recordOutput FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 100').all(id) as unknown as Run[]; }
+  deleteRun(id: string): void {
+    const run = this.run(id);
+    if (['running', 'stopping'].includes(run.status)) throw new Error('请先停止终端，再删除运行记录');
+    this.db.prepare('DELETE FROM runs WHERE id = ?').run(id);
+  }
+  clearFinishedRuns(sessionId: string): string[] {
+    this.session(sessionId);
+    const ids = this.db.prepare("SELECT id FROM runs WHERE sessionId = ? AND status NOT IN ('running', 'stopping')").all(sessionId).map(row => String(row.id));
+    this.db.prepare("DELETE FROM runs WHERE sessionId = ? AND status NOT IN ('running', 'stopping')").run(sessionId);
+    return ids;
+  }
   setPid(id: string, pid: number): void { this.db.prepare('UPDATE runs SET pid = ? WHERE id = ?').run(pid, id); }
   stopping(id: string): void { this.db.prepare("UPDATE runs SET status = 'stopping' WHERE id = ?").run(id); }
   running(id: string): void { this.db.prepare("UPDATE runs SET status = 'running' WHERE id = ?").run(id); }

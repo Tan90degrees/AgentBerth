@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 9;
+export const API_VERSION = 10;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -26,6 +26,7 @@ const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
   name: title,
+  sourceId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
   command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
   resumeCommand: singleLine.default('').transform(value => value.trim()).refine(value => !value.trim() || (value.includes('{sessionId}') && !/\{(?!sessionId\})/.test(value)), '恢复命令须包含 {sessionId}，且只支持此占位符'),
   plugin: z.object({ executable: singleLine.refine(value => !!value.trim(), '请填写插件程序'), args: z.array(singleLine).max(32).default([]), history: z.boolean(), resume: z.boolean(), runtime: z.enum(['node', 'executable']).optional(), sourceId: z.string().max(100).optional() }).strict().nullable().default(null),
@@ -62,6 +63,8 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('input'), params: z.object({ sessionId: id, runId: id, data: z.string().max(65536) }).strict() }),
   z.object({ id, method: z.literal('resize'), params: z.object({ sessionId: id, runId: id, ...size }).strict() }),
   z.object({ id, method: z.literal('runs'), params: z.object({ sessionId: id }).strict() }),
+  z.object({ id, method: z.literal('deleteRun'), params: z.object({ runId: id }).strict() }),
+  z.object({ id, method: z.literal('clearFinishedRuns'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('output'), params: z.object({ runId: id }).strict() }),
   z.object({ id, method: z.literal('importHistory'), params: z.object({ sessionId: id, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('refreshHistory'), params: z.object({ sessionId: id }).strict() }),

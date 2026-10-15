@@ -129,6 +129,16 @@ test('release packaging includes a square RGBA icon and Windows ICO sizes down t
   assert.equal(ico.readUInt16LE(0),0); assert.equal(ico.readUInt16LE(2),1);
   const sizes = Array.from({ length: ico.readUInt16LE(4) }, (_,i) => ico[6+16*i] || 256);
   for (const size of [16,24,32,48,128,256]) assert.ok(sizes.includes(size));
+  for (let i=0;i<ico.readUInt16LE(4);i++) {
+    const size = ico[6+16*i] || 256, length = ico.readUInt32LE(6+16*i+8), offset = ico.readUInt32LE(6+16*i+12);
+    assert.ok(offset + length <= ico.length);
+    if (size === 256) assert.equal(ico.subarray(offset+1,offset+4).toString(),'PNG');
+    else {
+      assert.equal(ico.readUInt32LE(offset),40); assert.equal(ico.readInt32LE(offset+4),size); assert.equal(ico.readInt32LE(offset+8),size*2);
+      assert.equal(ico.readUInt16LE(offset+14),32);
+      assert.equal(length,40+size*size*4+Math.ceil(size/32)*4*size);
+    }
+  }
   const pkg = JSON.parse(await readFile(path.join(root,'package.json'),'utf8'));
   assert.equal(pkg.build.win.icon,'assets/app.ico'); assert.ok(pkg.build.extraResources.some(resource => resource.to === 'assets'));
 });

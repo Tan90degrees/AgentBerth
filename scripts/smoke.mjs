@@ -96,6 +96,7 @@ try {
     }
     return { asset: inspect(nativeImage.createFromPath(iconPath)), executable: app.isPackaged && process.platform === 'win32' ? inspect(await app.getFileIcon(process.execPath, { size: 'large' })) : null };
   });
+  console.log('Native icon inspection:', JSON.stringify(nativeIcons));
   assert.equal(nativeIcons.asset.empty, false); assert.ok(nativeIcons.asset.mint > 5, 'Native icon has no visible mint brand mark');
   if (nativeIcons.executable) { assert.equal(nativeIcons.executable.empty, false); assert.ok(nativeIcons.executable.mint > 5, 'Packaged EXE retained a missing/default icon'); }
   await page.waitForFunction(() => { const image = document.querySelector('img.brand-mark'); return image?.complete && image.naturalWidth === 512; });
@@ -596,6 +597,12 @@ try {
   await menuAction(page, '启动终端', 'session');
   await waitRunState(page, true);
   assert.notEqual((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.id, original.id);
+  const activeRun = (await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun;
+  await page.getByRole('tab', { name: '运行记录', exact: true }).click();
+  await page.getByRole('button', { name: `删除运行记录 ${activeRun.id.slice(0,8)}`, exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: `删除运行记录 ${activeRun.id.slice(0,8)}`, exact: true }).isDisabled(), true);
+  await assert.rejects(page.evaluate(runId => window.berth.rpc('deleteRun', { runId }), activeRun.id), /先停止/);
+  await page.getByRole('tab', { name: '终端', exact: true }).click();
   await menuAction(page, '停止终端', 'session');
   await page.getByRole('dialog').getByRole('button', { name: '停止终端', exact: true }).click();
   await waitRunState(page, false);
@@ -621,8 +628,24 @@ try {
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
   await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
   await assertTerminalGutter(page);
+  step('delete a finished record from its output view and clear remaining history with confirmation');
+  await page.getByRole('button', { name: '删除此记录', exact: true }).click();
+  await page.getByRole('heading', { name: '删除此运行记录？', exact: true }).waitFor();
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await page.locator('.output-host .xterm-screen').waitFor();
+  await page.getByRole('button', { name: '删除此记录', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除记录', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  await eventually(async () => await page.locator('.run-item').filter({ hasText: original.id.slice(0,8) }).count() === 0, 'Deleted record stayed in the list');
+  await assert.rejects(page.evaluate(runId => window.berth.rpc('output', { runId }), original.id), /不存在/);
+  await assert.rejects(stat(path.join(folder, 'data', 'logs', original.id + '.log')), /ENOENT/);
+  await page.getByRole('button', { name: '清除已结束记录', exact: true }).click();
+  await page.getByRole('button', { name: '确认清除记录', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  await page.getByRole('heading', { name: '尚无运行记录', exact: true }).waitFor();
+  await page.screenshot({ path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
   await page.getByRole('tab', { name: '终端', exact: true }).click();
-  await page.getByRole('heading', { name: '终端已停止', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
   step('edit stopped launch configuration, start using session shell override and delete session');
   await menuAction(page, '编辑会话', 'session');
   await page.getByLabel('会话名称', { exact: true }).fill('编辑后的会话');
@@ -769,9 +792,13 @@ try {
   const sample = { cwd: folder, nativeSessionId: 'native-plugin-123', messages: [{ role: 'user', text: '自定义历史你好🙂' }, { role: 'assistant', text: '独立插件已连接' }] };
   await writeFile(pluginData, JSON.stringify(sample));
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '新增 Agent 类型', exact: true }).click();
+  const alphaConfig = path.join(folder, 'alpha-agent.json');
+  await writeFile(alphaConfig, JSON.stringify({ schemaVersion: 1, id: 'alpha-smoke', name: 'Alpha', command: 'echo ALPHA_READY' }));
+  await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, alphaConfig);
+  await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByLabel('类型名称', { exact: true }).fill('Alpha CLI');
-  await page.getByLabel('类型启动命令', { exact: true }).fill('echo ALPHA_READY');
+  assert.equal(await page.getByRole('dialog').locator('input').count(), 1);
+  assert.equal(await page.getByRole('dialog').locator('input[type=checkbox]').count(), 0);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: false } }));
   await eventually(() => page.getByRole('button', { name: '保存 Agent 类型', exact: true }).isDisabled(), 'Offline Agent save was enabled');
   await page.keyboard.press('Escape');
@@ -794,16 +821,33 @@ try {
   await stat(path.join(kitFolder, 'AGENT_PLUGIN_DEVELOPMENT.md')); await stat(path.join(kitFolder, 'agentberth-plugin.json')); await stat(path.join(kitFolder, 'plugin.cjs'));
   assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes(kitFolder));
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, pluginManifest);
-  await page.getByRole('button', { name: '导入插件', exact: true }).click();
+  await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   assert.equal(await page.getByLabel('类型名称', { exact: true }).inputValue(), 'Beta 插件');
-  assert.equal(await page.getByLabel('类型启动命令', { exact: true }).inputValue(), 'echo BETA_READY');
-  assert.equal(await page.getByLabel('插件参数', { exact: true }).isVisible(), false);
+  assert.equal(await page.getByRole('dialog').locator('input').count(), 1);
+  assert.equal(await page.getByLabel('类型启动命令', { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel('启用 Agent 插件', { exact: true }).count(), 0);
+  await page.getByRole('dialog').getByText('echo BETA_READY', { exact: true }).waitFor();
   await page.screenshot({ path: `test-results/${packaged ? 'packaged-plugin-import' : 'plugin-import'}.png` });
-  await page.getByRole('button', { name: '保存并启用插件', exact: true }).click();
+  await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '检查插件 Beta 插件', exact: true }).click();
   await page.locator('.agent-definitions li').filter({ hasText: 'Beta 插件' }).getByText('插件连接正常', { exact: true }).waitFor();
+  step('reimport the same type as one self-describing script, preserving its name and ID');
+  const beforeImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
+  const directScript = path.join(pluginBundle, 'standalone.cjs');
+  const source = (await readFile(pluginScript, 'utf8')).replace("id: 'my-agent', name: '我的 Agent', command: 'my-agent'", "id: 'beta-smoke', name: 'Beta 新名称', command: 'echo BETA_READY'");
+  await writeFile(directScript, 'setTimeout(()=>{\n' + source + '\n},600);');
+  await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, directScript);
+  await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
+  await page.getByRole('heading', { name: '更新 Agent 类型', exact: true }).waitFor();
+  assert.equal(await page.getByLabel('类型名称', { exact: true }).inputValue(), 'Beta 插件');
+  assert.equal(await page.getByRole('dialog').locator('input').count(), 1);
+  await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  const afterImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
+  assert.equal(afterImport.id, beforeImport.id);
+  assert.equal(afterImport.plugin.runtime, 'node'); assert.equal(afterImport.plugin.sourceId, 'beta-smoke');
   await rm(pluginBundle, { recursive: true });
   let registry = (await page.evaluate(() => window.berth.rpc('state'))).agents;
   assert.equal(registry.length, 2);
@@ -863,7 +907,7 @@ try {
   assert.equal(await page.getByRole('button', { name: '删除 Agent Beta 插件', exact: true }).isEnabled(), false);
   await page.getByRole('button', { name: '编辑 Agent Beta 插件', exact: true }).click();
   await page.getByLabel('类型名称', { exact: true }).fill('Beta 已保存');
-  await page.getByRole('button', { name: '保存并启用插件', exact: true }).click();
+  await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '更新后台', exact: true }).click();
   await page.getByRole('button', { name: '确认更新后台', exact: true }).click();
@@ -906,7 +950,7 @@ try {
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();
   await page.getByRole('button', { name: '删除 Agent Beta 已保存', exact: true }).click();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).agents.length, 0);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, one-file plugin import and self-check, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, name-only JSON/script imports, stable-ID reimport and self-check, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
 } catch (error) {
   console.error(error);
   if (application) {

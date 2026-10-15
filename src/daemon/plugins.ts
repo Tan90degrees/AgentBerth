@@ -5,6 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { AgentDefinition, History, Session } from '../shared/protocol';
 import { matchesProject } from './history';
+import { pluginDescriptionSchema } from '../shared/plugin-manifest';
 
 const execute = promisify(execFile);
 const nativeId = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
@@ -71,13 +72,16 @@ export class AgentPlugins {
       else child.stdin.end(JSON.stringify(request) + '\n');
     });
   }
-  async check(agent: AgentDefinition): Promise<{ name: string; message: string }> {
+  async describe(agent: AgentDefinition) {
     if (!agent.plugin) throw new Error('当前类型未安装插件');
-    const schema = z.object({ version: z.literal(1), name: z.string().min(1).max(100), capabilities: z.object({ history: z.boolean(), resume: z.boolean() }).strict() }).strict();
-    const result = schema.safeParse(await this.call(agent, 'describe', null, path.dirname(agent.plugin!.executable), null));
+    const result = pluginDescriptionSchema.safeParse(await this.call(agent, 'describe', null, path.dirname(agent.plugin.executable), null));
     if (!result.success) throw new Error('插件自检返回格式无效，请让开发 Agent 实现 describe 接口');
-    if ((agent.plugin!.history && !result.data.capabilities.history) || (agent.plugin!.resume && !result.data.capabilities.resume)) throw new Error('插件实际支持的能力与声明不一致，请重新导入修正后的插件');
-    return { name: result.data.name, message: '插件连接正常' };
+    return result.data;
+  }
+  async check(agent: AgentDefinition): Promise<{ name: string; message: string }> {
+    const result = await this.describe(agent);
+    if ((agent.plugin!.history && !result.capabilities.history) || (agent.plugin!.resume && !result.capabilities.resume)) throw new Error('插件实际支持的能力与声明不一致，请重新导入修正后的插件');
+    return { name: result.name, message: '插件连接正常' };
   }
   async history(agent: AgentDefinition, session: Session, projectPath: string, file: string | null): Promise<History> {
     let canonical: string | null = null;

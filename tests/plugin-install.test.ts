@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, mkdir, rm, realpath, symlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, mkdir, rm, realpath, symlink, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { installPluginManifest, exportPluginKit, developmentPrompt } from '../src/main/plugin-files';
+import { installAgentFile, installPluginManifest, exportPluginKit, developmentPrompt } from '../src/main/plugin-files';
 import { AgentPlugins } from '../src/daemon/plugins';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
@@ -106,4 +106,59 @@ test('real Agent TUI remains attachable in memory but exposes neither output log
 test('automatic session names avoid existing names', () => {
   assert.equal(nextSessionTitle('Codex', []), 'Codex 会话');
   assert.equal(nextSessionTitle('Codex', ['Codex 会话', 'Codex 会话 2']), 'Codex 会话 3');
+});
+
+
+test('single JSON config imports without any extension setup and retains its identity after rename and restart', async t => {
+  const folder = await temporary(t); const file = path.join(folder, 'agent.json');
+  await writeFile(file, '\uFEFF' + JSON.stringify({ schemaVersion: 1, id: 'simple-agent', name: 'Simple', command: 'simple --model fast', resumeCommand: 'simple --resume {sessionId}' }));
+  const config = await installAgentFile(file, path.join(folder, 'data'));
+  assert.equal(config.plugin, null); assert.equal(config.sourceId, 'simple-agent'); assert.equal(config.command, 'simple --model fast');
+  let store = new Store(path.join(folder, 'data'));
+  const agent = store.saveAgent({ ...config, name: 'My name' });
+  const project = store.createProject('Project', folder); const session = store.createSession(project.id, 'Session', agent.id, '');
+  store.close(); store = new Store(path.join(folder, 'data'));
+  try {
+    assert.equal(store.agent(agent.id).sourceId, config.sourceId);
+    const imported = await installAgentFile(file, path.join(folder, 'data'));
+    store.saveAgent({ ...imported, name: store.agent(agent.id).name, command: 'simple --model newer' }, agent.id);
+    assert.equal(store.state().agents!.length, 1); assert.equal(store.agent(agent.id).name, 'My name');
+    assert.equal(store.session(session.id).command, 'simple --model fast');
+  } finally { store.close(); }
+});
+
+test('single self-describing scripts import launch metadata and capabilities using the embedded runtime', async t => {
+  const folder = await temporary(t); const kit = await exportPluginKit(folder, path.resolve('.'));
+  const config = await installAgentFile(path.join(kit, 'plugin.cjs'), path.join(folder, 'data'));
+  assert.equal(config.sourceId, 'my-agent'); assert.equal(config.name, '我的 Agent'); assert.equal(config.command, 'my-agent');
+  assert.equal(config.plugin!.history, true); assert.equal(config.plugin!.resume, true);
+  await rm(kit, { recursive: true });
+  const plugins = new AgentPlugins();
+  try { assert.equal((await plugins.check({ id: 'test', ...config })).message, '插件连接正常'); } finally { await plugins.close(); }
+  for (const extension of ['mjs', 'js']) {
+    const file = path.join(folder, 'standalone.' + extension);
+    await writeFile(file, `process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({version:1,id:'launch-only',name:'Launch',command:'launch',capabilities:{history:false,resume:false}})));`);
+    const launch = await installAgentFile(file, path.join(folder, 'data'));
+    assert.equal(launch.sourceId, 'launch-only'); assert.equal(launch.plugin!.history, false); assert.equal(launch.plugin!.resume, false);
+  }
+});
+
+test('script import reports invalid metadata, execution and file errors and removes incomplete installations', async t => {
+  const folder = await temporary(t); const file = path.join(folder, 'invalid.cjs'); const data = path.join(folder, 'data');
+  const replies = [
+    { version: 1, name: 'Old adapter', capabilities: { history: false, resume: false } },
+    { version: 1, id: '../bad', name: 'Bad', command: 'bad', capabilities: { history: false, resume: false } },
+    { version: 1, id: 'bad', name: 'Bad', command: 'one\ntwo', capabilities: { history: false, resume: false } },
+  ];
+  for (const reply of replies) {
+    await writeFile(file, `process.stdin.resume();process.stdin.on('end',()=>console.log(${JSON.stringify(JSON.stringify(reply))}));`);
+    await assert.rejects(installAgentFile(file, data), /describe|自检/);
+    assert.deepEqual(await readdir(path.join(data, 'plugins')), []);
+  }
+  await writeFile(file, `require('./missing-resource.cjs');`);
+  await assert.rejects(installAgentFile(file, data), /退出码/);
+  assert.deepEqual(await readdir(path.join(data, 'plugins')), []);
+  await assert.rejects(installAgentFile(path.join(folder, 'script.ps1'), data), /JSON/);
+  await writeFile(file, Buffer.alloc(16 * 1024 * 1024 + 1));
+  await assert.rejects(installAgentFile(file, data), /16 MiB/);
 });

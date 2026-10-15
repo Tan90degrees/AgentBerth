@@ -6,7 +6,8 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { connectDaemon, shutdownDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
 import { requestSchema, type Method, type ServerEvent } from '../shared/protocol';
-import { installPluginManifest, exportPluginKit, developmentPrompt } from './plugin-files';
+import { installAgentFile, exportPluginKit, developmentPrompt } from './plugin-files';
+import { AgentPlugins } from '../daemon/plugins';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
 
 let window: BrowserWindow | null = null;
@@ -18,6 +19,7 @@ let quitReady = false;
 let exitPromise: Promise<void> | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let restarting = false;
+let importingPlugins = new AgentPlugins();
 const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
 const iconFile = path.join(resourceRoot, 'assets', process.platform === 'win32' ? 'app.ico' : 'app.png');
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
@@ -55,6 +57,7 @@ function quitApplication(): Promise<void> {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   tray?.setToolTip('AgentBerth · 正在停止终端并退出');
   exitPromise = (async () => {
+    await importingPlugins.close();
     if (connecting) await connecting.catch(() => {});
     await shutdownDaemon(dataDirectory);
     connection?.close(true); connection = null;
@@ -62,6 +65,7 @@ function quitApplication(): Promise<void> {
     app.quit();
   })().catch(error => {
     quitting = false;
+    importingPlugins = new AgentPlugins();
     tray?.setToolTip('AgentBerth · 退出失败，请重试');
     showWindow();
     dialog.showErrorBox('AgentBerth 退出未完成', `${String(error)}\n请再次从托盘选择退出，确保后台及全部终端停止。`);
@@ -144,8 +148,9 @@ ipcMain.handle('berth:restart', async event => {
 
 ipcMain.handle('berth:importPlugin', async event => {
   trusted(event);
-  const result = await dialog.showOpenDialog(window!, { title: '选择插件文件 agentberth-plugin.json', properties: ['openFile'], filters: [{ name: 'AgentBerth 插件', extensions: ['json'] }] });
-  return result.canceled ? null : installPluginManifest(result.filePaths[0], dataDirectory);
+  if (quitting) throw new Error('应用正在退出');
+  const result = await dialog.showOpenDialog(window!, { title: '导入 Agent 配置或脚本', properties: ['openFile'], filters: [{ name: 'Agent 配置或脚本', extensions: ['json', 'cjs', 'mjs', 'js'] }] });
+  return result.canceled ? null : installAgentFile(result.filePaths[0], dataDirectory, importingPlugins);
 });
 ipcMain.handle('berth:exportPluginKit', async event => {
   trusted(event);

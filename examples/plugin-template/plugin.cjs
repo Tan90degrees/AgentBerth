@@ -10,7 +10,7 @@ process.stdin.on('end', async () => {
     const request = JSON.parse(input);
     if (request.version !== 1) throw new Error('Unsupported protocol version');
     if (request.method === 'describe') {
-      process.stdout.write(JSON.stringify({ version: 1, name: 'AgentBerth 示例适配器', capabilities: { history: true, resume: true } }));
+      process.stdout.write(JSON.stringify({ version: 1, id: 'my-agent', name: '我的 Agent', command: 'my-agent', capabilities: { history: true, resume: true } }));
     } else if (request.method === 'history') {
       const file = request.path || path.join(request.projectPath, 'agent-session.json');
       const data = JSON.parse((await fs.readFile(file, 'utf8')).replace(/^\uFEFF/, ''));
