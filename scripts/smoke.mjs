@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright';
-import { Terminal as HeadlessTerminal } from '@xterm/headless';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
+import headless from '@xterm/headless';
+import unicode11 from '@xterm/addon-unicode11';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+const { Terminal: HeadlessTerminal } = headless;
+const { Unicode11Addon } = unicode11;
 const execute = promisify(execFile);
 const step = text => console.log(`Smoke: ${text}`);
 async function assertTerminalGutter(page) {
