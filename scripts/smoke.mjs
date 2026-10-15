@@ -24,8 +24,10 @@ async function assertTerminalGutter(page) {
 async function findTerminalText(page, text) {
   await page.getByRole('button', { name: '查找', exact: true }).click();
   await page.getByLabel('查找终端文字', { exact: true }).fill(text);
-  await page.getByRole('button', { name: '下一个匹配', exact: true }).click();
-  await page.getByRole('search').getByRole('status').filter({ hasText: '已定位' }).waitFor();
+  await eventually(async () => {
+    await page.getByRole('button', { name: '下一个匹配', exact: true }).click();
+    return (await page.getByRole('search').getByRole('status').innerText()).includes('已定位');
+  }, 'Terminal text did not arrive: ' + text);
   await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
   await page.getByRole('button', { name: '到底部', exact: true }).click();
 }

@@ -153,7 +153,7 @@ input:hover, select:hover, textarea:hover { border-color: var(--text-muted); }
 .tabs { border-bottom-color: var(--border); }
 .tabs > button { border-radius: 0; color: var(--text-muted); font-size: 11px; }
 .tabs > button.selected { color: var(--text); border-bottom-color: var(--text); }
-.terminal-panel, .terminal-surface, .terminal-host { background: var(--terminal); }
+.terminal-panel, .terminal-surface, .terminal-host, .terminal-mount .xterm, .terminal-mount .xterm-viewport { background: var(--terminal); }
 .terminal-toolbar, .terminal-search { border-bottom-color: var(--border); color: var(--text-muted); font-size: 11px; }
 .terminal-toolbar button:hover, .terminal-search button:hover { background: var(--hover); color: var(--text); }
 .terminal-search input { background: var(--input); border-color: var(--border); }
