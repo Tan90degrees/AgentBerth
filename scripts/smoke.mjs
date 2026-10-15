@@ -217,10 +217,13 @@ try {
   await page.getByLabel('Agent 类型', { exact: true }).selectOption('shell');
   await page.getByRole('button', { name: '创建并启动' }).click();
   await waitRunState(page, true);
+  const shellSession=(await page.evaluate(()=>window.berth.rpc('state'))).sessions[0];
+  // A live PTY can precede the initial ConPTY prompt; wait for the shell, not a fixed delay.
+  await eventually(async()=>{const value=await page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}),shellSession.id);return process.platform==='win32'?value.snapshot.includes('>'):/[#$]/.test(value.snapshot);},'Shell prompt did not become ready');
   await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.type('echo DESKTOP_SMOKE_READY');
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(300);
+  await eventually(async()=>(await page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}),shellSession.id)).snapshot.split('DESKTOP_SMOKE_READY').length>=3,'Shell did not execute its initial command');
   const before = await page.evaluate(() => window.berth.rpc('state'));
   const original = before.sessions[0].latestRun;
   assert.equal(original.status, 'running');
