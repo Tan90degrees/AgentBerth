@@ -2,6 +2,7 @@ import { _electron as electron } from 'playwright';
 import headless from '@xterm/headless';
 import unicode11 from '@xterm/addon-unicode11';
 import WebSocket from 'ws';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -76,14 +77,14 @@ function shellCommand(script) {
 }
 // Read the independent daemon while the renderer is hidden and may be suspended.
 async function readDaemonState(runtimeFile) {
-  const runtime=JSON.parse(await readFile(runtimeFile,'utf8'));
+  const runtime=JSON.parse(await readFile(runtimeFile,'utf8')),requestId=randomUUID();
   return new Promise((resolve,reject)=>{
-    const socket=new WebSocket(`ws://127.0.0.1:${runtime.port}`,{headers:{Authorization:'Bearer '+runtime.token},perMessageDeflate:false});
+    const socket=new WebSocket(`ws://127.0.0.1:${runtime.port}/rpc`,{headers:{Authorization:'Bearer '+runtime.token},perMessageDeflate:false});
     let settled=false;
     const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);socket.close();if(error)reject(error);else resolve(value);};
     const timer=setTimeout(()=>{socket.terminate();finish(new Error('Hidden-workbench daemon did not answer'));},15000);
-    socket.on('open',()=>socket.send(JSON.stringify({id:'hidden-state',method:'state',params:{}})));
-    socket.on('message',bytes=>{const response=JSON.parse(bytes.toString());if(response.id==='hidden-state')finish(response.error?new Error(response.error):null,response.result);});
+    socket.on('open',()=>socket.send(JSON.stringify({id:requestId,method:'state',params:{}})));
+    socket.on('message',bytes=>{const response=JSON.parse(bytes.toString());if(response.id===requestId)finish(response.error?new Error(response.error):null,response.result);});
     socket.on('error',error=>finish(error));socket.on('close',()=>{if(!settled)finish(new Error('Hidden-workbench daemon connection closed'));});
   });
 }
