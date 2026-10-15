@@ -1,12 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os, { release } from 'node:os';
 import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
+import { resolveTerminal } from '../src/daemon/paths';
 import type { Attachment, Project, Run, Session, TerminalEvent } from '../src/shared/protocol';
 import { windowsPtyFor } from '../src/shared/desktop';
 import { writeTerminalEvent } from '../src/shared/terminal-stream';
@@ -74,23 +76,30 @@ test('real TUI output and concurrent resizes replay to the same grid as the daem
   const connection = await DaemonConnection.open(runtime, event => { if (event.event === 'output' || event.event === 'resize') events.push(event); });
   const hidden = await DaemonConnection.open(runtime, event => { if (event.event === 'output' || event.event === 'resize') hiddenEvents.push(event); });
   t.after(async () => { connection.close(); hidden.close(); await server.close(); await rm(folder, { recursive: true, force: true, maxRetries: 5 }); });
-  const script = path.join(folder, 'tui.cjs');
-  await writeFile(script, `process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write('\\x1b[?1049h');let count=0;function draw(){const c=process.stdout.getWindowSize()[0],r=process.stdout.getWindowSize()[1];process.stdout.write('\\x1b[H\\x1b[2JFRAME_'+count+' '+c+'x'+r+'\\x1b[2;1H'+('中文🙂'.repeat(80))+'\\x1b['+r+';1HFOOT_'+count+'\\x1b[K');}process.stdout.on('resize',draw);setInterval(()=>{draw();count++;},20);`);
+  const script = path.join(folder, 'tui.cjs'), ready = path.join(folder, 'tui.ready');
+  await writeFile(script, `process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write('\\x1b[?1049h');let count=0;function draw(){const c=process.stdout.getWindowSize()[0],r=process.stdout.getWindowSize()[1];process.stdout.write('\\x1b[H\\x1b[2JFRAME_'+count+' '+c+'x'+r+'\\x1b[2;1H'+('中文🙂'.repeat(80))+'\\x1b['+r+';1HFOOT_'+count+'\\x1b[K');}process.stdout.on('resize',draw);draw();require('node:fs').writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{draw();count++;},20);`);
   const project = await connection.rpc<Project>('createProject', { name: 'resize', path: folder });
   const quote = (value: string) => `'${value.replaceAll("'", process.platform === 'win32' ? "''" : "'\\''")}'`;
-  const command = process.platform === 'win32' ? `$env:ELECTRON_RUN_AS_NODE='1'; & ${quote(process.execPath)} ${quote(script)}` : `ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(script)}`;
+  // Electron.exe is a Windows GUI executable; use the real console Node CLI
+  // installed by the development/CI environment for this interactive fixture.
+  const node = await resolveTerminal({ profile: 'custom', executable: 'node', args: [] });
+  const command = `${process.platform === 'win32' ? '& ' : ''}${quote(node.file)} ${quote(script)}`;
   const session = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'TUI', agent: 'custom', command });
   const run = await connection.rpc<Run>('start', { sessionId: session.id, cols: 80, rows: 24 });
   const initial = await connection.rpc<Attachment>('attach', { sessionId: session.id });
   const replay = grid(initial.cols, initial.rows, true); t.after(() => replay.dispose());
   await write(replay, initial.snapshot);
   const deadline = Date.now() + 10000;
-  while (!events.some(event => event.event === 'output' && event.data.text.includes('FRAME_'))) { assert.ok(Date.now() < deadline, 'TUI did not start'); await new Promise(resolve => setTimeout(resolve, 30)); }
+  while (!existsSync(ready)) {
+    const diagnostic = await connection.rpc<Attachment>('attach', { sessionId: session.id });
+    assert.ok(Date.now() < deadline, 'TUI did not start: '+diagnostic.snapshot.slice(-2000));
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
   const sizes = Array.from({ length: 12 }, (_, index) => ({ cols: index % 2 ? 100 : 45, rows: index % 3 ? 30 : 15 }));
   await Promise.all(sizes.map(size => connection.rpc('resize', { sessionId: session.id, runId: run.id, ...size })));
   let snapshot = await connection.rpc<Attachment>('attach', { sessionId: session.id });
   while (!snapshot.snapshot.includes(`${sizes.at(-1)!.cols}x${sizes.at(-1)!.rows}`)) {
-    assert.ok(Date.now() < deadline, 'TUI did not observe the final PTY size: '+JSON.stringify({cols:snapshot.cols,rows:snapshot.rows,screen:snapshot.snapshot.slice(0,400)}));
+    assert.ok(Date.now() < deadline, 'TUI did not observe the final PTY size: '+JSON.stringify({cols:snapshot.cols,rows:snapshot.rows,screen:snapshot.snapshot.slice(-2000)}));
     await new Promise(resolve => setTimeout(resolve, 30));
     snapshot = await connection.rpc<Attachment>('attach', { sessionId: session.id });
   }
