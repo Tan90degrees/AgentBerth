@@ -163,7 +163,7 @@ ipcMain.handle('berth:importPlugin', async event => {
 ipcMain.handle('berth:exportPluginKit', async event => {
   trusted(event);
   const result = await dialog.showOpenDialog(window!, { title: '选择插件开发目录的保存位置', properties: ['openDirectory', 'createDirectory'] });
-  return result.canceled ? null : exportPluginKit(result.filePaths[0], resourceRoot);
+  return result.canceled ? null : exportPluginKit(result.filePaths[0], resourceRoot, path.join(resourceRoot, app.isPackaged ? 'plugin-kit' : 'dist', 'check-plugin.cjs'));
 });
 ipcMain.handle('berth:pluginPrompt', async (event, folder?: string) => {
   trusted(event);

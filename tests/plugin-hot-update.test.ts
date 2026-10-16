@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, access, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, access, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DaemonServer } from '../src/daemon/server';
@@ -32,6 +32,10 @@ test('live Agent hot update validates before activation, preserves PID/identity/
   const invalid=await adapter(folder,'invalid',undefined,false);
   await assert.rejects(c.rpc('updateAgent',{agentId:agent.id,...invalid}),/声明不一致/);
   await assert.rejects(c.rpc('updateAgent',{agentId:agent.id,...original,sourceId:'wrong-agent'}),/ID/);
+  const wrongIdentity = await adapter(folder, 'wrong-identity');
+  await writeFile(wrongIdentity.plugin!.executable, (await readFile(wrongIdentity.plugin!.executable, 'utf8')).replace("id:'hot-agent'", "id:'different-agent'"));
+  await assert.rejects(c.rpc('updateAgent',{agentId:agent.id,...wrongIdentity}),/ID 与配置不一致/);
+  await assert.rejects(c.rpc('updateAgent',{agentId:agent.id,...original,plugin:{...original.plugin!,sourceId:'different-agent'}}),/ID 与配置不一致/);
   assert.equal((await c.rpc<State>('state')).agents![0].plugin!.executable,original.plugin!.executable);
   assert.equal((await c.rpc<History>('history',{sessionId:session.id})).messages[0].text,'old');
   const next=await adapter(folder,'new');await c.rpc('updateAgent',{agentId:agent.id,...next});

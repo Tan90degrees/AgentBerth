@@ -84,6 +84,8 @@ export class AgentPlugins {
   }
   async check(agent: AgentDefinition): Promise<{ name: string; message: string }> {
     const result = await this.describe(agent);
+    const identity = agent.sourceId ?? agent.plugin!.sourceId;
+    if ((agent.sourceId && agent.plugin!.sourceId && agent.sourceId !== agent.plugin!.sourceId) || (identity && result.id && identity !== result.id)) throw new Error('插件 ID 与配置不一致，请让开发 Agent 保持清单与 describe 的 ID 相同');
     if ((agent.plugin!.history && !result.capabilities.history) || (agent.plugin!.resume && !result.capabilities.resume) || (agent.plugin!.list && !result.capabilities.list)) throw new Error('插件实际支持的能力与声明不一致，请重新导入修正后的插件');
     return { name: result.name, message: '插件连接正常' };
   }

@@ -1042,6 +1042,10 @@ try {
   await page.getByText('开发套件已导出，给 Agent 的开发指令已复制', { exact: true }).waitFor();
   const kitFolder = await page.locator('.plugin-development>code').innerText();
   await stat(path.join(kitFolder, 'AGENT_PLUGIN_DEVELOPMENT.md')); await stat(path.join(kitFolder, 'agentberth-plugin.json')); await stat(path.join(kitFolder, 'plugin.cjs'));
+  await stat(path.join(kitFolder, 'check-plugin.cjs'));
+  const checkerRuntime = await application.evaluate(() => process.execPath);
+  const checker = await execute(checkerRuntime, [path.join(kitFolder, 'check-plugin.cjs'), path.join(kitFolder, 'plugin.cjs')], { cwd: kitFolder, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 15000, windowsHide: true });
+  assert.ok(checker.stdout.includes('describe、稳定 ID 和声明能力') && checker.stdout.includes('未检查：list/history/resume'));
   assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes(kitFolder));
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, pluginManifest);
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
