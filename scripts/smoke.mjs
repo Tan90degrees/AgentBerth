@@ -1005,7 +1005,8 @@ try {
   const pluginScript = packaged ? path.join(path.dirname(executablePath), 'resources', 'examples', 'agent-plugin.cjs') : path.resolve('examples/agent-plugin.cjs');
   await stat(pluginScript);
   const pluginBundle = path.join(folder, 'plugin-bundle'); await mkdir(pluginBundle);
-  await writeFile(path.join(pluginBundle, 'adapter.cjs'), await readFile(pluginScript, 'utf8'));
+  const source = (await readFile(pluginScript, 'utf8')).replace("id:'my-agent',name:'我的 Agent',command:'my-agent'", "id:'beta-smoke',name:'Beta 新名称',command:'echo BETA_READY'");
+  await writeFile(path.join(pluginBundle, 'adapter.cjs'), source);
   await writeFile(path.join(pluginBundle, 'plugin.cjs'), "setTimeout(()=>require('./adapter.cjs'),600);");
   const pluginManifest = path.join(pluginBundle, 'agentberth-plugin.json');
   await writeFile(pluginManifest, JSON.stringify({ schemaVersion: 1, id: 'beta-smoke', name: 'Beta 插件', command: 'echo BETA_READY', runtime: 'node', entry: 'plugin.cjs', files: ['adapter.cjs'], capabilities: { history: true, resume: true } }));
@@ -1063,7 +1064,6 @@ try {
   step('reimport the same type as one self-describing script, preserving its name and ID');
   const beforeImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
   const directScript = path.join(pluginBundle, 'standalone.cjs');
-  const source = (await readFile(pluginScript, 'utf8')).replace("id:'my-agent',name:'我的 Agent',command:'my-agent'", "id:'beta-smoke',name:'Beta 新名称',command:'echo BETA_READY'");
   await writeFile(directScript, 'setTimeout(()=>{\n' + source + '\n},600);');
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, directScript);
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
@@ -1176,6 +1176,15 @@ try {
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByText('插件 ID 与当前类型不一致，请选择同一类型的更新文件',{exact:true}).waitFor();
   assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).agents.find(a=>a.id===beta.id).plugin.executable,beforeHotAgent.plugin.executable);
+  const wrongHotScript = path.join(folder,'hot-wrong.cjs'), wrongHotManifest = path.join(folder,'hot-wrong.json');
+  await writeFile(wrongHotScript, source.replace("id:'beta-smoke'", "id:'different-agent'"));
+  await writeFile(wrongHotManifest, JSON.stringify({schemaVersion:1,id:'beta-smoke',name:'Beta',command:'echo WRONG_ID_MUST_NOT_APPLY',runtime:'node',entry:'hot-wrong.cjs',capabilities:{history:true,resume:true,list:true}}));
+  await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},wrongHotManifest);
+  await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'插件 ID 与配置不一致'}).waitFor();
+  const wrongHotState = await page.evaluate(()=>window.berth.rpc('state'));
+  assert.equal(wrongHotState.agents.find(a=>a.id===beta.id).plugin.executable,beforeHotAgent.plugin.executable);
+  assert.equal(wrongHotState.sessions.find(s=>s.id===betaSession.id).latestRun.pid,pluginRun.pid);
   await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},hotScript);
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByText('插件已热更新，后续读取使用新版本',{exact:true}).waitFor();
