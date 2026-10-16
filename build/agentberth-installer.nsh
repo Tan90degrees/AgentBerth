@@ -61,6 +61,7 @@ Function ${BerthPrefix}BerthLog
   ClearErrors
   FileOpen $BerthLogHandle "$BerthLogPath" a
   ${IfNot} ${Errors}
+    FileSeek $BerthLogHandle 0 END
     FileWriteUTF16LE $BerthLogHandle "[$0 ms] $BerthMessage$\r$\n"
     FileClose $BerthLogHandle
   ${EndIf}
@@ -94,6 +95,11 @@ FunctionEnd
     ; remains byte-based; Int64 arithmetic avoids overflow on large payloads.
     Pop $R8
     Pop $R9
+    ; The GUI abort callback and extraction share NSIS registers. Pause the
+    ; worker while confirmation is open so cancellation logging cannot race.
+    ${DoWhile} $BerthAbortDecision == "1"
+      Sleep 20
+    ${Loop}
     Push $0
     ${If} $R9 > 0
       System::Int64Op $R8 * 100
