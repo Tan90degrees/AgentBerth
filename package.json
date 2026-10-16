@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "description": "A project-oriented workspace for persistent agent terminals",
@@ -17,7 +17,7 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:scripts && node scripts/test.mjs",
-    "test:scripts": "node --test tests/setup.test.mjs tests/release.test.mjs",
+    "test:scripts": "node --test tests/setup.test.mjs tests/release.test.mjs tests/installer.test.mjs",
     "test:desktop": "npm run build && node scripts/smoke.mjs",
     "test:packaged": "node scripts/smoke.mjs --packaged",
     "check": "npm run typecheck && npm test && npm run build",
@@ -54,6 +54,7 @@
   "build": {
     "appId": "dev.agentberth.desktop",
     "productName": "AgentBerth",
+    "afterSign": "scripts/installer-payload.mjs",
     "directories": {
       "output": "release"
     },
@@ -77,6 +78,7 @@
       "icon": "assets/app.ico"
     },
     "nsis": {
+      "include": "build/agentberth-installer.nsh",
       "artifactName": "AgentBerth-${version}-windows-${arch}-setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
