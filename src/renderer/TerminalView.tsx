@@ -2,17 +2,21 @@ import { memo, useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { attachTerminalRenderer } from './terminal-renderer';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import type { Attachment, TerminalEvent, WindowsPty } from '../shared/protocol';
 import { inputChunks, terminalDimensions } from '../shared/desktop';
 import { useTerminalActions } from './TerminalActions';
 import { writeTerminalEvent } from '../shared/terminal-stream';
+import { terminalThemes } from '../shared/appearance';
+import { useAppearance } from './appearance';
 import { ResizeQueue } from './terminal-resize';
 
 const options = {
-  theme: { background: '#0c1017', foreground: '#d5dce8', cursor: '#65dfc0', selectionBackground: '#284446', black: '#19202d', red: '#ee8094', green: '#76d6a5', yellow: '#e3c688', blue: '#82acff', magenta: '#c4a2ef', cyan: '#78d8e5', white: '#d5dce8' },
-  fontFamily: 'Cascadia Code, Consolas, Menlo, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
+  fontFamily: 'Cascadia Mono, Cascadia Code, Consolas, DejaVu Sans Mono, Liberation Mono, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
   overviewRuler: { width: 14 },
+  minimumContrastRatio: 4.5, customGlyphs: true, rescaleOverlappingGlyphs: true, letterSpacing: 0,
   allowProposedApi: true, // Required by xterm's Unicode version provider.
 };
 
@@ -36,12 +40,15 @@ function fitTerminal(terminal: Terminal, fit: FitAddon) {
 
 export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, windowsPty, orderedResize = true, onError }: { sessionId: string; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
+  const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
+  useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
   const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty);
   useEffect(() => {
-    const terminal = new Terminal({ ...options, fontSize, windowsPty });
+    const terminal = new Terminal({ ...options, theme: palette.current, fontSize, windowsPty });
+    instance.current=terminal;
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -94,6 +101,8 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       if (!orderedResize || !running || !runId) fitTerminal(terminal, fit);
       if (running && runId) resizeQueue?.request(dimensions);
     };
+    const disposeRenderer = attachTerminalRenderer(terminal, host.current!, resize, () => new WebglAddon());
+    host.current!.dataset.cols = String(terminal.cols); host.current!.dataset.rows = String(terminal.rows);
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     // Sample while dragging, rather than waiting indefinitely for the final
     // ResizeObserver event. A slow RPC keeps only the newest requested size.
@@ -101,6 +110,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       resizeTimer ??= setTimeout(() => { resizeTimer = undefined; resize(); }, 50);
     });
     observer.observe(host.current!);
+    window.addEventListener('resize', resize);
     void window.berth.rpc<Attachment>('attach', { sessionId }).then(attachment => {
       if (disposed) return;
       runId = attachment.run?.id ?? null;
@@ -116,7 +126,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
         setReady(running);
         for (const event of pending) apply(event);
         pending = []; pendingBytes = 0;
-        if (!attachment.run) terminal.writeln('\x1b[38;2;119;137;159m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');
+        if (!attachment.run) terminal.writeln('\x1b[2m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');
         resize();
         const element = document.activeElement;
         if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
@@ -124,7 +134,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
     void document.fonts.ready.then(() => { if (!disposed) resize(); });
     return () => {
-      disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); sizeChanged.dispose(); input.dispose(); off(); unbind(); terminal.dispose();
+      instance.current=null;disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); window.removeEventListener('resize', resize); disposeRenderer(); sizeChanged.dispose(); input.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
   }, [sessionId, fontSize, windowsPty, orderedResize, bind, setReady]);
@@ -133,18 +143,24 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
 
 export function OutputView({ text, fontSize = 14, windowsPty, onError }: { text: string; fontSize?: number; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
+  const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
+  useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
   const errorHandler = useRef(onError); errorHandler.current = onError;
   const { bind, setReady, controls } = useTerminalActions(onError, true, !!windowsPty);
   useEffect(() => {
-    const terminal = new Terminal({ ...options, fontSize, windowsPty, disableStdin: true, cursorBlink: false });
+    const terminal = new Terminal({ ...options, theme: palette.current, fontSize, windowsPty, disableStdin: true, cursorBlink: false });
+    instance.current=terminal;
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const fit = new FitAddon(); terminal.loadAddon(fit); loadWebLinks(terminal, error => errorHandler.current(error)); terminal.open(host.current!);
     const unbind = bind(terminal, () => false);
     let disposed = false, resizeTimer: ReturnType<typeof setTimeout>;
     const resize = () => { if (!disposed) fitTerminal(terminal, fit); };
+    const disposeRenderer = attachTerminalRenderer(terminal, host.current!, resize, () => new WebglAddon());
+    const sizeChanged = terminal.onResize(({cols,rows}) => { if(host.current){host.current.dataset.cols=String(cols);host.current.dataset.rows=String(rows);} });
+    host.current!.dataset.cols=String(terminal.cols);host.current!.dataset.rows=String(terminal.rows);
     resize(); terminal.write(text, () => { if (!disposed) setReady(true); });
     const observer = new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); }); observer.observe(host.current!);
-    return () => { disposed = true; clearTimeout(resizeTimer); observer.disconnect(); unbind(); terminal.dispose(); };
+    return () => { instance.current=null;disposed = true; clearTimeout(resizeTimer); observer.disconnect(); disposeRenderer(); sizeChanged.dispose(); unbind(); terminal.dispose(); };
   }, [text, fontSize, windowsPty, bind, setReady]);
   return <div className="terminal-surface">{controls}<div className="terminal-host output-host"><div className="terminal-mount" ref={host} /></div></div>;
 }

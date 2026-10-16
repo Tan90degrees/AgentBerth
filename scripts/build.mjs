@@ -14,6 +14,8 @@ export async function buildBackend() {
       sourcemap: true,
     });
   }
+  // Exported developer tooling must work outside this repository without npm install.
+  await build({ entryPoints: ['src/plugin-check/index.ts'], outfile: 'dist/check-plugin.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', minify: true });
 }
 
 if (process.argv[1]?.endsWith('/build.mjs') || process.argv[1]?.endsWith('\\build.mjs')) {

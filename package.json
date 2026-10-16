@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "A project-oriented workspace for persistent agent terminals",
@@ -28,6 +28,7 @@
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/addon-unicode11": "0.9.0",
     "@xterm/addon-web-links": "0.12.0",
+    "@xterm/addon-webgl": "0.19.0",
     "@xterm/headless": "6.0.0",
     "@xterm/xterm": "6.0.0",
     "node-pty": "1.1.0",
@@ -83,6 +84,10 @@
       "uninstallerIcon": "assets/app.ico"
     },
     "extraResources": [
+      {
+        "from": "dist/check-plugin.cjs",
+        "to": "plugin-kit/check-plugin.cjs"
+      },
       {
         "from": "docs",
         "to": "docs"

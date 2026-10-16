@@ -5,5 +5,5 @@
   "command": "my-agent",
   "runtime": "node",
   "entry": "plugin.cjs",
-  "capabilities": { "history": true, "resume": true }
+  "capabilities": { "history": true, "resume": true, "list": true }
 }

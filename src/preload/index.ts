@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopApi, ServerEvent } from '../shared/protocol';
 
 const api: DesktopApi = {
+  setAppearance: mode => ipcRenderer.invoke('berth:appearance', mode),
   appInfo: () => ipcRenderer.invoke('berth:appInfo'),
   openDataDirectory: () => ipcRenderer.invoke('berth:dataDirectory'),
   rpc: (method, params = {}) => ipcRenderer.invoke('berth:rpc', method, params),

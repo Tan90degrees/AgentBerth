@@ -2,9 +2,9 @@ import { useRef, useState } from 'react';
 import type { AgentDefinition, AgentDefinitionConfig } from '../shared/protocol';
 import { Dialog } from './Dialog';
 
-const capabilities = (agent: AgentDefinitionConfig) => [agent.plugin?.history && '原生对话历史', (agent.plugin?.resume || agent.resumeCommand) && '会话恢复'].filter(Boolean).join(' · ') || '终端会话';
-export function AgentManager({ agents, defaultAgent, used, disabled, busy, error, onSave, onDelete, onError }: {
-  agents: AgentDefinition[]; defaultAgent: string; used: string[]; disabled: boolean; busy: boolean; error: string; onError: (value: string) => void;
+const capabilities = (agent: AgentDefinitionConfig) => [agent.plugin?.list && '会话列表', agent.plugin?.history && '原生对话历史', (agent.plugin?.resume || agent.resumeCommand) && '会话恢复'].filter(Boolean).join(' · ') || '终端会话';
+export function AgentManager({ agents, defaultAgent, used, disabled, busy, hotUpdates, error, onSave, onDelete, onError }: {
+  hotUpdates: boolean; agents: AgentDefinition[]; defaultAgent: string; used: string[]; disabled: boolean; busy: boolean; error: string; onError: (value: string) => void;
   onSave: (value: AgentDefinitionConfig, id?: string) => Promise<AgentDefinition | undefined>; onDelete: (id: string) => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState<{ config: AgentDefinitionConfig; id?: string; imported: boolean } | null>(null);
@@ -13,7 +13,24 @@ export function AgentManager({ agents, defaultAgent, used, disabled, busy, error
   const [notice, setNotice] = useState('');
   const [kitFolder, setKitFolder] = useState('');
   const [checks, setChecks] = useState<Record<string, string>>({});
+  const [updateErrors, setUpdateErrors] = useState<Record<string, string>>({});
   const [localError, setLocalError] = useState('');
+  const update = (agent: AgentDefinition) => task(async () => {
+    setUpdateErrors(previous => ({ ...previous, [agent.id]: '' }));
+    try {
+      const value = await window.berth.importAgentPlugin();
+      if (!value) return;
+      const identity = agent.sourceId ?? agent.plugin?.sourceId;
+      if (identity && identity !== (value.sourceId ?? value.plugin?.sourceId)) throw new Error('插件 ID 与当前类型不一致，请选择同一类型的更新文件');
+      setChecks(previous => ({ ...previous, [agent.id]: '正在校验更新…' }));
+      const result = await window.berth.rpc<AgentDefinition>('updateAgent', { ...value, name: agent.name, agentId: agent.id });
+      setChecks(previous => ({ ...previous, [agent.id]: result.plugin ? '插件已热更新，后续读取使用新版本' : '配置已热更新' }));
+      setNotice('已更新 ' + agent.name + '，运行中的终端保持不变');
+    } catch (reason) {
+      setUpdateErrors(previous => ({ ...previous, [agent.id]: reason instanceof Error ? reason.message : String(reason) }));
+      setChecks(previous => ({ ...previous, [agent.id]: '更新失败，继续使用旧版本' }));
+    }
+  });
   const opener = useRef<HTMLElement | null>(null);
   const open = (config: AgentDefinitionConfig, id?: string, imported = false) => {
     const { name, command, resumeCommand, plugin, sourceId } = config;
@@ -43,9 +60,9 @@ export function AgentManager({ agents, defaultAgent, used, disabled, busy, error
       open({ ...value, name: previous?.name ?? value.name }, previous?.id, true);
     });
   }}>导入 Agent</button></div></div>
-    <ul className="agent-definitions">{agents.map(agent => <li key={agent.id}><div><strong>{agent.name}</strong>{defaultAgent === agent.id && <span className="badge">默认</span>}<code title={agent.command}>{agent.command}</code><small>{capabilities(agent)}</small>{checks[agent.id] && <small className="plugin-check" role="status">{checks[agent.id]}</small>}</div><div>{agent.plugin && <button className="subtle" aria-label={`检查插件 ${agent.name}`} disabled={blocked} onClick={() => void check(agent)}>检查插件</button>}<button className="subtle" aria-label={`编辑 Agent ${agent.name}`} disabled={blocked} onClick={() => { opener.current = document.activeElement as HTMLElement; open(agent, agent.id); }}>重命名</button><button className="subtle danger-text" aria-label={`删除 Agent ${agent.name}`} disabled={blocked || used.includes(agent.id) || defaultAgent === agent.id} title={defaultAgent === agent.id ? '先更换默认 Agent' : used.includes(agent.id) ? '仍被会话使用，请先修改或删除会话' : '删除此类型'} onClick={() => void onDelete(agent.id)}>删除</button></div></li>)}</ul>
+    <ul className="agent-definitions">{agents.map(agent => <li key={agent.id}><div><strong>{agent.name}</strong>{defaultAgent === agent.id && <span className="badge">默认</span>}<code title={agent.command}>{agent.command}</code><small>{capabilities(agent)}</small>{updateErrors[agent.id] && <small className="danger-text" role="alert">{updateErrors[agent.id]}</small>}{checks[agent.id] && <small className={updateErrors[agent.id] ? "plugin-check plugin-check-failed" : "plugin-check"} role="status">{checks[agent.id]}</small>}</div><div><button className="subtle" aria-label={`更新插件 ${agent.name}`} title={hotUpdates ? "选择更新文件，校验成功后立即生效" : "更新后台后支持插件热更新"} disabled={blocked || !hotUpdates} onClick={() => void update(agent)}>更新插件</button>{agent.plugin && <button className="subtle" aria-label={`检查插件 ${agent.name}`} disabled={blocked} onClick={() => void check(agent)}>检查插件</button>}<button className="subtle" aria-label={`编辑 Agent ${agent.name}`} disabled={blocked} onClick={() => { opener.current = document.activeElement as HTMLElement; open(agent, agent.id); }}>重命名</button><button className="subtle danger-text" aria-label={`删除 Agent ${agent.name}`} disabled={blocked || used.includes(agent.id) || defaultAgent === agent.id} title={defaultAgent === agent.id ? '先更换默认 Agent' : used.includes(agent.id) ? '仍被会话使用，请先修改或删除会话' : '删除此类型'} onClick={() => void onDelete(agent.id)}>删除</button></div></li>)}</ul>
     {!agents.length && <p className="form-hint">还没有自定义 Agent。导入一个文件即可添加；也可以让编程 Agent 按下方指南为你制作。</p>}
-    <p className="form-hint">支持 .json 配置和 .cjs / .mjs / .js 自描述脚本，无需另装 Node。重新导入同一类型可更新配置，并保留名称和会话关联。脚本会在本机运行，请选择可信文件。</p><div className="plugin-development"><strong>让 Agent 帮你制作导入文件</strong><p>复制开发指令交给编程 Agent；需要示例时可导出包含完整指南的开发套件。</p><div><button className="subtle" disabled={working || busy} onClick={() => void task(async () => { const folder = await window.berth.exportPluginKit(); if (folder) { setKitFolder(folder); await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(folder)); setNotice('开发套件已导出，给 Agent 的开发指令已复制'); } })}>导出开发套件</button><button className="subtle" disabled={working || busy} onClick={() => void task(async () => { await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(kitFolder || undefined)); setNotice('完整开发指令已复制，可直接粘贴给 Agent'); })}>复制 Agent 开发指令</button></div>{kitFolder && <code>{kitFolder}</code>}{notice && <p role="status">{notice}</p>}</div>
+    <p className="form-hint">支持 .json 配置和 .cjs / .mjs / .js 自描述脚本，无需另装 Node。点击“更新插件”选择同一类型的新文件，校验后立即生效，无需停止终端或重启工作台。失败保留旧版；名称和会话关联保留。脚本会在本机运行，请选择可信文件。</p><div className="plugin-development"><strong>让 Agent 帮你制作导入文件</strong><p>复制开发指令交给编程 Agent；需要示例时可导出包含完整指南的开发套件。</p><div><button className="subtle" disabled={working || busy} onClick={() => void task(async () => { const folder = await window.berth.exportPluginKit(); if (folder) { setKitFolder(folder); await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(folder)); setNotice('开发套件已导出，给 Agent 的开发指令已复制'); } })}>导出开发套件</button><button className="subtle" disabled={working || busy} onClick={() => void task(async () => { await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(kitFolder || undefined)); setNotice('完整开发指令已复制，可直接粘贴给 Agent'); })}>复制 Agent 开发指令</button></div>{kitFolder && <code>{kitFolder}</code>}{notice && <p role="status">{notice}</p>}</div>
     {editing && <Dialog title={editing.imported ? editing.id ? '更新 Agent 类型' : '添加 Agent 类型' : '重命名 Agent 类型'} dirty={name !== editing.config.name} busy={busy || working} error={localError || error} returnFocus={opener.current} onClose={() => { setEditing(null); onError(''); }}><form onSubmit={async event => {
       event.preventDefault(); setLocalError(''); onError(''); setWorking(true);
       try {

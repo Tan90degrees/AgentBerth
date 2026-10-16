@@ -14,7 +14,7 @@ export const pluginManifestSchema = agentConfigFileSchema.extend({
   entry: relativeFile,
   args: z.array(z.string().max(4096).refine(value => !/[\r\n\x00]/.test(value))).max(32).default([]),
   files: z.array(relativeFile).max(63).default([]),
-  capabilities: z.object({ history: z.boolean().default(false), resume: z.boolean().default(false) }).strict(),
+  capabilities: z.object({ history: z.boolean().default(false), resume: z.boolean().default(false), list: z.boolean().optional() }).strict(),
 }).strict();
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;
 
@@ -25,5 +25,5 @@ export const pluginDescriptionSchema = z.object({
   name: agentDefinitionSchema.shape.name,
   command: agentDefinitionSchema.shape.command.optional(),
   resumeCommand: agentDefinitionSchema.shape.resumeCommand.optional(),
-  capabilities: z.object({ history: z.boolean(), resume: z.boolean() }).strict(),
+  capabilities: z.object({ history: z.boolean(), resume: z.boolean(), list: z.boolean().optional() }).strict(),
 }).strict();

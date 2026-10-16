@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { AgentDefinition, History, Session } from '../shared/protocol';
+import { nativeSessionIdSchema, type AgentDefinition, type History, type Session, type HistoryQuery, type NativeHistoryPage } from '../shared/protocol';
 import { matchesProject } from './history';
 import { pluginDescriptionSchema } from '../shared/plugin-manifest';
 
@@ -16,19 +16,23 @@ const historyResult = z.object({
   warnings: z.array(z.string().max(1000)).max(20).default([]),
 }).strict();
 const resumeResult = z.object({ version: z.literal(1), command: z.string().max(4096).refine(value => !!value.trim() && !/[\r\n\x00]/.test(value)) }).strict();
+const listResult = z.object({
+  version: z.literal(1), items: z.array(z.object({ cwd: z.string().max(4096), nativeSessionId: nativeSessionIdSchema, title: z.string().min(1).max(200), updatedAt: z.string().max(100).refine(value => Number.isFinite(Date.parse(value))).nullable().default(null), path: z.string().max(4096).nullable().default(null) }).strict()).max(50),
+  nextCursor: z.string().min(1).max(2048).nullable(), total: z.number().int().min(0).optional(), warnings: z.array(z.string().max(1000)).max(20).default([]),
+}).strict();
 
 export class AgentPlugins {
   private active = new Map<AbortController, Promise<unknown>>();
   private closing = false;
   constructor(private timeout = 10000) {}
 
-  private call(agent: AgentDefinition, method: 'history' | 'resume' | 'describe', session: Session | null, projectPath: string, file: string | null): Promise<unknown> {
+  private call(agent: AgentDefinition, method: 'history' | 'resume' | 'describe' | 'list', session: Session | null, projectPath: string, file: string | null, pagination?: HistoryQuery): Promise<unknown> {
     if (this.closing) return Promise.reject(new Error('后台正在退出'));
     if (!agent.plugin || (method !== 'describe' && !agent.plugin[method])) return Promise.reject(new Error('此 Agent 未启用相应插件能力'));
     if (!path.isAbsolute(agent.plugin.executable)) return Promise.reject(new Error('插件程序须使用完整路径'));
     if (this.active.size >= 4) return Promise.reject(new Error('插件正在处理其他请求，请稍后重试'));
     const controller = new AbortController();
-    const request = method === 'describe' ? { version: 1, method, agent: { id: agent.id, name: agent.name } } : { version: 1, method, agent: { id: agent.id, name: agent.name }, projectPath, session: { id: session!.id, title: session!.title, command: session!.command, nativeSessionId: session!.nativeSessionId }, path: file };
+    const request = method === 'describe' ? { version: 1, method, agent: { id: agent.id, name: agent.name } } : { version: 1, method, agent: { id: agent.id, name: agent.name }, projectPath, session: { id: session!.id, title: session!.title, command: session!.command, nativeSessionId: session!.nativeSessionId }, path: file, ...(method === 'list' ? { pagination: { cursor: pagination!.cursor, limit: pagination!.limit, query: pagination!.query } } : {}) };
     const task = this.run(agent.plugin, request, projectPath, controller.signal).finally(() => this.active.delete(controller));
     this.active.set(controller, task);
     return task;
@@ -80,8 +84,24 @@ export class AgentPlugins {
   }
   async check(agent: AgentDefinition): Promise<{ name: string; message: string }> {
     const result = await this.describe(agent);
-    if ((agent.plugin!.history && !result.capabilities.history) || (agent.plugin!.resume && !result.capabilities.resume)) throw new Error('插件实际支持的能力与声明不一致，请重新导入修正后的插件');
+    const identity = agent.sourceId ?? agent.plugin!.sourceId;
+    if ((agent.sourceId && agent.plugin!.sourceId && agent.sourceId !== agent.plugin!.sourceId) || (identity && result.id && identity !== result.id)) throw new Error('插件 ID 与配置不一致，请让开发 Agent 保持清单与 describe 的 ID 相同');
+    if ((agent.plugin!.history && !result.capabilities.history) || (agent.plugin!.resume && !result.capabilities.resume) || (agent.plugin!.list && !result.capabilities.list)) throw new Error('插件实际支持的能力与声明不一致，请重新导入修正后的插件');
     return { name: result.name, message: '插件连接正常' };
+  }
+  async list(agent: AgentDefinition, session: Session, projectPath: string, pagination: HistoryQuery): Promise<NativeHistoryPage> {
+    const parsed = listResult.safeParse(await this.call(agent, 'list', session, projectPath, null, pagination));
+    if (!parsed.success) throw new Error('插件会话列表格式无效，请检查 items、nextCursor 和会话元数据');
+    const result = parsed.data;
+    if (result.items.length > pagination.limit || (result.nextCursor !== null && (!result.items.length || result.nextCursor === pagination.cursor))) throw new Error('插件分页无效：请遵守 limit，且下一页游标必须向前推进');
+    const ids = new Set<string>();
+    for (const item of result.items) {
+      if (ids.has(item.nativeSessionId)) throw new Error('插件同一页不能返回重复会话 ID');
+      ids.add(item.nativeSessionId);
+      if (!await matchesProject(item.cwd, projectPath)) throw new Error('插件会话列表包含其他项目的记录');
+      if (item.path && !path.isAbsolute(item.path)) throw new Error('插件会话路径须使用完整路径');
+    }
+    return { items: result.items.map(({ cwd: _cwd, ...item }) => item), nextCursor: result.nextCursor, ...(result.total === undefined ? {} : { total: result.total }), warnings: result.warnings };
   }
   async history(agent: AgentDefinition, session: Session, projectPath: string, file: string | null): Promise<History> {
     let canonical: string | null = null;
