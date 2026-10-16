@@ -24,5 +24,19 @@ async function verify(root, manifestFile) {
   }
   return { files: seen.size, bytes };
 }
-module.exports = { verify };
-if (require.main === module) verify(process.argv[2], process.argv[3]).then(result => console.log(`VERIFIED: ${result.files} files, ${result.bytes} bytes`)).catch(error => { console.error(error.message); process.exitCode = 1; });
+async function copyPayload(root, manifestFile, target) {
+  await verify(root, manifestFile);
+  await fs.promises.cp(root, target, { recursive: true, force: true });
+  return verify(target, manifestFile);
+}
+module.exports = { verify, copyPayload };
+if (require.main === module) {
+  const [root, manifest, option, target] = process.argv.slice(2);
+  const run = async () => {
+    if (option !== undefined && (option !== '--copy-to' || !target)) throw new Error('Invalid installer copy arguments');
+    const result = option ? await copyPayload(root, manifest, target) : await verify(root, manifest);
+    console.log(`${option ? 'INSTALLED' : 'VERIFIED'}: ${result.files} files, ${result.bytes} bytes`);
+  };
+  run().catch(error => { console.error(error.message); process.exitCode = 1; });
+}
+

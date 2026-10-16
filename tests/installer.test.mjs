@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { electronExecutable } from '../scripts/electron-runtime.mjs';
 import { inventory } from '../scripts/installer-payload.mjs';
-const { verify } = createRequire(import.meta.url)('../build/verify-payload.cjs');
+const { verify, copyPayload } = createRequire(import.meta.url)('../build/verify-payload.cjs');
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'berth installer '));
@@ -50,4 +50,17 @@ test('staged Electron verifies physical ASAR bytes instead of its virtual filesy
   const child = spawnSync(electronExecutable(), [fileURLToPath(new URL('../build/verify-payload.cjs', import.meta.url)), payload, manifest], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', timeout: 10000 });
   assert.equal(child.status, 0, String(child.error ?? child.stderr));
   assert.match(child.stdout, /VERIFIED: 4 files/);
+});
+
+test('payload copy preserves Unicode paths, physical archive bytes and the full inventory', async t => {
+  const { payload, manifest } = await fixture(t);
+  const target = path.join(path.dirname(payload), 'installed 中文 with spaces');
+  const result = await copyPayload(payload, manifest, target);
+  assert.deepEqual(await verify(target, manifest), result);
+  assert.equal(await readFile(path.join(target, 'resources', 'app.asar'), 'utf8'), 'physical archive fixture');
+  const installed = path.join(path.dirname(payload), 'embedded runtime 安装');
+  const child = spawnSync(electronExecutable(), [fileURLToPath(new URL('../build/verify-payload.cjs', import.meta.url)), payload, manifest, '--copy-to', installed], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 0, String(child.error ?? child.stderr));
+  assert.match(child.stdout, /INSTALLED: 4 files/);
+  assert.deepEqual(await verify(installed, manifest), result);
 });
