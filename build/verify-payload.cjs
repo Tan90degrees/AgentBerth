@@ -1,4 +1,6 @@
 // Runs with the staged Electron's embedded Node before changing the old install.
+// Hash the physical app.asar archive; Electron otherwise exposes it as a directory.
+process.noAsar = true;
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');

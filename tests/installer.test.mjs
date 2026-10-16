@@ -4,6 +4,9 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { electronExecutable } from '../scripts/electron-runtime.mjs';
 import { inventory } from '../scripts/installer-payload.mjs';
 const { verify } = createRequire(import.meta.url)('../build/verify-payload.cjs');
 
@@ -14,6 +17,7 @@ async function fixture(t) {
   await writeFile(path.join(payload, 'AgentBerth.exe'), 'fixture-executable');
   await writeFile(path.join(payload, 'resources', '中文🙂.txt'), 'payload with Unicode');
   await writeFile(path.join(payload, 'empty'), '');
+  await writeFile(path.join(payload, 'resources', 'app.asar'), 'physical archive fixture');
   const manifest = path.join(root, 'inventory.json');
   await writeFile(manifest, JSON.stringify(await inventory(payload)));
   return { payload, manifest };
@@ -21,7 +25,7 @@ async function fixture(t) {
 test('installer inventory verifies every staged file including empty and Unicode paths', async t => {
   const { payload, manifest } = await fixture(t);
   const result = await verify(payload, manifest);
-  assert.equal(result.files, 3); assert.ok(result.bytes > 0);
+  assert.equal(result.files, 4); assert.ok(result.bytes > 0);
 });
 test('incomplete or corrupted staging fails before an old install can be replaced', async t => {
   const { payload, manifest } = await fixture(t);
@@ -39,4 +43,11 @@ test('installer verifier rejects traversal and case-folded duplicate inventory e
   }
   await writeFile(manifest, JSON.stringify({ version: 1, files: [original.files[0], { ...original.files[0], path: original.files[0].path.toUpperCase() }] }));
   await assert.rejects(verify(payload, manifest), /Duplicate inventory path/);
+});
+
+test('staged Electron verifies physical ASAR bytes instead of its virtual filesystem', async t => {
+  const { payload, manifest } = await fixture(t);
+  const child = spawnSync(electronExecutable(), [fileURLToPath(new URL('../build/verify-payload.cjs', import.meta.url)), payload, manifest], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 0, String(child.error ?? child.stderr));
+  assert.match(child.stdout, /VERIFIED: 4 files/);
 });
