@@ -24,6 +24,11 @@ export async function inventory(root) {
 // final executable, not the pre-icon/pre-version binary.
 export default async function afterSign(context) {
   if (context.electronPlatformName !== 'win32') return;
+  // 7za 24.09 auto-selects ARM64/BCJ2 filters that the pinned Nsis7z
+  // decoder can silently skip, including foreign-arch prebuilds in an x64 app.
+  // Keep every file verifiable with its supported single-stream BCJ filter.
+  // https://github.com/electron-userland/electron-builder/issues/9983
+  process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ';
   if (context.arch !== 1) throw new Error('Installer staging currently supports only Windows x64');
   const result = await inventory(context.appOutDir);
   const directory = path.join(context.packager.projectDir, 'dist');
