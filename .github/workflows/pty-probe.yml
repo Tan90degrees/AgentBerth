@@ -5,13 +5,9 @@ on:
 permissions:
   contents: read
 jobs:
-  probe:
+  packaged:
     runs-on: windows-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [system, bundled]
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,12 +15,14 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: node scripts/probe-windows-pty.mjs
-        timeout-minutes: 3
-      - run: npm run test:desktop
+      - run: npm run build
+      - run: npx electron-builder --win --dir --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: npm run test:packaged
         timeout-minutes: 5
         env:
-          BERTH_USE_BUNDLED: ${{ matrix.backend == 'bundled' && '1' || '0' }}
+          BERTH_USE_BUNDLED: '0'
           BERTH_PTY_TRACE: ${{ github.workspace }}/pty-trace.log
           DEBUG: pw:browser
       - run: Get-Content pty-trace.log
@@ -32,7 +30,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pty-diagnosis-${{ matrix.backend }}
+          name: pty-diagnosis-packaged
           path: |
             pty-trace.log
             test-results/*.png
