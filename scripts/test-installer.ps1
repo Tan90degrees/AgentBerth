@@ -70,9 +70,9 @@ function Logs {
   }
 }
 function Has-Log([string]$text) { return @((Logs) | Where-Object { $_.Text.Contains($text) }).Count -gt 0 }
-function Start-Setup([bool]$silent = $false) {
+function Start-Setup([bool]$silent = $false, [string]$scope = '/currentuser') {
   $script:caseStart = [DateTime]::UtcNow
-  $arguments = '/currentuser ' + $(if ($silent) { '/S ' } else { '' }) + '/D=' + $target
+  $arguments = $scope + ' ' + $(if ($silent) { '/S ' } else { '' }) + '/D=' + $target
   $process=Start-Process -FilePath $installer -ArgumentList $arguments -PassThru
   [void]$process.Handle
   return $process
@@ -197,6 +197,19 @@ try {
   $active = Start-Process $oldUninstaller -ArgumentList ("/S _?=" + $target) -PassThru
   Wait-Exit $active 0
   Assert (!(Test-Path $exe)) 'Uninstall left the executable'
+  Write-Host 'Installer smoke: all-users install and uninstall'
+  $active = Start-Setup $true '/allusers'
+  Wait-Exit $active 0
+  Verify-Installed
+  $registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
+  try {
+    $key = $registry.OpenSubKey('Software\cb3a0d82-5491-53a3-b6c8-37e7324e8dd4')
+    Assert ($null -ne $key) 'All-users installation registry entry is missing'
+    try { Assert ($key.GetValue('InstallLocation') -eq $target) 'All-users install used the wrong directory' } finally { $key.Dispose() }
+  } finally { $registry.Dispose() }
+  $active = Start-Process $oldUninstaller -ArgumentList ("/S /allusers _?=" + $target) -PassThru
+  Wait-Exit $active 0
+  Assert (!(Test-Path $exe)) 'All-users uninstall left the executable'
   Write-Host 'Installer smoke passed: real byte percentage, persistent logs, safe fresh/upgrade cancel, decline/resume, bounded upgrade and running-app protection'
 } catch {
   foreach($window in [SetupUi]::Dialogs()){ try{ [SetupUi]::Capture($window,(Join-Path $result 'failure.png')) }catch{} }

@@ -69,17 +69,17 @@ jobs:
         timeout-minutes: 10
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Test installer progress, cancellation and upgrade
+        id: installer-smoke
+        run: ./scripts/test-installer.ps1
+        shell: powershell
+        timeout-minutes: 6
       - name: Test packaged application with real terminal
         id: packaged-smoke
         run: npm run test:packaged
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
-      - name: Test installer progress, cancellation and upgrade
-        id: installer-smoke
-        run: ./scripts/test-installer.ps1
-        shell: powershell
-        timeout-minutes: 6
       - name: Write checksums and build information
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh

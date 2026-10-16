@@ -5,6 +5,7 @@
 ; Older uninstallers can contain unbounded PowerShell/CIM checks; never invoke
 ; those during an upgrade. Keep the same application ID, registry and data flags.
 !macro uninstallOldVersion ROOT_KEY
+  Call BerthEnsurePrepared
   ClearErrors
   StrCpy $R0 0
   !insertmacro readReg $installationDir "${ROOT_KEY}" "${INSTALL_REGISTRY_KEY}" InstallLocation

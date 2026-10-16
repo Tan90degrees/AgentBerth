@@ -154,6 +154,13 @@ FunctionEnd
     !insertmacro BerthLog "COMMIT: 文件准备完成，正在替换文件和创建快捷方式 / Finishing installation"
     SetOutPath "$INSTDIR"
   FunctionEnd
+  Function BerthEnsurePrepared
+    ; The upstream assisted installer skips CHECK_APP_RUNNING in the elevated
+    ; UAC child. Stage there too, before either old-install cleanup can run.
+    ${If} $BerthStage != "commit"
+      !insertmacro customCheckAppRunning
+    ${EndIf}
+  FunctionEnd
   Function BerthOpenLog
     Exec '"$SYSDIR\notepad.exe" "$BerthLogPath"'
   FunctionEnd
