@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { release } from 'node:os';
 import { Terminal } from '@xterm/headless';
@@ -20,6 +20,7 @@ import { readHistory } from './history';
 import { terminateTree } from './processes';
 import { windowsPtyFor } from '../shared/desktop';
 
+const trace = (value: string) => { if (process.env.BERTH_PTY_TRACE) appendFileSync(process.env.BERTH_PTY_TRACE, `${Date.now()} ${value}\n`); };
 interface LiveTerminal {
   run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
@@ -257,7 +258,7 @@ export class DaemonServer {
         return new Promise<null>((resolve, reject) => live.terminal.write('', () => {
           if (live.closed) { reject(new Error('终端已结束，请重新启动')); return; }
           try {
-            live.pty.resize(cols, rows); live.terminal.resize(cols, rows);
+            trace('resize before '+live.pty.pid); live.pty.resize(cols, rows); trace('resize after '+live.pty.pid); live.terminal.resize(cols, rows);
             live.committedSeq = seq;
             this.broadcast({ event: 'resize', data: { sessionId: live.run.sessionId, runId: live.run.id, seq, cols, rows } });
             resolve(null);
@@ -396,7 +397,7 @@ export class DaemonServer {
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
     let child: pty.IPty;
-    try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) }); }
+    try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file), ...(process.env.BERTH_USE_BUNDLED === '1' ? { useConptyDll: true } : {}) }); }
     catch (error) {
       terminal.dispose();
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
@@ -459,15 +460,18 @@ export class DaemonServer {
     return { run: null, snapshot: '', seq: 0, cols: 100, rows: 30 };
   }
   private async finish(sessionId: string, live: LiveTerminal, exitCode: number): Promise<void> {
+    trace('finish '+live.pty.pid+' code='+exitCode);
     if (live.closed) return;
     live.closed = true;
     // taskkill ends the shell tree, but node-pty's ConPTY output worker and native
     // handles still require disposal. Without it a stopped terminal keeps the
     // daemon (and the Windows test process) alive indefinitely.
     if (process.platform === 'win32') {
-      try { live.pty.kill(); } catch (error) { this.logError(error); }
+      try { trace('kill before '+live.pty.pid); live.pty.kill(); trace('kill after '+live.pty.pid); } catch (error) { this.logError(error); }
     }
+    trace('screen before '+live.pty.pid);
     const screen = await this.screen(live, !!live.run.recordOutput);
+    trace('screen after '+live.pty.pid);
     this.store.finish(live.run.id, live.stopping ? 'stopped' : 'exited', exitCode, null, screen.snapshot, screen.seq, screen.cols, screen.rows);
     if (this.live.get(sessionId) === live) this.live.delete(sessionId);
     live.terminal.dispose();
@@ -478,7 +482,7 @@ export class DaemonServer {
     const live = this.live.get(sessionId);
     if (!live || live.closed || live.stopping) return;
     live.stopping = true; this.store.stopping(live.run.id); this.changed();
-    try { await terminateTree(live.pty, () => this.live.get(sessionId) === live && !live.closed); }
+    try { trace('taskkill before '+live.pty.pid); await terminateTree(live.pty, () => this.live.get(sessionId) === live && !live.closed); trace('taskkill after '+live.pty.pid); }
     catch (error) {
       this.logError(error);
       if (!live.closed) { live.stopping = false; this.store.running(live.run.id); this.changed(); throw new Error('停止终端失败，请重试'); }

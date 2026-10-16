@@ -2,10 +2,13 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { cpSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url), execute = promisify(execFile);
 const mode=process.argv[2];
 if (!mode) {
+  const base=path.dirname(require.resolve('node-pty/package.json'));
+  cpSync(path.join(base,'prebuilds','win32-x64','conpty'),path.join(base,'build','Release','conpty'),{recursive:true});
   for (const backend of ['system','bundled']) for (let n=0;n<3;n++) {
     console.log('PROBE',backend,n);
     const child=spawn(require('electron'),[fileURLToPath(import.meta.url),backend],{env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},stdio:['ignore','pipe','pipe']});

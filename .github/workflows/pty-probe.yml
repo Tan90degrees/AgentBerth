@@ -7,7 +7,11 @@ permissions:
 jobs:
   probe:
     runs-on: windows-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [system, bundled]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,3 +21,18 @@ jobs:
       - run: npm ci
       - run: node scripts/probe-windows-pty.mjs
         timeout-minutes: 3
+      - run: npm run test:desktop
+        timeout-minutes: 5
+        env:
+          BERTH_USE_BUNDLED: ${{ matrix.backend == 'bundled' && '1' || '0' }}
+          BERTH_PTY_TRACE: ${{ github.workspace }}/pty-trace.log
+          DEBUG: pw:browser
+      - run: Get-Content pty-trace.log
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pty-diagnosis-${{ matrix.backend }}
+          path: |
+            pty-trace.log
+            test-results/*.png
