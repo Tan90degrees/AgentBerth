@@ -1,4 +1,4 @@
-!include "${PROJECT_DIR}/node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh"
+!include "${PROJECT_DIR}\node_modules\app-builder-lib\templates\nsis\include\installUtil.nsh"
 !macroundef uninstallOldVersion
 
 ; Reuse this release's generated uninstaller to remove the previous version.

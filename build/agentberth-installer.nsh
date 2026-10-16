@@ -36,10 +36,10 @@ Var BerthStartTick
 !macro customHeader
   ShowInstDetails show
   ShowUninstDetails show
-  !addincludedir "${PROJECT_DIR}/node_modules/app-builder-lib/templates/nsis"
+  !addincludedir "${PROJECT_DIR}\node_modules\app-builder-lib\templates\nsis"
   !cd "${BUILD_RESOURCES_DIR}"
   !ifndef BUILD_UNINSTALLER
-    !include "${PROJECT_DIR}/node_modules/app-builder-lib/templates/nsis/include/extractAppPackage.nsh"
+    !include "${PROJECT_DIR}\node_modules\app-builder-lib\templates\nsis\include\extractAppPackage.nsh"
   !endif
 
 Function ${BerthPrefix}BerthLog
@@ -136,8 +136,8 @@ FunctionEnd
     GetDlgItem $0 $HWNDPARENT 2
     EnableWindow $0 0
     !insertmacro BerthLog "VERIFY: 校验准备文件 / Verifying staged files"
-    File /oname=$PLUGINSDIR\verify-payload.cjs "${BUILD_RESOURCES_DIR}/verify-payload.cjs"
-    File /oname=$PLUGINSDIR\installer-payload.json "${PROJECT_DIR}/dist/installer-payload.json"
+    File /oname=$PLUGINSDIR\verify-payload.cjs "${BUILD_RESOURCES_DIR}\verify-payload.cjs"
+    File /oname=$PLUGINSDIR\installer-payload.json "${PROJECT_DIR}\dist\installer-payload.json"
     ReadEnvStr $BerthOldNodeMode ELECTRON_RUN_AS_NODE
     System::Call 'kernel32::SetEnvironmentVariable(w "ELECTRON_RUN_AS_NODE", w "1")'
     nsExec::ExecToStack /TIMEOUT=30000 '"$PLUGINSDIR\prepared\${APP_EXECUTABLE_FILENAME}" "$PLUGINSDIR\verify-payload.cjs" "$PLUGINSDIR\prepared" "$PLUGINSDIR\installer-payload.json"'
