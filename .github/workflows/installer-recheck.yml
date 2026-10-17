@@ -1,5 +1,7 @@
 name: Recheck existing Windows installer
 on:
+  push:
+    branches: [diagnostics/installer-recheck]
   workflow_dispatch:
     inputs:
       package_run_id:
@@ -19,14 +21,28 @@ jobs:
         with:
           name: AgentBerth-Windows-x64
           path: release
-          run-id: ${{ inputs.package_run_id }}
+          run-id: ${{ inputs.package_run_id || '38894889223' }}
           github-token: ${{ github.token }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: installer-payload-inventory
-          path: dist
-          run-id: ${{ inputs.package_run_id }}
-          github-token: ${{ github.token }}
+      # Legacy run predates the separate inventory artifact. Reconstruct its
+      # physical payload from the accompanying ZIP, excluding builder's later
+      # elevation helper, then assert the recorded embedded inventory totals.
+      - name: Recover legacy inventory from the accompanying ZIP
+        shell: python
+        run: |
+          import hashlib, json, pathlib, zipfile
+          archive = next(pathlib.Path('release').glob('*.zip'))
+          files = []
+          with zipfile.ZipFile(archive) as z:
+              for entry in z.infolist():
+                  if entry.is_dir() or entry.filename == 'resources/elevate.exe':
+                      continue
+                  with z.open(entry) as f:
+                      digest = hashlib.file_digest(f, 'sha256').hexdigest()
+                  files.append(dict(path=entry.filename, size=entry.file_size, sha256=digest))
+          assert len(files) == 372, len(files)
+          assert sum(f['size'] for f in files) == 440761047
+          pathlib.Path('dist').mkdir(exist_ok=True)
+          pathlib.Path('dist/installer-payload.json').write_text(json.dumps(dict(version=1, files=files)), encoding='utf-8')
       - name: Check package version and record provenance
         shell: pwsh
         run: |
