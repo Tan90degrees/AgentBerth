@@ -59,12 +59,21 @@ public class SetupUi {
 function Assert($condition, $message) { if (!$condition) { throw $message } }
 function Wait-Until([scriptblock]$check, [string]$message, [int]$seconds = 30) {
   $deadline = [DateTime]::UtcNow.AddSeconds($seconds)
-  do { if (& $check) { return }; Start-Sleep -Milliseconds 25 } while ([DateTime]::UtcNow -lt $deadline)
+  do {
+    if (& $check) { return }
+    foreach ($log in Logs) {
+      $failures = @($log.Text -split '\r?\n' | Where-Object { $_ -match '^\[\d+ ms\] FAILED:' })
+      if ($failures.Count -gt 0) { throw "Installer reported failure: $($failures[-1]); log: $($log.Path)" }
+    }
+    Start-Sleep -Milliseconds 25
+  } while ([DateTime]::UtcNow -lt $deadline)
   throw $message
 }
 function Logs {
   foreach ($file in Get-ChildItem (Join-Path $env:TEMP "AgentBerth-setup-$version-*.log") -ErrorAction SilentlyContinue) {
-    if ($file.LastWriteTimeUtc -ge $script:caseStart.AddSeconds(-1)) {
+    # Adjacent cases can start less than a second apart. Including older logs
+    # lets Drive-To mistake the previous install's stage for this one's.
+    if ($file.LastWriteTimeUtc -ge $script:caseStart) {
       try { [pscustomobject]@{ Path=$file.FullName; Text=[IO.File]::ReadAllText($file.FullName,[Text.Encoding]::Unicode) } } catch {}
     }
   }
@@ -75,6 +84,7 @@ function Start-Setup([bool]$silent = $false, [string]$scope = '/currentuser') {
   $arguments = $scope + ' ' + $(if ($silent) { '/S ' } else { '' }) + '/D=' + $target
   $process=Start-Process -FilePath $installer -ArgumentList $arguments -PassThru
   [void]$process.Handle
+  Write-Host "Started installer PID $($process.Id), case started $($script:caseStart.ToString('o'))"
   return $process
 }
 function Wait-Exit($process, [int]$expected, [int]$seconds = 90) {
