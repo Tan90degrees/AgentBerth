@@ -14,7 +14,7 @@ async function fixture(t) {
   await mkdir(directory); await mkdir(path.join(root, 'docs', 'releases'), { recursive: true });
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ version: '0.8.0' }));
   await writeFile(path.join(root, 'docs', 'releases', 'v0.8.0.md'), '# AgentBerth v0.8.0\n\n发布说明');
-  const info = { version: '0.8.0', commit: sha, ref: 'main', packagedSmoke: 'success', run: 'https://github.com/Tan90degrees/AgentBerth/actions/runs/1' };
+  const info = { version: '0.8.0', commit: sha, ref: 'main', packagedSmoke: 'success', installerSmoke: 'success', run: 'https://github.com/Tan90degrees/AgentBerth/actions/runs/1' };
   await writeFile(path.join(directory, 'build-info.json'), '\uFEFF' + JSON.stringify(info));
   let sums = '\uFEFF';
   for (const [name, data] of [['AgentBerth-0.8.0-windows-x64-setup.exe', 'installer'], ['AgentBerth-0.8.0-windows-x64.zip', 'application']]) {
@@ -60,7 +60,7 @@ test('release verifies exact package names, BOM checksums, provenance and notes'
 
 test('failed smoke, wrong commit/version/ref and non-stable versions cannot release', async t => {
   const f = await fixture(t);
-  for (const change of [{ packagedSmoke: 'failure' }, { commit: otherSha }, { version: '0.7.1' }, { ref: 'feat/session-workbench' }]) {
+  for (const change of [{ packagedSmoke: 'failure' }, { installerSmoke: 'failure' }, { installerSmoke: undefined }, { commit: otherSha }, { version: '0.7.1' }, { ref: 'feat/session-workbench' }]) {
     await writeFile(path.join(f.directory, 'build-info.json'), JSON.stringify({ ...f.info, ...change }));
     await assert.rejects(verifyRelease(f.root, f.directory, sha), /does not match/);
   }

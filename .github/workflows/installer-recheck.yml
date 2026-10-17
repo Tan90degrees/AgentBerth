@@ -1,0 +1,46 @@
+name: Recheck existing Windows installer
+on:
+  workflow_dispatch:
+    inputs:
+      package_run_id:
+        description: CI run containing the Windows package and payload inventory
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: AgentBerth-Windows-x64
+          path: release
+          run-id: ${{ inputs.package_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-payload-inventory
+          path: dist
+          run-id: ${{ inputs.package_run_id }}
+          github-token: ${{ github.token }}
+      - name: Check package version and record provenance
+        shell: pwsh
+        run: |
+          $build = Get-Content release/build-info.json -Raw | ConvertFrom-Json
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($build.version -ne $version) { throw 'Package version differs from the checked-out test script' }
+          "Package commit: $($build.commit); test commit: $env:GITHUB_SHA" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Test existing installer without rebuilding
+        run: ./scripts/test-installer.ps1
+        shell: powershell
+        timeout-minutes: 6
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-recheck-Windows
+          path: test-results/installer/
+          if-no-files-found: ignore

@@ -43,8 +43,8 @@
 
 | 文件 | 使用方式 |
 |---|---|
-| `AgentBerth-0.9.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `AgentBerth-0.9.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `AgentBerth-0.9.1-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.9.1-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
@@ -204,7 +204,7 @@ OpenCode 会话在项目目录中执行 `opencode export <sessionID> > session.j
 
 应用、安装程序、快捷方式、任务栏和托盘使用统一的薄荷绿 B／终端图标。图标来源与尺寸转换方法见 [assets/README.md](assets/README.md)。
 
-当前版本范围与已知限制见 [v0.9.0 发布说明](docs/releases/v0.9.0.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
+当前版本范围与已知限制见 [v0.9.0 功能说明](docs/releases/v0.9.0.md) 和 [v0.9.1 安装修复](docs/releases/v0.9.1.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
 
 ## 验证与打包
 
