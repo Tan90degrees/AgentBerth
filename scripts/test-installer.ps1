@@ -59,7 +59,14 @@ public class SetupUi {
 function Assert($condition, $message) { if (!$condition) { throw $message } }
 function Wait-Until([scriptblock]$check, [string]$message, [int]$seconds = 30) {
   $deadline = [DateTime]::UtcNow.AddSeconds($seconds)
-  do { if (& $check) { return }; Start-Sleep -Milliseconds 25 } while ([DateTime]::UtcNow -lt $deadline)
+  do {
+    if (& $check) { return }
+    foreach ($log in Logs) {
+      $failures = @($log.Text -split '\r?\n' | Where-Object { $_ -match '^\[\d+ ms\] FAILED:' })
+      if ($failures.Count -gt 0) { throw "Installer reported failure: $($failures[-1]); log: $($log.Path)" }
+    }
+    Start-Sleep -Milliseconds 25
+  } while ([DateTime]::UtcNow -lt $deadline)
   throw $message
 }
 function Logs {
