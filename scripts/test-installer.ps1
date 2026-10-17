@@ -122,12 +122,33 @@ function Cancel-Preparation([bool]$yes) {
   Answer-Abort $yes
 }
 function Verify-Installed {
-  $old = $env:ELECTRON_RUN_AS_NODE
+  # Electron is a Windows GUI executable even in Node mode. PowerShell 5.1's
+  # call operator can return before it exits, leaving LASTEXITCODE unchanged.
+  $info = New-Object Diagnostics.ProcessStartInfo
+  $info.FileName = $exe
+  $info.Arguments = '"' + (Join-Path $repo 'build/verify-payload.cjs') + '" "' + $target + '" "' + (Join-Path $repo 'dist/installer-payload.json') + '"'
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  $info.EnvironmentVariables['ELECTRON_RUN_AS_NODE'] = '1'
+  $process = [Diagnostics.Process]::Start($info)
   try {
-    $env:ELECTRON_RUN_AS_NODE = '1'
-    & $exe (Join-Path $repo 'build/verify-payload.cjs') $target (Join-Path $repo 'dist/installer-payload.json')
-    Assert ($LASTEXITCODE -eq 0) 'Installed payload differs from built payload'
-  } finally { $env:ELECTRON_RUN_AS_NODE = $old }
+    [void]$process.Handle
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    Assert ($process.WaitForExit(60000)) 'Installed payload verification timed out after 60 seconds'
+    $process.WaitForExit()
+    $output = $stdout.GetAwaiter().GetResult()
+    $errors = $stderr.GetAwaiter().GetResult()
+    Write-Host $output
+    if ($errors) { Write-Host $errors }
+    Assert ($process.ExitCode -eq 0) "Installed payload differs from built payload (verifier exit $($process.ExitCode))"
+  } finally {
+    # Finish our verifier before the suite is allowed to remove its directory.
+    if (!$process.HasExited) { $process.Kill(); $process.WaitForExit() }
+    $process.Dispose()
+  }
 }
 
 try {
