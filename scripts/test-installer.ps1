@@ -41,7 +41,8 @@ public class SetupUi {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
-  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+  [DllImport("user32.dll",SetLastError=true)] public static extern IntPtr SendMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+  [DllImport("kernel32.dll",EntryPoint="SetLastError")] static extern void ClearLastError(uint code);
   [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h,int n);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect r);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
@@ -66,10 +67,14 @@ public class SetupUi {
   public static bool UncheckAll(IntPtr parent) {
     var checks=VisibleChecks(parent);
     foreach(var check in checks) {
-      SendMessage(check,0xf1,IntPtr.Zero,IntPtr.Zero);
+      ClearLastError(0);SendMessage(check,0xf1,IntPtr.Zero,IntPtr.Zero);
+      if(Marshal.GetLastWin32Error()==5)throw new System.ComponentModel.Win32Exception(5);
       if(SendMessage(check,0xf0,IntPtr.Zero,IntPtr.Zero)!=IntPtr.Zero)return false;
     }
     return checks.Length>0;
+  }
+  public static string DescribeChecks(IntPtr parent) {
+    var s=new StringBuilder();foreach(var check in VisibleChecks(parent))s.AppendLine(Text(check)+": checked="+SendMessage(check,0xf0,IntPtr.Zero,IntPtr.Zero));return s.ToString();
   }
   public static string ChildText(IntPtr parent) {
     var s=new StringBuilder();EnumChildWindows(parent,delegate(IntPtr h,IntPtr p){s.AppendLine(Text(h));return true;},IntPtr.Zero);return s.ToString();
@@ -88,6 +93,11 @@ function Assert($condition, $message) { if (!$condition) { throw $message } }
 function Live-AppPids {
   foreach ($process in [Diagnostics.Process]::GetProcessesByName('AgentBerth')) {
     try { if (!$process.HasExited) { $process.Id } } finally { $process.Dispose() }
+  }
+}
+function Trace-AppProcesses([string]$stage) {
+  foreach ($process in [Diagnostics.Process]::GetProcessesByName('AgentBerth')) {
+    try { Write-Host "$stage PID=$($process.Id) exited=$($process.HasExited) started=$($process.StartTime.ToUniversalTime().ToString('o')) title=$($process.MainWindowTitle)" } finally { $process.Dispose() }
   }
 }
 function Wait-Until([scriptblock]$check, [string]$message, [int]$seconds = 30) {
@@ -209,6 +219,7 @@ try {
   Assert (Has-Log '100%') 'Byte percentage is missing'
   Assert (Has-Log 'VERIFIED:') 'Staged inventory verification is missing'
   Verify-Installed
+  Trace-AppProcesses 'After fresh install'
   # Simulate legacy native-build files independently of current package filters.
   $legacyRoot = $target + '\legacy native cache'
   $legacyFolder = $legacyRoot + '\' + ('x' * 140)
@@ -240,6 +251,7 @@ try {
   Verify-Installed
   Assert (Test-Path $sentinel) 'Failed cleanup removed an existing user file'
   Assert ([SetupUi]::FileExists($legacyFile)) 'Failed cleanup did not restore the long legacy file'
+  Trace-AppProcesses 'After rollback'
 
   Write-Host 'Installer smoke: declining cancel resumes and uses current bounded uninstaller'
   $active = Start-Setup
@@ -251,7 +263,9 @@ try {
     foreach ($window in [SetupUi]::Dialogs()) {
       # Both Run and Open log must exist: Run's default state has then been set.
       if ([SetupUi]::VisibleChecks($window).Length -ge 2) {
+        Write-Host "Finish options before: $([SetupUi]::DescribeChecks($window))"
         Assert ([SetupUi]::UncheckAll($window)) 'Finish-page options could not be cleared'
+        Write-Host "Finish options after: $([SetupUi]::DescribeChecks($window))"
         [SetupUi]::Capture($window,(Join-Path $result 'completed.png'))
         [SetupUi]::Click($window,1)
         return $true
@@ -269,6 +283,7 @@ try {
   Assert (!(Test-Path $sentinel)) 'Old cleanup did not run'
   Assert (![SetupUi]::FileExists($legacyFile)) 'Upgrade left the long legacy file'
   Verify-Installed
+  Trace-AppProcesses 'After finish'
 
   Write-Host 'Installer smoke: running background app blocks silently and remains alive'
   Assert (@(Live-AppPids).Count -eq 0) 'Finish page unexpectedly launched an application'
@@ -313,6 +328,7 @@ try {
   Assert (!(Test-Path $exe)) 'All-users uninstall left the executable'
   Write-Host 'Installer smoke passed: byte percentage, logs, safe cancellation, locked-file rollback, long-path upgrade, running-app protection and both uninstall scopes'
 } catch {
+  Trace-AppProcesses 'Failure'
   Write-Host "Remaining live AgentBerth PIDs: $(@(Live-AppPids) -join ', ')"
   foreach($window in [SetupUi]::Dialogs()){ try{ [SetupUi]::Capture($window,(Join-Path $result 'failure.png')) }catch{} }
   foreach($log in Logs){ Write-Host $log.Path; Write-Host $log.Text }
