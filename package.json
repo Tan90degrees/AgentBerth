@@ -18,8 +18,8 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:scripts && node scripts/test.mjs",
     "test:scripts": "node --test tests/setup.test.mjs tests/release.test.mjs tests/installer.test.mjs",
-    "test:desktop": "npm run build && node scripts/smoke.mjs && node scripts/smoke-files.mjs",
-    "test:packaged": "node scripts/smoke.mjs --packaged && node scripts/smoke-files.mjs --packaged",
+    "test:desktop": "npm run build && node scripts/test-desktop.mjs",
+    "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "check": "npm run typecheck && npm test && npm run build",
     "dist:win": "npm run build && electron-builder --win nsis zip --x64 --publish never",
     "test:files": "npm run build && node scripts/smoke-files.mjs"
