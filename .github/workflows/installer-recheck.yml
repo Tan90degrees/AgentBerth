@@ -13,6 +13,10 @@ permissions:
   actions: read
 jobs:
   installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2]
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -49,6 +53,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: installer-recheck-Windows
+          name: installer-recheck-Windows-${{ matrix.attempt }}
           path: test-results/installer/
           if-no-files-found: ignore

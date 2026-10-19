@@ -257,7 +257,6 @@ try {
   $active = Start-Setup
   Cancel-Preparation $false
   Wait-Until { Has-Log 'COMPLETED:' } 'Install did not resume after declining cancel' 90
-  $script:advancedToFinish = $false
   Wait-Until {
     Assert (!$active.HasExited) 'Installer exited before the finish-page options could be reviewed'
     foreach ($window in [SetupUi]::Dialogs()) {
@@ -270,12 +269,8 @@ try {
         [SetupUi]::Click($window,1)
         return $true
       }
-      # Advance the completed progress page once. Repeated clicks can be
-      # queued into the finish page before its default Run option is cleared.
-      if (!$script:advancedToFinish -and [SetupUi]::DetailsVisible($window) -and [SetupUi]::IsWindowEnabled([SetupUi]::GetDlgItem($window,1))) {
-        [SetupUi]::Click($window,1)
-        $script:advancedToFinish = $true
-      }
+      # MUI's finish-page macro enables AutoCloseWindow: the progress page
+      # advances itself. Clicking Next here can land on the new Finish button.
     }
     return $false
   } 'Finish page did not become ready' 15
