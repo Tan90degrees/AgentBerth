@@ -107,7 +107,7 @@ input:hover, select:hover, textarea:hover { border-color: var(--text-muted); }
 .text-button:hover:not(:disabled) { color: var(--text); }
 .sidebar { background: var(--sidebar); border-right: 1px solid var(--border); }
 .sidebar .brand { gap: 9px; margin-bottom: 22px; }
-.brand-mark { width: 28px; height: 28px; filter: grayscale(1); }
+.brand-mark { width: 28px; height: 28px; }
 .brand strong { font-size: 15px; font-weight: 600; letter-spacing: -.3px; }
 .brand small { font-size: 10px; color: var(--text-muted); letter-spacing: 0; }
 .sidebar .quick-link {

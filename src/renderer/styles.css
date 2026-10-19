@@ -1,5 +1,5 @@
 :root {
-  font-family: Inter,"Segoe UI","Microsoft YaHei",sans-serif;
+  font-family: Inter,"Segoe UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
   color: var(--text);
   background: var(--surface-muted);
   font-synthesis: none;
