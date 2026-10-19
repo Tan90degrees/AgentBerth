@@ -2,7 +2,7 @@ name: CI and Windows packages
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'feat/**', 'fix/**']
+    branches: [main]
   pull_request:
 permissions:
   contents: read
@@ -69,6 +69,11 @@ jobs:
         timeout-minutes: 10
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Test installer progress, cancellation and upgrade
+        id: installer-smoke
+        run: ./scripts/test-installer.ps1
+        shell: powershell
+        timeout-minutes: 6
       - name: Test packaged application with real terminal
         id: packaged-smoke
         run: npm run test:packaged
@@ -80,6 +85,7 @@ jobs:
         shell: pwsh
         env:
           PACKAGED_SMOKE_RESULT: ${{ steps.packaged-smoke.outcome }}
+          INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
         run: |
           $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.zip' }
           if ($files.Count -ne 2) { throw 'Expected one installer and one ZIP' }
@@ -89,8 +95,15 @@ jobs:
           }
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $env:PACKAGED_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $env:PACKAGED_SMOKE_RESULT; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        with:
+          name: installer-payload-inventory
+          path: dist/installer-payload.json
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         with:
@@ -108,6 +121,12 @@ jobs:
         with:
           name: screenshots-packaged-Windows
           path: test-results/*.png
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-smoke-Windows
+          path: test-results/installer/
           if-no-files-found: ignore
   release:
     name: Publish verified release
