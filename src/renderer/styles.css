@@ -1980,7 +1980,12 @@ textarea:focus-visible {
   flex: 1
 }
 .project-header h1 {
-  flex-shrink: 0
+  min-width: 0;
+  flex-shrink: 1;
+  letter-spacing: normal;
+  line-height: 1.5;
+  /* Leave room for the last glyph's ink beyond its advance width. */
+  padding-inline-end: .15em
 }
 .terminal-state-actions:empty {
   display: none
