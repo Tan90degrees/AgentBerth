@@ -38,6 +38,7 @@ export class DaemonServer {
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
   private ws = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
   private clients = new Map<WebSocket, Client>();
+  private pendingWork = 0;
   private live = new Map<string, LiveTerminal>();
   private token = randomBytes(32).toString('hex');
   private closing = false;
@@ -70,8 +71,14 @@ export class DaemonServer {
           this.send(socket, { id, error: '请求参数无效' });
           return;
         }
+        // Resource polling is cancelled by close() and must not block an idle restart.
+        const blocksIdleShutdown = result.data.method !== 'resources';
         client.pending++;
-        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value })).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败' })).finally(() => { client.pending--; });
+        if (blocksIdleShutdown) this.pendingWork++;
+        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value })).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败' })).finally(() => {
+          client.pending--;
+          if (blocksIdleShutdown) this.pendingWork--;
+        });
       });
     });
   }
@@ -140,7 +147,7 @@ export class DaemonServer {
         return null;
       case 'shutdownIdle':
         if (this.live.size || this.starting.size) throw new Error('请先停止全部终端，再更新后台');
-        if (this.historyBusy.size || this.editingProjects.size || [...this.clients.values()].some(other => other.pending > (other === client ? 1 : 0))) throw new Error('后台正在处理数据，请稍后重试');
+        if (this.historyBusy.size || this.editingProjects.size || this.pendingWork > 1) throw new Error('后台正在处理数据，请稍后重试');
         this.closing = true;
         setTimeout(this.onShutdown, 50);
         return null;
