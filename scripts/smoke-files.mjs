@@ -93,8 +93,12 @@ try {
   await page.getByRole('button', { name: '刷新文件预览', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.source-code')?.textContent.includes('EXTERNAL_CHANGE_READY'));
   const resizer = page.getByRole('separator', { name: '调整文件面板宽度', exact: true });
-  const before = await page.locator('.file-browser').boundingBox(); await resizer.focus(); await page.keyboard.press('ArrowLeft');
-  const after = await page.locator('.file-browser').boundingBox(); assert.ok(after.width > before.width);
+  // Start by shrinking: on smaller Windows desktops the initial panel may
+  // already be at its maximum width and cannot grow further.
+  const before = await page.locator('.file-browser').boundingBox(); await resizer.focus(); await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(width => document.querySelector('.file-browser').getBoundingClientRect().width < width, before.width);
+  const smaller = await page.locator('.file-browser').boundingBox(); await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(width => document.querySelector('.file-browser').getBoundingClientRect().width > width, smaller.width);
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}files-code-dark.png` });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   const gray = await entry('trace.log').evaluate(element => getComputedStyle(element).color);

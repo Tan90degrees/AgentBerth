@@ -1,4 +1,4 @@
-.file-browser { position: relative; display: flex; flex-direction: column; width: min(var(--files-width, 620px), calc(100% - 260px)); min-width: 280px; min-height: 0; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); }
+.file-browser { position: relative; display: flex; flex-direction: column; width: min(var(--files-width, 620px), calc(100% - 280px)); min-width: 280px; min-height: 0; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); }
 .file-browser-header { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
 .file-browser-header strong { font-size: 12px; font-weight: 500; }
 .file-browser-header > span { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }

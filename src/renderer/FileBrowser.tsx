@@ -100,7 +100,13 @@ export default memo(function FileBrowser({ project, connected, onClose }: { proj
     window.addEventListener('focus', focus);
     return () => window.removeEventListener('focus', focus);
   }, [refresh]);
-  useEffect(() => { const resize = () => setWidth(clampWidth(desiredWidth.current)); window.addEventListener('resize', resize); return () => window.removeEventListener('resize', resize); }, []);
+  useEffect(() => {
+    const resize = () => setWidth(clampWidth(desiredWidth.current));
+    const observer = new ResizeObserver(resize);
+    if (host.current?.parentElement) observer.observe(host.current.parentElement);
+    resize();
+    return () => observer.disconnect();
+  }, []);
   function toggle(entry: ProjectFile) {
     if (expanded.has(entry.path)) setExpanded(previous => { const next = new Set(previous); next.delete(entry.path); return next; });
     else {
@@ -141,8 +147,8 @@ export default memo(function FileBrowser({ project, connected, onClose }: { proj
     drag.current = null; document.body.classList.remove('files-resizing'); commitWidth(pendingWidth.current);
   };
   return <aside id="project-file-browser" ref={host} className="file-browser" aria-label={`项目文件 ${project.name}`} style={{ '--files-width': `${width}px` } as CSSProperties}>
-    <div className="files-resizer" role="separator" aria-label="调整文件面板宽度" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.max(280, host.current?.parentElement?.clientWidth ?? 900)} aria-valuenow={width} tabIndex={0} title="拖动调整文件面板，双击恢复默认"
-      onDoubleClick={() => commitWidth(620)} onKeyDown={event => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); commitWidth(event.key === 'Home' ? 280 : event.key === 'End' ? 10000 : width + (event.key === 'ArrowLeft' ? 20 : -20)); }}
+    <div className="files-resizer" role="separator" aria-label="调整文件面板宽度" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={clampWidth(10000)} aria-valuenow={width} tabIndex={0} title="拖动调整文件面板，双击恢复默认"
+      onDoubleClick={() => commitWidth(620)} onKeyDown={event => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); commitWidth(event.key === 'Home' ? 280 : event.key === 'End' ? 10000 : (host.current?.getBoundingClientRect().width ?? width) + (event.key === 'ArrowLeft' ? 20 : -20)); }}
       onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); const width = host.current!.getBoundingClientRect().width; drag.current = { id: event.pointerId, x: event.clientX, width }; pendingWidth.current = width; document.body.classList.add('files-resizing'); }}
       onPointerMove={event => { const start = drag.current; if (!start || start.id !== event.pointerId) return; pendingWidth.current = clampWidth(start.width + start.x - event.clientX); if (!frame.current) frame.current = requestAnimationFrame(() => { host.current?.style.setProperty('--files-width', `${pendingWidth.current}px`); frame.current = 0; }); }}
       onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag} />
