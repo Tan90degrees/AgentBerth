@@ -56,6 +56,16 @@ jobs:
           import pathlib, zipfile
           with zipfile.ZipFile(next(pathlib.Path('release').glob('*.zip'))) as archive:
               archive.extractall('.installer-recheck')
+      - name: Trace the exact file rejected by upstream atomic cleanup
+        shell: python
+        run: |
+          import pathlib
+          template = pathlib.Path('node_modules/app-builder-lib/templates/nsis/uninstaller.nsh')
+          source = template.read_text(encoding='utf-8')
+          needle = 'DetailPrint "File is busy, aborting: $R0"'
+          assert needle in source
+          source = source.replace(needle, '!insertmacro BerthLog "FAILED: cannot move installed file: $R0"')
+          template.write_text(source, encoding='utf-8')
       - name: Rebuild only the instrumented installer
         run: npx electron-builder --prepackaged .installer-recheck --win nsis --x64 --publish never
         timeout-minutes: 4
