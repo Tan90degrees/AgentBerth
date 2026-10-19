@@ -117,7 +117,18 @@ function Logs {
     # Adjacent cases can start less than a second apart. Including older logs
     # lets Drive-To mistake the previous install's stage for this one's.
     if ($file.LastWriteTimeUtc -ge $script:caseStart) {
-      try { [pscustomobject]@{ Path=$file.FullName; Text=[IO.File]::ReadAllText($file.FullName,[Text.Encoding]::Unicode) } } catch {}
+      $stream = $null
+      $reader = $null
+      try {
+        # ReadAllText uses FileShare.Read, which can deny the installer's
+        # concurrent FileOpen-for-append and silently lose a completion line.
+        $sharing = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $stream = [IO.File]::Open($file.FullName,[IO.FileMode]::Open,[IO.FileAccess]::Read,$sharing)
+        $reader = [IO.StreamReader]::new($stream,[Text.Encoding]::Unicode,$true)
+        [pscustomobject]@{ Path=$file.FullName; Text=$reader.ReadToEnd() }
+      } catch {} finally {
+        if ($reader) { $reader.Dispose() } elseif ($stream) { $stream.Dispose() }
+      }
     }
   }
 }
