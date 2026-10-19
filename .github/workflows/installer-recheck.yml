@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        attempt: [1, 2]
+        attempt: [1, 2, 3]
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -25,13 +25,13 @@ jobs:
         with:
           name: AgentBerth-Windows-x64
           path: release
-          run-id: ${{ inputs.package_run_id || '39188724144' }}
+          run-id: ${{ inputs.package_run_id || '39190131132' }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
           name: installer-payload-inventory
           path: dist
-          run-id: ${{ inputs.package_run_id || '39188724144' }}
+          run-id: ${{ inputs.package_run_id || '39190131132' }}
           github-token: ${{ github.token }}
       - name: Check package version and record provenance
         shell: pwsh

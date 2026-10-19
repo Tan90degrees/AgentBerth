@@ -297,7 +297,16 @@ try {
   Assert (Has-Log 'CANCELLED: application still running') 'Silent running-app failure did not log its reason'
   $active = Start-Setup
   Drive-To 'WAITING: application running'
-  foreach ($window in [SetupUi]::Dialogs()) { if([SetupUi]::GetDlgItem($window,4) -ne [IntPtr]::Zero){ [SetupUi]::Click($window,2) } }
+  # The log is written before MessageBox creates its controls.
+  Wait-Until {
+    foreach ($window in [SetupUi]::Dialogs()) {
+      if ([SetupUi]::GetDlgItem($window,4) -ne [IntPtr]::Zero -and [SetupUi]::IsWindowEnabled([SetupUi]::GetDlgItem($window,2))) {
+        [SetupUi]::Click($window,2)
+        return $true
+      }
+    }
+    return $false
+  } 'Running-application warning did not become ready' 5
   Wait-Exit $active 2 15
   Assert (!$helper.HasExited) 'Interactive cancel killed the running background app'
   Write-Host "Stopping background fixture PID $($helper.Id)"
