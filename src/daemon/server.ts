@@ -12,6 +12,7 @@ import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment,
 import { Store } from './store';
 import { ResourceSampler } from './resources';
 import { GitWorkspace } from './git';
+import { ProjectFiles } from './files';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
 import { sameDirectory } from './history';
@@ -33,6 +34,7 @@ export class DaemonServer {
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
   private git = new GitWorkspace();
+  private files = new ProjectFiles(this.git);
   private resources = new ResourceSampler();
   private gitBusy = new Set<string>();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
@@ -92,7 +94,8 @@ export class DaemonServer {
   private send(socket: WebSocket, message: unknown): void {
     if (socket.readyState !== WebSocket.OPEN) return;
     // A slow or closed UI must never stop output consumption by the daemon.
-    if (socket.bufferedAmount > 2 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); return; }
+    // Two bounded image replies can overlap; a slow UI still has a finite budget.
+    if (socket.bufferedAmount > 16 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); return; }
     socket.send(JSON.stringify(message));
   }
   private broadcast(event: ServerEvent): void {
@@ -128,6 +131,8 @@ export class DaemonServer {
       case 'state': return this.store.state();
       case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
       case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
+      case 'projectFiles': return this.files.list(this.store.project(request.params.projectId).path, request.params.path, request.params.offset, request.params.limit);
+      case 'previewFile': return this.files.preview(this.store.project(request.params.projectId).path, request.params.path);
       case 'gitOperation': {
         const params = request.params, project = this.store.project(params.projectId);
         this.requireProjectAvailable(project.id);

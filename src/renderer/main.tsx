@@ -5,6 +5,7 @@ import { App } from './App';
 import './styles.css';
 import '@xterm/xterm/css/xterm.css';
 import './appearance.css';
+import './files.css';
 
 initializeAppearance();
 

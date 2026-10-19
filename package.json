@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "description": "A project-oriented workspace for persistent agent terminals",
@@ -18,10 +18,11 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:scripts && node scripts/test.mjs",
     "test:scripts": "node --test tests/setup.test.mjs tests/release.test.mjs tests/installer.test.mjs",
-    "test:desktop": "npm run build && node scripts/smoke.mjs",
-    "test:packaged": "node scripts/smoke.mjs --packaged",
+    "test:desktop": "npm run build && node scripts/smoke.mjs && node scripts/smoke-files.mjs",
+    "test:packaged": "node scripts/smoke.mjs --packaged && node scripts/smoke-files.mjs --packaged",
     "check": "npm run typecheck && npm test && npm run build",
-    "dist:win": "npm run build && electron-builder --win nsis zip --x64 --publish never"
+    "dist:win": "npm run build && electron-builder --win nsis zip --x64 --publish never",
+    "test:files": "npm run build && node scripts/smoke-files.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
@@ -31,9 +32,12 @@
     "@xterm/addon-webgl": "0.19.0",
     "@xterm/headless": "6.0.0",
     "@xterm/xterm": "6.0.0",
+    "highlight.js": "11.12.0",
     "node-pty": "1.1.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
     "ws": "8.22.0",
     "zod": "4.6.7"
   },
