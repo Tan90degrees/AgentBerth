@@ -70,6 +70,15 @@ Function ${BerthPrefix}BerthLog
   Pop $0
 FunctionEnd
 
+!ifdef BUILD_UNINSTALLER
+  Function un.onUninstFailed
+    !insertmacro BerthLog "FAILED: uninstallation did not complete; target=$INSTDIR"
+  FunctionEnd
+  Function un.onUninstSuccess
+    !insertmacro BerthLog "UNINSTALLED: target=$INSTDIR"
+  FunctionEnd
+!endif
+
 !ifndef BUILD_UNINSTALLER
   Function BerthShowProgress
     GetDlgItem $0 $HWNDPARENT 2
@@ -186,6 +195,7 @@ FunctionEnd
   berth_check_running:
     nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
     Pop $R0
+    !insertmacro BerthLog "CHECK: process lookup returned $R0"
     ${If} $R0 == 0
       !insertmacro BerthLog "WAITING: application running; 请从托盘退出后重试；安装器不会强制停止会话。"
       MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION "AgentBerth 仍在运行（可能在托盘中）。$\r$\n请先从托盘退出，终端停止后点重试；或点取消保留当前版本。$\r$\n$\r$\nAgentBerth is running. Exit it from the tray, then Retry, or Cancel setup.$\r$\n日志 / Log: $BerthLogPath" /SD IDCANCEL IDRETRY berth_check_running
@@ -204,6 +214,15 @@ FunctionEnd
     Call BerthPreparePayload
   !endif
 !macroend
+
+!ifdef BUILD_UNINSTALLER
+  !macro customUnInit
+    !insertmacro BerthLog "UNINSTALL: initialized; target=$INSTDIR; mode=$installMode"
+  !macroend
+  !macro customUnInstall
+    !insertmacro BerthLog "UNINSTALL: removing application files; target=$INSTDIR"
+  !macroend
+!endif
 
 !ifndef BUILD_UNINSTALLER
   !macro customInit
