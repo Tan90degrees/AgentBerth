@@ -1,4 +1,4 @@
-; StackIsle installer extensions for electron-builder 26.15.3.
+; AgentBerth installer extensions for electron-builder 26.15.3.
 ; Keep the upstream wizard, registry, shortcut and signed-uninstaller machinery.
 !include LogicLib.nsh
 !include FileFunc.nsh
@@ -67,13 +67,13 @@ Function ${BerthPrefix}BerthLog
   Push $0
   ${If} $BerthLogPath == ""
     System::Call 'kernel32::GetCurrentProcessId() i.r0'
-    StrCpy $BerthLogPath "$TEMP\StackIsle-setup-${VERSION}-$0.log"
+    StrCpy $BerthLogPath "$TEMP\AgentBerth-setup-${VERSION}-$0.log"
     System::Call 'kernel32::GetTickCount() i.r0'
     StrCpy $BerthStartTick $0
     ClearErrors
     FileOpen $BerthLogHandle "$BerthLogPath" w
     ${IfNot} ${Errors}
-      FileWriteUTF16LE /BOM $BerthLogHandle "StackIsle ${VERSION}$\r$\n"
+      FileWriteUTF16LE /BOM $BerthLogHandle "AgentBerth ${VERSION}$\r$\n"
       FileClose $BerthLogHandle
     ${EndIf}
   ${EndIf}
@@ -241,18 +241,18 @@ FunctionEnd
 !macroend
 
 !macro customCheckAppRunning
-  !insertmacro BerthLog "检查运行中的 StackIsle / Checking running application"
+  !insertmacro BerthLog "检查运行中的 AgentBerth / Checking running application"
   berth_check_running:
     nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
     Pop $R0
     ${If} $R0 == 603
-      nsProcess::_FindProcess "AgentBerth.exe"
+      nsProcess::_FindProcess "StackIsle.exe"
       Pop $R0
     ${EndIf}
     !insertmacro BerthLog "CHECK: process lookup returned $R0"
     ${If} $R0 == 0
       !insertmacro BerthLog "WAITING: application running; 请从托盘退出后重试；安装器不会强制停止会话。"
-      MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION "StackIsle 或旧版 AgentBerth 仍在运行（可能在托盘中）。$\r$\n请先从托盘退出，终端停止后点重试；或点取消保留当前版本。$\r$\n$\r$\nStackIsle is running. Exit it from the tray, then Retry, or Cancel setup.$\r$\n日志 / Log: $BerthLogPath" /SD IDCANCEL IDRETRY berth_check_running
+      MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION "AgentBerth 或旧版 StackIsle 仍在运行（可能在托盘中）。$\r$\n请先从托盘退出，终端停止后点重试；或点取消保留当前版本。$\r$\n$\r$\nAgentBerth is running. Exit it from the tray, then Retry, or Cancel setup.$\r$\n日志 / Log: $BerthLogPath" /SD IDCANCEL IDRETRY berth_check_running
       !insertmacro BerthLog "CANCELLED: application still running; existing files retained"
       SetErrorLevel 2
       Quit
@@ -260,7 +260,7 @@ FunctionEnd
       ; nsProcess returns 603 when no matching process exists. Do not interpret
       ; an enumeration failure as permission to overwrite a live installation.
       !insertmacro BerthLog "FAILED: process check returned $R0"
-      MessageBox MB_OK|MB_ICONSTOP "无法检查运行中的 StackIsle（$R0）。$\r$\nCannot check running application. Log: $BerthLogPath" /SD IDOK
+      MessageBox MB_OK|MB_ICONSTOP "无法检查运行中的 AgentBerth（$R0）。$\r$\nCannot check running application. Log: $BerthLogPath" /SD IDOK
       SetErrorLevel 2
       Quit
     ${EndIf}

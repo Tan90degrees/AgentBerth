@@ -1,10 +1,12 @@
-import { createElement, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createElement, isValidElement, useEffect, useMemo, useRef, useState, useId, type CSSProperties, type ReactNode } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { FilePreview as Preview } from '../shared/protocol';
 import { fileLanguage, fileSize, isMarkdown, previewLink } from '../shared/file-preview';
-import { highlightCode } from './syntax';
-import HighlightWorker from './highlight-worker?worker&inline';
+import { useHighlightedCode } from './highlighting';
+import { syntaxLanguages } from '../shared/syntax-languages';
+import { defaultPreviewAppearance, normalizePreviewAppearance, previewFontFamily, previewFonts, type PreviewAppearance } from '../shared/preview-appearance';
+import { readStored, saveStored } from './storage';
 
 let imageReaders = 0;
 const waitingImages: (() => void)[] = [];
@@ -26,7 +28,7 @@ function heading(level: number): Components['h1'] {
 function MarkdownCode({ children, className }: { children?: ReactNode; className?: string }) {
   const language = /language-([\w+-]+)/.exec(className ?? '')?.[1];
   const text = textOf(children);
-  const html = useMemo(() => language && text.length <= 16000 ? highlightCode(text, language) : null, [text, language]);
+  const html = useHighlightedCode(text, language ?? 'plaintext', !!language && text.length <= 64000);
   return html === null ? <code className={className}>{children}</code> : <code className={`hljs ${className ?? ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 function MarkdownImage({ src, alt, projectId, path }: { src?: string; alt?: string; projectId: string; path: string }) {
@@ -59,46 +61,58 @@ export function MarkdownDocument({ content, projectId, path, onNavigate, onError
   }), [projectId, path, onNavigate, onError]);
   return <article className="markdown-document"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={components}>{content}</Markdown></article>;
 }
-function CodePreview({ text, filename, position }: { text: string; filename: string; position?: { line: number; column: number; nonce: number } | null }) {
+function CodePreview({ text, language, appearance, position }: { text: string; language: string; appearance: PreviewAppearance; position?: { line: number; column: number; nonce: number } | null }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!position || !host.current) return;
-    const row = Math.min(position.line, text.split('\n').length), lineHeight = 20.4;
+    const row = Math.min(position.line, text.split('\n').length), lineHeight = parseFloat(getComputedStyle(host.current.querySelector('pre')!).lineHeight);
+    const canvas = document.createElement('canvas'), context = canvas.getContext('2d')!; context.font = getComputedStyle(host.current.querySelector('pre')!).font;
+    const columnOffset = context.measureText((text.split('\n')[row - 1] ?? '').slice(0, position.column - 1)).width;
     host.current.scrollTop = Math.max(0, (row - 1) * lineHeight - host.current.clientHeight / 3);
-    host.current.scrollLeft = Math.max(0, (position.column - 1) * 7.2 - host.current.clientWidth / 2);
+    host.current.scrollLeft = Math.max(0, columnOffset - host.current.clientWidth / 2);
     host.current.dataset.location = `${row}:${position.column}`;
-  }, [text, position]);
-  const [highlighted, setHighlighted] = useState<{ text: string; html: string } | null>(null);
-  const language = fileLanguage(filename);
-  useEffect(() => {
-    setHighlighted(null);
-    if (!text || language === 'plaintext') return;
-    let worker: Worker;
-    try {
-      worker = new HighlightWorker();
-      worker.onmessage = event => { setHighlighted({ text, html: String(event.data) }); worker.terminate(); };
-      worker.onerror = () => worker.terminate();
-      worker.postMessage({ text, language });
-    } catch { return; }
-    return () => worker.terminate();
-  }, [text, language]);
+  }, [text, position, appearance.size, appearance.font, appearance.customFont]);
+  const highlighted = useHighlightedCode(text, language);
   const lineNumbers = useMemo(() => Array.from({ length: text.split('\n').length }, (_, index) => index + 1), [text]);
   const targetLine = position ? Math.min(position.line, lineNumbers.length) : 0;
-  return <div ref={host} className="source-preview" tabIndex={0} aria-label="文件源码"><pre className="source-lines" aria-hidden="true">{lineNumbers.map(line => <span key={line} className={line === targetLine ? 'source-target-line' : ''}>{line}{'\n'}</span>)}</pre><pre className="source-code" style={targetLine ? { backgroundImage: 'linear-gradient(var(--selected), var(--selected))', backgroundSize: '100% 20.4px', backgroundPosition: `0 ${14 + (targetLine - 1) * 20.4}px`, backgroundRepeat: 'no-repeat' } : undefined}>{highlighted?.text === text ? <code className="hljs" data-language={language} dangerouslySetInnerHTML={{ __html: highlighted.html }} /> : <code data-language={language}>{text}</code>}</pre></div>;
+  return <div ref={host} className="source-preview" tabIndex={0} aria-label="文件源码"><pre className="source-lines" aria-hidden="true">{targetLine ? <>{lineNumbers.slice(0, targetLine - 1).join('\n')}{targetLine > 1 ? '\n' : ''}<span className="source-target-line">{targetLine}</span>{targetLine < lineNumbers.length ? '\n' : ''}{lineNumbers.slice(targetLine).join('\n')}</> : lineNumbers.join('\n')}</pre><pre className="source-code" style={targetLine ? { backgroundImage: 'linear-gradient(var(--selected), var(--selected))', backgroundSize: `100% ${appearance.size * 1.7}px`, backgroundPosition: `0 ${14 + (targetLine - 1) * appearance.size * 1.7}px`, backgroundRepeat: 'no-repeat' } : undefined}>{highlighted !== null ? <code className="hljs" data-language={language} dangerouslySetInnerHTML={{ __html: highlighted }} /> : <code data-language={language}>{text}</code>}</pre></div>;
+}
+function loadAppearance(): PreviewAppearance {
+  try { return normalizePreviewAppearance(JSON.parse(readStored('berth.previewAppearance') ?? 'null')); } catch { return { ...defaultPreviewAppearance }; }
+}
+function PreviewFonts({ value, onChange }: { value: PreviewAppearance; onChange: (value: PreviewAppearance) => void }) {
+  const id = useId();
+  const [sizeInput, setSizeInput] = useState(String(value.size));
+  useEffect(() => setSizeInput(String(value.size)), [value.size]);
+  const commitSize = () => { const next = normalizePreviewAppearance({ ...value, size: sizeInput ? Number(sizeInput) : value.size }); setSizeInput(String(next.size)); onChange(next); };
+  return <><button className="preview-font-button" popoverTarget={id} title="调整预览字体和字号" aria-label="预览字体设置">Aa</button><div id={id} popover="auto" className="preview-font-popover" role="group" aria-label="预览字体设置"><strong>预览字体</strong><label>字体<select aria-label="预览字体" value={value.font} onChange={event => onChange({ ...value, font: event.target.value })}>{previewFonts.map(font => <option key={font.id} value={font.id}>{font.name}</option>)}</select></label>{value.font === 'custom' && <label>字体名称<input aria-label="自定义预览字体" maxLength={100} placeholder="例如 Sarasa Mono SC" value={value.customFont} onChange={event => onChange({ ...value, customFont: event.target.value })} /></label>}<label>字号<div className="preview-size-control"><button aria-label="减小预览字号" disabled={value.size <= 10} onClick={() => onChange({ ...value, size: value.size - 1 })}>−</button><input aria-label="预览字号" type="number" min="10" max="28" value={sizeInput} onBlur={commitSize} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitSize(); } }} onChange={event => { setSizeInput(event.target.value); const size = Number(event.target.value); if (event.target.value && size >= 10 && size <= 28) onChange({ ...value, size }); }} /><span>px</span><button aria-label="增大预览字号" disabled={value.size >= 28} onClick={() => onChange({ ...value, size: value.size + 1 })}>＋</button></div></label><p>即时生效并自动保存，仅调整文件预览。字体使用本机安装；未安装时自动回退。</p><button className="text-button" onClick={() => onChange({ ...defaultPreviewAppearance })}>恢复默认预览字体</button></div></>;
 }
 export default function FilePreview({ position, file, projectId, markdown, onMarkdown, onNavigate, onRefresh, onError }: { position?: { path: string; line: number; column: number; nonce: number } | null; file: Preview; projectId: string; markdown: boolean; onMarkdown: (value: boolean) => void; onNavigate: (path: string, anchor?: string) => void; onRefresh: () => void; onError: (error: string) => void }) {
   const [copied, setCopied] = useState(false);
+  const [appearance, setAppearance] = useState(loadAppearance);
+  const [language, setLanguage] = useState('file');
+  useEffect(() => { setLanguage('file'); }, [file.path]);
+  const detected = fileLanguage(file.name, file.content ?? '');
+  const selectedLanguage = language === 'file' ? detected : language;
+  const fontFamily = previewFontFamily(appearance);
+  const previewStyle = { '--preview-font-size': `${appearance.size}px`, '--preview-font-family': fontFamily, '--preview-document-font': appearance.font === 'auto' ? '"Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif' : fontFamily } as CSSProperties;
+  const changeAppearance = (value: PreviewAppearance) => { const normalized = normalizePreviewAppearance(value); setAppearance(normalized); saveStored('berth.previewAppearance', JSON.stringify(normalized)); };
+
   useEffect(() => { setCopied(false); }, [file.path]);
   useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(false), 1800); return () => clearTimeout(timer); }, [copied]);
   return <>
     <div className="file-preview-tools">
       <span className="file-relative-path" title={file.path}>{file.path}</span>
       {file.kind === 'text' && isMarkdown(file.name) && <div className="file-preview-modes" role="group" aria-label="Markdown 预览方式"><button aria-pressed={!markdown} onClick={() => onMarkdown(false)}>源码</button><button aria-pressed={markdown} onClick={() => onMarkdown(true)}>渲染</button></div>}
+      {file.kind === 'text' && !(markdown && isMarkdown(file.name)) && <select className="preview-language" aria-label="预览高亮语言" value={language} onChange={event => setLanguage(event.target.value)}><option value="file">文件类型（{detected === 'plaintext' ? '纯文本' : detected}）</option><option value="auto">自动识别</option><option value="plaintext">纯文本</option>{syntaxLanguages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+      {file.kind === 'text' && <PreviewFonts value={appearance} onChange={changeAppearance} />}
       {file.kind === 'text' && <button title="复制当前预览的内容" onClick={() => { void window.berth.copyText(file.content ?? '').then(() => setCopied(true)).catch(error => onError(String(error))); }}>{copied ? '已复制' : '复制内容'}</button>}
       {position?.path === file.path && <span title="终端跳转位置">{position.line}:{position.column}</span>}
       <span>{fileSize(file.size)}</span><button className="icon-button" aria-label="刷新文件预览" title="重新读取当前文件" onClick={onRefresh}>↻</button>
     </div>
     {file.truncated && <p className="file-preview-notice" role="status">文件较大，仅预览开头部分内容。</p>}
-    {file.kind === 'text' ? markdown && isMarkdown(file.name) ? <div className="markdown-scroll"><MarkdownDocument content={file.content ?? ''} projectId={projectId} path={file.path} onNavigate={onNavigate} onError={onError} /></div> : <CodePreview position={position?.path === file.path ? position : null} text={file.content ?? ''} filename={file.name} /> : file.kind === 'image' ? <div className="image-preview"><img src={file.content ?? ''} alt={file.name} /><span>{file.name}</span></div> : <div className="file-preview-empty"><span>无法直接预览</span><p>{file.message ?? '此文件不是可预览的文本或图片。'}</p><small>{fileSize(file.size)}</small></div>}
+    <div className="file-preview-content" style={previewStyle}>
+    {file.kind === 'text' ? markdown && isMarkdown(file.name) ? <div className="markdown-scroll"><MarkdownDocument content={file.content ?? ''} projectId={projectId} path={file.path} onNavigate={onNavigate} onError={onError} /></div> : <CodePreview position={position?.path === file.path ? position : null} text={file.content ?? ''} language={selectedLanguage} appearance={appearance} /> : file.kind === 'image' ? <div className="image-preview"><img src={file.content ?? ''} alt={file.name} /><span>{file.name}</span></div> : <div className="file-preview-empty"><span>无法直接预览</span><p>{file.message ?? '此文件不是可预览的文本或图片。'}</p><small>{fileSize(file.size)}</small></div>}
+    </div>
   </>;
 }

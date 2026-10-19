@@ -107,3 +107,27 @@
 .session-content { min-height:0; }
 
 .source-target-line { color:var(--text); background:var(--selected); font-weight:700; }
+
+.terminal-path-hints { position:absolute; inset:0; pointer-events:none; z-index:5; overflow:hidden; }
+.terminal-path-underline { position:absolute; height:1px; background:currentColor; }
+.xterm-screen.terminal-path-active { cursor:pointer !important; }
+
+.file-preview-content { display:flex; flex:1; min-height:0; min-width:0; overflow:hidden; }
+.file-preview-content .source-preview pre { font-family:var(--preview-font-family); font-size:var(--preview-font-size); line-height:1.7; }
+.file-preview-content .markdown-document { font-family:var(--preview-document-font); font-size:var(--preview-font-size); }
+.file-preview-content .markdown-document pre, .file-preview-content .markdown-document code { font-family:var(--preview-font-family); font-size:var(--preview-font-size); }
+.file-preview-content .markdown-document pre code { font-size:inherit; }
+.preview-language { max-width:140px; min-width:70px; padding:4px 6px; font-size:10px; background:var(--surface-muted); border-color:var(--border); }
+.preview-font-button { anchor-name:--preview-font-control; }
+.preview-font-popover { position-anchor:--preview-font-control; position-area:bottom span-left; position-try-fallbacks:flip-block,flip-inline; inset:auto; margin:6px 0 0; width:280px; max-height:calc(100vh - 40px); overflow:auto; border:1px solid var(--border); border-radius:10px; padding:14px; background:var(--surface); color:var(--text); box-shadow:0 8px 30px #0003; }
+.preview-font-popover label { display:block; margin:12px 0; font-size:12px; }
+.preview-font-popover select, .preview-font-popover input { margin-top:5px; width:100%; }
+.preview-font-popover p { font-size:11px; color:var(--text-muted); line-height:1.6; }
+.preview-size-control { display:flex; align-items:center; gap:8px; }
+.preview-size-control input { width:65px; }
+.preview-size-control button { padding:6px 10px; border:1px solid var(--border); }
+@media(max-width:1100px) { .preview-language { max-width:110px; } .file-preview-tools { gap:5px; } }
+
+.file-preview-content .markdown-document h1 { font-size:1.85em; }
+.file-preview-content .markdown-document h2 { font-size:1.46em; }
+.file-preview-content .markdown-document h3 { font-size:1.23em; }

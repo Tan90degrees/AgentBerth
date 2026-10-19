@@ -111,7 +111,7 @@ async function forceCleanup(app) {
 
 const packaged = process.argv.includes('--packaged');
 if (packaged && process.platform !== 'win32') throw new Error('Packaged smoke requires the Windows package built on Windows');
-const executablePath = packaged ? path.resolve('release/win-unpacked/StackIsle.exe') : undefined;
+const executablePath = packaged ? path.resolve('release/win-unpacked/AgentBerth.exe') : undefined;
 if (executablePath) await stat(executablePath);
 // Exercise real canvas glyphs on CI hosts without a physical GPU. Production chooses its native driver.
 const launchArgs = [...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
@@ -233,7 +233,7 @@ try {
   step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
   const appInfo = await page.evaluate(() => window.berth.appInfo());
   assert.equal(appInfo.version, JSON.parse(await readFile('package.json','utf8')).version); assert.equal(appInfo.packaged, packaged);
-  await page.getByText(`StackIsle · 栈屿 v${appInfo.version}`, { exact: true }).waitFor();
+  await page.getByText(`AgentBerth · 泊栈 v${appInfo.version}`, { exact: true }).waitFor();
   await page.getByRole('button', { name: '复制诊断信息', exact: true }).click();
   await page.getByText('诊断信息已复制', { exact: true }).waitFor();
   const diagnostic = await application.evaluate(({ clipboard }) => clipboard.readText());

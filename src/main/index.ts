@@ -42,11 +42,11 @@ else {
     const icon = nativeImage.createFromPath(iconFile);
     if (icon.isEmpty()) throw new Error('应用图标资源未正确打包');
     tray = new Tray(iconFile);
-    tray.setToolTip('StackIsle · 会话后台运行');
+    tray.setToolTip('AgentBerth · 会话后台运行');
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开 StackIsle', click: showWindow },
+      { label: '打开 AgentBerth', click: showWindow },
       { type: 'separator' },
-      { label: '退出 StackIsle（停止全部终端）', click: () => app.quit() },
+      { label: '退出 AgentBerth（停止全部终端）', click: () => app.quit() },
     ]));
     tray.on('double-click', showWindow);
     try { await reconnect(); } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
@@ -59,7 +59,7 @@ function quitApplication(): Promise<void> {
   if (exitPromise) return exitPromise;
   quitting = true;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  tray?.setToolTip('StackIsle · 正在停止终端并退出');
+  tray?.setToolTip('AgentBerth · 正在停止终端并退出');
   exitPromise = (async () => {
     await importingPlugins.close();
     if (connecting) await connecting.catch(() => {});
@@ -69,12 +69,12 @@ function quitApplication(): Promise<void> {
     // All owned workers and the daemon are gone; renderer/debugger unload must not delay explicit quit.
     app.exit(0);
   })().catch(error => {
-    console.error('StackIsle 退出未完成：', error);
+    console.error('AgentBerth 退出未完成：', error);
     quitting = false;
     importingPlugins = new AgentPlugins();
-    tray?.setToolTip('StackIsle · 退出失败，请重试');
+    tray?.setToolTip('AgentBerth · 退出失败，请重试');
     showWindow();
-    dialog.showErrorBox('StackIsle 退出未完成', `${String(error)}\n请再次从托盘选择退出，确保后台及全部终端停止。`);
+    dialog.showErrorBox('AgentBerth 退出未完成', `${String(error)}\n请再次从托盘选择退出，确保后台及全部终端停止。`);
   }).finally(() => { exitPromise = null; });
   return exitPromise;
 }
@@ -96,7 +96,7 @@ async function reconnect(): Promise<void> {
   return connecting;
 }
 function createWindow() {
-  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'StackIsle · 栈屿', icon: iconFile, show: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, show: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window.once('ready-to-show',()=>{if(!quitting)window?.show();});
   window.setMenuBarVisibility(false);
   window.on('close', event => { if (!quitReady) { event.preventDefault(); window?.hide(); } });
