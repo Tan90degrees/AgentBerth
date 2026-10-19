@@ -185,6 +185,19 @@ function Cancel-Preparation([bool]$yes) {
   }
   Answer-Abort $yes
 }
+function Move-LegacyFixture([string]$source, [string]$destination) {
+  # Windows can briefly retain an image/antivirus handle after the verifier
+  # exits. Retry only sharing violations while preparing the legacy fixture.
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  do {
+    try { Move-Item -LiteralPath $source -Destination $destination; return }
+    catch [IO.IOException] {
+      $code = $_.Exception.HResult -band 0xffff
+      if (($code -ne 32 -and $code -ne 33) -or [DateTime]::UtcNow -ge $deadline) { throw }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ($true)
+}
 function Verify-Installed {
   # Electron is a Windows GUI executable even in Node mode. PowerShell 5.1's
   # call operator can return before it exits, leaving LASTEXITCODE unchanged.
@@ -232,8 +245,8 @@ try {
   Verify-Installed
   Trace-AppProcesses 'After fresh install'
   Write-Host 'Installer smoke: upgrade an installation with legacy StackIsle filenames'
-  Move-Item $exe (Join-Path $target 'StackIsle.exe')
-  Move-Item (Join-Path $target 'Uninstall AgentBerth.exe') (Join-Path $target 'Uninstall StackIsle.exe')
+  Move-LegacyFixture $exe (Join-Path $target 'StackIsle.exe')
+  Move-LegacyFixture (Join-Path $target 'Uninstall AgentBerth.exe') (Join-Path $target 'Uninstall StackIsle.exe')
   $active = Start-Setup $true
   Wait-Exit $active 0
   Assert (Has-Log 'UPGRADE: bounded current uninstaller') 'Legacy executable did not trigger upgrade cleanup'

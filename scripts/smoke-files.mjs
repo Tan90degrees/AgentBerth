@@ -49,6 +49,35 @@ try {
   page.on('console', message => { if (message.type() === 'error') console.error(message.text()); });
   await page.getByRole('button', { name: '添加第一个项目' }).waitFor();
   const project = await page.evaluate(root => window.berth.rpc('createProject', { name: '文件工作台', path: root }), root);
+  step('compact project heading keeps final glyphs visible and truncates long names with a tooltip');
+  const projectTitle = page.locator('.project-header h1');
+  for (const name of ['文件工作台f', 'AgentBerth 项目管理', '项目名称很长时应该明确显示省略号并允许悬停查看全部名称'.repeat(3)]) {
+    await page.evaluate(({ projectId, name, path }) => window.berth.rpc('updateProject', { projectId, name, path }), { projectId: project.id, name, path: root });
+    await page.waitForFunction(name => document.querySelector('.project-header h1')?.textContent === name, name);
+    assert.equal(await projectTitle.getAttribute('title'), name);
+    const layout = await projectTitle.evaluate(element => {
+      const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+      const range = document.createRange(); range.selectNodeContents(element);
+      const text = range.getBoundingClientRect();
+      const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+      context.font = style.font; context.letterSpacing = style.letterSpacing;
+      const ink = context.measureText(element.textContent);
+      return { width: rect.width, right: rect.right, textRight: text.right, inkRight: text.left + ink.actualBoundingBoxRight,
+        pathLeft: element.nextElementSibling.getBoundingClientRect().left, ellipsis: style.textOverflow,
+        rowHeight: element.closest('.project-header').getBoundingClientRect().height };
+    });
+    assert.ok(layout.rowHeight <= 40, `project row stays compact: ${JSON.stringify(layout)}`);
+    assert.ok(layout.right <= layout.pathLeft, 'project name and path must not overlap');
+    if (name.length < 40) {
+      assert.ok(layout.textRight <= layout.right && layout.inkRight <= layout.right, `complete final glyph: ${JSON.stringify(layout)}`);
+    } else {
+      assert.ok(layout.textRight > layout.right, 'long name exceeds the visible title');
+      assert.equal(layout.ellipsis, 'ellipsis');
+      await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}project-heading-long.png` });
+    }
+  }
+  await page.evaluate(({ projectId, path }) => window.berth.rpc('updateProject', { projectId, name: '文件工作台', path }), { projectId: project.id, path: root });
+  await page.waitForFunction(() => document.querySelector('.project-header h1')?.textContent === '文件工作台');
   const session = await page.evaluate(projectId => window.berth.rpc('createSession', { projectId, title: '保持运行的终端', agent: 'shell' }), project.id);
   const run = await page.evaluate(sessionId => window.berth.rpc('start', { sessionId, cols: 90, rows: 30 }), session.id);
   await page.locator('.terminal-mount .xterm').waitFor();
