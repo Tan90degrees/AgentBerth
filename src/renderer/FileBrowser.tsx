@@ -9,7 +9,7 @@ type Directory = { page?: ProjectFilePage; loading: boolean; error?: string };
 function EntryIcon({ directory, expanded }: { directory: boolean; expanded?: boolean }) {
   return <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true"><path d={directory ? expanded ? 'M2 7V4h6l2 2h8v2M2 8h17l-3 8H3L2 8Z' : 'M2 6V4h6l2 2h8v10H2V6Z' : 'M5 2h7l4 4v12H5V2Zm7 0v5h4'} /></svg>;
 }
-export default memo(function FileBrowser({ project, connected, treeHost, previewHost, onPreview, target }: { project: Project; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; onPreview: () => void; target: { query: string; nonce: number } | null }) {
+export default memo(function FileBrowser({ project, connected, treeHost, previewHost, onPreview, target, navigationSupported }: { project: Project; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; onPreview: () => void; navigationSupported: boolean; target: { query: string; nonce: number } | null }) {
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
   const directoriesRef = useRef(directories); directoriesRef.current = directories;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -139,6 +139,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     }, 180);
     return () => { clearTimeout(timer); searchToken.current++; };
   }, [query, searchOpen, project.id, reveal, target]);
+  useEffect(() => { document.querySelector('[aria-label="匹配的文件和目录"] [aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }); }, [matchIndex]);
   function toggle(entry: ProjectFile) {
     if (expanded.has(entry.path)) setExpanded(previous => { const next = new Set(previous); next.delete(entry.path); return next; });
     else {
@@ -182,7 +183,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
   }
   return <>
     {treeHost && createPortal(<div className="file-navigation">
-      <button className="file-find-button" title="模糊查找文件或目录" onClick={() => { searchOpener.current = document.activeElement as HTMLElement; setQuery(''); setSearchOpen(true); }}>查找文件或目录…<kbd>路径</kbd></button>
+      <button className="file-find-button" disabled={!connected || !navigationSupported} title={navigationSupported ? "模糊查找文件或目录" : "更新后台后使用路径查找"} onClick={() => { searchOpener.current = document.activeElement as HTMLElement; setQuery(''); setSearchOpen(true); }}>查找文件或目录…<kbd>路径</kbd></button>
       <div className="file-tree-options"><button aria-pressed={showIgnored} title="Git 忽略的文件和目录以灰色显示" onClick={() => setShowIgnored(previous => { saveStored('berth.showIgnoredFiles', String(!previous)); return !previous; })}>{showIgnored ? '隐藏忽略项' : '显示忽略项'}</button><div><button aria-label="刷新目录树" title="刷新展开的目录和当前文件" disabled={!connected || refreshing} onClick={() => void refresh()}>{refreshing ? '…' : '↻'}</button><button aria-label="收起全部目录" title="收起全部目录" onClick={() => setExpanded(new Set())}>⊟</button></div></div>
       {directories['']?.page?.warning && <p className="file-tree-warning" role="status">{directories[''].page.warning}</p>}
       <nav ref={tree} className="file-tree" aria-label="项目目录树"><ul role="tree" aria-label={project.name} onKeyDown={treeKeys}>{renderDirectory('', 0)}</ul></nav>

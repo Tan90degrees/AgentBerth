@@ -14,6 +14,9 @@ test('terminal paths preserve Windows drive letters, quoted spaces, Unicode and 
   assert.deepEqual(links.map(link => link.text), ['src/main.ts:42:5', '"docs/空 格.md"']);
   for (const link of links) assert.equal(text.slice(link.start, link.end), link.text);
   assert.equal(terminalFileLinks('plain terminal prose').length, 0);
+  assert.deepEqual(terminalFileLinks('/src C:\\Work src/').map(item => item.text), ['/src', 'C:\\Work', 'src/']);
+  assert.equal(terminalFileLinks('"src/空 格.ts":12:3')[0].text, '"src/空 格.ts":12:3');
+  assert.equal(terminalFileLinks('x'.repeat(20000)).length, 0);
   assert.equal(parseFileLocation(terminalFileLinks('at src/app.ts(8,4)')[0].text).line, 8);
 });
 test('file matching prioritizes exact suffixes over fuzzy subsequences', () => {

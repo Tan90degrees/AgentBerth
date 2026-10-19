@@ -20,10 +20,13 @@ export function fileMatchScore(candidate: string, query: string): number {
 // URL links are handled separately. Quoted paths can contain spaces; unquoted
 // links require a separator or extension so normal prose is not made clickable.
 export function terminalFileLinks(line: string): { text: string; start: number; end: number }[] {
-  const pattern = /(?:"[^"\r\n]+"|'[^'\r\n]+')(?:：?\d+)?(?::\d+(?::\d+)?)?|(?:[A-Za-z]:[\\/]|\.{0,2}[\\/])?[^\s<>"'`|*?]+(?:[\\/][^\s<>"'`|*?]+|\.[A-Za-z][A-Za-z0-9]{0,15})(?::\d+(?::\d+)?|\(\d+(?:,\d+)?\))?/g;
+  const pattern = /(?:"[^"\r\n]+"|'[^'\r\n]+')(?::\d+(?::\d+)?)?|[^\s<>"'`|*?]+/g;
   return [...line.matchAll(pattern)].flatMap(match => {
-    const text = match[0].replace(/[,;]+$/, ''), start = match.index!;
-    if (/^[\w+.-]+:\/\//.test(text) && !/^file:\/\//i.test(text) || !/[\\/.]/.test(text)) return [];
+    let text = match[0], start = match.index!;
+    if (text.startsWith('(') && text.endsWith(')')) { text = text.slice(1, -1); start++; }
+    text = text.replace(/[,;]+$/, '');
+    if (/^[\w+.-]+:\/\//.test(text) && !/^file:\/\//i.test(text)) return [];
+    if (!/[\\/]/.test(text) && !/\.[A-Za-z][A-Za-z0-9]{0,15}(?:["']|:\d|\(|$)/.test(text)) return [];
     return [{ text, start, end: start + text.length }];
   });
 }

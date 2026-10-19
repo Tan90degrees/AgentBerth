@@ -82,8 +82,9 @@ function CodePreview({ text, filename, position }: { text: string; filename: str
     } catch { return; }
     return () => worker.terminate();
   }, [text, language]);
-  const lineNumbers = useMemo(() => Array.from({ length: text.split('\n').length }, (_, index) => index + 1).join('\n'), [text]);
-  return <div ref={host} className="source-preview" tabIndex={0} aria-label="文件源码"><pre className="source-lines" aria-hidden="true">{lineNumbers}</pre><pre className="source-code">{highlighted?.text === text ? <code className="hljs" data-language={language} dangerouslySetInnerHTML={{ __html: highlighted.html }} /> : <code data-language={language}>{text}</code>}</pre></div>;
+  const lineNumbers = useMemo(() => Array.from({ length: text.split('\n').length }, (_, index) => index + 1), [text]);
+  const targetLine = position ? Math.min(position.line, lineNumbers.length) : 0;
+  return <div ref={host} className="source-preview" tabIndex={0} aria-label="文件源码"><pre className="source-lines" aria-hidden="true">{lineNumbers.map(line => <span key={line} className={line === targetLine ? 'source-target-line' : ''}>{line}{'\n'}</span>)}</pre><pre className="source-code" style={targetLine ? { backgroundImage: 'linear-gradient(var(--selected), var(--selected))', backgroundSize: '100% 20.4px', backgroundPosition: `0 ${14 + (targetLine - 1) * 20.4}px`, backgroundRepeat: 'no-repeat' } : undefined}>{highlighted?.text === text ? <code className="hljs" data-language={language} dangerouslySetInnerHTML={{ __html: highlighted.html }} /> : <code data-language={language}>{text}</code>}</pre></div>;
 }
 export default function FilePreview({ position, file, projectId, markdown, onMarkdown, onNavigate, onRefresh, onError }: { position?: { path: string; line: number; column: number; nonce: number } | null; file: Preview; projectId: string; markdown: boolean; onMarkdown: (value: boolean) => void; onNavigate: (path: string, anchor?: string) => void; onRefresh: () => void; onError: (error: string) => void }) {
   const [copied, setCopied] = useState(false);
@@ -94,6 +95,7 @@ export default function FilePreview({ position, file, projectId, markdown, onMar
       <span className="file-relative-path" title={file.path}>{file.path}</span>
       {file.kind === 'text' && isMarkdown(file.name) && <div className="file-preview-modes" role="group" aria-label="Markdown 预览方式"><button aria-pressed={!markdown} onClick={() => onMarkdown(false)}>源码</button><button aria-pressed={markdown} onClick={() => onMarkdown(true)}>渲染</button></div>}
       {file.kind === 'text' && <button title="复制当前预览的内容" onClick={() => { void window.berth.copyText(file.content ?? '').then(() => setCopied(true)).catch(error => onError(String(error))); }}>{copied ? '已复制' : '复制内容'}</button>}
+      {position?.path === file.path && <span title="终端跳转位置">{position.line}:{position.column}</span>}
       <span>{fileSize(file.size)}</span><button className="icon-button" aria-label="刷新文件预览" title="重新读取当前文件" onClick={onRefresh}>↻</button>
     </div>
     {file.truncated && <p className="file-preview-notice" role="status">文件较大，仅预览开头部分内容。</p>}

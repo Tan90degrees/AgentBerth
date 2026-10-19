@@ -25,7 +25,7 @@ let restarting = false;
 let importingPlugins = new AgentPlugins();
 const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
 const iconFile = path.join(resourceRoot, 'assets', process.platform === 'win32' ? 'app.ico' : 'app.png');
-if (!app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', legacyProfile(app.getPath('appData')));
+if (!app.commandLine.hasSwitch('user-data-dir')) { const profile = legacyProfile(app.getPath('appData')); mkdirSync(profile, { recursive: true }); app.setPath('userData', profile); }
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
 if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must be an absolute path');
 
