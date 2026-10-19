@@ -8,6 +8,7 @@
 Var BerthLogPath
 Var BerthLogHandle
 Var BerthMessage
+Var BerthLine
 Var BerthStartTick
 !ifndef BUILD_UNINSTALLER
   Var BerthStage
@@ -15,6 +16,13 @@ Var BerthStartTick
   Var BerthProgress
   Var BerthCallback
   Var BerthOldNodeMode
+  Var BerthCompleted
+  Var BerthTotal
+  Var BerthPercentStep
+  Var BerthPercent
+  Var BerthScaledCompleted
+  Var BerthCancelLogHandle
+  Var BerthProgressHeader
   Var packageArch
 !endif
 
@@ -43,6 +51,18 @@ Var BerthStartTick
     !include "${PROJECT_DIR}\node_modules\app-builder-lib\templates\nsis\include\extractAppPackage.nsh"
   !endif
 
+Function ${BerthPrefix}BerthAppend
+  ClearErrors
+  FileOpen $BerthLogHandle "$BerthLogPath" a
+  ${IfNot} ${Errors}
+    FileSeek $BerthLogHandle 0 END
+    FileWriteUTF16LE $BerthLogHandle "$BerthLine$\r$\n"
+    FileClose $BerthLogHandle
+  ${EndIf}
+  SetDetailsPrint both
+  DetailPrint "$BerthMessage"
+FunctionEnd
+
 Function ${BerthPrefix}BerthLog
   Push $0
   ${If} $BerthLogPath == ""
@@ -59,15 +79,8 @@ Function ${BerthPrefix}BerthLog
   ${EndIf}
   System::Call 'kernel32::GetTickCount() i.r0'
   IntOp $0 $0 - $BerthStartTick
-  ClearErrors
-  FileOpen $BerthLogHandle "$BerthLogPath" a
-  ${IfNot} ${Errors}
-    FileSeek $BerthLogHandle 0 END
-    FileWriteUTF16LE $BerthLogHandle "[$0 ms] $BerthMessage$\r$\n"
-    FileClose $BerthLogHandle
-  ${EndIf}
-  SetDetailsPrint both
-  DetailPrint "$BerthMessage"
+  StrCpy $BerthLine "[$0 ms] $BerthMessage"
+  Call ${BerthPrefix}BerthAppend
   Pop $0
 FunctionEnd
 
@@ -91,6 +104,7 @@ FunctionEnd
     GetDlgItem $0 $HWNDPARENT 2
     EnableWindow $0 1
     SetDetailsView show
+    GetDlgItem $BerthProgressHeader $HWNDPARENT 1038
     !insertmacro BerthLog "日志 / Log: $BerthLogPath"
   FunctionEnd
   Function BerthAbort
@@ -102,32 +116,59 @@ FunctionEnd
     StrCpy $BerthAbortDecision "0"
     Abort
     berth_abort_confirmed:
-      !insertmacro BerthLog "CANCELLED: before commit; existing installation retained"
+      ; No plug-ins or shared log scratch variables while extraction is active.
+      ClearErrors
+      FileOpen $BerthCancelLogHandle "$BerthLogPath" a
+      ${IfNot} ${Errors}
+        FileSeek $BerthCancelLogHandle 0 END
+        FileWriteUTF16LE $BerthCancelLogHandle "[cancel] CANCELLED: before commit; existing installation retained$\r$\n"
+        FileClose $BerthCancelLogHandle
+      ${EndIf}
       SetErrorLevel 1
       Quit
   FunctionEnd
   Function BerthExtractProgress
     ; Nsis7z passes completed and total bytes to its callback. Its progress bar
-    ; remains byte-based; Int64 arithmetic avoids overflow on large payloads.
-    Pop $R8
-    Pop $R9
-    ; The GUI abort callback and extraction share NSIS registers. Pause the
-    ; worker while confirmation is open so cancellation logging cannot race.
+    ; remains byte-based. Avoid plug-ins in this worker callback: the abort
+    ; callback can otherwise interleave calls on their NSIS parameter stack.
+    Pop $BerthCompleted
+    Pop $BerthTotal
     ${DoWhile} $BerthAbortDecision == "1"
       Sleep 20
     ${Loop}
-    Push $0
-    ${If} $R9 > 0
-      System::Int64Op $R8 * 100
-      Pop $0
-      System::Int64Op $0 / $R9
-      Pop $0
-      ${If} $0 != $BerthProgress
-        StrCpy $BerthProgress $0
-        !insertmacro BerthLog "准备文件 / Preparing files: $0% ($R8 / $R9 bytes)"
+    ${If} $BerthTotal != "0"
+      StrLen $BerthPercentStep $BerthTotal
+      ${If} $BerthPercentStep > 5
+        ; Scale decimal byte strings before 32-bit arithmetic. This supports
+        ; payloads beyond 2 GiB without multiplying their byte count by 100.
+        StrCpy $BerthPercentStep $BerthTotal -3
+        IntOp $BerthPercentStep $BerthPercentStep / 100
+        StrLen $BerthPercent $BerthCompleted
+        ${If} $BerthPercent > 3
+          StrCpy $BerthScaledCompleted $BerthCompleted -3
+        ${Else}
+          StrCpy $BerthScaledCompleted 0
+        ${EndIf}
+        IntOp $BerthPercent $BerthScaledCompleted / $BerthPercentStep
+      ${Else}
+        IntOp $BerthPercent $BerthCompleted * 100
+        IntOp $BerthPercent $BerthPercent / $BerthTotal
+      ${EndIf}
+      ${If} $BerthCompleted != $BerthTotal
+      ${AndIf} $BerthPercent > 99
+        StrCpy $BerthPercent 99
+      ${EndIf}
+      ${If} $BerthCompleted == $BerthTotal
+        StrCpy $BerthPercent 100
+      ${EndIf}
+      ${If} $BerthPercent != $BerthProgress
+        StrCpy $BerthProgress $BerthPercent
+        StrCpy $BerthMessage "准备文件 / Preparing files: $BerthProgress% ($BerthCompleted / $BerthTotal bytes)"
+        StrCpy $BerthLine "[progress] $BerthMessage"
+        Call BerthAppend
+        SendMessage $BerthProgressHeader ${WM_SETTEXT} 0 "STR:$BerthMessage" /TIMEOUT=500
       ${EndIf}
     ${EndIf}
-    Pop $0
   FunctionEnd
   Function BerthPreparePayload
     StrCpy $BerthStage "prepare"
@@ -158,6 +199,7 @@ FunctionEnd
     GetDlgItem $0 $HWNDPARENT 2
     EnableWindow $0 0
     !insertmacro BerthLog "VERIFY: 校验准备文件 / Verifying staged files"
+    SendMessage $BerthProgressHeader ${WM_SETTEXT} 0 "STR:校验准备文件 / Verifying staged files"
     File /oname=$PLUGINSDIR\verify-payload.cjs "${BUILD_RESOURCES_DIR}\verify-payload.cjs"
     File /oname=$PLUGINSDIR\installer-payload.json "${PROJECT_DIR}\dist\installer-payload.json"
     ReadEnvStr $BerthOldNodeMode ELECTRON_RUN_AS_NODE
@@ -174,6 +216,7 @@ FunctionEnd
     ${EndIf}
     !insertmacro BerthLog "$1"
     !insertmacro BerthLog "COMMIT: 文件准备完成，正在替换文件和创建快捷方式 / Finishing installation"
+    SendMessage $BerthProgressHeader ${WM_SETTEXT} 0 "STR:替换文件和创建快捷方式 / Finishing installation"
     SetOutPath "$INSTDIR"
   FunctionEnd
   Function BerthEnsurePrepared
@@ -247,6 +290,25 @@ FunctionEnd
     ${EndIf}
     Pop $0
     SetOutPath $TEMP
+  !macroend
+  ; Keep electron-builder 26.15.3's atomic move/restore helpers and report the
+  ; exact file on failure, before its return value is consumed by rollback.
+  !macro customRemoveFiles
+    ${If} ${isUpdated}
+      CreateDirectory "$PLUGINSDIR\old-install"
+      Push ""
+      Call un.atomicRMDir
+      Pop $R0
+      ${If} $R0 != 0
+        !insertmacro BerthLog "FAILED: cannot move installed file: $R0; restoring previous files"
+        Push ""
+        Call un.restoreFiles
+        Pop $R0
+        Abort "Previous-version cleanup failed; existing files restored."
+      ${EndIf}
+    ${EndIf}
+    SetOutPath $TEMP
+    RMDir /r "$INSTDIR"
   !macroend
 !endif
 
