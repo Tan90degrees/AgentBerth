@@ -148,3 +148,17 @@ test('terminal navigation resolves exact absolute paths, fuzzy ambiguity, direct
     await assert.rejects(files.search(project, 'linked.ts'), /项目目录之外/);
   }
 });
+
+
+test('absolute terminal paths canonicalize directory aliases before checking project boundaries', async t => {
+  const { root, project, files } = await fixture(t);
+  await mkdir(path.join(project, 'src')); await writeFile(path.join(project, 'src', 'app.ts'), 'source');
+  const alias = path.join(root, 'project-alias');
+  try { await symlink(project, alias, process.platform === 'win32' ? 'junction' : 'dir'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { t.skip('Directory aliases unavailable'); return; } throw error; }
+  const result = await files.search(alias, path.join(alias, 'src', 'app.ts') + ':9:2');
+  assert.equal(result.matches[0].path, 'src/app.ts'); assert.equal(result.line, 9);
+  const missing = await files.search(alias, path.join(alias, 'src', 'ap.ts'));
+  assert.equal(missing.matches[0].path, 'src/app.ts');
+  await assert.rejects(files.search(alias, path.join(root, 'outside', 'app.ts')), /项目之外/);
+});

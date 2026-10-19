@@ -75,8 +75,22 @@ export class ProjectFiles {
       const canonicalRoot = await realpath(root);
       let input = location.path.replaceAll('\\', '/');
       if (path.isAbsolute(input) || path.win32.isAbsolute(input)) {
-        if (!inside(canonicalRoot, path.resolve(input))) throw new Error('此路径位于当前项目之外，请切换到对应项目');
-        input = path.relative(canonicalRoot, input).replaceAll('\\', '/');
+        // Resolve Windows 8.3 names and directory aliases before comparing roots.
+        // Missing leaf names can still be fuzzy matched through their nearest
+        // existing parent, without allowing an outside symlink into the search.
+        let absolute = path.resolve(input);
+        const missing: string[] = [];
+        for (let depth = 0; depth < 64; depth++) {
+          try { absolute = path.resolve(await realpath(absolute), ...missing); break; }
+          catch (error) {
+            if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+            const parent = path.dirname(absolute);
+            if (parent === absolute || depth === 63) throw new Error('无法定位此路径，请使用项目内的相对路径');
+            missing.unshift(path.basename(absolute)); absolute = parent;
+          }
+        }
+        if (!inside(canonicalRoot, absolute)) throw new Error('此路径位于当前项目之外，请切换到对应项目');
+        input = path.relative(canonicalRoot, absolute).replaceAll('\\', '/');
       }
       input = input.replace(/^(?:\.\/)+/, '').replace(/\/$/, '');
       if (input.split('/').includes('..') || input.includes('\0')) throw new Error('只能定位当前项目中的文件');
