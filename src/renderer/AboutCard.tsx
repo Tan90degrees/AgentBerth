@@ -16,7 +16,7 @@ export function AboutCard({ connected, apiVersion, running, onError }: { connect
     try { await work(); setMessage(success); } catch (reason) { setError(String(reason)); onError(String(reason)); }
   }
   return <section className="settings-card about-card"><h2>关于与支持</h2>
-    <p className="app-version">AgentBerth · 泊栈 {info ? `v${info.version}` : '正在读取版本…'}</p>
+    <p className="app-version">StackIsle · 栈屿 {info ? `v${info.version}` : '正在读取版本…'}</p>
     <p>后台{connected ? '已连接' : '未连接'}{apiVersion < API_VERSION ? ' · 可更新后台' : ''}</p>
     <div className="about-actions"><button className="subtle" disabled={!info} onClick={() => void action(() => window.berth.copyText(diagnostics(info!, connected, apiVersion, running)), '诊断信息已复制')}>复制诊断信息</button><button className="subtle" onClick={() => void action(() => window.berth.openDataDirectory())}>打开数据目录</button><button className="subtle" onClick={() => void action(() => window.berth.openExternal('https://github.com/Tan90degrees/AgentBerth/blob/main/README.md'))}>使用说明</button><button className="subtle" onClick={() => void action(() => window.berth.openExternal('https://github.com/Tan90degrees/AgentBerth/issues'))}>反馈问题</button></div>
     <p className="form-hint">复制诊断信息可用于反馈问题，仅包含版本、系统和后台状态。</p>

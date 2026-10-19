@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 16;
+export const API_VERSION = 17;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -53,6 +53,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id }).strict() }),
   z.object({ id, method: z.literal('gitOperation'), params: gitOperationSchema }),
   z.object({ id, method: z.literal('projectFiles'), params: z.object({ projectId: id, path: z.string().max(4096).default(''), offset: z.number().int().min(0).max(10000).default(0), limit: z.number().int().min(1).max(300).default(200) }).strict() }),
+  z.object({ id, method: z.literal('findProjectFiles'), params: z.object({ projectId: id, query: z.string().trim().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('previewFile'), params: z.object({ projectId: id, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('createProject'), params: z.object({ name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('updateProject'), params: z.object({ projectId: id, name: title, path: z.string().min(1).max(4096) }).strict() }),

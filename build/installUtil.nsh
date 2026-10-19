@@ -10,7 +10,8 @@
   StrCpy $R0 0
   !insertmacro readReg $installationDir "${ROOT_KEY}" "${INSTALL_REGISTRY_KEY}" InstallLocation
   ${If} $installationDir != ""
-  ${AndIf} ${FileExists} "$installationDir\${APP_EXECUTABLE_FILENAME}"
+  ${If} ${FileExists} "$installationDir\${APP_EXECUTABLE_FILENAME}"
+  ${OrIf} ${FileExists} "$installationDir\AgentBerth.exe"
     File /oname=$PLUGINSDIR\berth-current-uninstaller.exe "${UNINSTALLER_OUT_FILE}"
     ${If} $installMode == "CurrentUser"
     ${OrIf} "${ROOT_KEY}" == "HKEY_CURRENT_USER"
@@ -35,6 +36,7 @@
     ${EndIf}
     SetOutPath "$INSTDIR"
     ClearErrors
+  ${EndIf}
   ${EndIf}
   ClearErrors
 !macroend

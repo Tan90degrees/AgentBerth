@@ -1,9 +1,9 @@
 {
-  "name": "agentberth",
-  "version": "0.10.0",
+  "name": "stackisle",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
-  "description": "A project-oriented workspace for persistent agent terminals",
+  "description": "A project workspace for persistent terminals, agents, files and history",
   "license": "Apache-2.0",
   "main": "dist/main.cjs",
   "engines": {
@@ -18,8 +18,8 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:scripts && node scripts/test.mjs",
     "test:scripts": "node --test tests/setup.test.mjs tests/release.test.mjs tests/installer.test.mjs",
-    "test:desktop": "npm run build && node scripts/smoke.mjs && node scripts/smoke-files.mjs",
-    "test:packaged": "node scripts/smoke.mjs --packaged && node scripts/smoke-files.mjs --packaged",
+    "test:desktop": "npm run build && node scripts/test-desktop.mjs",
+    "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "check": "npm run typecheck && npm test && npm run build",
     "dist:win": "npm run build && electron-builder --win nsis zip --x64 --publish never",
     "test:files": "npm run build && node scripts/smoke-files.mjs"
@@ -57,7 +57,7 @@
   },
   "build": {
     "appId": "dev.agentberth.desktop",
-    "productName": "AgentBerth",
+    "productName": "StackIsle",
     "afterSign": "scripts/installer-payload.mjs",
     "directories": {
       "output": "release"
@@ -78,12 +78,12 @@
         "nsis",
         "zip"
       ],
-      "artifactName": "AgentBerth-${version}-windows-${arch}.${ext}",
+      "artifactName": "StackIsle-${version}-windows-${arch}.${ext}",
       "icon": "assets/app.ico"
     },
     "nsis": {
       "include": "build/agentberth-installer.nsh",
-      "artifactName": "AgentBerth-${version}-windows-${arch}-setup.${ext}",
+      "artifactName": "StackIsle-${version}-windows-${arch}-setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "assets/app.ico",

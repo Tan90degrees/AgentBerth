@@ -1,12 +1,12 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version
-$installer = Join-Path $repo "release/AgentBerth-$version-windows-x64-setup.exe"
+$installer = Join-Path $repo "release/StackIsle-$version-windows-x64-setup.exe"
 $result = Join-Path $repo 'test-results/installer'
 [void](New-Item -ItemType Directory -Force $result)
 $root = Join-Path $env:TEMP ("berth setup test " + [guid]::NewGuid().ToString())
-$target = Join-Path $root ('installed ' + [char]0x4e2d + '\AgentBerth')
-$exe = Join-Path $target 'AgentBerth.exe'
+$target = Join-Path $root ('installed ' + [char]0x4e2d + '\StackIsle')
+$exe = Join-Path $target 'StackIsle.exe'
 $helper = $null
 $active = $null
 $script:caseStart = [DateTime]::UtcNow
@@ -50,7 +50,7 @@ public class SetupUi {
   public static string Text(IntPtr h) { var s=new StringBuilder(2048);GetWindowText(h,s,s.Capacity);return s.ToString(); }
   public static IntPtr[] Dialogs() {
     var list=new List<IntPtr>();
-    EnumWindows(delegate(IntPtr h,IntPtr p) { var s=new StringBuilder(128);GetClassName(h,s,s.Capacity);if(IsWindowVisible(h)&&s.ToString()=="#32770"&&Text(h).StartsWith("AgentBerth"))list.Add(h);return true; },IntPtr.Zero);
+    EnumWindows(delegate(IntPtr h,IntPtr p) { var s=new StringBuilder(128);GetClassName(h,s,s.Capacity);if(IsWindowVisible(h)&&s.ToString()=="#32770"&&Text(h).StartsWith("StackIsle"))list.Add(h);return true; },IntPtr.Zero);
     return list.ToArray();
   }
   public static void Click(IntPtr parent,int id) { var b=GetDlgItem(parent,id);if(b!=IntPtr.Zero&&IsWindowEnabled(b))PostMessage(b,0xf5,IntPtr.Zero,IntPtr.Zero); }
@@ -91,12 +91,12 @@ public class SetupUi {
 
 function Assert($condition, $message) { if (!$condition) { throw $message } }
 function Live-AppPids {
-  foreach ($process in [Diagnostics.Process]::GetProcessesByName('AgentBerth')) {
+  foreach ($process in (@([Diagnostics.Process]::GetProcessesByName('StackIsle')) + @([Diagnostics.Process]::GetProcessesByName('AgentBerth')))) {
     try { if (!$process.HasExited) { $process.Id } } finally { $process.Dispose() }
   }
 }
 function Trace-AppProcesses([string]$stage) {
-  foreach ($process in [Diagnostics.Process]::GetProcessesByName('AgentBerth')) {
+  foreach ($process in (@([Diagnostics.Process]::GetProcessesByName('StackIsle')) + @([Diagnostics.Process]::GetProcessesByName('AgentBerth')))) {
     try { Write-Host "$stage PID=$($process.Id) exited=$($process.HasExited) started=$($process.StartTime.ToUniversalTime().ToString('o')) title=$($process.MainWindowTitle)" } finally { $process.Dispose() }
   }
 }
@@ -113,7 +113,7 @@ function Wait-Until([scriptblock]$check, [string]$message, [int]$seconds = 30) {
   throw $message
 }
 function Logs {
-  foreach ($file in Get-ChildItem (Join-Path $env:TEMP "AgentBerth-setup-$version-*.log") -ErrorAction SilentlyContinue) {
+  foreach ($file in Get-ChildItem (Join-Path $env:TEMP "StackIsle-setup-$version-*.log") -ErrorAction SilentlyContinue) {
     # Adjacent cases can start less than a second apart. Including older logs
     # lets Drive-To mistake the previous install's stage for this one's.
     if ($file.LastWriteTimeUtc -ge $script:caseStart) {
@@ -231,6 +231,15 @@ try {
   Assert (Has-Log 'VERIFIED:') 'Staged inventory verification is missing'
   Verify-Installed
   Trace-AppProcesses 'After fresh install'
+  Write-Host 'Installer smoke: upgrade an installation with legacy AgentBerth filenames'
+  Move-Item $exe (Join-Path $target 'AgentBerth.exe')
+  Move-Item (Join-Path $target 'Uninstall StackIsle.exe') (Join-Path $target 'Uninstall AgentBerth.exe')
+  $active = Start-Setup $true
+  Wait-Exit $active 0
+  Assert (Has-Log 'UPGRADE: bounded current uninstaller') 'Legacy executable did not trigger upgrade cleanup'
+  Assert (!(Test-Path (Join-Path $target 'AgentBerth.exe'))) 'Upgrade left the legacy executable'
+  Verify-Installed
+
   # Simulate legacy native-build files independently of current package filters.
   $legacyRoot = $target + '\legacy native cache'
   $legacyFolder = $legacyRoot + '\' + ('x' * 140)
@@ -240,7 +249,7 @@ try {
   Assert ([SetupUi]::FileExists($legacyFile)) 'Long legacy file was not created'
   $beforeHash = (Get-FileHash $exe).Hash
   $sentinel = Join-Path $target 'preserve-on-cancel.txt'; Set-Content $sentinel 'retain old installation'
-  $oldUninstaller = Join-Path $target 'Uninstall AgentBerth.exe'
+  $oldUninstaller = Join-Path $target 'Uninstall StackIsle.exe'
   Set-Content $oldUninstaller 'Legacy uninstaller MUST NOT execute'
 
   Write-Host 'Installer smoke: cancel upgrade preserves old executable, uninstaller and files'
@@ -298,7 +307,9 @@ try {
   $readyJson = ConvertTo-Json $ready -Compress
   [IO.File]::WriteAllText($idle,"require('node:fs').writeFileSync($readyJson,'ready');setInterval(()=>{},1000);")
   $info = New-Object Diagnostics.ProcessStartInfo
-  $info.FileName=$exe; $info.Arguments='"'+$idle+'"'; $info.UseShellExecute=$false; $info.CreateNoWindow=$true
+  $legacyExe = Join-Path $target 'AgentBerth.exe'
+  Copy-Item $exe $legacyExe
+  $info.FileName=$legacyExe; $info.Arguments='"'+$idle+'"'; $info.UseShellExecute=$false; $info.CreateNoWindow=$true
   $info.EnvironmentVariables['ELECTRON_RUN_AS_NODE']='1'
   $helper = [Diagnostics.Process]::Start($info)
   Wait-Until { Test-Path $ready } 'Background fixture did not start'
@@ -344,13 +355,13 @@ try {
   Write-Host 'Installer smoke passed: byte percentage, logs, safe cancellation, locked-file rollback, long-path upgrade, running-app protection and both uninstall scopes'
 } catch {
   Trace-AppProcesses 'Failure'
-  Write-Host "Remaining live AgentBerth PIDs: $(@(Live-AppPids) -join ', ')"
+  Write-Host "Remaining live StackIsle PIDs: $(@(Live-AppPids) -join ', ')"
   foreach($window in [SetupUi]::Dialogs()){ try{ [SetupUi]::Capture($window,(Join-Path $result 'failure.png')) }catch{} }
   foreach($log in Logs){ Write-Host $log.Path; Write-Host $log.Text }
   throw
 } finally {
   if($helper){if(!$helper.HasExited){$helper.Kill();$helper.WaitForExit()};$helper.Dispose()}
-  foreach($log in Get-ChildItem (Join-Path $env:TEMP "AgentBerth-setup-$version-*.log") -ErrorAction SilentlyContinue){ if($log.LastWriteTimeUtc -ge $suiteStart.AddSeconds(-1)){Copy-Item $log.FullName $result -Force} }
+  foreach($log in Get-ChildItem (Join-Path $env:TEMP "StackIsle-setup-$version-*.log") -ErrorAction SilentlyContinue){ if($log.LastWriteTimeUtc -ge $suiteStart.AddSeconds(-1)){Copy-Item $log.FullName $result -Force} }
   if($active -and !$active.HasExited){$active.Kill();$active.WaitForExit()}
   Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 }
