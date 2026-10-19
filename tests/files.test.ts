@@ -127,3 +127,24 @@ test('file RPCs use registered project roots and validate directory pagination',
   await assert.rejects(connection.rpc('projectFiles', { projectId: p.id, limit: 1000 }), /参数无效/);
   await assert.rejects(connection.rpc('previewFile', { projectId: p.id, path: '../secret.txt' }), /路径无效/);
 });
+
+test('terminal navigation resolves exact absolute paths, fuzzy ambiguity, directories and positions inside the project', async t => {
+  const { project, root, files } = await fixture(t);
+  await mkdir(path.join(project, 'src')); await mkdir(path.join(project, 'tests')); await mkdir(path.join(project, 'node_modules'));
+  await writeFile(path.join(project, 'src', 'app.ts'), 'source'); await writeFile(path.join(project, 'tests', 'app.ts'), 'test');
+  await writeFile(path.join(project, 'node_modules', 'app.ts'), 'dependency');
+  const exact = await files.search(project, path.join(project, 'src', 'app.ts') + ':42:5');
+  assert.equal(exact.matches[0].path, 'src/app.ts'); assert.equal(exact.line, 42); assert.equal(exact.column, 5);
+  assert.equal((await files.search(project, 'src')).matches[0].kind, 'directory');
+  const fuzzy = await files.search(project, 'app.ts');
+  assert.deepEqual(new Set(fuzzy.matches.map(item => item.path)), new Set(['src/app.ts', 'tests/app.ts']));
+  assert.equal((await files.search(project, 'srap')).matches[0].path, 'src/app.ts');
+  assert.equal((await files.search(project, 'node_modules/app.ts')).matches[0].path, 'node_modules/app.ts');
+  assert.deepEqual((await files.search(project, 'does-not-exist')).matches, []);
+  await assert.rejects(files.search(project, path.join(root, 'outside.ts')), /项目之外/);
+  await assert.rejects(files.search(project, '../outside.ts'), /当前项目/);
+  if (process.platform !== 'win32') {
+    await writeFile(path.join(root, 'outside.ts'), 'outside'); await symlink(path.join(root, 'outside.ts'), path.join(project, 'linked.ts'));
+    await assert.rejects(files.search(project, 'linked.ts'), /项目目录之外/);
+  }
+});

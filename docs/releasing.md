@@ -29,7 +29,7 @@ Windows 安装定制位于 `build/agentberth-installer.nsh`。保留 electron-bu
 
 ## 安装器问题复检
 
-CI 将原始文件清单单独保存为 `installer-payload-inventory`。在 Actions 手动运行 `Recheck existing Windows installer`，输入同一次构建的 run ID，可直接下载该清单与 `AgentBerth-Windows-x64`，复检安装、取消、升级和卸载，无需重新打包。复检记录安装包提交与测试提交，不修改原包的构建信息，也不发布软件。
+CI 将原始文件清单单独保存为 `installer-payload-inventory`。在 Actions 手动运行 `Recheck existing Windows installer`，输入同一次构建的 run ID，可直接下载该清单与 `StackIsle-Windows-x64`，复检安装、取消、升级和卸载，无需重新打包。复检记录安装包提交与测试提交，不修改原包的构建信息，也不发布软件。
 
 Windows 测试显式等待 GUI 类型的 Electron 校验进程，按本轮启动时间筛选日志，发现 `FAILED` 即退出。升级回归包含中文/空格目录、超过 260 字符的旧文件，以及文件真正被占用时的完整文件恢复。卸载清理只在文件操作阶段切换到 Windows 扩展长度路径；快捷方式和注册表沿用原有路径，成功或失败回调恢复正常显示路径。
 

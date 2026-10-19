@@ -2,6 +2,7 @@ import { open, opendir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Dirent } from 'node:fs';
 import type { FilePreview, ProjectFile, ProjectFilePage } from '../shared/protocol';
+import { parseFileLocation, fileMatchScore } from '../shared/file-navigation';
 import { GitWorkspace } from './git';
 
 export const MAX_TEXT_BYTES = 256 * 1024;
@@ -65,6 +66,46 @@ export class ProjectFiles {
       const ignored = await this.git.ignored(path.resolve(target.root, target.relative), entries.map(entry => entry.name + (entry.kind === 'directory' ? '/' : '')));
       for (const entry of entries) entry.ignored = ignored.paths.has(entry.name);
       return { path: target.relative, entries, nextOffset: offset + limit < rows.length ? offset + limit : null, total: rows.length, truncated, gitAvailable: ignored.available, warning: ignored.warning };
+    });
+  }
+
+  search(root: string, query: string): Promise<{ matches: ProjectFile[]; truncated: boolean; line?: number; column?: number }> {
+    return this.read(async () => {
+      const location = parseFileLocation(query);
+      const canonicalRoot = await realpath(root);
+      let input = location.path.replaceAll('\\', '/');
+      if (path.isAbsolute(input) || path.win32.isAbsolute(input)) {
+        if (!inside(canonicalRoot, path.resolve(input))) throw new Error('此路径位于当前项目之外，请切换到对应项目');
+        input = path.relative(canonicalRoot, input).replaceAll('\\', '/');
+      }
+      input = input.replace(/^(?:\.\/)+/, '').replace(/\/$/, '');
+      if (input.split('/').includes('..') || input.includes('\0')) throw new Error('只能定位当前项目中的文件');
+      const { line, column } = location;
+      try {
+        const exact = await projectFilePath(canonicalRoot, input), info = await stat(exact.absolute);
+        if (info.isFile() || info.isDirectory()) return { matches: [{ name: path.basename(input) || path.basename(root), path: input, kind: info.isDirectory() ? 'directory' : 'file', symlink: false, ignored: false }], truncated: false, line, column };
+      } catch (error) { if (String(error).includes('项目目录之外')) throw error; }
+      if (!input) return { matches: [], truncated: false };
+      const queue = [''], matches: { entry: ProjectFile; score: number }[] = [];
+      const skip = new Set(['.git', 'node_modules', '.venv', 'venv', 'vendor', 'dist', 'release', 'build', '.next', 'target']);
+      let visited = 0, truncated = false;
+      const deadline = Date.now() + 1500;
+      while (queue.length) {
+        const directory = queue.shift()!;
+        try {
+          for await (const entry of await opendir(path.join(canonicalRoot, directory))) {
+            if (++visited > 20000 || Date.now() > deadline) { truncated = true; break; }
+            if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory()) || skip.has(entry.name)) continue;
+            const relative = [directory, entry.name].filter(Boolean).join('/');
+            const score = fileMatchScore(relative, input);
+            if (score >= 0) matches.push({ score, entry: { name: entry.name, path: relative, kind: entry.isDirectory() ? 'directory' : 'file', symlink: false, ignored: false } });
+            if (entry.isDirectory()) queue.push(relative);
+          }
+        } catch { /* Unreadable subdirectories do not block navigation. */ }
+        if (truncated) break;
+      }
+      matches.sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path));
+      return { matches: matches.slice(0, 80).map(item => item.entry), truncated: truncated || matches.length > 80, line, column };
     });
   }
 

@@ -1,9 +1,9 @@
 {
-  "name": "agentberth",
-  "version": "0.10.0",
+  "name": "stackisle",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
-  "description": "A project-oriented workspace for persistent agent terminals",
+  "description": "A project workspace for persistent terminals, agents, files and history",
   "license": "Apache-2.0",
   "main": "dist/main.cjs",
   "engines": {
@@ -57,7 +57,7 @@
   },
   "build": {
     "appId": "dev.agentberth.desktop",
-    "productName": "AgentBerth",
+    "productName": "StackIsle",
     "afterSign": "scripts/installer-payload.mjs",
     "directories": {
       "output": "release"
@@ -78,12 +78,12 @@
         "nsis",
         "zip"
       ],
-      "artifactName": "AgentBerth-${version}-windows-${arch}.${ext}",
+      "artifactName": "StackIsle-${version}-windows-${arch}.${ext}",
       "icon": "assets/app.ico"
     },
     "nsis": {
       "include": "build/agentberth-installer.nsh",
-      "artifactName": "AgentBerth-${version}-windows-${arch}-setup.${ext}",
+      "artifactName": "StackIsle-${version}-windows-${arch}-setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "assets/app.ico",

@@ -142,3 +142,14 @@ test('release packaging includes a square RGBA icon and Windows ICO sizes down t
   const pkg = JSON.parse(await readFile(path.join(root,'package.json'),'utf8'));
   assert.equal(pkg.build.win.icon,'assets/app.ico'); assert.ok(pkg.build.extraResources.some(resource => resource.to === 'assets'));
 });
+
+test('release verification follows the new product name while retaining old fixture compatibility', async t => {
+  const { root, directory } = await fixture(t);
+  const { rename } = await import('node:fs/promises');
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ version: '0.8.0', build: { productName: 'StackIsle' } }));
+  for (const extension of ['-setup.exe', '.zip']) await rename(path.join(directory, `AgentBerth-0.8.0-windows-x64${extension}`), path.join(directory, `StackIsle-0.8.0-windows-x64${extension}`));
+  const sums = await readFile(path.join(directory, 'SHA256SUMS.txt'), 'utf8');
+  await writeFile(path.join(directory, 'SHA256SUMS.txt'), sums.replaceAll('AgentBerth-', 'StackIsle-'));
+  const verified = await verifyRelease(root, directory, sha);
+  assert.ok(verified.files.some(file => file.name === 'StackIsle-0.8.0-windows-x64-setup.exe'));
+});

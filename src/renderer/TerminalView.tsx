@@ -11,6 +11,7 @@ import { useTerminalActions } from './TerminalActions';
 import { writeTerminalEvent } from '../shared/terminal-stream';
 import { terminalThemes } from '../shared/appearance';
 import { useAppearance } from './appearance';
+import { terminalFileLinks } from '../shared/file-navigation';
 import { ResizeQueue } from './terminal-resize';
 
 const options = {
@@ -39,12 +40,14 @@ function fitTerminal(terminal: Terminal, fit: FitAddon) {
   return dimensions;
 }
 
-export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError }: { sessionId: string; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
+export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError, onOpenPath }: { sessionId: string; onOpenPath?: (path: string) => void; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
   useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
+  const pathHandler = useRef(onOpenPath); pathHandler.current = onOpenPath;
+  useEffect(() => { if (autoFocus && host.current?.clientWidth) instance.current?.focus(); }, [autoFocus]);
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
   const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty);
   useEffect(() => {
@@ -55,6 +58,24 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     terminal.loadAddon(fit);
     loadWebLinks(terminal, error => errorHandler.current(error));
     terminal.open(host.current!);
+    terminal.registerLinkProvider({ provideLinks(row, callback) {
+      const buffer = terminal.buffer.active;
+      let first = row - 1, last = row - 1;
+      while (first > 0 && row - first <= 8 && buffer.getLine(first)?.isWrapped) first--;
+      while (last - first < 8 && buffer.getLine(last + 1)?.isWrapped) last++;
+      let text = ''; const offsets: { x: number; y: number }[] = [];
+      for (let y = first; y <= last; y++) {
+        const line = buffer.getLine(y); if (!line) continue;
+        const rendered = line.translateToString(y === last); let offset = text.length;
+        for (let col = 0; col < line.length; col++) { const cell = line.getCell(col); if (!cell || !cell.getWidth()) continue; const chars = cell.getChars() || ' '; for (let i = 0; i < chars.length; i++) offsets[offset++] = { x: col + 1, y: y + 1 }; }
+        text += rendered;
+      }
+      callback(terminalFileLinks(text).flatMap(link => {
+        const start = offsets[link.start], end = offsets[link.end - 1];
+        if (!start || !end || start.y > row || end.y < row) return [];
+        return [{ text: link.text, range: { start, end }, decorations: { pointerCursor: true, underline: true }, activate(event: MouseEvent) { if (event.ctrlKey || event.metaKey) pathHandler.current?.(link.text); } }];
+      }));
+    } });
     const sizeChanged = terminal.onResize(({ cols, rows }) => {
       if (host.current) { host.current.dataset.cols = String(cols); host.current.dataset.rows = String(rows); }
     });

@@ -78,7 +78,7 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   const closeSearch = () => { setSearchOpen(false); setFound(null); owner.current?.search.clearDecorations(); owner.current?.terminal.clearSelection(); owner.current?.terminal.focus(); };
   const controls = <>
     {!searchOpen && <div className="terminal-toolbar" aria-label={readOnly ? '输出操作' : '终端操作'}>
-      <span className="terminal-tool-status" role="status" title={`拖动选字；TUI 内按住 ${selectionModifier} 拖动强制选字；Ctrl+点击打开网页链接`}>{message || (readOnly ? '只读输出' : mouseTracking ? `${selectionModifier}+拖动选字` : '选中文字后可复制')}</span>
+      <span className="terminal-tool-status" role="status" title={`拖动选字；TUI 内按住 ${selectionModifier} 拖动强制选字；Ctrl/⌘+点击打开路径或网页链接`}>{message || (readOnly ? '只读输出' : mouseTracking ? `${selectionModifier}+拖动选字` : '选中文字后可复制')}</span>
       <button disabled={!selection} onMouseDown={event => event.preventDefault()} onClick={() => void copy()} title="Ctrl+Shift+C">复制选中</button>
       {!readOnly && <button disabled={!ready} onClick={() => void paste()} title="Ctrl+Shift+V">粘贴</button>}
       <button disabled={!ready} onClick={openSearch} title="Ctrl+Shift+F">查找</button>
