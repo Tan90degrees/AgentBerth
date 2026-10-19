@@ -17,6 +17,7 @@ const options = {
   fontFamily: 'Cascadia Mono, Cascadia Code, Consolas, DejaVu Sans Mono, Liberation Mono, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
   overviewRuler: { width: 14 },
   minimumContrastRatio: 4.5, customGlyphs: true, rescaleOverlappingGlyphs: true, letterSpacing: 0,
+  macOptionClickForcesSelection: true,
   allowProposedApi: true, // Required by xterm's Unicode version provider.
 };
 
@@ -38,7 +39,7 @@ function fitTerminal(terminal: Terminal, fit: FitAddon) {
   return dimensions;
 }
 
-export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, windowsPty, orderedResize = true, onError }: { sessionId: string; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
+export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError }: { sessionId: string; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
   useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
@@ -83,15 +84,21 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       } else apply(event);
     });
     let inputChain = Promise.resolve(), inputGeneration = 0;
-    const input = terminal.onData(data => {
+    const sendInput = (data: string, binary = false) => {
       if (!ready || !running || !runId) return;
       const targetRun = runId, generation = inputGeneration;
       for (const chunk of inputChunks(data)) {
         inputChain = inputChain.then(async () => {
           if (disposed || !ready || !running || targetRun !== runId || generation !== inputGeneration) return;
-          await window.berth.rpc('input', { sessionId, runId: targetRun, data: chunk });
+          await window.berth.rpc('input', { sessionId, runId: targetRun, data: chunk, ...(binary ? { binary: true } : {}) });
         }).catch(reason => { inputGeneration++; if (!disposed) errorHandler.current(String(reason)); });
       }
+    };
+    const input = terminal.onData(data => sendInput(data));
+    const binaryInput = terminal.onBinary(data => {
+      if (binaryMouse) sendInput(data, true);
+      else if ([...data].every(char => char.charCodeAt(0) < 128)) sendInput(data);
+      else errorHandler.current('请在设置中更新后台，以恢复完整的终端鼠标支持');
     });
     let resizeQueue: ResizeQueue | null = null;
     const resize = () => {
@@ -134,10 +141,10 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
     void document.fonts.ready.then(() => { if (!disposed) resize(); });
     return () => {
-      instance.current=null;disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); window.removeEventListener('resize', resize); disposeRenderer(); sizeChanged.dispose(); input.dispose(); off(); unbind(); terminal.dispose();
+      instance.current=null;disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); window.removeEventListener('resize', resize); disposeRenderer(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
-  }, [sessionId, fontSize, windowsPty, orderedResize, bind, setReady]);
+  }, [sessionId, fontSize, windowsPty, orderedResize, binaryMouse, bind, setReady]);
   return <div className="terminal-surface">{controls}<div className="terminal-host" data-testid="terminal"><div className="terminal-mount" ref={host} /></div></div>;
 });
 

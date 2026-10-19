@@ -19,10 +19,11 @@ import { sameDirectory } from './history';
 import { RunLog } from './logs';
 import { readHistory } from './history';
 import { terminateTree } from './processes';
+import { trackMouseEncoding } from '../shared/terminal-modes';
 import { windowsPtyFor } from '../shared/desktop';
 
 interface LiveTerminal {
-  run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon;
+  run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null;
@@ -255,7 +256,8 @@ export class DaemonServer {
       case 'detach': client.subscriptions.delete(request.params.sessionId); return null;
       case 'input': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
-        this.terminal(request.params.sessionId, request.params.runId).pty.write(request.params.data); return null;
+        const { data, binary } = request.params;
+        this.terminal(request.params.sessionId, request.params.runId).pty.write(binary ? Buffer.from(data, 'latin1') : data); return null;
       }
       case 'resize': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
@@ -407,6 +409,7 @@ export class DaemonServer {
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
+    const mouseEncoding = trackMouseEncoding(terminal);
     let child: pty.IPty;
     try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) }); }
     catch (error) {
@@ -414,7 +417,7 @@ export class DaemonServer {
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
     }
     this.store.setPid(run.id, child.pid);
-    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
+    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     this.live.set(sessionId, live);
     this.pruneLogs();
     child.onData(text => {
@@ -448,7 +451,7 @@ export class DaemonServer {
   private async screen(live: LiveTerminal, serialize = true): Promise<{ snapshot: string; seq: number; cols: number; rows: number }> {
     this.flushOutput(live);
     // This callback follows all prior writes. seq and the screen describe the same point in time.
-    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: serialize ? live.serialize.serialize({ scrollback: 200 }) : '', seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
+    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: serialize ? (live.serialize.serialize({ scrollback: 200 }) + live.mouseEncoding()) : '', seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
   }
   private flushOutput(live: LiveTerminal): void {
     if (live.outputTimer) clearTimeout(live.outputTimer);

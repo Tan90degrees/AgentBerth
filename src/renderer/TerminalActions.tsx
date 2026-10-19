@@ -8,6 +8,8 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   const error = useRef(onError); error.current = onError;
   const input = useRef<HTMLInputElement>(null);
   const [ready, setReady] = useState(false);
+  const [mouseTracking, setMouseTracking] = useState(false);
+  const selectionModifier = /Mac/.test(navigator.platform) ? 'Option' : 'Shift';
   const [selection, setSelection] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -39,8 +41,9 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   const bind = useCallback((terminal: Terminal, canPaste: () => boolean) => {
     const search = new TerminalSearch(terminal, inferWindowsWrap);
     const current: Owner = { terminal, search, canPaste, disposed: false, subscriptions: [] };
-    owner.current = current; setReady(false); setSelection(false); setFound(null);
+    owner.current = current; setReady(false); setSelection(false); setMouseTracking(false); setFound(null);
     current.subscriptions.push(terminal.onSelectionChange(() => { if (!current.disposed) setSelection(terminal.hasSelection()); }));
+    current.subscriptions.push(terminal.onWriteParsed(() => { if (!current.disposed) setMouseTracking(terminal.modes.mouseTrackingMode !== 'none'); }));
     terminal.attachCustomKeyEventHandler(event => {
       if (event.defaultPrevented) return false;
       if (event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey) || !event.shiftKey) return true;
@@ -75,7 +78,7 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   const closeSearch = () => { setSearchOpen(false); setFound(null); owner.current?.search.clearDecorations(); owner.current?.terminal.clearSelection(); owner.current?.terminal.focus(); };
   const controls = <>
     {!searchOpen && <div className="terminal-toolbar" aria-label={readOnly ? '输出操作' : '终端操作'}>
-      <span className="terminal-tool-status" role="status" title="选中文字后复制；Ctrl+点击打开网页链接">{message || (readOnly ? '只读输出' : '选中文字后可复制')}</span>
+      <span className="terminal-tool-status" role="status" title={`拖动选字；TUI 内按住 ${selectionModifier} 拖动强制选字；Ctrl+点击打开网页链接`}>{message || (readOnly ? '只读输出' : mouseTracking ? `${selectionModifier}+拖动选字` : '选中文字后可复制')}</span>
       <button disabled={!selection} onMouseDown={event => event.preventDefault()} onClick={() => void copy()} title="Ctrl+Shift+C">复制选中</button>
       {!readOnly && <button disabled={!ready} onClick={() => void paste()} title="Ctrl+Shift+V">粘贴</button>}
       <button disabled={!ready} onClick={openSearch} title="Ctrl+Shift+F">查找</button>

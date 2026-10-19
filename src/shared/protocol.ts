@@ -79,7 +79,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('stop'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('attach'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('detach'), params: z.object({ sessionId: id }).strict() }),
-  z.object({ id, method: z.literal('input'), params: z.object({ sessionId: id, runId: id, data: z.string().max(65536) }).strict() }),
+  z.object({ id, method: z.literal('input'), params: z.object({ sessionId: id, runId: id, data: z.string().max(65536), binary: z.boolean().optional() }).strict() }),
   z.object({ id, method: z.literal('resize'), params: z.object({ sessionId: id, runId: id, ...size }).strict() }),
   z.object({ id, method: z.literal('runs'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('deleteRun'), params: z.object({ runId: id }).strict() }),
