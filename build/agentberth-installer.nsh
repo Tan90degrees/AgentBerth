@@ -19,6 +19,7 @@ Var BerthStartTick
 !endif
 
 !ifdef BUILD_UNINSTALLER
+  Var BerthUninstallDir
   !define BerthPrefix "un."
 !else
   !define BerthPrefix ""
@@ -72,9 +73,15 @@ FunctionEnd
 
 !ifdef BUILD_UNINSTALLER
   Function un.onUninstFailed
+    ${If} $BerthUninstallDir != ""
+      StrCpy $INSTDIR $BerthUninstallDir
+    ${EndIf}
     !insertmacro BerthLog "FAILED: uninstallation did not complete; target=$INSTDIR"
   FunctionEnd
   Function un.onUninstSuccess
+    ${If} $BerthUninstallDir != ""
+      StrCpy $INSTDIR $BerthUninstallDir
+    ${EndIf}
     !insertmacro BerthLog "UNINSTALLED: target=$INSTDIR"
   FunctionEnd
 !endif
@@ -221,6 +228,25 @@ FunctionEnd
   !macroend
   !macro customUnInstall
     !insertmacro BerthLog "UNINSTALL: removing application files; target=$INSTDIR"
+    ; Node can install files beyond MAX_PATH. The upstream atomic cleanup uses
+    ; MoveFileW, which needs an extended-length path to move those files even
+    ; when the system-wide long-path policy is disabled. Restore the display
+    ; path in the success/failure callbacks; registry/shortcut paths are already
+    ; computed before this hook.
+    StrCpy $BerthUninstallDir $INSTDIR
+    Push $0
+    StrCpy $0 $INSTDIR 4
+    ${If} $0 != "\\?\"
+      StrCpy $0 $INSTDIR 2
+      ${If} $0 == "\\"
+        StrCpy $0 $INSTDIR "" 2
+        StrCpy $INSTDIR "\\?\UNC\$0"
+      ${Else}
+        StrCpy $INSTDIR "\\?\$INSTDIR"
+      ${EndIf}
+    ${EndIf}
+    Pop $0
+    SetOutPath $TEMP
   !macroend
 !endif
 

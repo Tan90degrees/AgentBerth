@@ -79,10 +79,16 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           if ($build.version -ne $version) { throw 'Package version differs from the checked-out test script' }
           "Package commit: $($build.commit); test commit: $env:GITHUB_SHA" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
-      - name: Test existing installer without rebuilding
-        run: ./scripts/test-installer.ps1
+      - name: Test installer with Win32 long-path policy disabled
         shell: powershell
         timeout-minutes: 6
+        run: |
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+          $previous = (Get-ItemProperty $key).LongPathsEnabled
+          try {
+            Set-ItemProperty $key LongPathsEnabled 0
+            ./scripts/test-installer.ps1
+          } finally { Set-ItemProperty $key LongPathsEnabled $previous }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

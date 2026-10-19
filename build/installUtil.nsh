@@ -22,6 +22,8 @@
       StrCpy $0 "$0 --keep-shortcuts"
     ${EndIf}
     !insertmacro BerthLog "UPGRADE: bounded current uninstaller; previous=$installationDir"
+    ; Do not keep the old installation directory open while it is removed.
+    SetOutPath "$PLUGINSDIR"
     nsExec::ExecToStack /TIMEOUT=30000 '"$PLUGINSDIR\berth-current-uninstaller.exe" /S /KEEP_APP_DATA $0 --updated _?=$installationDir'
     Pop $R0
     Pop $1
@@ -31,6 +33,7 @@
       SetErrorLevel 2
       Quit
     ${EndIf}
+    SetOutPath "$INSTDIR"
     ClearErrors
   ${EndIf}
   ClearErrors
