@@ -106,11 +106,16 @@ test('project boundaries reject traversal and outside junctions while allowing i
 });
 
 test('file RPCs use registered project roots and validate directory pagination', async t => {
-  const { root, project } = await fixture(t);
+  const root = await mkdtemp(path.join(os.tmpdir(), 'berth 文件 RPC '));
+  const project = path.join(root, 'project');
+  let server: DaemonServer | undefined, connection: DaemonConnection | undefined;
+  // Hooks run in registration order. Windows cannot remove an open SQLite
+  // database; close the connection and server before removing their directory.
+  t.after(async () => { connection?.close(); await server?.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }); });
+  await mkdir(project);
   await writeFile(path.join(project, 'hello.ts'), 'export const ready = true;');
-  const server = new DaemonServer(path.join(root, 'data'));
-  const connection = await DaemonConnection.open(await server.listen(), () => {});
-  t.after(async () => { connection.close(); await server.close(); });
+  server = new DaemonServer(path.join(root, 'data'));
+  connection = await DaemonConnection.open(await server.listen(), () => {});
   const p = await connection.rpc<Project>('createProject', { name: 'Files', path: project });
   const page = await connection.rpc<ProjectFilePage>('projectFiles', { projectId: p.id });
   assert.equal(page.entries[0].path, 'hello.ts');
