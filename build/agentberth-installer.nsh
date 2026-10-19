@@ -304,7 +304,7 @@ FunctionEnd
         Push ""
         Call un.restoreFiles
         Pop $R0
-        Abort "Previous-version cleanup failed; existing files restored."
+        Abort "Previous-version cleanup failed; rollback attempted. See setup log."
       ${EndIf}
     ${EndIf}
     SetOutPath $TEMP

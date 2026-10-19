@@ -39,4 +39,3 @@ if (require.main === module) {
   };
   run().catch(error => { console.error(error.message); process.exitCode = 1; });
 }
-

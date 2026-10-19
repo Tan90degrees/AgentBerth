@@ -11,6 +11,8 @@
 
 `CI and Windows packages` 在 main 上执行全部检查。仅当 check 的两个系统和 windows-package 均成功时，Publish verified release 才会运行；PR、开发分支与 fork 不发布。
 
+开发分支通过 PR 事件执行完整验证，避免 push 与 PR 同时重复构建。未创建 PR 时，可在 Actions 手动运行工作流并选择分支生成测试包；main 的推送继续自动验证并发布。
+
 发布任务从同一次运行下载验证包，校验版本、提交、main 分支、packagedSmoke=success、installerSmoke=success、两个包的 SHA-256、文件名及发布说明。随后创建轻量版本标签和草稿 Release，上传四个附件，再核对附件状态、大小和 GitHub 返回的摘要；main 仍指向该提交时才公开 Release。
 
 - 上传中断时，草稿保留；从原运行重跑可继续上传。
