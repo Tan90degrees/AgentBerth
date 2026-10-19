@@ -44,7 +44,7 @@ export class GitWorkspace {
   private executable(): Promise<string> {
     return this.binary ??= resolveExecutable('git').catch(() => { this.binary = null; throw new Error('找不到 Git，请安装 Git for Windows 或将 git 加入 PATH 后刷新'); });
   }
-  private async command(cwd: string, args: string[], network = false): Promise<string> {
+  private async command(cwd: string, args: string[], network = false, input?: string, allowedExitCodes = [0]): Promise<string> {
     if (this.closing) throw new Error('后台正在退出');
     const binary = await this.executable();
     if (this.closing) throw new Error('后台正在退出');
@@ -55,7 +55,9 @@ export class GitWorkspace {
       for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+|CONFIG_PARAMETERS|NAMESPACE|PREFIX|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)$/i.test(key)) delete env[key];
       Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', SSH_ASKPASS_REQUIRE: 'never', LC_ALL: 'C', LANG: 'C' });
       if (!network) env.GIT_OPTIONAL_LOCKS = '0';
-      const child = spawn(binary, ['--no-pager','-c','color.ui=false','-c','core.quotepath=false','-C',cwd,...args], { env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore','pipe','pipe'] });
+      const child = spawn(binary, ['--no-pager','-c','color.ui=false','-c','core.quotepath=false','-C',cwd,...args], { env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe','pipe','pipe'] });
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
       const stdout: Buffer[] = [], stderr: Buffer[] = []; let bytes=0; let failure: Error | null=null; let killing: Promise<void> | null=null;
       const kill = () => killing ??= (async()=>{
         if (!child.pid) return;
@@ -69,13 +71,23 @@ export class GitWorkspace {
       const consume = (target: Buffer[],chunk: Buffer) => { bytes+=chunk.length; if(bytes>8*1024*1024) fail(new Error('Git 返回内容过多，请在终端检查仓库状态')); else target.push(chunk); };
       child.stdout.on('data',(data:Buffer)=>consume(stdout,data));child.stderr.on('data',(data:Buffer)=>consume(stderr,data));
       child.on('error',error=>{failure??=new Error(`无法运行 Git：${error.message}`);});
-      child.on('close',code=>{ clearTimeout(timer); controller.signal.removeEventListener('abort',abort); void (async()=>{ if(killing)await killing; if(failure)throw failure; const out=Buffer.concat(stdout).toString('utf8'),err=Buffer.concat(stderr).toString('utf8');if(code!==0)throw new GitCommandError(code,err+'\n'+out);return out+(network && err ? '\n'+err : ''); })().then(resolve,reject); });
+      child.on('close',code=>{ clearTimeout(timer); controller.signal.removeEventListener('abort',abort); void (async()=>{ if(killing)await killing; if(failure)throw failure; const out=Buffer.concat(stdout).toString('utf8'),err=Buffer.concat(stderr).toString('utf8');if(code===null||!allowedExitCodes.includes(code))throw new GitCommandError(code,err+'\n'+out);return out+(network && err ? '\n'+err : ''); })().then(resolve,reject); });
     }).finally(()=>this.active.delete(controller));
     this.active.set(controller,task);return task;
   }
   status(cwd: string): Promise<GitStatus> {
     const pending=this.statuses.get(cwd);if(pending)return pending;
     const task=this.inspect(cwd).finally(()=>this.statuses.delete(cwd));this.statuses.set(cwd,task);return task;
+  }
+  async ignored(cwd: string, paths: string[]): Promise<{ paths: Set<string>; available: boolean; warning?: string }> {
+    if (!paths.length) return { paths: new Set(), available: true };
+    try {
+      const output = await this.command(cwd, ['check-ignore', '-z', '--stdin'], false, paths.join('\0') + '\0', [0, 1]);
+      return { paths: new Set(output.split('\0').filter(Boolean).map(value => value.replace(/\/$/, ''))), available: true };
+    } catch (error) {
+      if (error instanceof GitCommandError && /not a git repository/i.test(error.output)) return { paths: new Set(), available: false };
+      return { paths: new Set(), available: false, warning: 'Git 忽略状态暂不可用；仍可浏览和预览文件。' };
+    }
   }
   private async inspect(cwd: string): Promise<GitStatus> {
     try {

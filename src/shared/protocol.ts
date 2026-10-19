@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 15;
+export const API_VERSION = 16;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -52,6 +52,8 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id }).strict() }),
   z.object({ id, method: z.literal('gitOperation'), params: gitOperationSchema }),
+  z.object({ id, method: z.literal('projectFiles'), params: z.object({ projectId: id, path: z.string().max(4096).default(''), offset: z.number().int().min(0).max(10000).default(0), limit: z.number().int().min(1).max(300).default(200) }).strict() }),
+  z.object({ id, method: z.literal('previewFile'), params: z.object({ projectId: id, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('createProject'), params: z.object({ name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('updateProject'), params: z.object({ projectId: id, name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('deleteProject'), params: z.object({ projectId: id }).strict() }),
@@ -77,7 +79,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('stop'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('attach'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('detach'), params: z.object({ sessionId: id }).strict() }),
-  z.object({ id, method: z.literal('input'), params: z.object({ sessionId: id, runId: id, data: z.string().max(65536) }).strict() }),
+  z.object({ id, method: z.literal('input'), params: z.object({ sessionId: id, runId: id, data: z.string().max(65536), binary: z.boolean().optional() }).strict() }),
   z.object({ id, method: z.literal('resize'), params: z.object({ sessionId: id, runId: id, ...size }).strict() }),
   z.object({ id, method: z.literal('runs'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('deleteRun'), params: z.object({ runId: id }).strict() }),
@@ -91,6 +93,9 @@ export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
 export interface Project { id: string; name: string; path: string; createdAt: string }
+export interface ProjectFile { name: string; path: string; kind: 'directory' | 'file' | 'other'; ignored: boolean; symlink: boolean; unavailable?: boolean }
+export interface ProjectFilePage { path: string; entries: ProjectFile[]; nextOffset: number | null; total: number; truncated: boolean; gitAvailable: boolean; warning?: string }
+export interface FilePreview { path: string; name: string; size: number; modifiedAt: string; kind: 'text' | 'image' | 'binary'; content: string | null; truncated: boolean; encoding?: string; mime?: string; message?: string }
 export interface ResourceUsage {cpuPercent:number|null;memoryBytes:number|null;processCount:number;partial:boolean}
 export interface ResourceSnapshot {sampledAt:string;cpuCount:number;sessions:Record<string,ResourceUsage&{runId:string}>;projects:Record<string,ResourceUsage>;workspace:ResourceUsage;desktopIncluded:boolean;error?:string}
 export interface GitFile { path: string; originalPath?: string; index: string; worktree: string; conflict: boolean }

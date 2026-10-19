@@ -12,16 +12,18 @@ import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment,
 import { Store } from './store';
 import { ResourceSampler } from './resources';
 import { GitWorkspace } from './git';
+import { ProjectFiles } from './files';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
 import { sameDirectory } from './history';
 import { RunLog } from './logs';
 import { readHistory } from './history';
 import { terminateTree } from './processes';
+import { trackMouseEncoding } from '../shared/terminal-modes';
 import { windowsPtyFor } from '../shared/desktop';
 
 interface LiveTerminal {
-  run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon;
+  run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null;
@@ -33,6 +35,7 @@ export class DaemonServer {
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
   private git = new GitWorkspace();
+  private files = new ProjectFiles(this.git);
   private resources = new ResourceSampler();
   private gitBusy = new Set<string>();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
@@ -92,7 +95,8 @@ export class DaemonServer {
   private send(socket: WebSocket, message: unknown): void {
     if (socket.readyState !== WebSocket.OPEN) return;
     // A slow or closed UI must never stop output consumption by the daemon.
-    if (socket.bufferedAmount > 2 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); return; }
+    // Two bounded image replies can overlap; a slow UI still has a finite budget.
+    if (socket.bufferedAmount > 16 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); return; }
     socket.send(JSON.stringify(message));
   }
   private broadcast(event: ServerEvent): void {
@@ -128,6 +132,8 @@ export class DaemonServer {
       case 'state': return this.store.state();
       case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
       case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
+      case 'projectFiles': return this.files.list(this.store.project(request.params.projectId).path, request.params.path, request.params.offset, request.params.limit);
+      case 'previewFile': return this.files.preview(this.store.project(request.params.projectId).path, request.params.path);
       case 'gitOperation': {
         const params = request.params, project = this.store.project(params.projectId);
         this.requireProjectAvailable(project.id);
@@ -250,7 +256,8 @@ export class DaemonServer {
       case 'detach': client.subscriptions.delete(request.params.sessionId); return null;
       case 'input': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
-        this.terminal(request.params.sessionId, request.params.runId).pty.write(request.params.data); return null;
+        const { data, binary } = request.params;
+        this.terminal(request.params.sessionId, request.params.runId).pty.write(binary ? Buffer.from(data, 'latin1') : data); return null;
       }
       case 'resize': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
@@ -402,6 +409,7 @@ export class DaemonServer {
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
+    const mouseEncoding = trackMouseEncoding(terminal);
     let child: pty.IPty;
     try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) }); }
     catch (error) {
@@ -409,7 +417,7 @@ export class DaemonServer {
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
     }
     this.store.setPid(run.id, child.pid);
-    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
+    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     this.live.set(sessionId, live);
     this.pruneLogs();
     child.onData(text => {
@@ -443,7 +451,7 @@ export class DaemonServer {
   private async screen(live: LiveTerminal, serialize = true): Promise<{ snapshot: string; seq: number; cols: number; rows: number }> {
     this.flushOutput(live);
     // This callback follows all prior writes. seq and the screen describe the same point in time.
-    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: serialize ? live.serialize.serialize({ scrollback: 200 }) : '', seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
+    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: serialize ? (live.serialize.serialize({ scrollback: 200 }) + live.mouseEncoding()) : '', seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
   }
   private flushOutput(live: LiveTerminal): void {
     if (live.outputTimer) clearTimeout(live.outputTimer);

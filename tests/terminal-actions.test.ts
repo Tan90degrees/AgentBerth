@@ -6,6 +6,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { externalWebUrl, inputChunks, terminalDimensions, windowsPtyFor } from '../src/shared/desktop';
 import { requestSchema } from '../src/shared/protocol';
+import { trackMouseEncoding } from '../src/shared/terminal-modes';
 import { terminalTextRows } from '../src/renderer/terminal-search';
 
 test('large terminal input remains ordered, Unicode intact and below the WebSocket payload limit', () => {
@@ -93,4 +94,41 @@ test('ConPTY physical wraps reconstruct wide Unicode text without padding or add
     await new Promise<void>(resolve => terminal.write('one\r\ntwo', resolve));
     assert.deepEqual(terminalTextRows(terminal, true).filter(row => row.text).map(row => row.text), ['one', 'two']);
   } finally { terminal.dispose(); }
+});
+
+
+test('reattachment keeps SGR and pixel mouse reports identical, including split DEC modes and resets', async () => {
+  const source = new Terminal({ cols: 160, rows: 30, allowProposedApi: true });
+  const serialize = new SerializeAddon(); source.loadAddon(serialize);
+  const encoding = trackMouseEncoding(source);
+  const write = (terminal: Terminal, text: string) => new Promise<void>(resolve => terminal.write(text, resolve));
+  const report = (terminal: Terminal) => {
+    let result = '';
+    const text = terminal.onData(data => { result += data; });
+    const binary = terminal.onBinary(data => { result += 'binary:' + data; });
+    // Exercise xterm's real encoder without a browser mouse event.
+    (terminal as unknown as { _core: { coreMouseService: { triggerMouseEvent(event: object): void } } })._core.coreMouseService.triggerMouseEvent({ col: 130, row: 4, x: 1040, y: 80, button: 0, action: 1, ctrl: false, alt: false, shift: false });
+    text.dispose(); binary.dispose(); return result;
+  };
+  try {
+    for (const mode of [1006, 1016]) {
+      await write(source, '\x1b[?1000;'); await write(source, mode + 'h');
+      const restored = new Terminal({ cols: 160, rows: 30, allowProposedApi: true });
+      try {
+        await write(restored, serialize.serialize() + encoding());
+        const expected = report(source);
+        assert.ok(expected.startsWith('\x1b[<0;'));
+        assert.equal(report(restored), expected, 'Reconnect changed the TUI mouse wire format');
+      } finally { restored.dispose(); }
+      await write(source, `\x1b[?${mode}l`);
+      assert.equal(encoding(), '');
+      assert.ok(report(source).startsWith('binary:'));
+    }
+    await write(source, '\x1b]0;fake [?1006h\x07');
+    assert.equal(encoding(), '', 'OSC title must not change mouse encoding');
+    await write(source, '\x1b[?1006h\x1b[!p');
+    assert.equal(encoding(), '\x1b[?1006h', 'DECSTR does not reset xterm mouse encoding');
+    await write(source, '\x1bc');
+    assert.equal(encoding(), '');
+  } finally { source.dispose(); }
 });
