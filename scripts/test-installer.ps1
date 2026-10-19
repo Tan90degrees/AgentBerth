@@ -19,6 +19,19 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Drawing;
 public class SetupUi {
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CreateDirectoryW(string p,IntPtr a);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateFileW(string p,uint access,uint share,IntPtr a,uint creation,uint flags,IntPtr template);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern uint GetFileAttributesW(string p);
+  public static void CreateLongFixture(string root,string folder,string file) {
+    foreach(var directory in new[]{root,folder}) {
+      if(!CreateDirectoryW(directory,IntPtr.Zero)&&Marshal.GetLastWin32Error()!=183)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    }
+    var handle=CreateFileW(file,0x40000000,7,IntPtr.Zero,2,0x80,IntPtr.Zero);
+    if(handle==new IntPtr(-1))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    CloseHandle(handle);
+  }
+  public static bool FileExists(string p) { return GetFileAttributesW(p)!=0xffffffff; }
   public delegate bool EnumProc(IntPtr h, IntPtr p);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr p);
   [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc f, IntPtr p);
@@ -57,6 +70,11 @@ public class SetupUi {
 '@
 
 function Assert($condition, $message) { if (!$condition) { throw $message } }
+function Live-AppPids {
+  foreach ($process in [Diagnostics.Process]::GetProcessesByName('AgentBerth')) {
+    try { if (!$process.HasExited) { $process.Id } } finally { $process.Dispose() }
+  }
+}
 function Wait-Until([scriptblock]$check, [string]$message, [int]$seconds = 30) {
   $deadline = [DateTime]::UtcNow.AddSeconds($seconds)
   do {
@@ -176,6 +194,13 @@ try {
   Assert (Has-Log '100%') 'Byte percentage is missing'
   Assert (Has-Log 'VERIFIED:') 'Staged inventory verification is missing'
   Verify-Installed
+  # Simulate legacy native-build files independently of current package filters.
+  $legacyRoot = $target + '\legacy native cache'
+  $legacyFolder = $legacyRoot + '\' + ('x' * 140)
+  $legacyFile = '\\?\' + $legacyFolder + '\state.bin'
+  Assert ($legacyFile.Length -gt 264) 'Legacy cleanup fixture does not exceed MAX_PATH'
+  [SetupUi]::CreateLongFixture(('\\?\' + $legacyRoot),('\\?\' + $legacyFolder),$legacyFile)
+  Assert ([SetupUi]::FileExists($legacyFile)) 'Long legacy file was not created'
   $beforeHash = (Get-FileHash $exe).Hash
   $sentinel = Join-Path $target 'preserve-on-cancel.txt'; Set-Content $sentinel 'retain old installation'
   $oldUninstaller = Join-Path $target 'Uninstall AgentBerth.exe'
@@ -188,6 +213,18 @@ try {
   Assert ((Get-FileHash $exe).Hash -eq $beforeHash) 'Cancel changed the old executable'
   Assert (Test-Path $sentinel) 'Cancel removed an existing file'
   Assert ((Get-Content $oldUninstaller -Raw).Contains('MUST NOT execute')) 'Cancel replaced the old uninstaller'
+  Assert ([SetupUi]::FileExists($legacyFile)) 'Cancel removed the long legacy file'
+
+  Write-Host 'Installer smoke: a genuinely locked file fails safely and restores the old payload'
+  $locked = [IO.File]::Open((Join-Path $target 'resources/app.asar'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  try {
+    $active = Start-Setup $true
+    Wait-Exit $active 2
+    Assert (Has-Log 'FAILED: cannot move installed file:') 'Locked-file failure does not identify the file'
+  } finally { $locked.Dispose() }
+  Verify-Installed
+  Assert (Test-Path $sentinel) 'Failed cleanup removed an existing user file'
+  Assert ([SetupUi]::FileExists($legacyFile)) 'Failed cleanup did not restore the long legacy file'
 
   Write-Host 'Installer smoke: declining cancel resumes and uses current bounded uninstaller'
   $active = Start-Setup
@@ -201,9 +238,11 @@ try {
   } 'Finish page did not close' 15
   Wait-Exit $active 0 15
   Assert (!(Test-Path $sentinel)) 'Old cleanup did not run'
+  Assert (![SetupUi]::FileExists($legacyFile)) 'Upgrade left the long legacy file'
   Verify-Installed
 
   Write-Host 'Installer smoke: running background app blocks silently and remains alive'
+  Assert (@(Live-AppPids).Count -eq 0) 'Finish page unexpectedly launched an application'
   $ready = Join-Path $root 'ready'
   $idle = Join-Path $root 'idle.cjs'
   $readyJson = ConvertTo-Json $ready -Compress
@@ -222,7 +261,9 @@ try {
   foreach ($window in [SetupUi]::Dialogs()) { if([SetupUi]::GetDlgItem($window,4) -ne [IntPtr]::Zero){ [SetupUi]::Click($window,2) } }
   Wait-Exit $active 2 15
   Assert (!$helper.HasExited) 'Interactive cancel killed the running background app'
-  $helper.Kill(); $helper.WaitForExit(); $helper=$null
+  Write-Host "Stopping background fixture PID $($helper.Id)"
+  $helper.Kill(); $helper.WaitForExit(); $helper.Dispose(); $helper=$null
+  Wait-Until { @(Live-AppPids).Count -eq 0 } 'Background fixture did not fully exit' 5
 
   Write-Host 'Installer smoke: silent uninstall with new native process check'
   $active = Start-Process $oldUninstaller -ArgumentList ("/S _?=" + $target) -PassThru
@@ -241,13 +282,14 @@ try {
   $active = Start-Process $oldUninstaller -ArgumentList ("/S /allusers _?=" + $target) -PassThru
   Wait-Exit $active 0
   Assert (!(Test-Path $exe)) 'All-users uninstall left the executable'
-  Write-Host 'Installer smoke passed: real byte percentage, persistent logs, safe fresh/upgrade cancel, decline/resume, bounded upgrade and running-app protection'
+  Write-Host 'Installer smoke passed: byte percentage, logs, safe cancellation, locked-file rollback, long-path upgrade, running-app protection and both uninstall scopes'
 } catch {
+  Write-Host "Remaining live AgentBerth PIDs: $(@(Live-AppPids) -join ', ')"
   foreach($window in [SetupUi]::Dialogs()){ try{ [SetupUi]::Capture($window,(Join-Path $result 'failure.png')) }catch{} }
   foreach($log in Logs){ Write-Host $log.Path; Write-Host $log.Text }
   throw
 } finally {
-  if($helper -and !$helper.HasExited){$helper.Kill();$helper.WaitForExit()}
+  if($helper){if(!$helper.HasExited){$helper.Kill();$helper.WaitForExit()};$helper.Dispose()}
   foreach($log in Get-ChildItem (Join-Path $env:TEMP "AgentBerth-setup-$version-*.log") -ErrorAction SilentlyContinue){ if($log.LastWriteTimeUtc -ge $suiteStart.AddSeconds(-1)){Copy-Item $log.FullName $result -Force} }
   if($active -and !$active.HasExited){$active.Kill();$active.WaitForExit()}
   Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
