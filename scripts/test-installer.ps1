@@ -53,8 +53,23 @@ public class SetupUi {
     return list.ToArray();
   }
   public static void Click(IntPtr parent,int id) { var b=GetDlgItem(parent,id);if(b!=IntPtr.Zero&&IsWindowEnabled(b))PostMessage(b,0xf5,IntPtr.Zero,IntPtr.Zero); }
-  public static void UncheckAll(IntPtr parent) {
-    EnumChildWindows(parent,delegate(IntPtr h,IntPtr p) { if((GetWindowLong(h,-16)&15)==3)SendMessage(h,0xf1,IntPtr.Zero,IntPtr.Zero);return true; },IntPtr.Zero);
+  public static IntPtr[] VisibleChecks(IntPtr parent) {
+    var list=new List<IntPtr>();
+    EnumChildWindows(parent,delegate(IntPtr h,IntPtr p) {
+      var name=new StringBuilder(128);GetClassName(h,name,name.Capacity);
+      int style=GetWindowLong(h,-16)&15;
+      if(IsWindowVisible(h)&&name.ToString().Equals("Button",StringComparison.OrdinalIgnoreCase)&&(style==2||style==3||style==5||style==6))list.Add(h);
+      return true;
+    },IntPtr.Zero);
+    return list.ToArray();
+  }
+  public static bool UncheckAll(IntPtr parent) {
+    var checks=VisibleChecks(parent);
+    foreach(var check in checks) {
+      SendMessage(check,0xf1,IntPtr.Zero,IntPtr.Zero);
+      if(SendMessage(check,0xf0,IntPtr.Zero,IntPtr.Zero)!=IntPtr.Zero)return false;
+    }
+    return checks.Length>0;
   }
   public static string ChildText(IntPtr parent) {
     var s=new StringBuilder();EnumChildWindows(parent,delegate(IntPtr h,IntPtr p){s.AppendLine(Text(h));return true;},IntPtr.Zero);return s.ToString();
@@ -230,12 +245,26 @@ try {
   $active = Start-Setup
   Cancel-Preparation $false
   Wait-Until { Has-Log 'COMPLETED:' } 'Install did not resume after declining cancel' 90
+  $script:advancedToFinish = $false
   Wait-Until {
-    if($active.HasExited){return $true}
-    foreach ($window in [SetupUi]::Dialogs()) { [SetupUi]::UncheckAll($window); [SetupUi]::Capture($window,(Join-Path $result 'completed.png')); [SetupUi]::Click($window,1) }
-    Start-Sleep -Milliseconds 75
+    Assert (!$active.HasExited) 'Installer exited before the finish-page options could be reviewed'
+    foreach ($window in [SetupUi]::Dialogs()) {
+      # Both Run and Open log must exist: Run's default state has then been set.
+      if ([SetupUi]::VisibleChecks($window).Length -ge 2) {
+        Assert ([SetupUi]::UncheckAll($window)) 'Finish-page options could not be cleared'
+        [SetupUi]::Capture($window,(Join-Path $result 'completed.png'))
+        [SetupUi]::Click($window,1)
+        return $true
+      }
+      # Advance the completed progress page once. Repeated clicks can be
+      # queued into the finish page before its default Run option is cleared.
+      if (!$script:advancedToFinish -and [SetupUi]::DetailsVisible($window) -and [SetupUi]::IsWindowEnabled([SetupUi]::GetDlgItem($window,1))) {
+        [SetupUi]::Click($window,1)
+        $script:advancedToFinish = $true
+      }
+    }
     return $false
-  } 'Finish page did not close' 15
+  } 'Finish page did not become ready' 15
   Wait-Exit $active 0 15
   Assert (!(Test-Path $sentinel)) 'Old cleanup did not run'
   Assert (![SetupUi]::FileExists($legacyFile)) 'Upgrade left the long legacy file'
