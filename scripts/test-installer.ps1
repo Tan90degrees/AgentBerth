@@ -70,6 +70,11 @@ public class SetupUi {
 '@
 
 function Assert($condition, $message) { if (!$condition) { throw $message } }
+function Live-AppPids {
+  foreach ($process in [Diagnostics.Process]::GetProcessesByName('AgentBerth')) {
+    try { if (!$process.HasExited) { $process.Id } } finally { $process.Dispose() }
+  }
+}
 function Wait-Until([scriptblock]$check, [string]$message, [int]$seconds = 30) {
   $deadline = [DateTime]::UtcNow.AddSeconds($seconds)
   do {
@@ -237,6 +242,7 @@ try {
   Verify-Installed
 
   Write-Host 'Installer smoke: running background app blocks silently and remains alive'
+  Assert (@(Live-AppPids).Count -eq 0) 'Finish page unexpectedly launched an application'
   $ready = Join-Path $root 'ready'
   $idle = Join-Path $root 'idle.cjs'
   $readyJson = ConvertTo-Json $ready -Compress
@@ -255,7 +261,9 @@ try {
   foreach ($window in [SetupUi]::Dialogs()) { if([SetupUi]::GetDlgItem($window,4) -ne [IntPtr]::Zero){ [SetupUi]::Click($window,2) } }
   Wait-Exit $active 2 15
   Assert (!$helper.HasExited) 'Interactive cancel killed the running background app'
-  $helper.Kill(); $helper.WaitForExit(); $helper=$null
+  Write-Host "Stopping background fixture PID $($helper.Id)"
+  $helper.Kill(); $helper.WaitForExit(); $helper.Dispose(); $helper=$null
+  Wait-Until { @(Live-AppPids).Count -eq 0 } 'Background fixture did not fully exit' 5
 
   Write-Host 'Installer smoke: silent uninstall with new native process check'
   $active = Start-Process $oldUninstaller -ArgumentList ("/S _?=" + $target) -PassThru
@@ -276,11 +284,12 @@ try {
   Assert (!(Test-Path $exe)) 'All-users uninstall left the executable'
   Write-Host 'Installer smoke passed: byte percentage, logs, safe cancellation, locked-file rollback, long-path upgrade, running-app protection and both uninstall scopes'
 } catch {
+  Write-Host "Remaining live AgentBerth PIDs: $(@(Live-AppPids) -join ', ')"
   foreach($window in [SetupUi]::Dialogs()){ try{ [SetupUi]::Capture($window,(Join-Path $result 'failure.png')) }catch{} }
   foreach($log in Logs){ Write-Host $log.Path; Write-Host $log.Text }
   throw
 } finally {
-  if($helper -and !$helper.HasExited){$helper.Kill();$helper.WaitForExit()}
+  if($helper){if(!$helper.HasExited){$helper.Kill();$helper.WaitForExit()};$helper.Dispose()}
   foreach($log in Get-ChildItem (Join-Path $env:TEMP "AgentBerth-setup-$version-*.log") -ErrorAction SilentlyContinue){ if($log.LastWriteTimeUtc -ge $suiteStart.AddSeconds(-1)){Copy-Item $log.FullName $result -Force} }
   if($active -and !$active.HasExited){$active.Kill();$active.WaitForExit()}
   Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
