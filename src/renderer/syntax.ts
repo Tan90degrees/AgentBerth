@@ -1,14 +1,9 @@
-import hljs from 'highlight.js/lib/common';
-import powershell from 'highlight.js/lib/languages/powershell';
-import cmake from 'highlight.js/lib/languages/cmake';
-import makefile from 'highlight.js/lib/languages/makefile';
+import hljs from 'highlight.js';
 
-hljs.registerLanguage('powershell', powershell);
-hljs.registerLanguage('cmake', cmake);
-hljs.registerLanguage('makefile', makefile);
 export function highlightCode(text: string, language: string): string {
-  if (language !== 'plaintext' && hljs.getLanguage(language)) {
-    try { return hljs.highlight(text, { language, ignoreIllegals: true }).value; } catch { /* Keep unknown syntax readable. */ }
-  }
+  try {
+    if (language === 'auto') { const detected = hljs.highlightAuto(text.slice(0, 8000)).language; if (detected) return hljs.highlight(text, { language: detected, ignoreIllegals: true }).value; }
+    if (language !== 'plaintext' && hljs.getLanguage(language)) return hljs.highlight(text, { language, ignoreIllegals: true }).value;
+  } catch { /* Keep invalid/unknown syntax readable and inert. */ }
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }

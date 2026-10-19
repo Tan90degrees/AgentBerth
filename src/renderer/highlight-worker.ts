@@ -1,5 +1,4 @@
 import { highlightCode } from './syntax';
-
-self.onmessage = (event: MessageEvent<{ text: string; language: string }>) => {
-  self.postMessage(highlightCode(event.data.text, event.data.language));
+self.onmessage = (event: MessageEvent<{ id: number; text: string; language: string }>) => {
+  self.postMessage({ id: event.data.id, html: highlightCode(event.data.text, event.data.language) });
 };

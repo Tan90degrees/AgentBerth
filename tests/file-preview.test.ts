@@ -22,3 +22,20 @@ test('syntax highlighting emits tokens and keeps embedded HTML inert, including 
     assert.ok(!html.includes('<img')); assert.ok(html.includes('&lt;'));
   }
 });
+
+test('full syntax set covers structured configuration and language aliases beyond the common bundle', async () => {
+  const { syntaxLanguages } = await import('../src/shared/syntax-languages');
+  assert.equal(syntaxLanguages.length, 192);
+  for (const [name, language, code] of [
+    ['app.json', 'json', '{"enabled":true,"count":42}'],
+    ['app.yaml', 'yaml', 'enabled: true\ncount: 42'], ['app.toml', 'ini', '[app]\nenabled = true'],
+    ['main.scala', 'scala', 'object Main { val count = 42 }'], ['main.dart', 'dart', 'void main() { final count = 42; }'],
+    ['main.hs', 'haskell', 'module Main where\nmain = print 42'], ['main.ex', 'elixir', 'defmodule Main do\nend'],
+    ['kernel.cu', 'cpp', '__global__ void kernel() {}'],
+  ]) {
+    assert.equal(fileLanguage(name), language, name);
+    assert.match(highlightCode(code, language), /hljs-/, name);
+  }
+  assert.equal(fileLanguage('script', '#!/usr/bin/env python3\nprint(42)'), 'python');
+  assert.equal(fileLanguage('nginx.conf'), 'nginx');
+});

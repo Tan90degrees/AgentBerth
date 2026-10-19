@@ -11,7 +11,7 @@ import { useTerminalActions } from './TerminalActions';
 import { writeTerminalEvent } from '../shared/terminal-stream';
 import { terminalThemes } from '../shared/appearance';
 import { useAppearance } from './appearance';
-import { terminalFileLinks } from '../shared/file-navigation';
+import { bindTerminalPaths } from './terminal-paths';
 import { ResizeQueue } from './terminal-resize';
 
 const options = {
@@ -58,24 +58,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     terminal.loadAddon(fit);
     loadWebLinks(terminal, error => errorHandler.current(error));
     terminal.open(host.current!);
-    terminal.registerLinkProvider({ provideLinks(row, callback) {
-      const buffer = terminal.buffer.active;
-      let first = row - 1, last = row - 1;
-      while (first > 0 && row - first <= 8 && buffer.getLine(first)?.isWrapped) first--;
-      while (last - first < 8 && buffer.getLine(last + 1)?.isWrapped) last++;
-      let text = ''; const offsets: { x: number; y: number }[] = [];
-      for (let y = first; y <= last; y++) {
-        const line = buffer.getLine(y); if (!line) continue;
-        const rendered = line.translateToString(y === last); let offset = text.length;
-        for (let col = 0; col < line.length; col++) { const cell = line.getCell(col); if (!cell || !cell.getWidth()) continue; const chars = cell.getChars() || ' '; for (let i = 0; i < chars.length; i++) offsets[offset++] = { x: col + 1, y: y + 1 }; }
-        text += rendered;
-      }
-      callback(terminalFileLinks(text).flatMap(link => {
-        const start = offsets[link.start], end = offsets[link.end - 1];
-        if (!start || !end || start.y > row || end.y < row) return [];
-        return [{ text: link.text, range: { start, end }, decorations: { pointerCursor: true, underline: true }, activate(event: MouseEvent) { if (event.ctrlKey || event.metaKey) pathHandler.current?.(link.text); } }];
-      }));
-    } });
+    const disposePaths = bindTerminalPaths(terminal, path => pathHandler.current?.(path));
     const sizeChanged = terminal.onResize(({ cols, rows }) => {
       if (host.current) { host.current.dataset.cols = String(cols); host.current.dataset.rows = String(rows); }
     });
@@ -162,7 +145,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
     void document.fonts.ready.then(() => { if (!disposed) resize(); });
     return () => {
-      instance.current=null;disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); window.removeEventListener('resize', resize); disposeRenderer(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
+      instance.current=null;disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); window.removeEventListener('resize', resize); disposeRenderer(); disposePaths(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
   }, [sessionId, fontSize, windowsPty, orderedResize, binaryMouse, bind, setReady]);

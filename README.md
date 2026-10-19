@@ -1,4 +1,4 @@
-# StackIsle · 栈屿
+# AgentBerth · 泊栈
 
 按项目组织的本地开发工作台，汇集终端、Agent、文件与原生对话历史。一个目录可以有多个会话；终端由独立后台进程持有，关闭主窗口后仍继续运行，重新打开可接回同一运行实例；从托盘退出会停止全部终端及后台进程。
 
@@ -6,9 +6,13 @@
 
 ## 当前能力
 
+- 预览支持 193 种内置语法，覆盖 JSON / YAML / TOML、常见编程语言与配置类型；可手动选择语言或自动识别。源码与 Markdown 代码块均在 Worker 中高亮。
+- 预览工具栏的 **Aa** 可调整字号（10–28 px）、选择或自定义本机字体，自动保存，独立于终端设置。
+- 终端路径只在按住 Ctrl（macOS 也可 ⌘）时出现下划线与点击手势；普通拖选、双击和 TUI 鼠标操作保留原行为。
+
 - 左侧切换“会话 / 文件”，主区切换“终端 / 历史 / 预览”；文件预览可独立于会话使用，切换内容页保留终端实例。
 - Ctrl（macOS ⌘）点击终端中的路径，直接预览文件或定位目录；模糊名称多个匹配可选择，支持 `:行:列`，也可在左侧点击“查找文件或目录”。
-- StackIsle（栈屿）沿用旧版 AgentBerth 的数据目录与安装标识，升级保留项目、会话和设置。GitHub 仓库和插件协议标识保持兼容。
+- 项目名称恢复为 AgentBerth · 泊栈；兼容 v0.11.0 的安装升级，沿用原有数据目录与应用标识。
 
 - ChatGPT 风格的中性界面，默认深色，支持浅色、深色与跟随系统；侧栏底部一键切换，终端同步换色且保持运行。[外观设置](docs/appearance.md)。
 
@@ -27,7 +31,7 @@
 - 全局快速切换与键盘操作，记住每个项目上次选择的会话；多关键词、路径分隔符兼容搜索。
 - 设置草稿跨页面与工作台重开保留，表单关闭前保护未保存内容；会话配置可复制，路径和原生 ID 可一键复制。
 - 目录移动或终端程序缺失时保留失败记录，提供修改配置与重新启动入口。
-- 独立 daemon 管理 PTY；切换项目、收起终端、关闭窗口都不会停止后台终端；托盘「退出 StackIsle（停止全部终端）」会完整退出。
+- 独立 daemon 管理 PTY；切换项目、收起终端、关闭窗口都不会停止后台终端；托盘「退出 AgentBerth（停止全部终端）」会完整退出。
 - 重新打开工作台，接回原有 PID、输入输出和最近终端画面。
 - 终端优先使用 WebGL 绘制连续块字符与框线，改善 TUI 内滚动条断线和字符溢出；图形上下文不可用或丢失时原位降级。
 - 终端缩放和输出共享顺序边界，前端与后台按相同尺寸解析；连续拖动合并中间尺寸，避免请求积压。兼容旧后台的缩放方式；更新后台后启用同步缩放。
@@ -40,15 +44,15 @@
 
 打开 [最新正式版本](https://github.com/Tan90degrees/AgentBerth/releases/latest)，直接下载安装程序或 ZIP。发布页还提供 SHA-256 校验文件与构建信息，无需从 Actions 的临时产物中查找。
 
-开发分支和 PR 的验证包仍可在 [GitHub Actions](https://github.com/Tan90degrees/AgentBerth/actions) 对应运行的 **Artifacts → StackIsle-Windows-x64** 中下载。主分支全部检查通过后，由发布任务校验文件、上传附件并公开对应版本；版本已发布时跳过，不覆盖旧包。
+开发分支和 PR 的验证包仍可在 [GitHub Actions](https://github.com/Tan90degrees/AgentBerth/actions) 对应运行的 **Artifacts → AgentBerth-Windows-x64** 中下载。主分支全部检查通过后，由发布任务校验文件、上传附件并公开对应版本；版本已发布时跳过，不覆盖旧包。
 
 发布附件（Actions 验证包解压后也包含同样文件）：
 
 
 | 文件 | 使用方式 |
 |---|---|
-| `StackIsle-0.11.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `StackIsle-0.11.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `StackIsle.exe` |
+| `AgentBerth-0.12.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.12.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
@@ -78,7 +82,7 @@ npm run dev
 
 `npm run dev` 会先检查本机 Electron 二进制是否完整，再编译桌面与后台代码，启动 Vite 和 Electron。缺少二进制时立即提示 `npm run setup`，不会在加载入口时隐式下载。页面修改自动更新；main、preload、daemon 修改后需要重新启动相关进程。后台使用 Electron 自带的 Node 运行时，与原生模块 ABI 保持一致，不依赖用户另装的 Node 来运行打包应用。
 
-应用关闭按钮默认隐藏到托盘，任务继续运行。托盘「退出 StackIsle（停止全部终端）」先清理所有终端及其子进程，再结束 daemon 和应用。退出后再次打开保留项目、会话、设置和运行记录，终端处于已停止状态，不会自动重新执行命令。
+应用关闭按钮默认隐藏到托盘，任务继续运行。托盘「退出 AgentBerth（停止全部终端）」先清理所有终端及其子进程，再结束 daemon 和应用。退出后再次打开保留项目、会话、设置和运行记录，终端处于已停止状态，不会自动重新执行命令。
 
 ### Electron 下载失败
 
@@ -218,7 +222,7 @@ OpenCode 会话在项目目录中执行 `opencode export <sessionID> > session.j
 npm run check          # TypeScript + 真实 PTY 测试 + 生产构建
 npm run test:desktop   # Playwright 驱动真实 Electron 窗口
 npm run dist:win       # Windows 本机生成 NSIS x64 安装包与 ZIP
-npm run test:packaged  # Windows 测试 release/win-unpacked/StackIsle.exe
+npm run test:packaged  # Windows 测试 release/win-unpacked/AgentBerth.exe
 ```
 
 Linux 无显示器环境：

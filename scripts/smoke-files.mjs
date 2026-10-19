@@ -20,6 +20,7 @@ await Promise.all([
   writeFile(path.join(root, 'docs', '指南.md'), '# 本地链接已打开\n\n[返回](../README.md)\n'),
   writeFile(path.join(root, 'trace.log'), 'ignored'), writeFile(path.join(root, 'tracked.log'), 'tracked'), writeFile(path.join(root, 'keep.log'), 'visible'),
   writeFile(path.join(root, 'cache', 'data.txt'), 'ignored cache'), writeFile(path.join(root, 'pixel.png'), png),
+  writeFile(path.join(root, 'config.json'), '{"enabled":true,"count":42}'), writeFile(path.join(root, 'config.yaml'), 'enabled: true\ncount: 42'), writeFile(path.join(root, 'main.scala'), 'object Main { val count = 42 }'),
   writeFile(path.join(root, 'binary.bin'), Buffer.from([0, 255, 1, 0])), writeFile(path.join(root, 'empty.txt'), ''),
   writeFile(path.join(second, 'README.md'), '# 第二个项目\n\nSECOND_PROJECT_ONLY\n'),
   ...Array.from({ length: 205 }, (_, n) => writeFile(path.join(root, `z-page-${String(n).padStart(3, '0')}.txt`), String(n))),
@@ -42,7 +43,7 @@ try {
   const args = [...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--user-data-dir=' + path.join(folder, 'profile')];
   if (process.platform === 'linux' && process.getuid?.() === 0) args.push('--no-sandbox');
   const env = { ...process.env, AGENTBERTH_DATA_DIR: path.join(folder, 'data') }; delete env.ELECTRON_RUN_AS_NODE;
-  application = await electron.launch({ executablePath: packaged ? path.resolve('release/win-unpacked/StackIsle.exe') : undefined, args, env, timeout: 20000 });
+  application = await electron.launch({ executablePath: packaged ? path.resolve('release/win-unpacked/AgentBerth.exe') : undefined, args, env, timeout: 20000 });
   const page = await application.firstWindow(); page.setDefaultTimeout(12000);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') console.error(message.text()); });
@@ -112,6 +113,30 @@ try {
   const normal = await entry('tracked.log').evaluate(element => getComputedStyle(element).color); assert.notEqual(gray, normal);
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}files-code-light.png` });
   await page.getByRole('button', { name: '切换为深色模式' }).click();
+  step('preview typography persists across files and supports custom installed fonts');
+  await page.getByRole('button', { name: '预览字体设置', exact: true }).click();
+  let fonts = page.getByRole('group', { name: '预览字体设置', exact: true });
+  await fonts.getByLabel('预览字号', { exact: true }).fill('18');
+  await fonts.getByLabel('预览字体', { exact: true }).selectOption('consolas');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.source-code')).fontSize === '18px');
+  await fonts.getByLabel('预览字体', { exact: true }).selectOption('custom');
+  await fonts.getByLabel('自定义预览字体', { exact: true }).fill('Courier New');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.source-code')).fontFamily.includes('Courier New'));
+  await page.keyboard.press('Escape');
+  assert.equal(await fonts.isVisible(), false);
+  for (const [file, language] of [['config.json', 'json'], ['config.yaml', 'yaml'], ['main.scala', 'scala']]) {
+    await entry(file).click();
+    await page.waitForFunction(language => document.querySelector('.source-code code.hljs')?.dataset.language === language, language);
+    assert.ok(await page.locator('.source-code [class*="hljs-"]').count() > 0);
+    assert.equal(await page.locator('.source-code').evaluate(element => getComputedStyle(element).fontSize), '18px');
+  }
+  await page.getByLabel('预览高亮语言', { exact: true }).selectOption('plaintext');
+  await page.waitForFunction(() => document.querySelector('.source-code code')?.dataset.language === 'plaintext');
+  assert.equal(await page.locator('.source-code [class*="hljs-"]').count(), 0);
+  await page.getByRole('button', { name: '预览字体设置', exact: true }).click();
+  fonts = page.getByRole('group', { name: '预览字体设置', exact: true });
+  await fonts.getByRole('button', { name: '恢复默认预览字体', exact: true }).click();
+  await page.keyboard.press('Escape');
   step('fuzzy path picker handles multiple matches, folder reveal and line-column navigation');
   await page.getByRole('button', { name: '查找文件或目录…' }).click();
   let picker = page.getByRole('dialog', { name: '定位文件或目录', exact: true });
@@ -137,8 +162,21 @@ try {
   const box = await screen.boundingBox();
   const cols = await page.locator('.terminal-mount').getAttribute('data-cols');
   const rows = await page.locator('.terminal-mount').getAttribute('data-rows');
+  const px = box.x + box.width / Number(cols) * 4, py = box.y + box.height / Number(rows) / 2;
+  await page.mouse.move(px, py);
+  assert.equal(await screen.evaluate(element => getComputedStyle(element).cursor === 'pointer'), false);
+  await page.mouse.click(px, py);
+  assert.equal(await mainTabs.getByRole('tab', { name: '终端', exact: true }).getAttribute('aria-selected'), 'true');
+  await page.mouse.dblclick(px, py);
+  assert.equal(await page.getByRole('dialog', { name: '定位文件或目录', exact: true }).count(), 0);
   await page.keyboard.down('Control');
-  await page.mouse.move(box.x + box.width / Number(cols) * 4, box.y + box.height / Number(rows) / 2);
+  await page.waitForFunction(() => document.querySelector('.xterm-screen')?.classList.contains('terminal-path-active'));
+  assert.equal(await screen.evaluate(element => getComputedStyle(element).cursor), 'pointer');
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => !document.querySelector('.xterm-screen')?.classList.contains('terminal-path-active'));
+  assert.equal(await screen.evaluate(element => getComputedStyle(element).cursor === 'pointer'), false);
+  await page.keyboard.down('Control');
+  await page.mouse.move(px, py);
   await page.waitForTimeout(250);
   await page.mouse.click(box.x + box.width / Number(cols) * 4, box.y + box.height / Number(rows) / 2);
   await page.keyboard.up('Control');

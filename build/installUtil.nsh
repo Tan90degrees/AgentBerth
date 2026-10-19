@@ -11,7 +11,7 @@
   !insertmacro readReg $installationDir "${ROOT_KEY}" "${INSTALL_REGISTRY_KEY}" InstallLocation
   ${If} $installationDir != ""
   ${If} ${FileExists} "$installationDir\${APP_EXECUTABLE_FILENAME}"
-  ${OrIf} ${FileExists} "$installationDir\AgentBerth.exe"
+  ${OrIf} ${FileExists} "$installationDir\StackIsle.exe"
     File /oname=$PLUGINSDIR\berth-current-uninstaller.exe "${UNINSTALLER_OUT_FILE}"
     ${If} $installMode == "CurrentUser"
     ${OrIf} "${ROOT_KEY}" == "HKEY_CURRENT_USER"
