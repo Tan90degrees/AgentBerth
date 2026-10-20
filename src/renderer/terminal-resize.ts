@@ -1,27 +1,34 @@
 type Size = { cols: number; rows: number };
-const same = (a: Size, b: Size) => a.cols === b.cols && a.rows === b.rows;
 
-export class ResizeQueue {
-  private pending: Size | null = null;
+// All layout notifications share one sampler. Measure when work can actually
+// start: dimensions captured while an RPC/parser was busy are already stale.
+export class ResizeScheduler {
+  private timer: ReturnType<typeof setTimeout> | undefined;
   private busy = false;
+  private dirty = false;
   private disposed = false;
-  constructor(private applied: Size, private send: (size: Size) => Promise<void>, private onError: (error: unknown) => void) {}
+  constructor(private measure: () => Size | null, private apply: (size: Size) => Promise<void>, private onError: (error: unknown) => void) {}
 
-  request(size: Size): void {
+  request(): void {
     if (this.disposed) return;
-    this.pending = size;
-    if (!this.busy) void this.drain();
+    this.dirty = true;
+    if (!this.busy && this.timer === undefined) this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.flush();
+    }, 80);
   }
-  private async drain(): Promise<void> {
+  private async flush(): Promise<void> {
+    if (this.disposed) return;
+    this.dirty = false;
     this.busy = true;
     try {
-      while (!this.disposed && this.pending) {
-        const size = this.pending; this.pending = null;
-        if (same(size, this.applied)) continue;
-        try { await this.send(size); this.applied = size; }
-        catch (error) { if (!this.disposed) this.onError(error); }
-      }
-    } finally { this.busy = false; }
+      const size = this.measure();
+      if (size) await this.apply(size);
+    } catch (error) { if (!this.disposed) this.onError(error); }
+    finally {
+      this.busy = false;
+      if (this.dirty) this.request();
+    }
   }
-  dispose(): void { this.disposed = true; this.pending = null; }
+  dispose(): void { this.disposed = true; this.dirty = false; clearTimeout(this.timer); }
 }
