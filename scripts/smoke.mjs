@@ -179,8 +179,9 @@ try {
   await runGit(folder,['remote','add','origin',gitRemote]);await runGit(folder,['push','-u','origin','main']);await runGit(folder,['clone',gitRemote,gitPeer]);
   await runGit(gitPeer,['config','user.name','Desktop Peer']);await runGit(gitPeer,['config','user.email','peer@example.invalid']);await runGit(gitPeer,['config','core.autocrlf','false']);
   await page.getByRole('button',{name:'Git 管理 AgentBerth 易用性',exact:true}).click();
-  let gitDialog=page.getByRole('dialog',{name:'Git · AgentBerth 易用性',exact:true});
+  let gitDialog=page.getByRole('region',{name:'源代码管理 AgentBerth 易用性',exact:true});
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Git branch was not displayed');
+  await gitDialog.getByText('分支与远端',{exact:true}).click();
   await gitDialog.getByText('上游 origin/main · 领先 0 / 落后 0',{exact:true}).waitFor();
   await writeFile(path.join(gitPeer,'remote.txt'),'REMOTE_GIT_READY');await runGit(gitPeer,['add','.']);await runGit(gitPeer,['commit','-m','remote']);await runGit(gitPeer,['push']);
   await gitDialog.getByRole('button',{name:'获取远端',exact:true}).click();
@@ -194,7 +195,6 @@ try {
   await gitDialog.getByRole('button',{name:'推送',exact:true}).click();await gitDialog.getByText('上游 origin/main · 领先 0 / 落后 0',{exact:true}).waitFor();
   assert.equal(await runGit(gitRemote,['rev-parse','refs/heads/main']),await runGit(folder,['rev-parse','HEAD']));
   await runGit(folder,['branch','feature/ui']);await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).click();
-  await gitDialog.getByText('本地分支与工作区改动（0）',{exact:true}).click();
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('feature/ui');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='feature/ui','Git branch switch did not refresh');
   step('Git background refresh during pointer activation does not swallow publication');
@@ -210,7 +210,7 @@ try {
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Git branch switch back failed');
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
-  await gitDialog.getByRole('button',{name:'关闭 Git 面板',exact:true}).click();
+  await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'会话',exact:true}).click();
   step('save shell and default Agent settings');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   step('appearance follows system, supports keyboard choice and explicit override');
@@ -308,11 +308,11 @@ try {
   step('Git pull, sync and branch switching remain available with a live terminal and preserve PTY/input/output');
   await runGit(gitPeer,['pull','--ff-only']);await writeFile(path.join(gitPeer,'remote.txt'),'LIVE_REMOTE_GIT_READY');await runGit(gitPeer,['add','.']);await runGit(gitPeer,['commit','-m','live remote']);await runGit(gitPeer,['push']);
   await page.getByRole('button',{name:'Git 管理 AgentBerth 易用性',exact:true}).click();
-  gitDialog=page.getByRole('dialog',{name:'Git · AgentBerth 易用性',exact:true});
+  gitDialog=page.getByRole('region',{name:'源代码管理 AgentBerth 易用性',exact:true});
   await gitDialog.getByRole('button',{name:'拉取',exact:true}).click();await gitDialog.getByText('已快进拉取远端提交',{exact:true}).waitFor();
   assert.equal(await readFile(path.join(folder,'remote.txt'),'utf8'),'LIVE_REMOTE_GIT_READY');
   await runGit(folder,['branch','feature/live']);await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).click();
-  await gitDialog.getByText('本地分支与工作区改动（0）',{exact:true}).click();await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('feature/live');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
+  await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('feature/live');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await gitDialog.getByRole('button',{name:'同步远端',exact:true}).click();await gitDialog.getByText('上游 origin/feature/live · 领先 0 / 落后 0',{exact:true}).waitFor();
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Live branch switch back failed');
@@ -321,7 +321,7 @@ try {
   await eventually(async()=>await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).isEnabled(),'Git operation did not complete');
   await gitDialog.evaluate(element=>{element.scrollTop=0;});
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-live-terminal':'git-live-terminal'}.png`});
-  await gitDialog.getByRole('button',{name:'关闭 Git 面板',exact:true}).click();
+  await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'会话',exact:true}).click();
   await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('echo LIVE_GIT_IO_READY');await page.keyboard.press('Enter');
   await eventually(async()=>(await page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}),before.sessions[0].id)).snapshot.split('LIVE_GIT_IO_READY').length>=3,'Terminal I/O stopped after Git changes');
 

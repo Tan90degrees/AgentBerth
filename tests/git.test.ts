@@ -77,7 +77,7 @@ test('unrelated edits survive pull/switch while overlapping edits, changed previ
   await assert.rejects(operation('push'),/rejected|fetch first|non-fast-forward/);assert.equal(await git(remote,'rev-parse','refs/heads/main'),theirs);
 });
 
-test('RPC pull, sync and branch switching preserve a running nested project PTY and its input/output', {timeout:20000},async t=>{
+test('RPC pull, sync, branch switch, staging, diff and commit preserve a running nested project PTY and its input/output', {timeout:30000},async t=>{
   const{dir,a,b}=await fixture(t);const sub=path.join(a,'nested');await mkdir(sub);const server=new DaemonServer(path.join(dir,'data'));const c=await DaemonConnection.open(await server.listen(),()=>{});
   // Close SQLite/PTY resources before fixture cleanup on Windows.
   const shutdown=async()=>{c.close();await server.close();};
@@ -88,6 +88,14 @@ test('RPC pull, sync and branch switching preserve a running nested project PTY 
     const operation=async(action:GitOperation['action'],branch?:string)=>{const status=await c.rpc<GitStatus>('gitStatus',{projectId:p.id});return c.rpc<GitResult>('gitOperation',{projectId:p.id,action,remote:'origin',branch:branch||status.upstreamBranch||status.branch,expected:{root:status.root,head:status.head,branch:status.branch}});};
     await operation('fetch');await operation('pull');assert.equal(await readFile(path.join(a,'remote.txt'),'utf8'),'live pull');
     await git(a,'branch','feature/live');await operation('switch','feature/live');await operation('sync');await operation('switch','main');
+    await git(a,'config','commit.gpgsign','false');
+    await writeFile(path.join(a,'live-changes.txt'),'LIVE_STAGED_CONTENT\n');
+    const changed = await c.rpc<GitStatus>('gitStatus',{projectId:p.id});
+    const staged = await c.rpc<GitResult>('gitOperation',{projectId:p.id,action:'stage',paths:['live-changes.txt'],expected:{root:changed.root,head:changed.head,branch:changed.branch}});
+    const diff = await c.rpc<{patch:string}>('gitDiff',{projectId:p.id,path:'live-changes.txt',staged:true});
+    assert.match(diff.patch,/\+LIVE_STAGED_CONTENT/);
+    await c.rpc('gitOperation',{projectId:p.id,action:'commit',message:'Live staged commit',expected:{root:staged.status.root,head:staged.status.head,branch:staged.status.branch}});
+    assert.equal(await git(a,'show','HEAD:live-changes.txt'),'LIVE_STAGED_CONTENT');
     const current=(await c.rpc<State>('state')).sessions.find(value=>value.id===s.id)!;assert.equal(current.latestRun!.id,run.id);assert.equal(current.latestRun!.pid,run.pid);assert.equal(current.latestRun!.status,'running');
     await c.rpc('attach',{sessionId:s.id});await c.rpc('resize',{sessionId:s.id,runId:run.id,cols:90,rows:28});await c.rpc('input',{sessionId:s.id,runId:run.id,data:'echo LIVE_GIT_PTY_OK\r'});
     const deadline=Date.now()+5000;
