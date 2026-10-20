@@ -994,7 +994,7 @@ try {
     await page.evaluate(({sessionId,file}) => window.berth.rpc('importHistory',{sessionId,path:file}), {sessionId:(await page.evaluate(()=>window.berth.rpc('state'))).sessions.find(item=>item.title==='OpenCode 会话').id,file});
   }
   await nativeBrowser.getByText('共 8 条 · 第 1 页',{exact:true}).waitFor();
-  assert.equal(await nativeBrowser.locator('.native-item').count(),5);
+  await eventually(async()=>await nativeBrowser.locator('.native-item').count()===5,'Saved history first page did not finish loading');
   await nativeBrowser.getByRole('button',{name:'下一页',exact:true}).click();
   await nativeBrowser.getByText('共 8 条 · 第 2 页',{exact:true}).waitFor();
   await eventually(async()=>await nativeBrowser.locator('.native-item').count()===3,'Saved history page did not change');
