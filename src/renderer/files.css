@@ -118,11 +118,6 @@
 .file-preview-content .markdown-document pre, .file-preview-content .markdown-document code { font-family:var(--preview-font-family); font-size:var(--preview-font-size); }
 .file-preview-content .markdown-document pre code { font-size:inherit; }
 .preview-language { max-width:140px; min-width:70px; padding:4px 6px; font-size:10px; background:var(--surface-muted); border-color:var(--border); }
-.preview-font-button { anchor-name:--preview-font-control; }
-.preview-font-popover { position-anchor:--preview-font-control; position-area:bottom span-left; position-try-fallbacks:flip-block,flip-inline; inset:auto; margin:6px 0 0; width:280px; max-height:calc(100vh - 40px); overflow:auto; border:1px solid var(--border); border-radius:10px; padding:14px; background:var(--surface); color:var(--text); box-shadow:0 8px 30px #0003; }
-.preview-font-popover label { display:block; margin:12px 0; font-size:12px; }
-.preview-font-popover select, .preview-font-popover input { margin-top:5px; width:100%; }
-.preview-font-popover p { font-size:11px; color:var(--text-muted); line-height:1.6; }
 .preview-size-control { display:flex; align-items:center; gap:8px; }
 .preview-size-control input { width:65px; }
 .preview-size-control button { padding:6px 10px; border:1px solid var(--border); }
@@ -131,3 +126,59 @@
 .file-preview-content .markdown-document h1 { font-size:1.85em; }
 .file-preview-content .markdown-document h2 { font-size:1.46em; }
 .file-preview-content .markdown-document h3 { font-size:1.23em; }
+
+.preview-font-sample { margin:14px 0; padding:12px; border:1px solid var(--border); border-radius:6px; overflow:auto; font-family:var(--preview-font-family); font-size:var(--preview-font-size); white-space:pre; }
+
+.sidebar-tabs button { min-width:0; gap:4px; padding-inline:5px; font-size:11px; white-space:nowrap; }
+.scm-sidebar { display:flex; flex:1; min-height:0; flex-direction:column; overflow:auto; scrollbar-gutter:stable; padding:0 8px 12px; gap:8px; }
+.scm-sidebar .git-heading { padding:3px 4px; min-height:28px; gap:6px; }
+.scm-sidebar .git-heading strong { font-size:12px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.scm-sidebar .git-heading button { font-size:17px; width:24px; height:24px; }
+.scm-sidebar .git-summary { gap:8px; margin:0 4px; font-size:10px; }
+.scm-sidebar .git-root { margin:6px 0; font-size:9px; }
+.scm-commit { display:flex; flex-direction:column; gap:7px; }
+.scm-commit textarea { width:100%; min-height:62px; max-height:160px; resize:vertical; background:var(--surface-muted); border:1px solid var(--border); border-radius:6px; padding:8px; color:var(--text); font-family:inherit; font-size:11px; line-height:1.5; }
+.scm-commit textarea:focus-visible { outline:2px solid var(--focus); outline-offset:-1px; }
+.scm-commit .primary { padding:7px; font-size:11px; }
+.scm-network { padding:7px 4px; border-bottom:1px solid var(--border); font-size:10px; }
+.scm-network summary { cursor:pointer; color:var(--text-secondary); }
+.scm-network select { padding:6px; font-size:10px; }
+.scm-network label { display:block; margin-top:8px; }
+.scm-network .git-tracking { font-size:10px; }
+.scm-network .git-actions { gap:4px; margin-top:8px; }
+.scm-network .git-actions button { padding:6px; font-size:10px; }
+.scm-network .git-switch { gap:4px; margin-top:8px; }
+.scm-network .git-switch button { white-space:nowrap; padding:5px; font-size:10px; }
+.scm-filter { padding:7px 8px; font-size:11px; }
+.scm-group { min-width:0; }
+.scm-group-heading { display:flex; align-items:center; gap:3px; height:29px; background:var(--surface-muted); padding:0 4px; }
+.scm-group-heading strong { min-width:0; flex:1; font-size:11px; font-weight:500; }
+.scm-group-heading small { margin-left:6px; border-radius:5px; background:var(--selected); padding:1px 5px; font-size:10px; }
+.scm-group-heading button { font-size:14px; min-width:24px; padding:3px; }
+.scm-group input[type=checkbox] { width:13px; height:13px; flex-shrink:0; padding:0; margin:0 4px; accent-color:var(--link); }
+.scm-files { list-style:none; margin:2px 0; padding:0; }
+.scm-files li { display:flex; min-width:0; align-items:center; min-height:28px; }
+.scm-files li:hover { background:var(--hover); }
+.scm-file { flex:1; min-width:0; height:28px; justify-content:flex-start; padding:0 3px; gap:5px; text-align:left; }
+.scm-file span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+.scm-file small { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); font-size:9px; flex:1; }
+.scm-file b { font-size:10px; font-weight:500; color:var(--warning); margin-left:auto; }
+.scm-file-action { flex-shrink:0; width:23px; padding:2px; font-size:16px; }
+.scm-empty { padding:8px 5px; color:var(--text-muted); font-size:10px; }
+.scm-more { padding:5px; color:var(--link); font-size:10px; }
+.scm-sidebar .form-hint, .scm-sidebar .form-error { margin:3px 0; font-size:10px; line-height:1.7; }
+.scm-sidebar .git-success, .scm-sidebar .git-progress { margin:0; font-size:10px; }
+.diff-comparison-label { padding:6px 12px; border-bottom:1px solid var(--border); color:var(--text-muted); font-size:10px; }
+.git-diff-scroll { flex:1; min-height:0; overflow:auto; scrollbar-gutter:stable; tab-size:4; }
+.diff-lines { min-width:max-content; font-family:var(--preview-font-family); font-size:var(--preview-font-size); line-height:1.7; padding:8px 0 20px; }
+.diff-line { display:flex; white-space:pre; min-height:1.7em; }
+.diff-number { width:5ch; padding:0 .7ch; flex-shrink:0; color:var(--text-muted); text-align:right; user-select:none; background:var(--bg); border-right:1px solid var(--border); }
+.diff-sign { width:3ch; flex-shrink:0; text-align:center; user-select:none; }
+.diff-text { padding-right:16px; }
+.diff-add { background:color-mix(in srgb, var(--success) 14%, transparent); }
+.diff-remove { background:color-mix(in srgb, var(--danger) 14%, transparent); }
+.diff-hunk { color:var(--link); background:var(--selected); }
+.diff-meta { color:var(--text-muted); }
+
+.settings-host, .workspace-host { display:flex; flex:1; flex-direction:column; min-height:0; min-width:0; overflow:hidden; }
+.settings-host[hidden], .workspace-host[hidden] { display:none !important; }

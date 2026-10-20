@@ -4,6 +4,7 @@ import { agentLabels } from './labels';
 import { AgentManager } from './AgentManager';
 import { TerminalFields } from './TerminalFields';
 import { AppearanceControls } from './AppearanceControls';
+import { PreviewSettings } from './PreviewSettings';
 import { AboutCard } from './AboutCard';
 
 export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSaveAgent, onDeleteAgent, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
@@ -16,6 +17,7 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
   const change = (value: Settings) => { onChange(value); setSaved(false); };
   return <section className="settings-page"><header><span className="eyebrow">PREFERENCES</span><h1>设置</h1><p>选择每个新终端的运行环境，让会话按你的习惯启动。</p></header>
     <AppearanceControls />
+    <PreviewSettings />
     <form className="settings-card" onSubmit={async event => { event.preventDefault(); if (await onSave(draft)) setSaved(true); }}>
       <h2>终端与会话</h2>
       {conflict && <p className="draft-notice" role="status">后台设置已更新，当前草稿已保留。保存将应用此处的值，也可以取消修改以加载后台设置。</p>}

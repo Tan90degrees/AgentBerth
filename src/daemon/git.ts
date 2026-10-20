@@ -1,12 +1,19 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { realpath, stat } from 'node:fs/promises';
+import { lstat, open, readlink, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { GitFile, GitOperation, GitResult, GitStatus } from '../shared/protocol';
+import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitResult, GitStatus } from '../shared/protocol';
 import { resolveExecutable } from './executables';
 import { terminalEnvironment } from './paths';
 
 const execute = promisify(execFile);
+export const MAX_GIT_FILES = 2000;
+const MAX_DIFF_BYTES = 256 * 1024;
+function repositoryPath(input: string): string {
+  const value = process.platform === 'win32' ? input.replaceAll('\\', '/') : input;
+  if (!value || value.includes('\0') || path.isAbsolute(value) || path.win32.isAbsolute(value) || value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) throw new Error('Git 文件路径无效，请刷新后重试');
+  return value;
+}
 export const gitMessage = (text: string) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/(https?:\/\/)[^\s/@]+@/gi, '$1***@').replace(/([?&](?:token|access_token|auth|password|key)=)[^&\s]+/gi, '$1***').slice(-16384);
 const empty = (root: string, kind: GitStatus['kind'], message?: string): GitStatus => ({ kind, message, busy: false, root, commonDirectory: '', branch: null, head: null, upstream: null, upstreamRemote: null, upstreamBranch: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0, total: 0, files: [], branches: [], remotes: [], operation: null, fetchedAt: null });
 export function parseGitStatus(output: string, root: string): GitStatus {
@@ -26,7 +33,7 @@ export function parseGitStatus(output: string, root: string): GitStatus {
       if (type === '?') result.untracked++;
       else if (type === 'u') result.conflicts++;
       else { if (xy[0] !== '.') result.staged++; if (xy[1] !== '.') result.modified++; }
-      if (result.files.length < 100) result.files.push(file);
+      if (result.files.length < MAX_GIT_FILES) result.files.push(file);
     }
   }
   return result;
@@ -93,7 +100,7 @@ export class GitWorkspace {
     try {
       const root=await realpath((await this.command(cwd,['rev-parse','--show-toplevel'])).replace(/\r?\n$/,''));
       const [porcelain, refs, remotes, gitDirText, commonText] = await Promise.all([
-        this.command(root,['status','--porcelain=v2','--branch','-z','--untracked-files=normal']),
+        this.command(root,['status','--porcelain=v2','--branch','-z','--untracked-files=all']),
         this.command(root,['for-each-ref','--format=%(refname:short)%00%(upstream:remotename)%00%(upstream:remoteref)','refs/heads/']),
         this.command(root,['remote']),this.command(root,['rev-parse','--absolute-git-dir']),this.command(root,['rev-parse','--git-common-dir']),
       ]);
@@ -114,6 +121,41 @@ export class GitWorkspace {
     }
   }
   private requireRepository(status: GitStatus): void { if(status.kind!=='repository')throw new Error(status.message || '无法读取 Git 仓库'); }
+  async diff(cwd: string, request: GitDiffRequest): Promise<GitDiff> {
+    const status = await this.status(cwd); this.requireRepository(status);
+    const input = repositoryPath(request.path);
+    const filename = repositoryPath(request.projectPath ? path.relative(status.root, path.resolve(await realpath(cwd), input)).split(path.sep).join('/') : input);
+    const file = status.files.find(item => item.path === filename);
+    let patch = '', binary = false, truncated = false;
+    if (!request.staged && file?.index === '?') {
+      const absolute = path.resolve(status.root, filename), parent = await realpath(path.dirname(absolute));
+      const relative = path.relative(status.root, parent);
+      if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('文件位于仓库之外');
+      const info = await lstat(absolute);
+      let content: string;
+      if (info.isSymbolicLink()) content = await readlink(absolute);
+      else {
+        if (!info.isFile()) throw new Error('只能查看文件差异');
+        const handle = await open(absolute, 'r');
+        try {
+          const buffer = Buffer.alloc(MAX_DIFF_BYTES + 1), { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+          truncated = bytesRead > MAX_DIFF_BYTES;
+          const bytes = buffer.subarray(0, Math.min(bytesRead, MAX_DIFF_BYTES));
+          binary = bytes.includes(0);
+          try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: truncated }); } catch { binary = true; content = ''; }
+        } finally { await handle.close(); }
+      }
+      if (!binary && content) {
+        const lines = content.split('\n'); if (lines.at(-1) === '') lines.pop();
+        patch = `diff --git a/${filename} b/${filename}\nnew file mode ${info.isSymbolicLink() ? '120000' : '100644'}\n--- /dev/null\n+++ b/${filename}\n@@ -0,0 +1,${lines.length} @@\n` + lines.map(line => '+' + line).join('\n') + '\n' + (!content.endsWith('\n') ? '\\ No newline at end of file\n' : '');
+      }
+    } else {
+      patch = await this.command(status.root, ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--unified=3', '--src-prefix=a/', '--dst-prefix=b/', ...(request.staged ? ['--cached'] : []), '--', filename, ...(file?.originalPath ? [file.originalPath] : [])]);
+      binary = /^Binary files .* differ$/m.test(patch) || /^GIT binary patch$/m.test(patch);
+    }
+    if (patch.length > MAX_DIFF_BYTES) { patch = patch.slice(0, MAX_DIFF_BYTES); truncated = true; }
+    return { path: filename, staged: request.staged, patch, binary, truncated, ...(!patch ? { message: binary ? '二进制文件已更改，无法显示文本差异。' : file?.index === '?' ? '新文件为空，暂存后可提交。' : '当前比较中没有差异。' } : {}) };
+  }
   private verify(status: GitStatus, expected: GitOperation['expected']): void {
     this.requireRepository(status);
     if(status.root!==expected.root || status.branch!==expected.branch || status.head!==expected.head)throw new Error('分支、提交或仓库已变化，请刷新后重新操作');
@@ -129,7 +171,29 @@ export class GitWorkspace {
     if(this.locks.size>=2)throw new Error('已有两个 Git 操作在执行，请稍后重试');
     this.locks.add(key);const output: string[]=[];let completed='';
     try {
-      if(request.action==='switch') {
+      // Re-read after acquiring our repository lock; a preceding operation may
+      // have completed while the initial inspection was in flight.
+      status = await this.inspect(cwd);
+      this.verify(status, request.action === 'fetch' ? { ...request.expected, branch: status.branch, head: status.head } : request.expected);
+      if (request.action === 'stage' || request.action === 'unstage') {
+        if (!request.paths?.length) throw new Error('请先选择文件');
+        const selected = [...new Set(request.paths.map(repositoryPath))].map(filename => {
+          const file = status.files.find(item => item.path === filename);
+          if (!file || (request.action === 'unstage' && (file.index === '.' || file.index === '?')) || (request.action === 'stage' && file.worktree === '.' && !file.conflict)) throw new Error('所选文件状态已变化，请刷新后重新选择');
+          return file;
+        });
+        const paths = [...new Set(selected.flatMap(file => file.originalPath && (request.action === 'unstage' ? file.index === 'R' : file.worktree === 'R') ? [file.path, file.originalPath] : [file.path]))];
+        if (request.action === 'stage') await this.command(status.root, ['--literal-pathspecs', 'add', '--all', '--', ...paths], true);
+        else if (status.head) await this.command(status.root, ['--literal-pathspecs', 'reset', '--quiet', status.head, '--', ...paths], true);
+        else await this.command(status.root, ['--literal-pathspecs', 'rm', '--cached', '--force', '--quiet', '--ignore-unmatch', '--', ...paths], true);
+        completed = `已${request.action === 'stage' ? '暂存' : '取消暂存'} ${selected.length} 个文件`;
+      } else if (request.action === 'commit') {
+        this.requireReady(status);
+        if (!status.staged) throw new Error('没有已暂存的更改，请先暂存要提交的文件');
+        if (!request.message?.trim()) throw new Error('请填写提交信息');
+        output.push(await this.command(status.root, ['commit', '--file=-', '--cleanup=strip'], true, request.message.trim() + '\n'));
+        completed = '已提交暂存的更改';
+      } else if(request.action==='switch') {
         this.requireReady(status);
         if(!request.branch || !status.branches.includes(request.branch))throw new Error('请选择已有的本地分支，刷新后重试');
         await this.command(status.root,['switch','--',request.branch],true);

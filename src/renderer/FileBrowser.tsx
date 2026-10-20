@@ -9,7 +9,7 @@ type Directory = { page?: ProjectFilePage; loading: boolean; error?: string };
 function EntryIcon({ directory, expanded }: { directory: boolean; expanded?: boolean }) {
   return <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true"><path d={directory ? expanded ? 'M2 7V4h6l2 2h8v2M2 8h17l-3 8H3L2 8Z' : 'M2 6V4h6l2 2h8v10H2V6Z' : 'M5 2h7l4 4v12H5V2Zm7 0v5h4'} /></svg>;
 }
-export default memo(function FileBrowser({ project, connected, treeHost, previewHost, onPreview, target, navigationSupported }: { project: Project; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; onPreview: () => void; navigationSupported: boolean; target: { query: string; nonce: number } | null }) {
+export default memo(function FileBrowser({ project, connected, treeHost, previewHost, onPreview, target, navigationSupported, onDiff }: { project: Project; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; onPreview: () => void; onDiff?: (path: string, staged: boolean, projectPath: boolean) => void; navigationSupported: boolean; target: { query: string; nonce: number } | null }) {
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
   const directoriesRef = useRef(directories); directoriesRef.current = directories;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -192,7 +192,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     </div>, treeHost)}
     {previewHost && createPortal(<section ref={host} className="file-preview-pane" aria-label="文件预览" aria-busy={loading}>
       {error && <div className="file-preview-error" role="alert"><p>{error}</p>{selected && <button disabled={!connected} onClick={() => void openFile(selected)}>重试</button>}</div>}
-      {file ? <Suspense fallback={<div className="file-preview-empty">正在准备预览…</div>}><Preview position={position} file={file} projectId={project.id} markdown={markdown} onMarkdown={value => { setMarkdown(value); saveStored('berth.markdownPreview', value ? 'rendered' : 'source'); }} onNavigate={navigateFile} onRefresh={() => void openFile(selected)} onError={setError} /></Suspense> : !error && <div className="file-preview-empty"><EntryIcon directory={false} /><strong>{loading ? '正在读取文件…' : '选择文件预览'}</strong><p>从左侧“文件”选择文档或代码，<br />在这里查看源码、图片和 Markdown。</p></div>}
+      {file ? <Suspense fallback={<div className="file-preview-empty">正在准备预览…</div>}><Preview onDiff={onDiff ? staged => onDiff(file.path, staged, true) : undefined} position={position} file={file} projectId={project.id} markdown={markdown} onMarkdown={value => { setMarkdown(value); saveStored('berth.markdownPreview', value ? 'rendered' : 'source'); }} onNavigate={navigateFile} onRefresh={() => void openFile(selected)} onError={setError} /></Suspense> : !error && <div className="file-preview-empty"><EntryIcon directory={false} /><strong>{loading ? '正在读取文件…' : '选择文件预览'}</strong><p>从左侧“文件”选择文档或代码，<br />在这里查看源码、图片和 Markdown。</p></div>}
     </section>, previewHost)}
   </>;
 });

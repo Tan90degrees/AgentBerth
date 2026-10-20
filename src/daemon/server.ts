@@ -132,6 +132,7 @@ export class DaemonServer {
       case 'state': return this.store.state();
       case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
       case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
+      case 'gitDiff': return this.git.diff(this.store.project(request.params.projectId).path, request.params);
       case 'projectFiles': return this.files.list(this.store.project(request.params.projectId).path, request.params.path, request.params.offset, request.params.limit);
       case 'findProjectFiles': return this.files.search(this.store.project(request.params.projectId).path, request.params.query);
       case 'previewFile': return this.files.preview(this.store.project(request.params.projectId).path, request.params.path);
