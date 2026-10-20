@@ -181,7 +181,7 @@ export function OutputView({ text, fontSize = 14, windowsPty, onError }: { text:
     const disposeRenderer = attachTerminalRenderer(terminal, host.current!, requestResize, () => new WebglAddon());
     const sizeChanged = terminal.onResize(({cols,rows}) => { if(host.current){host.current.dataset.cols=String(cols);host.current.dataset.rows=String(rows);} });
     host.current!.dataset.cols=String(terminal.cols);host.current!.dataset.rows=String(terminal.rows);
-    requestResize(); terminal.write(text, () => { if (!disposed) setReady(true); });
+    fitTerminal(terminal, fit); requestResize(); terminal.write(text, () => { if (!disposed) setReady(true); });
     const observer = new ResizeObserver(requestResize); observer.observe(host.current!);
     window.addEventListener('resize', requestResize);
     const metricsChanged = terminal.onResize(requestResize);
