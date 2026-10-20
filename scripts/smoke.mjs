@@ -729,6 +729,9 @@ try {
     await findTerminalText(page, 'MOUSE_LEGACY_2');
     await clickTui(); await findTerminalText(page, 'MOUSE_LEGACY_3');
   }
+  // Capture a completed, static TUI frame rather than a periodic ConPTY redraw.
+  await page.evaluate(({sessionId,runId}) => window.berth.rpc('input',{sessionId,runId,data:'p'}), {sessionId:before.sessions[0].id,runId:original.id});
+  await findTerminalText(page, 'COPY_READY');
   await findTerminalText(page, 'TUI_FOOTER');
   await assertContinuousTuiBar(page, application);
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
