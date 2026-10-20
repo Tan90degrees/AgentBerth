@@ -632,10 +632,34 @@ try {
   step('resize a full-screen Unicode TUI, settle both grids, switch away and restore without restarting');
   const tuiScript = path.join(folder, process.platform === 'win32' ? 'resize-tui.ps1' : 'resize-tui.cjs');
   if (process.platform === 'win32') await writeFile(tuiScript, '\ufeff' + await readFile(new URL('../tests/fixtures/mouse-tui.ps1', import.meta.url), 'utf8'));
-  else await writeFile(tuiScript, `let done=false,clicks=0,legacy=false,paused=false;process.stdout.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h');function draw(){const [c,r]=process.stdout.getWindowSize();process.stdout.write('\\x1b[H\\x1b[2JTUI_RESIZE_READY\\x1b[2;1HSIZE_'+c+'x'+r+'\\x1b[3;1H'+('中文🙂'.repeat(Math.max(1,Math.floor((c-6)/6))))+Array.from({length:Math.max(0,r-4)},(_,i)=>'\\x1b['+(i+3)+';10H\\x1b[38;2;255;102;0m█\\x1b[0m').join('')+'\\x1b[4;20HMOUSE_'+(legacy?'LEGACY_':'SGR_')+clicks+(paused?'\\x1b[5;20HCOPY_READY':'')+'\\x1b['+r+';1HTUI_FOOTER\\x1b[K');}draw();process.stdout.on('resize',draw);const timer=setInterval(()=>{if(!paused)draw();},60);function finish(){if(done)return;done=true;clearInterval(timer);process.stdout.removeListener('resize',draw);process.stdin.setRawMode(false);process.stdin.pause();process.stdout.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049lTUI_RESIZE_DONE\\r\\n');process.exit(0);}process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',data=>{if(data.includes(3))finish();else if(data.includes(112)){paused=true;draw();}else if(data.includes(108)){legacy=true;paused=false;process.stdout.write('\\x1b[?1006l');}else if((!legacy&&/\\x1b\\[<0;[0-9]+;[0-9]+M/.test(data.toString()))||(legacy&&data.includes(Buffer.from('\\x1b[M '))))clicks++;});process.on('SIGINT',finish);setTimeout(finish,60000);`);
+  else await writeFile(tuiScript, `let done=false,clicks=0,legacy=false,paused=false;process.stdout.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h');function draw(){const [c,r]=process.stdout.getWindowSize();process.stdout.write('\\x1b[H\\x1b[2JTUI_RESIZE_READY\\x1b[2;1HSIZE_'+c+'x'+r+'\\x1b[3;1H'+('中文🙂'.repeat(Math.max(1,Math.floor((c-6)/6))))+Array.from({length:Math.max(0,r-4)},(_,i)=>'\\x1b['+(i+3)+';10H\\x1b[38;2;255;102;0m█\\x1b[0m').join('')+'\\x1b[4;20HMOUSE_'+(legacy?'LEGACY_':'SGR_')+clicks+(paused?'\\x1b[5;20HCOPY_READY':'')+'\\x1b['+r+';1HTUI_FOOTER\\x1b[K');}draw();process.stdout.on('resize',draw);const timer=setInterval(()=>{if(!paused)draw();},60);function finish(){if(done)return;done=true;clearInterval(timer);process.stdout.removeListener('resize',draw);process.stdin.setRawMode(false);process.stdin.pause();process.stdout.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049lTUI_RESIZE_DONE\\r\\n');process.exit(0);}process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',data=>{if(data.includes(3))finish();else if(data.includes(112)){paused=true;draw();}else if(data.includes(114)){paused=false;draw();}else if(data.includes(108)){legacy=true;paused=false;process.stdout.write('\\x1b[?1006l');}else if((!legacy&&/\\x1b\\[<0;[0-9]+;[0-9]+M/.test(data.toString()))||(legacy&&data.includes(Buffer.from('\\x1b[M '))))clicks++;});process.on('SIGINT',finish);setTimeout(finish,60000);`);
   await page.evaluate(({ sessionId, runId, data }) => window.berth.rpc('input', { sessionId, runId, data }), { sessionId: before.sessions[0].id, runId: original.id, data: (process.platform === 'win32' ? `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "${tuiScript}"` : shellCommand(tuiScript)) + '\r' });
   await findTerminalText(page, 'TUI_RESIZE_READY');
   const bounds = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+  step('stress continuous native resizing and maximize/restore with redraw-on-resize Unicode TUI');
+  await page.evaluate(({sessionId,runId}) => window.berth.rpc('input',{sessionId,runId,data:'p'}), {sessionId:before.sessions[0].id,runId:original.id});
+  await findTerminalText(page, 'COPY_READY');
+  await page.evaluate(() => {
+    window.resizeTicks = []; window.resizeLastTick = performance.now();
+    window.resizeTimer = setInterval(() => { const now = performance.now(); window.resizeTicks.push(now - window.resizeLastTick); window.resizeLastTick = now; }, 16);
+  });
+  for (let i = 0; i < 24; i++) {
+    await application.evaluate(({ BrowserWindow }, i) => BrowserWindow.getAllWindows()[0].setSize(1030 + (i % 8) * 29, 710 + (i % 5) * 17), i);
+    await page.waitForTimeout(12);
+  }
+  // Xvfb has no window manager; exercise the native maximize state on Windows.
+  if (process.platform === 'win32') {
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].maximize());
+    await eventually(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized()), 'Native maximize did not finish');
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].unmaximize());
+    await eventually(() => application.evaluate(({ BrowserWindow }) => !BrowserWindow.getAllWindows()[0].isMaximized()), 'Native restore did not finish');
+  }
+  // Native window resizing may suspend compositor frames. Timer gaps measure
+  // JS responsiveness during the drag; measure rendering again after settling.
+  const resizeGaps = await page.evaluate(() => { clearInterval(window.resizeTimer); return window.resizeTicks.slice(3).sort((a,b) => a-b); });
+  const resizeP95 = resizeGaps[Math.floor(resizeGaps.length * .95)] ?? 0;
+  console.log(`Continuous TUI resize: ${resizeGaps.length} event-loop samples, p95 gap ${resizeP95.toFixed(1)}ms`);
+  assert.ok(resizeGaps.length > 5 && resizeP95 < 350, 'Continuous resizing stalled the renderer event loop: p95 ' + resizeP95);
   for (const [width, height] of [[1100, 720], [1280, 820], [1030, 710], [1200, 780]]) {
     await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(...size), [width, height]);
     await eventually(async () => {
@@ -662,12 +686,23 @@ try {
     await assertContinuousTuiBar(page, application);
     await assertTerminalGutter(page);
   }
+  await page.evaluate(() => {
+    window.settledResizeFrames = []; let last = performance.now();
+    const frame = now => { window.settledResizeFrames.push(now - last); last = now; if (window.settledResizeFrames.length < 16) requestAnimationFrame(frame); };
+    requestAnimationFrame(frame);
+  });
+  await page.waitForFunction(() => window.settledResizeFrames.length >= 16, undefined, { timeout: 5000 });
+  const settledGaps = await page.evaluate(() => window.settledResizeFrames.slice(3).sort((a,b) => a-b));
+  const settledP95 = settledGaps[Math.floor(settledGaps.length * .95)];
+  console.log(`Settled TUI resize: p95 frame gap ${settledP95.toFixed(1)}ms`);
+  assert.ok(settledP95 < 350, 'Rendering remained slow after resizing: p95 ' + settledP95);
   assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')), 'Resize remounted the terminal');
   const clickTui = async () => {
     const screen = await page.locator('.terminal-mount .xterm-screen').boundingBox();
     const rows = Number(await page.locator('.terminal-mount').getAttribute('data-rows'));
     await page.mouse.click(screen.x + 30, screen.y + screen.height / rows * 5.5);
   };
+  await page.evaluate(({sessionId,runId}) => window.berth.rpc('input',{sessionId,runId,data:'r'}), {sessionId:before.sessions[0].id,runId:original.id});
   await clickTui(); await findTerminalText(page, 'MOUSE_SGR_1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.locator('.projects .project-item').click();

@@ -54,6 +54,7 @@ public static class MouseTui {
                         if (record.Character == 'p') { paused = true; Draw(clicks, paused); }
                         if (record.Character == 'r') paused = false;
                     }
+                    if (record.Type == 4 && paused) Draw(clicks, paused);
                     if (record.Type == 2) {
                         if ((record.MouseFlags & ~2u) == 0 && (record.Buttons & 1) != 0 && (buttons & 1) == 0) clicks++;
                         buttons = record.Buttons;

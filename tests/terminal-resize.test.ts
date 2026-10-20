@@ -12,7 +12,7 @@ import { resolveTerminal } from '../src/daemon/paths';
 import type { Attachment, Project, Run, Session, TerminalEvent } from '../src/shared/protocol';
 import { windowsPtyFor } from '../src/shared/desktop';
 import { writeTerminalEvent } from '../src/shared/terminal-stream';
-import { ResizeQueue } from '../src/renderer/terminal-resize';
+import { ResizeScheduler } from '../src/renderer/terminal-resize';
 
 const write = (terminal: Terminal, text = '') => new Promise<void>(resolve => terminal.write(text, resolve));
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -48,22 +48,57 @@ test('size boundaries preserve normal/alternate buffers and Unicode while writes
   }
 });
 
-test('latest resize replaces intermediate requests, including dragging back to the initial size', async () => {
-  const sent: string[] = [], finish: (() => void)[] = [];
-  const queue = new ResizeQueue({ cols: 80, rows: 24 }, size => { sent.push(`${size.cols}x${size.rows}`); return new Promise(resolve => finish.push(resolve)); }, error => { throw error; });
-  queue.request({ cols: 100, rows: 30 }); queue.request({ cols: 120, rows: 40 }); queue.request({ cols: 80, rows: 24 });
-  assert.deepEqual(sent, ['100x30']);
-  finish.shift()!(); await tick(); assert.deepEqual(sent, ['100x30', '80x24']);
-  finish.shift()!(); await tick(); queue.request({ cols: 80, rows: 24 }); assert.equal(sent.length, 2);
-  queue.dispose(); queue.request({ cols: 150, rows: 50 }); assert.equal(sent.length, 2);
+test('resize storms sample the latest layout once, including returning to the initial size', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let size = { cols: 80, rows: 24 }, reads = 0;
+  const sent: typeof size[] = [];
+  const scheduler = new ResizeScheduler(() => { reads++; return size; }, async value => { sent.push(value); }, error => { throw error; });
+  for (let i = 0; i < 1000; i++) { size = { cols: 100 + i, rows: 30 }; scheduler.request(); }
+  size = { cols: 80, rows: 24 }; scheduler.request();
+  assert.equal(reads, 0);
+  t.mock.timers.tick(79); assert.equal(reads, 0);
+  t.mock.timers.tick(1); await tick();
+  assert.equal(reads, 1); assert.deepEqual(sent, [{ cols: 80, rows: 24 }]);
+  scheduler.dispose();
 });
 
-test('failed resizing can retry and disposal drops queued work and late errors', async () => {
-  let calls = 0; const errors: unknown[] = []; let reject: (reason: Error) => void = () => {};
-  const queue = new ResizeQueue({ cols: 80, rows: 24 }, async () => { calls++; if (calls === 1) throw new Error('offline'); await new Promise<void>((_, fail) => { reject = fail; }); }, error => errors.push(error));
-  queue.request({ cols: 100, rows: 30 }); await tick(); assert.equal(errors.length, 1);
-  queue.request({ cols: 100, rows: 30 }); queue.request({ cols: 120, rows: 40 }); assert.equal(calls, 2);
-  queue.dispose(); reject(new Error('late disconnect')); await tick(); assert.equal(calls, 2); assert.equal(errors.length, 1);
+test('slow PTY/parser work never overlaps and queued layouts are measured only when ready', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let size = { cols: 100, rows: 30 }, reads = 0;
+  const sent: typeof size[] = [], finish: (() => void)[] = [];
+  const scheduler = new ResizeScheduler(() => { reads++; return size; }, value => {
+    sent.push(value); return new Promise(resolve => finish.push(resolve));
+  }, error => { throw error; });
+  scheduler.request(); t.mock.timers.tick(80);
+  size = { cols: 120, rows: 40 }; scheduler.request(); t.mock.timers.tick(1000);
+  size = { cols: 80, rows: 24 }; scheduler.request();
+  assert.equal(reads, 1); assert.deepEqual(sent, [{ cols: 100, rows: 30 }]);
+  finish.shift()!(); await tick();
+  // Change the layout again without another notification before sampling.
+  size = { cols: 90, rows: 25 };
+  t.mock.timers.tick(80); assert.deepEqual(sent, [{ cols: 100, rows: 30 }, { cols: 90, rows: 25 }]);
+  scheduler.dispose(); scheduler.request(); finish.shift()!(); await tick(); t.mock.timers.tick(1000);
+  assert.equal(reads, 2);
+});
+
+test('hidden layouts are ignored, reappearing panes refit, errors retry and disposal cancels timers', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let visible = false, calls = 0, reject: (error: Error) => void = () => {};
+  const errors: unknown[] = [];
+  const scheduler = new ResizeScheduler(() => visible ? { cols: 100, rows: 30 } : null, async () => {
+    if (++calls === 1) throw new Error('offline');
+    await new Promise<void>((_, fail) => { reject = fail; });
+  }, error => errors.push(error));
+  scheduler.request(); t.mock.timers.tick(80); await tick(); assert.equal(calls, 0);
+  visible = true; scheduler.request(); t.mock.timers.tick(80); await tick(); assert.equal(errors.length, 1);
+  scheduler.request(); t.mock.timers.tick(80); assert.equal(calls, 2);
+  scheduler.request(); scheduler.dispose(); reject(new Error('late disconnect')); await tick(); t.mock.timers.tick(1000);
+  assert.equal(calls, 2); assert.equal(errors.length, 1);
+  const cancelled = new ResizeScheduler(() => { throw new Error('disposed sampler ran'); }, async () => {}, error => { throw error; });
+  cancelled.request(); cancelled.dispose(); t.mock.timers.tick(80);
+});
+
+test('disposed terminal ignores a queued size boundary', async () => {
   const terminal = grid(); let alive = true;
   writeTerminalEvent(terminal, { event: 'resize', data: { sessionId: 'a', runId: 'b', seq: 1, cols: 120, rows: 40 } }, () => alive);
   alive = false; await write(terminal); assert.equal(terminal.cols, 80); terminal.dispose();

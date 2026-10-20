@@ -12,7 +12,7 @@ import { writeTerminalEvent } from '../shared/terminal-stream';
 import { terminalThemes } from '../shared/appearance';
 import { useAppearance } from './appearance';
 import { bindTerminalPaths } from './terminal-paths';
-import { ResizeQueue } from './terminal-resize';
+import { ResizeScheduler } from './terminal-resize';
 
 const options = {
   fontFamily: 'Cascadia Mono, Cascadia Code, Consolas, DejaVu Sans Mono, Liberation Mono, monospace', fontSize: 14, lineHeight: 1.25, scrollback: 2000, cursorBlink: true,
@@ -104,32 +104,41 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       else if ([...data].every(char => char.charCodeAt(0) < 128)) sendInput(data);
       else errorHandler.current('请在设置中更新后台，以恢复完整的终端鼠标支持');
     });
-    let resizeQueue: ResizeQueue | null = null;
-    const resize = () => {
-      if (disposed || !ready || !host.current?.clientWidth || !host.current?.clientHeight) return;
-      const dimensions = proposedSize(fit);
-      if (!dimensions) return;
+    let appliedSize: { cols: number; rows: number } | null = null;
+    const resize = new ResizeScheduler(() => {
+      if (disposed || !ready || !host.current?.clientWidth || !host.current?.clientHeight) return null;
+      return proposedSize(fit);
+    }, async dimensions => {
       if (!orderedResize || !running || !runId) fitTerminal(terminal, fit);
-      if (running && runId) resizeQueue?.request(dimensions);
-    };
-    const disposeRenderer = attachTerminalRenderer(terminal, host.current!, resize, () => new WebglAddon());
+      if (running && runId && (appliedSize?.cols !== dimensions.cols || appliedSize?.rows !== dimensions.rows)) {
+        await window.berth.rpc('resize', { sessionId, runId, ...dimensions });
+        // The daemon's boundary arrives before its RPC reply, but xterm parses
+        // it asynchronously. Do not start another PTY resize ahead of that grid.
+        if (disposed) return;
+        await new Promise<void>(resolve => terminal.write('', resolve));
+        if (disposed) return;
+        appliedSize = { cols: terminal.cols, rows: terminal.rows };
+      }
+      terminal.refresh(0, terminal.rows - 1);
+    }, error => { if (!disposed && running) errorHandler.current(String(error)); });
+    const requestResize = () => resize.request();
+    const disposeRenderer = attachTerminalRenderer(terminal, host.current!, requestResize, () => new WebglAddon());
     host.current!.dataset.cols = String(terminal.cols); host.current!.dataset.rows = String(terminal.rows);
-    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-    // Sample while dragging, rather than waiting indefinitely for the final
-    // ResizeObserver event. A slow RPC keeps only the newest requested size.
-    const observer = new ResizeObserver(() => {
-      resizeTimer ??= setTimeout(() => { resizeTimer = undefined; resize(); }, 50);
-    });
+    const observer = new ResizeObserver(requestResize);
     observer.observe(host.current!);
-    window.addEventListener('resize', resize);
+    // Native window events, sidebar dragging and hidden/visible transitions
+    // must use the same bounded path. Never fit directly inside an event storm.
+    window.addEventListener('resize', requestResize);
+    const metricsChanged = terminal.onResize(size => {
+      if (orderedResize) appliedSize = size;
+      requestResize();
+    });
     void window.berth.rpc<Attachment>('attach', { sessionId }).then(attachment => {
       if (disposed) return;
       runId = attachment.run?.id ?? null;
       running = attachment.run?.status === 'running';
       seq = attachment.seq;
-      resizeQueue = new ResizeQueue({ cols: attachment.cols, rows: attachment.rows }, async dimensions => {
-        if (!disposed && running && runId) await window.berth.rpc('resize', { sessionId, runId, ...dimensions });
-      }, error => { if (!disposed && running) errorHandler.current(String(error)); });
+      appliedSize = { cols: attachment.cols, rows: attachment.rows };
       terminal.resize(attachment.cols, attachment.rows);
       terminal.write(attachment.snapshot, () => {
         if (disposed) return;
@@ -138,14 +147,14 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
         for (const event of pending) apply(event);
         pending = []; pendingBytes = 0;
         if (!attachment.run) terminal.writeln('\x1b[2m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');
-        resize();
+        requestResize();
         const element = document.activeElement;
         if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
       });
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
-    void document.fonts.ready.then(() => { if (!disposed) resize(); });
+    void document.fonts.ready.then(() => { if (!disposed) requestResize(); });
     return () => {
-      instance.current=null;disposed = true; resizeQueue?.dispose(); clearTimeout(resizeTimer); observer.disconnect(); window.removeEventListener('resize', resize); disposeRenderer(); disposePaths(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
+      instance.current=null;disposed = true; resize.dispose(); metricsChanged.dispose(); observer.disconnect(); window.removeEventListener('resize', requestResize); disposeRenderer(); disposePaths(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
   }, [sessionId, fontSize, windowsPty, orderedResize, binaryMouse, bind, setReady]);
@@ -164,14 +173,20 @@ export function OutputView({ text, fontSize = 14, windowsPty, onError }: { text:
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const fit = new FitAddon(); terminal.loadAddon(fit); loadWebLinks(terminal, error => errorHandler.current(error)); terminal.open(host.current!);
     const unbind = bind(terminal, () => false);
-    let disposed = false, resizeTimer: ReturnType<typeof setTimeout>;
-    const resize = () => { if (!disposed) fitTerminal(terminal, fit); };
-    const disposeRenderer = attachTerminalRenderer(terminal, host.current!, resize, () => new WebglAddon());
+    let disposed = false;
+    const resize = new ResizeScheduler(() => !disposed && host.current?.clientWidth && host.current?.clientHeight ? proposedSize(fit) : null, async () => {
+      fitTerminal(terminal, fit); terminal.refresh(0, terminal.rows - 1);
+    }, error => { if (!disposed) errorHandler.current(String(error)); });
+    const requestResize = () => resize.request();
+    const disposeRenderer = attachTerminalRenderer(terminal, host.current!, requestResize, () => new WebglAddon());
     const sizeChanged = terminal.onResize(({cols,rows}) => { if(host.current){host.current.dataset.cols=String(cols);host.current.dataset.rows=String(rows);} });
     host.current!.dataset.cols=String(terminal.cols);host.current!.dataset.rows=String(terminal.rows);
-    resize(); terminal.write(text, () => { if (!disposed) setReady(true); });
-    const observer = new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 80); }); observer.observe(host.current!);
-    return () => { instance.current=null;disposed = true; clearTimeout(resizeTimer); observer.disconnect(); disposeRenderer(); sizeChanged.dispose(); unbind(); terminal.dispose(); };
+    fitTerminal(terminal, fit); requestResize(); terminal.write(text, () => { if (!disposed) setReady(true); });
+    const observer = new ResizeObserver(requestResize); observer.observe(host.current!);
+    window.addEventListener('resize', requestResize);
+    const metricsChanged = terminal.onResize(requestResize);
+    void document.fonts.ready.then(requestResize);
+    return () => { instance.current=null;disposed = true; resize.dispose(); metricsChanged.dispose(); observer.disconnect(); window.removeEventListener('resize', requestResize); disposeRenderer(); sizeChanged.dispose(); unbind(); terminal.dispose(); };
   }, [text, fontSize, windowsPty, bind, setReady]);
   return <div className="terminal-surface">{controls}<div className="terminal-host output-host"><div className="terminal-mount" ref={host} /></div></div>;
 }
