@@ -134,6 +134,8 @@ try {
   await sideTabs.getByRole('tab', { name: '会话', exact: true }).click();
   await mainTabs.getByRole('tab', { name: '预览', exact: true }).click();
   await page.getByLabel('文件源码', { exact: true }).waitFor();
+  assert.equal(await sideTabs.getByRole('tab', { name: '会话', exact: true }).getAttribute('aria-selected'), 'true');
+  await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
   assert.equal(await entry('code.ts').getAttribute('aria-selected'), 'true');
   assert.equal(await page.evaluate(() => window.originalTerminal === document.querySelector('.terminal-mount .xterm')), true);
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}files-code-dark.png` });
