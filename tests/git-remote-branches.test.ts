@@ -75,7 +75,9 @@ test('switching remote branches preserves unrelated edits and Git refuses overla
 
 test('stale or foreign remote refs are rejected and fetch removes deleted remote branches', async t => {
   const { a, b, service, operation, select, switchTo } = await fixture(t);
+  await git(a, 'config', 'fetch.pruneTags', 'true'); await git(a, 'tag', 'local-only');
   await git(b, 'push', 'origin', 'HEAD:refs/heads/topic'); await operation('fetch'); const old = await select('topic');
+  assert.equal(await git(a, 'show-ref', '--verify', 'refs/tags/local-only').then(() => true, () => false), true);
   await writeFile(path.join(b, 'new.txt'), 'new'); await git(b, 'add', '.'); await git(b, 'commit', '-m', 'new'); await git(b, 'push', 'origin', 'HEAD:refs/heads/topic'); await operation('fetch');
   await assert.rejects(switchTo(old), /提交已变化/);
   const current = await select('topic');
@@ -86,4 +88,18 @@ test('stale or foreign remote refs are rejected and fetch removes deleted remote
   await git(b, 'push', 'origin', '--delete', 'topic'); await operation('fetch');
   assert.ok(!(await service.status(a)).remoteBranches?.some(item => item.branch === 'topic'));
   await assert.rejects(switchTo(current), /远端分支/);
+});
+
+test('fetch never prunes local branches or tags when a custom refspec maps into local namespaces', async t => {
+  const { a, b, service, operation } = await fixture(t);
+  await git(b, 'push', 'origin', 'HEAD:refs/heads/topic');
+  await git(a, 'config', 'fetch.prune', 'true'); await git(a, 'config', 'fetch.pruneTags', 'true');
+  await git(a, 'config', '--replace-all', 'remote.origin.fetch', '+refs/heads/*:refs/heads/mirror/*');
+  await git(a, 'config', '--add', 'remote.origin.fetch', '+refs/heads/*:refs/tags/mirror/*');
+  await operation('fetch');
+  await git(b, 'push', 'origin', '--delete', 'topic');
+  await operation('fetch');
+  assert.equal(await git(a, 'show-ref', '--verify', 'refs/heads/mirror/topic').then(() => true, () => false), true);
+  assert.equal(await git(a, 'show-ref', '--verify', 'refs/tags/mirror/topic').then(() => true, () => false), true);
+  assert.ok(!(await service.status(a)).remoteBranches?.some(item => item.ref.startsWith('refs/heads/') || item.ref.startsWith('refs/tags/')));
 });

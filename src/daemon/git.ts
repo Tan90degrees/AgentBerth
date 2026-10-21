@@ -9,6 +9,9 @@ import { terminalEnvironment } from './paths';
 const execute = promisify(execFile);
 export const MAX_GIT_FILES = 2000;
 const MAX_DIFF_BYTES = 256 * 1024;
+// Fetch mappings can legally target local branches/tags. Never prune or offer
+// those refs as remote tracking branches.
+const localGitRef = (ref: string) => /^(?:refs\/(?:heads|tags|notes|replace|original|bisect|rewritten)(?:\/|$)|refs\/stash(?:\/|$))/.test(ref);
 function repositoryPath(input: string): string {
   const value = process.platform === 'win32' ? input.replaceAll('\\', '/') : input;
   if (!value || value.includes('\0') || path.isAbsolute(value) || path.win32.isAbsolute(value) || value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) throw new Error('Git 文件路径无效，请刷新后重试');
@@ -132,7 +135,7 @@ export class GitWorkspace {
       }
       for (const line of remoteRefs.trimEnd().split('\n').filter(Boolean)) {
         const [ref, symbolic, head] = line.split('\0');
-        if (symbolic || !/^[a-f0-9]{40,64}$/.test(head)) continue;
+        if (symbolic || localGitRef(ref) || !/^[a-f0-9]{40,64}$/.test(head)) continue;
         for (const mapping of mappings) {
           const wildcard = mapping.destination.indexOf('*');
           let source: string;
@@ -271,7 +274,20 @@ export class GitWorkspace {
         if(request.action!=='fetch' && request.branch!==target)throw new Error('远端目标分支已变化，请刷新后重新操作');
         if(request.action==='pull' && !status.upstream)throw new Error('当前分支没有远端上游，请先推送发布此分支');
         if(request.action==='fetch' || (status.upstream && ['pull','sync'].includes(request.action))) {
-          output.push(await this.command(status.root,['fetch',...(request.action==='fetch'?['--prune']:[]),'--no-auto-gc','--no-tags','--no-recurse-submodules','--',remote,...(request.action==='fetch'?[]:['refs/heads/'+target])],true));
+          const prune = ['--no-prune', '--no-prune-tags'];
+          if (request.action === 'fetch') {
+            const specs = (await this.command(status.root, ['config', '--null', '--get-all', `remote.${remote}.fetch`], false, undefined, [0,1])).split('\0').filter(Boolean);
+            const safe = specs.every(spec => {
+              if (spec.startsWith('^')) return true;
+              const colon = spec.indexOf(':');
+              if (colon < 0) return true;
+              const destination = spec.slice(colon + 1);
+              return destination.startsWith('refs/') && !localGitRef(destination);
+            });
+            // Explicit flags also override fetch.prune/remote.*.pruneTags.
+            if (safe) prune[0] = '--prune';
+          }
+          output.push(await this.command(status.root,['fetch',...prune,'--no-auto-gc','--no-tags','--no-recurse-submodules','--',remote,...(request.action==='fetch'?[]:['refs/heads/'+target])],true));
           completed='已获取远端更新';
           const fresh=await this.inspect(cwd);this.verify(fresh,request.action==='fetch'?{...request.expected,branch:fresh.branch,head:fresh.head}:request.expected);status=fresh;
           if(request.action!=='fetch' && (fresh.upstreamRemote!==remote || fresh.upstreamBranch!==target))throw new Error('上游配置已变化，请刷新重试');
