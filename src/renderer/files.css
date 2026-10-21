@@ -182,3 +182,9 @@
 
 .settings-host, .workspace-host { display:flex; flex:1; flex-direction:column; min-height:0; min-width:0; overflow:hidden; }
 .settings-host[hidden], .workspace-host[hidden] { display:none !important; }
+
+.scm-branch-tabs { display:flex; gap:4px; margin-top:10px; }
+.scm-branch-tabs button { flex:1; padding:5px; font-size:10px; background:transparent; border:1px solid var(--border); }
+.scm-branch-tabs button[aria-selected="true"] { background:var(--surface-muted); color:var(--text); }
+.scm-network label>input { width:100%; min-width:0; padding:6px; font-size:11px; }
+.scm-network label>span { display:block; margin-top:4px; }

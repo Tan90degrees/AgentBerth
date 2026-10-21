@@ -2,7 +2,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lstat, open, readlink, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitResult, GitStatus } from '../shared/protocol';
+import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitRemoteBranch, GitResult, GitStatus } from '../shared/protocol';
 import { resolveExecutable } from './executables';
 import { terminalEnvironment } from './paths';
 
@@ -15,7 +15,7 @@ function repositoryPath(input: string): string {
   return value;
 }
 export const gitMessage = (text: string) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/(https?:\/\/)[^\s/@]+@/gi, '$1***@').replace(/([?&](?:token|access_token|auth|password|key)=)[^&\s]+/gi, '$1***').slice(-16384);
-const empty = (root: string, kind: GitStatus['kind'], message?: string): GitStatus => ({ kind, message, busy: false, root, commonDirectory: '', branch: null, head: null, upstream: null, upstreamRemote: null, upstreamBranch: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0, total: 0, files: [], branches: [], remotes: [], operation: null, fetchedAt: null });
+const empty = (root: string, kind: GitStatus['kind'], message?: string): GitStatus => ({ kind, message, busy: false, root, commonDirectory: '', branch: null, head: null, upstream: null, upstreamRemote: null, upstreamBranch: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0, total: 0, files: [], branches: [], remoteBranches: [], remotes: [], operation: null, fetchedAt: null });
 export function parseGitStatus(output: string, root: string): GitStatus {
   const result = empty(root, 'repository');
   const records = output.split('\0');
@@ -99,10 +99,12 @@ export class GitWorkspace {
   private async inspect(cwd: string): Promise<GitStatus> {
     try {
       const root=await realpath((await this.command(cwd,['rev-parse','--show-toplevel'])).replace(/\r?\n$/,''));
-      const [porcelain, refs, remotes, gitDirText, commonText] = await Promise.all([
+      const [porcelain, refs, remotes, gitDirText, commonText, remoteRefs, fetchConfig] = await Promise.all([
         this.command(root,['status','--porcelain=v2','--branch','-z','--untracked-files=all']),
-        this.command(root,['for-each-ref','--format=%(refname:short)%00%(upstream:remotename)%00%(upstream:remoteref)','refs/heads/']),
+        this.command(root,['for-each-ref','--format=%(refname:lstrip=2)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream)','refs/heads/']),
         this.command(root,['remote']),this.command(root,['rev-parse','--absolute-git-dir']),this.command(root,['rev-parse','--git-common-dir']),
+        this.command(root,['for-each-ref','--format=%(refname)%00%(symref)%00%(objectname)']),
+        this.command(root,['config','--null','--get-regexp','^remote\\..*\\.fetch$'], false, undefined, [0,1]),
       ]);
       const result=parseGitStatus(porcelain,root),gitDir=path.resolve(root,gitDirText.replace(/\r?\n$/,''));
       result.commonDirectory=await realpath(path.resolve(root,commonText.replace(/\r?\n$/,'')));
@@ -111,6 +113,47 @@ export class GitWorkspace {
       const branch=rows.find(row=>row[0]===result.branch);
       result.upstreamRemote=branch?.[1] || null;result.upstreamBranch=branch?.[2]?.replace(/^refs\/heads\//,'') || null;
       result.remotes=remotes.trim().split(/\r?\n/).filter(Boolean);
+      const exclusions = new Map<string, string[]>();
+      const mappings: { remote: string; source: string; destination: string }[] = [];
+      for (const record of fetchConfig.split('\0').filter(Boolean)) {
+        const newline = record.indexOf('\n'), key = record.slice(0, newline), spec = record.slice(newline + 1).replace(/^\+/, '');
+        const remote = result.remotes.find(name => key === `remote.${name}.fetch`);
+        if (!remote) continue;
+        if (spec.startsWith('^')) { exclusions.set(remote, [...(exclusions.get(remote) ?? []), spec.slice(1)]); continue; }
+        const colon = spec.indexOf(':');
+        if (colon > 0 && spec.startsWith('refs/heads/')) mappings.push({ remote, source: spec.slice(0, colon), destination: spec.slice(colon + 1) });
+      }
+      const remoteBranches: GitRemoteBranch[] = [], seen = new Set<string>();
+      const localUpstreams = new Map<string, string[]>();
+      for (const row of rows) {
+        if (!row[3]) continue;
+        const key = row[1] + '\0' + row[2] + '\0' + row[3];
+        localUpstreams.set(key, [...(localUpstreams.get(key) ?? []), row[0]]);
+      }
+      for (const line of remoteRefs.trimEnd().split('\n').filter(Boolean)) {
+        const [ref, symbolic, head] = line.split('\0');
+        if (symbolic || !/^[a-f0-9]{40,64}$/.test(head)) continue;
+        for (const mapping of mappings) {
+          const wildcard = mapping.destination.indexOf('*');
+          let source: string;
+          if (wildcard < 0) { if (ref !== mapping.destination) continue; source = mapping.source; }
+          else {
+            const prefix = mapping.destination.slice(0, wildcard), suffix = mapping.destination.slice(wildcard + 1);
+            if (!ref.startsWith(prefix) || !ref.endsWith(suffix) || ref.length < prefix.length + suffix.length) continue;
+            source = mapping.source.replace('*', ref.slice(prefix.length, suffix ? -suffix.length : undefined));
+          }
+          const name = source.slice('refs/heads/'.length);
+          const key = mapping.remote + '\0' + ref;
+          const excluded = (exclusions.get(mapping.remote) ?? []).some(rule => { const star = rule.indexOf('*'); return star < 0 ? source === rule : source.startsWith(rule.slice(0, star)) && source.endsWith(rule.slice(star + 1)); });
+          if (!name || seen.has(key) || excluded) continue;
+          seen.add(key);
+          remoteBranches.push({ ref, remote: mapping.remote, branch: name, head, localBranches: localUpstreams.get(mapping.remote + '\0' + source + '\0' + ref) ?? [] });
+        }
+      }
+      remoteBranches.sort((a,b) => a.remote.localeCompare(b.remote) || a.branch.localeCompare(b.branch));
+      result.remoteBranches = remoteBranches.slice(0, 2000);
+      result.remoteBranchesTruncated = remoteBranches.length > 2000;
+
       for(const [file,label] of [['rebase-merge','变基'],['rebase-apply','变基'],['MERGE_HEAD','合并'],['CHERRY_PICK_HEAD','拣选'],['REVERT_HEAD','还原']]) { try {await stat(path.join(gitDir,file));result.operation=label;break;}catch{} }
       try { result.fetchedAt=(await stat(path.join(gitDir,'FETCH_HEAD'))).mtime.toISOString(); } catch {}
       result.busy=this.locks.has(process.platform==='win32'?result.commonDirectory.toLowerCase():result.commonDirectory);
@@ -193,6 +236,23 @@ export class GitWorkspace {
         if (!request.message?.trim()) throw new Error('请填写提交信息');
         output.push(await this.command(status.root, ['commit', '--file=-', '--cleanup=strip'], true, request.message.trim() + '\n'));
         completed = '已提交暂存的更改';
+      } else if (request.action === 'switchRemote') {
+        this.requireReady(status);
+        const target = status.remoteBranches?.find(item => item.ref === request.remoteRef && item.remote === request.remote && item.branch === request.branch);
+        if (!target) throw new Error('远端分支已变化或未获取，请获取远端后重新选择');
+        if (!request.remoteHead || request.remoteHead !== target.head) throw new Error('远端分支提交已变化，请刷新后重新选择');
+        const local = request.localBranch || (target.localBranches.includes(target.branch) ? target.branch : target.localBranches[0]) || target.branch;
+        if (local === 'HEAD' || local.startsWith('-') || local.startsWith('@{-')) throw new Error('本地分支名称无效');
+        await this.command(status.root, ['check-ref-format', '--branch', local]);
+        const exists = (await this.command(status.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/' + local])).split(/\r?\n/).includes('refs/heads/' + local);
+        if (exists) {
+          if (!target.localBranches.includes(local)) throw new Error(`本地分支 ${local} 已存在且未跟踪 ${target.remote}/${target.branch}；请更换本地分支名称，或在本地分支列表中切换`);
+          await this.command(status.root, ['switch', '--no-guess', '--', local], true);
+          completed = `已切换到 ${local}（跟踪 ${target.remote}/${target.branch}）`;
+        } else {
+          await this.command(status.root, ['switch', '--track', '--create', local, '--', target.ref], true);
+          completed = `已创建并切换到 ${local}（跟踪 ${target.remote}/${target.branch}）`;
+        }
       } else if(request.action==='switch') {
         this.requireReady(status);
         if(!request.branch || !status.branches.includes(request.branch))throw new Error('请选择已有的本地分支，刷新后重试');
@@ -211,7 +271,7 @@ export class GitWorkspace {
         if(request.action!=='fetch' && request.branch!==target)throw new Error('远端目标分支已变化，请刷新后重新操作');
         if(request.action==='pull' && !status.upstream)throw new Error('当前分支没有远端上游，请先推送发布此分支');
         if(request.action==='fetch' || (status.upstream && ['pull','sync'].includes(request.action))) {
-          output.push(await this.command(status.root,['fetch','--no-auto-gc','--no-tags','--no-recurse-submodules','--',remote,...(request.action==='fetch'?[]:['refs/heads/'+target])],true));
+          output.push(await this.command(status.root,['fetch',...(request.action==='fetch'?['--prune']:[]),'--no-auto-gc','--no-tags','--no-recurse-submodules','--',remote,...(request.action==='fetch'?[]:['refs/heads/'+target])],true));
           completed='已获取远端更新';
           const fresh=await this.inspect(cwd);this.verify(fresh,request.action==='fetch'?{...request.expected,branch:fresh.branch,head:fresh.head}:request.expected);status=fresh;
           if(request.action!=='fetch' && (fresh.upstreamRemote!==remote || fresh.upstreamBranch!==target))throw new Error('上游配置已变化，请刷新重试');

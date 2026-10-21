@@ -88,6 +88,12 @@ test('RPC pull, sync, branch switch, staging, diff and commit preserve a running
     const operation=async(action:GitOperation['action'],branch?:string)=>{const status=await c.rpc<GitStatus>('gitStatus',{projectId:p.id});return c.rpc<GitResult>('gitOperation',{projectId:p.id,action,remote:'origin',branch:branch||status.upstreamBranch||status.branch,expected:{root:status.root,head:status.head,branch:status.branch}});};
     await operation('fetch');await operation('pull');assert.equal(await readFile(path.join(a,'remote.txt'),'utf8'),'live pull');
     await git(a,'branch','feature/live');await operation('switch','feature/live');await operation('sync');await operation('switch','main');
+    await git(b,'push','origin','HEAD:refs/heads/feature/remote-live'); await operation('fetch');
+    const remoteStatus = await c.rpc<GitStatus>('gitStatus',{projectId:p.id});
+    const remoteTarget = remoteStatus.remoteBranches!.find(item => item.branch === 'feature/remote-live')!;
+    await c.rpc('gitOperation',{projectId:p.id,action:'switchRemote',remote:remoteTarget.remote,branch:remoteTarget.branch,remoteRef:remoteTarget.ref,remoteHead:remoteTarget.head,expected:{root:remoteStatus.root,head:remoteStatus.head,branch:remoteStatus.branch}});
+    assert.equal((await c.rpc<GitStatus>('gitStatus',{projectId:p.id})).upstream,'origin/feature/remote-live');
+    await operation('switch','main');
     await git(a,'config','commit.gpgsign','false');
     await writeFile(path.join(a,'live-changes.txt'),'LIVE_STAGED_CONTENT\n');
     const changed = await c.rpc<GitStatus>('gitStatus',{projectId:p.id});
