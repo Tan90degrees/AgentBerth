@@ -671,9 +671,12 @@ try {
     window.resizeTicks = []; window.resizeLastTick = performance.now();
     window.resizeTimer = setInterval(() => { const now = performance.now(); window.resizeTicks.push(now - window.resizeLastTick); window.resizeLastTick = now; }, 16);
   });
-  for (let i = 0; i < 24; i++) {
+  // Collect a useful sample on both fast and throttled CI compositors.
+  const resizeSampleDeadline = Date.now() + 5000; let resizeSamples = 0;
+  for (let i = 0; i < 24 || (resizeSamples < 20 && Date.now() < resizeSampleDeadline); i++) {
     await application.evaluate(({ BrowserWindow }, i) => BrowserWindow.getAllWindows()[0].setSize(1030 + (i % 8) * 29, 710 + (i % 5) * 17), i);
     await page.waitForTimeout(12);
+    if (i >= 23 && i % 4 === 3) resizeSamples = await page.evaluate(() => window.resizeTicks.length);
   }
   // Xvfb has no window manager; exercise the native maximize state on Windows.
   if (process.platform === 'win32') {
