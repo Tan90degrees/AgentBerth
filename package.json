@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "private": true,
   "type": "module",
   "description": "A project workspace for persistent terminals, agents, files and history",

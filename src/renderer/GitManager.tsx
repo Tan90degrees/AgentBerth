@@ -32,10 +32,11 @@ export function GitBranch({project,enabled,onOpen}:{project:Project;enabled:bool
     <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="5" cy="4" r="2"/><circle cx="15" cy="4" r="2"/><circle cx="5" cy="16" r="2"/><path d="M5 6v8m0-3c7 0 10-1 10-5"/></svg><span>{branchLabel(status)}</span>{status?.kind==='repository'&&<><small>{status.total?` · ${status.total} 项改动`:''}</small><small>↑{status.ahead} ↓{status.behind}</small>{status.busy&&<small>处理中…</small>}</>}
   </button>;
 }
-const actions = { fetch: '获取远端', pull: '拉取', push: '推送', sync: '同步远端', switch: '切换分支', stage: '暂存', unstage: '取消暂存', commit: '提交' };
+const actions = { fetch: '获取远端', pull: '拉取', push: '推送', sync: '同步远端', switch: '切换分支', switchRemote: '切换远端分支', stage: '暂存', unstage: '取消暂存', commit: '提交' };
 export function GitSidebar({ project, enabled, visible, supported, onDiff, onNotice, onError }: { project: Project; enabled: boolean; visible: boolean; supported: boolean; onDiff: (path: string, staged: boolean) => void; onNotice: (message: string) => void; onError: (message: string) => void }) {
   const { status, loading, error, refresh, setStatus } = useGitStatus(project, enabled && visible);
   const [remote, setRemote] = useState(''), [branch, setBranch] = useState('');
+  const [branchScope, setBranchScope] = useState<'local' | 'remote'>('local'), [branchQuery, setBranchQuery] = useState(''), [localBranch, setLocalBranch] = useState('');
   const [working, setWorking] = useState<GitOperation['action'] | null>(null), [failure, setFailure] = useState(''), [output, setOutput] = useState(''), [notice, setNotice] = useState('');
   const [message, setMessage] = useState(() => readStored(`berth.commit.${project.id}`) ?? '');
   const [selected, setSelected] = useState<Set<string>>(new Set()), [query, setQuery] = useState(''), [pageSize, setPageSize] = useState(100);
@@ -49,12 +50,20 @@ export function GitSidebar({ project, enabled, visible, supported, onDiff, onNot
   const repository = status?.kind === 'repository';
   const canWrite = repository && !!status.branch && !!status.head && !status.operation && !status.conflicts;
   const canChange = repository && !status.operation && !status.conflicts;
+  const remoteSupported = status?.remoteBranches !== undefined;
+  const remoteBranches = (status?.remoteBranches ?? []).filter(item => item.remote === remote);
+  const selectedRemote = branchScope === 'remote' ? remoteBranches.find(item => item.ref === branch) : undefined;
+  const matchesBranch = (name: string) => name.toLocaleLowerCase().includes(branchQuery.toLocaleLowerCase());
+  const matchingLocal = (status?.branches ?? []).filter(matchesBranch), matchingRemote = remoteBranches.filter(item => matchesBranch(`${item.remote}/${item.branch}`));
+  const switchScope = (scope: 'local' | 'remote') => { setBranchScope(scope); setBranch(''); setLocalBranch(''); setBranchQuery(''); };
+  const pickBranch = (value: string) => { setBranch(value); const item = remoteBranches.find(item => item.ref === value); setLocalBranch(item ? item.localBranches.includes(item.branch) ? item.branch : item.localBranches[0] ?? item.branch : ''); };
+  const remoteCollision = !!selectedRemote && !!localBranch && !!status?.branches.includes(localBranch) && !selectedRemote.localBranches.includes(localBranch);
   async function act(action: GitOperation['action'], paths?: string[]) {
     if (!status || !repository || blocked) return;
     setWorking(action); setFailure(''); setNotice(''); setOutput('');
     try {
       const result = await window.berth.rpc<GitResult>('gitOperation', { projectId: project.id, action, expected: { root: status.root, branch: status.branch, head: status.head },
-        ...(action === 'stage' || action === 'unstage' ? { paths } : action === 'commit' ? { message } : action === 'switch' ? { branch } : { remote, ...(status.upstreamBranch || status.branch ? { branch: status.upstreamBranch || status.branch } : {}) }) });
+        ...(action === 'stage' || action === 'unstage' ? { paths } : action === 'commit' ? { message } : action === 'switch' ? { branch } : action === 'switchRemote' && selectedRemote ? { remote: selectedRemote.remote, branch: selectedRemote.branch, remoteRef: selectedRemote.ref, remoteHead: selectedRemote.head, localBranch } : { remote, ...(status.upstreamBranch || status.branch ? { branch: status.upstreamBranch || status.branch } : {}) }) });
       if (action === 'commit') saveStored(`berth.commit.${project.id}`, null);
       if (alive.current) { setStatus(result.status); setOutput(result.output); setNotice(result.message); setSelected(new Set()); if (action === 'commit') setMessage(''); }
       onNotice(`${project.name}：${result.message}`);
@@ -89,9 +98,20 @@ export function GitSidebar({ project, enabled, visible, supported, onDiff, onNot
       <form className="scm-commit" onSubmit={event => { event.preventDefault(); void act('commit'); }}><textarea aria-label="Git 提交信息" placeholder="提交信息（Ctrl+Enter 提交）" maxLength={8000} value={message} disabled={!!working} onChange={event => setMessage(event.target.value)} onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); if (message.trim() && status.staged && canChange && !blocked && supported) void act('commit'); } }} /><button className="primary" disabled={blocked || !supported || !message.trim() || !status.staged || !canChange}>提交已暂存的更改{status.staged ? `（${status.staged}）` : ''}</button></form>
       {status.operation && <p className="form-error">正在{status.operation}，可暂存已解决的文件；完成操作请使用终端。</p>}
       <details className="scm-network"><summary>分支与远端</summary><code className="git-root" title={status.root}>{status.root}</code><p className="git-tracking"><span>{status.upstream ? `上游 ${status.upstream} · 领先 ${status.ahead} / 落后 ${status.behind}` : '当前分支未配置远端上游'}</span><small>领先/落后以最近获取为准</small></p>
-        <label>远端<select aria-label="Git 远端" value={remote} disabled={blocked} onChange={event => setRemote(event.target.value)}>{!status.remotes.length && <option value="">未配置远端</option>}{status.remotes.map(name => <option key={name}>{name}</option>)}</select></label>
+        <label>远端<select aria-label="Git 远端" value={remote} disabled={blocked} onChange={event => { setRemote(event.target.value); if (branchScope === 'remote') { setBranch(''); setLocalBranch(''); } }}>{!status.remotes.length && <option value="">未配置远端</option>}{status.remotes.map(name => <option key={name}>{name}</option>)}</select></label>
         <div className="git-actions"><button className="subtle" disabled={blocked || !remote} onClick={() => void act('fetch')}>获取远端</button><button className="subtle" disabled={blocked || !remote || !canWrite || !status.upstream} onClick={() => void act('pull')}>拉取</button><button className="subtle" disabled={blocked || !remote || !canWrite} onClick={() => void act('push')}>{status.upstream ? '推送' : '发布当前分支'}</button><button className="subtle" disabled={blocked || !remote || !canWrite} onClick={() => void act('sync')}>同步远端</button></div>
-        <div className="git-switch"><select aria-label="切换 Git 分支" value={branch} disabled={blocked || !canChange} onChange={event => setBranch(event.target.value)}><option value="">选择本地分支</option>{status.branches.map(name => <option key={name} value={name} disabled={name === status.branch}>{name}</option>)}</select><button className="subtle" disabled={blocked || !canChange || !branch} onClick={() => void act('switch')}>切换分支</button></div>
+        <div className="scm-branch-tabs" role="tablist" aria-label="Git 分支范围"><button role="tab" aria-selected={branchScope === 'local'} disabled={!!working} onClick={() => switchScope('local')}>本地分支</button><button role="tab" aria-selected={branchScope === 'remote'} disabled={!!working || !remoteSupported} title={remoteSupported ? '查看已获取的远端分支' : '更新后台后可查看和切换远端分支'} onClick={() => switchScope('remote')}>远端分支</button></div>
+        {!remoteSupported && <p className="form-hint">更新后台后可查看并切换远端分支。</p>}
+        <input className="scm-filter" aria-label="筛选 Git 分支" placeholder="筛选分支…" value={branchQuery} onChange={event => { setBranchQuery(event.target.value); setBranch(''); setLocalBranch(''); }} />
+        <div className="git-switch"><select aria-label="切换 Git 分支" value={branch} disabled={blocked} onChange={event => pickBranch(event.target.value)}><option value="">{branchScope === 'local' ? '选择本地分支' : '选择远端分支'}</option>{branchScope === 'local' ? matchingLocal.map(name => <option key={name} value={name} disabled={name === status.branch}>{name}</option>) : matchingRemote.map(item => <option key={item.ref} value={item.ref}>{item.remote}/{item.branch}{item.localBranches.length ? ' · 已有本地跟踪分支' : ''}</option>)}</select><button className="subtle" disabled={blocked || !canChange || !branch || (branchScope === 'remote' && (!selectedRemote || !localBranch.trim() || remoteCollision || (localBranch === status.branch && selectedRemote.localBranches.includes(localBranch))))} onClick={() => void act(branchScope === 'remote' ? 'switchRemote' : 'switch')}>切换分支</button></div>
+        {branchScope === 'remote' && <>
+          <p className="form-hint">分支列表以最近获取为准；点击“获取远端”更新并清理已删除的分支。{status.fetchedAt ? ` 最近获取：${new Date(status.fetchedAt).toLocaleString()}` : ''}</p>
+          {!remoteBranches.length && <p className="scm-empty">{remote ? '尚无已获取的远端分支，请先获取远端。' : '请先配置并选择远端。'}</p>}
+          {!!remoteBranches.length && !matchingRemote.length && <p className="scm-empty">没有匹配的远端分支。</p>}
+          {status.remoteBranchesTruncated && <p className="form-hint">远端分支超过 2000 个，其余请在终端查看。</p>}
+          {selectedRemote && <label>本地分支名称<input aria-label="远端分支的本地名称" value={localBranch} maxLength={1024} disabled={blocked} onChange={event => setLocalBranch(event.target.value)} /><span className={remoteCollision ? 'form-error' : 'form-hint'}>{remoteCollision ? '此本地分支已存在且跟踪关系不同，请更换名称或切换至本地分支列表。' : selectedRemote.localBranches.includes(localBranch) ? '切换到已有跟踪分支，保留其本地提交。' : '将创建本地分支并自动设置远端上游。'}</span></label>}
+        </>}
+
       </details>
       <input className="scm-filter" aria-label="筛选更改文件" placeholder="筛选更改文件…" value={query} onChange={event => setQuery(event.target.value)} />
       {group(true)}{group(false)}

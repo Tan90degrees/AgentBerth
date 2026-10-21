@@ -316,6 +316,34 @@ try {
   await gitDialog.getByRole('button',{name:'同步远端',exact:true}).click();await gitDialog.getByText('上游 origin/feature/live · 领先 0 / 落后 0',{exact:true}).waitFor();
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Live branch switch back failed');
+  step('browse and filter remote branches, create tracking branches and reuse them without restarting the live terminal');
+  await page.evaluate(() => { window.remoteBranchTerminal = document.querySelector('.xterm'); });
+  await runGit(gitPeer,['push','origin','HEAD:refs/heads/feature/remote-ui']);
+  await gitDialog.getByRole('button',{name:'获取远端',exact:true}).click();
+  await eventually(()=>gitDialog.getByRole('button',{name:'获取远端',exact:true}).isEnabled(),'Remote fetch did not complete');
+  await gitDialog.getByRole('tab',{name:'远端分支',exact:true}).click();
+  await gitDialog.getByLabel('筛选 Git 分支',{exact:true}).fill('remote-ui');
+  const remoteSelector = gitDialog.getByLabel('切换 Git 分支',{exact:true});
+  await eventually(async()=>await remoteSelector.locator('option').count()===2,'Remote branch filter did not match one branch');
+  await remoteSelector.selectOption('refs/remotes/origin/feature/remote-ui');
+  assert.equal(await gitDialog.getByLabel('远端分支的本地名称',{exact:true}).inputValue(),'feature/remote-ui');
+  await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
+  await gitDialog.getByText('上游 origin/feature/remote-ui · 领先 0 / 落后 0',{exact:true}).waitFor();
+  assert.equal(await runGit(folder,['symbolic-ref','--short','HEAD']),'feature/remote-ui');
+  await gitDialog.getByRole('tab',{name:'本地分支',exact:true}).click();
+  await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main'); await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
+  await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Remote checkout did not return to main');
+  await gitDialog.getByRole('tab',{name:'远端分支',exact:true}).click();
+  await gitDialog.getByLabel('筛选 Git 分支',{exact:true}).fill('remote-ui');
+  await remoteSelector.selectOption('refs/remotes/origin/feature/remote-ui');
+  await gitDialog.getByText('切换到已有跟踪分支，保留其本地提交。',{exact:true}).waitFor();
+  await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
+  await gitDialog.getByText('上游 origin/feature/remote-ui · 领先 0 / 落后 0',{exact:true}).waitFor();
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-git-remote-branches':'git-remote-branches'}.png`});
+  await gitDialog.getByRole('tab',{name:'本地分支',exact:true}).click();
+  await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main'); await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
+  await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Remote reuse did not return to main');
+  assert.ok(await page.evaluate(()=>window.remoteBranchTerminal===document.querySelector('.xterm')),'Remote switching remounted the terminal');
   const gitRun=(await page.evaluate(()=>window.berth.rpc('state'))).sessions[0].latestRun;
   assert.equal(gitRun.id,original.id);assert.equal(gitRun.pid,original.pid);assert.equal(gitRun.status,'running');
   await eventually(async()=>await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).isEnabled(),'Git operation did not complete');
@@ -643,9 +671,12 @@ try {
     window.resizeTicks = []; window.resizeLastTick = performance.now();
     window.resizeTimer = setInterval(() => { const now = performance.now(); window.resizeTicks.push(now - window.resizeLastTick); window.resizeLastTick = now; }, 16);
   });
-  for (let i = 0; i < 24; i++) {
+  // Collect a useful sample on both fast and throttled CI compositors.
+  const resizeSampleDeadline = Date.now() + 5000; let resizeSamples = 0;
+  for (let i = 0; i < 24 || (resizeSamples < 20 && Date.now() < resizeSampleDeadline); i++) {
     await application.evaluate(({ BrowserWindow }, i) => BrowserWindow.getAllWindows()[0].setSize(1030 + (i % 8) * 29, 710 + (i % 5) * 17), i);
     await page.waitForTimeout(12);
+    if (i >= 23 && i % 4 === 3) resizeSamples = await page.evaluate(() => window.resizeTicks.length);
   }
   // Xvfb has no window manager; exercise the native maximize state on Windows.
   if (process.platform === 'win32') {

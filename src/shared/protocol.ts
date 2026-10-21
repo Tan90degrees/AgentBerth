@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 18;
+export const API_VERSION = 19;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -41,9 +41,10 @@ export const nativeSessionIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 export const historyQuerySchema = z.object({ cursor: z.string().max(2048).nullable().default(null), limit: z.number().int().min(1).max(50).default(10), query: z.string().trim().max(100).default('') }).strict();
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
 export const gitOperationSchema = z.object({
-  projectId: id, action: z.enum(['fetch', 'pull', 'push', 'sync', 'switch', 'stage', 'unstage', 'commit']),
+  projectId: id, action: z.enum(['fetch', 'pull', 'push', 'sync', 'switch', 'switchRemote', 'stage', 'unstage', 'commit']),
   expected: z.object({ root: z.string().min(1).max(4096), branch: z.string().max(1024).nullable(), head: z.string().regex(/^[a-f0-9]{40,64}$/).nullable() }).strict(),
   remote: z.string().min(1).max(256).optional(), branch: z.string().min(1).max(1024).optional(),
+  remoteRef: z.string().min(1).max(2048).optional(), remoteHead: z.string().regex(/^[a-f0-9]{40,64}$/).optional(), localBranch: z.string().min(1).max(1024).optional(),
   paths: z.array(z.string().min(1).max(4096)).min(1).max(500).optional(),
   message: z.string().trim().min(1).max(8000).optional(),
 }).strict();
@@ -105,11 +106,13 @@ export interface FilePreview { path: string; name: string; size: number; modifie
 export interface ResourceUsage {cpuPercent:number|null;memoryBytes:number|null;processCount:number;partial:boolean}
 export interface ResourceSnapshot {sampledAt:string;cpuCount:number;sessions:Record<string,ResourceUsage&{runId:string}>;projects:Record<string,ResourceUsage>;workspace:ResourceUsage;desktopIncluded:boolean;error?:string}
 export interface GitFile { path: string; originalPath?: string; index: string; worktree: string; conflict: boolean }
+export interface GitRemoteBranch { ref: string; remote: string; branch: string; head: string; localBranches: string[] }
 export interface GitStatus {
   kind: 'repository' | 'not-repository' | 'unavailable'; message?: string; busy: boolean;
   root: string; commonDirectory: string; branch: string | null; head: string | null; upstream: string | null;
   upstreamRemote: string | null; upstreamBranch: string | null; ahead: number; behind: number;
   staged: number; modified: number; untracked: number; conflicts: number; total: number; files: GitFile[];
+  remoteBranches?: GitRemoteBranch[]; remoteBranchesTruncated?: boolean;
   branches: string[]; remotes: string[]; operation: string | null; fetchedAt: string | null;
 }
 export interface GitResult { status: GitStatus; message: string; output: string }
