@@ -10,3 +10,4 @@
 .remote-step .remote-unknown { color: var(--warning, #c99b4b); }
 .remote-fields { margin-bottom: 12px; }
 .remote-watch-note { color: var(--text-muted); font-size: 11px; }
+.mcp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
