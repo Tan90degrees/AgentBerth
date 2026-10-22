@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { SshTerminal } from './ssh-terminal';
+import type { SshChallenge, SshSecret } from '../shared/protocol';
 import { createServer, type IncomingMessage } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -25,7 +28,7 @@ import { RemoteActivity, remoteKeys } from './remote-activity';
 import { windowsPtyFor } from '../shared/desktop';
 
 interface LiveTerminal {
-  run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
+  run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal | SshTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null; finishing: Promise<void> | null;
@@ -33,6 +36,9 @@ interface LiveTerminal {
 interface Client { subscriptions: Set<string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
+  private sshProvider: Client | null = null;
+  private sshChallenges = new Map<string, { client: Client; resolve: (value: {secret?: SshSecret; accepted?: boolean}) => void; reject: (error: Error) => void }>();
+  private openingAliases = new Set<string>();
   private store: Store;
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
@@ -65,7 +71,7 @@ export class DaemonServer {
       const client: Client = { subscriptions: new Set(), pending: 0, abort: new AbortController() };
       this.clients.set(socket, client);
       socket.on('error', () => socket.close());
-      socket.on('close', () => { client.abort.abort(); for (const live of this.live.values()) live.remote?.activity.release(client); this.clients.delete(socket); });
+      socket.on('close', () => { if (this.sshProvider === client) this.sshProvider = null; for (const pending of this.sshChallenges.values()) if (pending.client === client) pending.reject(new Error('请打开 AgentBerth 后重试 SSH 连接')); client.abort.abort(); for (const live of this.live.values()) live.remote?.activity.release(client); this.clients.delete(socket); });
       socket.on('message', (bytes, isBinary) => {
         if (isBinary || client.pending >= 128) { socket.close(1008, 'Invalid or excessive requests'); return; }
         let parsed: unknown;
@@ -134,9 +140,69 @@ export class DaemonServer {
     if (this.terminal(sessionId,runId).stopping) throw new Error('终端正在停止');
     return remote;
   }
+  private challenge(profile: {id: string; alias: string; hostname: string; port: number}, kind: SshChallenge['kind'], fingerprint?: string): Promise<{secret?: SshSecret; accepted?: boolean}> {
+    const provider = this.sshProvider;
+    const socket = [...this.clients].find(([,client]) => client === provider)?.[0];
+    if (!provider || !socket) return Promise.reject(new Error('请打开 AgentBerth，在 SSH 连接设置中输入登录信息后重试'));
+    const id = randomUUID();
+    return new Promise((resolve,reject) => {
+      const complete = () => { clearTimeout(timer); this.sshChallenges.delete(id); };
+      const timer = setTimeout(() => { complete(); reject(new Error('SSH 登录信息或主机指纹确认超时，请在 AgentBerth 中重试')); }, 40000);
+      this.sshChallenges.set(id, { client: provider, resolve: value => { complete(); resolve(value); }, reject: error => { complete(); reject(error); } });
+      this.send(socket, { event: 'sshChallenge', data: { id, connectionId: profile.id, alias: profile.alias, kind, fingerprint, hostname: profile.hostname, port: profile.port } });
+    });
+  }
+  private aliasTarget(alias: string) {
+    const profile = this.store.sshConnections().find(item => item.alias.toLowerCase() === alias.toLowerCase());
+    if (!profile) throw new Error('连接别名不存在，请先在 AgentBerth 设置中保存 SSH 连接');
+    const sessions = this.store.state().sessions.filter(session => session.remote?.connectionId === profile.id);
+    const active = sessions.filter(session => this.live.has(session.id));
+    if (active.length > 1) throw new Error('此别名有多个运行会话，请从 terminal_list 选择 sessionId 和 runId');
+    return { profile, session: active[0] ?? sessions[0] };
+  }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
+      case 'sshConnections': return this.store.sshConnections();
+      case 'registerSshProvider': {
+        if (this.sshProvider && this.sshProvider !== client) throw new Error('SSH 登录提供端已连接');
+        this.sshProvider = client; return null;
+      }
+      case 'sshChallengeReply': {
+        const pending = this.sshChallenges.get(request.params.challengeId);
+        if (!pending || pending.client !== client) throw new Error('登录请求已过期');
+        pending.resolve(request.params); return null;
+      }
+      case 'saveSshConnection': {
+        if (request.params.connectionId) for (const session of this.store.state().sessions) if (session.remote?.connectionId === request.params.connectionId) this.requireIdle(session.id);
+        const profile = this.store.saveSshConnection(request.params.config, request.params.connectionId); this.changed(); return profile;
+      }
+      case 'deleteSshConnection': this.store.deleteSshConnection(request.params.connectionId); return null;
+      case 'remoteAliases': return this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent }));
+      case 'remoteResolve': {
+        const {session} = this.aliasTarget(request.params.alias);
+        if (!session) throw new Error('此连接尚未打开，请先调用 terminal_open');
+        const live = this.terminal(session.id);
+        return { sessionId: session.id, runId: live.run.id };
+      }
+      case 'remoteOpen': {
+        const {profile, session: previous} = this.aliasTarget(request.params.alias);
+        if (!profile.allowAgent) throw new Error('此连接未允许 Agent 打开，请在 SSH 设置中修改');
+        if (this.openingAliases.has(profile.id)) throw new Error('此连接正在启动，请稍后读取 terminal_list');
+        if (previous && this.live.has(previous.id)) {
+          const live = this.terminal(previous.id);
+          return { sessionId: previous.id, runId: live.run.id, info: live.remote?.activity.info };
+        }
+        this.openingAliases.add(profile.id);
+        try {
+          const folder = path.join(this.dataDirectory,'remote-sessions'); mkdirSync(folder,{recursive:true,mode:0o700});
+          const project = previous ? null : this.store.createProject('远程连接', folder);
+          const session = previous ?? this.store.createSession(project!.id, profile.alias, 'shell', '', null, { connectionId: profile.id, host: profile.alias, directory: '' });
+          const run = await this.start(session.id, false, 100, 30);
+          const info = this.remote(session.id,run.id).activity.control('agent');
+          this.changed(); return { sessionId: session.id, runId: run.id, info };
+        } finally { this.openingAliases.delete(profile.id); }
+      }
       case 'sshHosts': return sshHosts();
       case 'remoteInfo': return this.live.get(request.params.sessionId)?.remote?.activity.info ?? null;
       case 'remoteActions': return this.store.remoteActions(request.params.sessionId, request.params.before);
@@ -420,6 +486,7 @@ export class DaemonServer {
   }
 
   private validateRemote(config: { remote: unknown; agent: string; command: string }): void {
+    if (config.remote && typeof config.remote === 'object' && 'connectionId' in config.remote && typeof config.remote.connectionId === 'string') this.store.sshConnection(config.remote.connectionId);
     if (config.remote && (config.agent !== 'shell' || config.command.trim())) throw new Error('远程会话请选择默认终端；Agent 通过 MCP 操作此终端');
   }
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
@@ -434,7 +501,7 @@ export class DaemonServer {
     let selected: { file: string; args: string[] };
     try {
       cwd = await directory(this.store.project(session.projectId).path);
-      selected = await resolveTerminal(session.remote ? { profile: 'custom', executable: 'ssh', args: [] } : config);
+      selected = session.remote?.connectionId ? { file: 'SSH', args: [] } : await resolveTerminal(session.remote ? { profile: 'custom', executable: 'ssh', args: [] } : config);
     } catch (error) {
       if (!this.closing) {
         const failed = this.store.createRun(sessionId, command, cols, rows, config.profile === 'custom' ? config.executable : '');
@@ -455,7 +522,19 @@ export class DaemonServer {
     try {
       if (session.remote) {
         const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }));
-        const transport = new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
+        const profile = session.remote.connectionId ? this.store.sshConnection(session.remote.connectionId) : null;
+        const transport = profile ? new SshTerminal(profile, sessionId, session.remote.directory, cols, rows, {
+          credentials: async () => (await this.challenge(profile,'credentials')).secret ?? {},
+          verify: async fingerprint => {
+            const trusted = this.store.sshFingerprint(profile.id);
+            if (trusted === fingerprint) return true;
+            if (trusted) throw new Error('SSH 主机指纹已改变，请删除并重新创建连接以重新确认服务器身份');
+            const accepted = (await this.challenge(profile,'hostKey',fingerprint)).accepted === true;
+            if (accepted) this.store.trustSshFingerprint(profile.id,fingerprint);
+            return accepted;
+          },
+        }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
+          : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
       } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) });
     }

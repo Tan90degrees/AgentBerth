@@ -1,3 +1,4 @@
+import { SshConnections } from './SshConnections';
 import { useState } from 'react';
 import { DEFAULT_SETTINGS, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
 import { agentLabels } from './labels';
@@ -30,6 +31,7 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
       <label>终端字号<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label>
       <footer><span role="status">{saved ? '设置已保存' : JSON.stringify(draft) !== key ? '草稿已保留，保存后应用' : ''}</span>{JSON.stringify(draft) !== key && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled} onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button className="primary" disabled={disabled || JSON.stringify(draft) === key}>保存设置</button></footer>
     </form>
+    {apiVersion >= 22 && <SshConnections disabled={!connected || busy} onError={onError} />}
     <AgentManager hotUpdates={apiVersion >= 15} agents={agents} used={usedAgents} defaultAgent={settings.defaultAgent} disabled={disabled} busy={busy} error={error} onError={onError} onSave={onSaveAgent} onDelete={onDeleteAgent} />
     <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再更新后台。` : '安装新版本后，可在这里更新后台以加载新功能。项目、会话和设置会保留。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>更新后台</button></section>
     {apiVersion >= 21 && <McpSettings disabled={!connected} onError={onError} />}

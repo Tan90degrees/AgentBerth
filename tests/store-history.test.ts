@@ -60,8 +60,8 @@ test('Claude native transcript preserves text and excludes tool payloads', async
 });
 
 test('Windows directory matching is case insensitive and does not match similarly named folders', () => {
-  assert.ok(sameDirectory('D:\\Projects\\OmniOCR\\', 'd:/projects/omniocr', 'win32'));
-  assert.ok(!sameDirectory('D:\\Projects\\OmniOCR-copy', 'D:\\Projects\\OmniOCR', 'win32'));
+  assert.ok(sameDirectory('D:\\Projects\\my-project\\', 'd:/projects/my-project', 'win32'));
+  assert.ok(!sameDirectory('D:\\Projects\\my-project-copy', 'D:\\Projects\\my-project', 'win32'));
 });
 
 test('native IDs cannot inject shell commands and invalid terminal dimensions are rejected', () => {

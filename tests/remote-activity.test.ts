@@ -18,9 +18,9 @@ function setup() {
   const folder = mkdtempSync(path.join(tmpdir(), 'berth-remote-'));
   const store = new Store(folder);
   const project = store.createProject('remote',folder);
-  const session = store.createSession(project.id,'SSH','shell','',null,{host:'ascend-dev',directory:'/work/项目'});
+  const session = store.createSession(project.id,'SSH','shell','',null,{host:'dev-server',directory:'/work/项目'});
   const run = store.createRun(session.id,'',80,24,'ssh');
-  const info: RemoteInfo = {sessionId:session.id,runId:run.id,host:'ascend-dev',connection:'connected',owner:'user',phase:'idle',cwd:'/work',error:null};
+  const info: RemoteInfo = {sessionId:session.id,runId:run.id,host:'dev-server',connection:'connected',owner:'user',phase:'idle',cwd:'/work',error:null};
   const actions: RemoteAction[] = [];
   const activity = new RemoteActivity(info,store,()=>{},action=>actions.push(action));
   return {folder,store,session,run,info,actions,activity, close:()=>{store.close();rmSync(folder,{recursive:true,force:true});}};
@@ -90,7 +90,7 @@ test('remote configuration, durable steps, pagination and crash outcomes survive
   const first=x.store.remoteActions(x.session.id),second=x.store.remoteActions(x.session.id,first.at(-1)!.sequence);
   assert.equal(first.length,50);assert.equal(new Set([...first,...second].map(a=>a.id)).size,62);
   x.store.close();const next=new Store(x.folder);
-  assert.equal(next.session(x.session.id).remote?.host,'ascend-dev');assert.equal(next.remoteAction(id)!.status,'unknown');
+  assert.equal(next.session(x.session.id).remote?.host,'dev-server');assert.equal(next.remoteAction(id)!.status,'unknown');
   next.deleteProject(x.session.projectId);assert.equal(next.remoteAction(id),null);next.close();rmSync(x.folder,{recursive:true,force:true});closed=true;
 });
 
@@ -159,7 +159,7 @@ test('MCP advertises only scoped terminal tools and delegates bounded waits with
   const calls:{method:string;params:unknown}[]=[];const id=randomUUID();
   const server=new TerminalMcp({rpc:async<T>(method: Method,params?: Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteExecute'?{id,status:'running'}:{status:'running'}) as T;}});
   const initialized:any=await server.request('initialize',{protocolVersion:'2025-11-25'});assert.equal(initialized.protocolVersion,'2025-11-25');
-  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,6);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
+  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,7);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:id,command:'sleep 100',waitMs:10}});
   assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteExecute','remoteWait']);
   await assert.rejects(server.request('tools/call',{name:'shutdown'}),McpError);

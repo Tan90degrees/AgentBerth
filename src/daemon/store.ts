@@ -1,3 +1,4 @@
+import { sshConnectionSchema, type SshConnectionConfig, type SshConnection } from '../shared/protocol';
 import { release } from 'node:os';
 import { windowsPtyFor } from '../shared/desktop';
 import { DatabaseSync } from 'node:sqlite';
@@ -64,10 +65,36 @@ export class Store {
       this.db.exec(`INSERT OR IGNORE INTO native_histories (projectId, agent, nativeSessionId, title, updatedAt, history)
         SELECT projectId, agent, nativeSessionId, title, updatedAt, history FROM sessions WHERE nativeSessionId IS NOT NULL ORDER BY updatedAt DESC`);
     }
+    this.db.exec('CREATE TABLE IF NOT EXISTS ssh_connections (id TEXT PRIMARY KEY, value TEXT NOT NULL, fingerprint TEXT)');
     this.db.exec('PRAGMA user_version = 5');
     for (const table of ['remote_actions', 'remote_requests']) for (const row of this.db.prepare(`SELECT id,value FROM ${table}`).all()) { const a = JSON.parse(String(row.value)); if (a.status === 'running') this.db.prepare(`UPDATE ${table} SET value=? WHERE id=?`).run(JSON.stringify({ ...a, status: 'unknown', endedAt: new Date().toISOString() }), row.id); }
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
+  }
+
+  sshConnections(): SshConnection[] {
+    return this.db.prepare('SELECT id,value FROM ssh_connections ORDER BY rowid').all().map(row => ({ id: String(row.id), ...sshConnectionSchema.parse(JSON.parse(String(row.value))) }));
+  }
+  sshConnection(id: string): SshConnection {
+    const value = this.sshConnections().find(item => item.id === id);
+    if (!value) throw new Error('SSH 连接不存在，请在设置中保存连接');
+    return value;
+  }
+  saveSshConnection(config: SshConnectionConfig, id: string = randomUUID()): SshConnection {
+    const value = sshConnectionSchema.parse(config), previous = this.sshConnections().find(item => item.id === id);
+    if (this.sshConnections().some(item => item.id !== id && item.alias.toLowerCase() === value.alias.toLowerCase())) throw new Error('连接别名已存在');
+    if (!previous && this.sshConnections().length >= 200) throw new Error('最多保存 200 个 SSH 连接');
+    this.db.prepare('INSERT INTO ssh_connections (id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(id, JSON.stringify(value));
+    this.db.prepare("UPDATE sessions SET remote=json_set(remote,'$.host',?) WHERE json_extract(remote,'$.connectionId')=?").run(value.alias,id);
+    if (previous && (previous.hostname !== value.hostname || previous.port !== value.port)) this.db.prepare('UPDATE ssh_connections SET fingerprint=NULL WHERE id=?').run(id);
+    return this.sshConnection(id);
+  }
+  sshFingerprint(id: string): string | null { return (this.db.prepare('SELECT fingerprint FROM ssh_connections WHERE id=?').get(id)?.fingerprint as string) ?? null; }
+  trustSshFingerprint(id: string, fingerprint: string): void { this.db.prepare('UPDATE ssh_connections SET fingerprint=? WHERE id=?').run(fingerprint,id); }
+  deleteSshConnection(id: string): void {
+    this.sshConnection(id);
+    if (this.db.prepare("SELECT id FROM sessions WHERE json_extract(remote,'$.connectionId')=? LIMIT 1").get(id)) throw new Error('请先删除或修改使用此连接的会话');
+    this.db.prepare('DELETE FROM ssh_connections WHERE id=?').run(id);
   }
 
   state(): State {

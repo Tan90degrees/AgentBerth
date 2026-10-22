@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopApi, ServerEvent } from '../shared/protocol';
 
 const api: DesktopApi = {
+  saveSshConnection: (config, id, secret = {}, remember = false) => ipcRenderer.invoke('berth:saveSshConnection', config, id, secret, remember),
+  deleteSshConnection: id => ipcRenderer.invoke('berth:deleteSshConnection', id),
+  chooseSshKey: () => ipcRenderer.invoke('berth:sshKey'),
   setAppearance: mode => ipcRenderer.invoke('berth:appearance', mode),
   mcpConfig: () => ipcRenderer.invoke('berth:mcpConfig'),
   appInfo: () => ipcRenderer.invoke('berth:appInfo'),

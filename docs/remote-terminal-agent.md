@@ -2,7 +2,7 @@
 
 你通过 AgentBerth MCP 操作用户正在观看的同一个真实远程终端。遵循用户指定的主机、目录和会话；不要用 ssh-skill、直接 SSH、另一个 Shell 或隐藏执行路径绕过共享终端。远端只需要现有 SSH 服务和登录 Shell，不要求用户安装组件。
 
-1. `terminal_list`：找到用户指定的会话，读取 sessionId、当前 runId、主机、连接、控制权和 commandTracking。会话由用户在桌面创建并启动；MCP 不提供自授权工具。
+1. `terminal_list`：读取 connections 中的已保存别名，以及 sessions 中的可见会话。用户指定别名后，调用 `terminal_open({"alias":"dev-server"})`；只有用户在设置中明确允许 Agent 打开的连接才可启动。新启动的会话自动允许 Agent 输入，已有会话保持其当前控制权。后续工具可直接传 alias，也可传 sessionId/runId，二选一。多个运行会话使用明确的 ID。不要询问、读取或把服务器密码放入工具参数。
 2. `terminal_screen`：读当前真实画面、光标和状态。输入要求 owner=agent；用户接管后等待重新授权，不能抢回控制权。
 3. `terminal_execute`：commandTracking=posix 且 phase=idle 时执行单行命令。phase=unknown 时先读屏，只有确认空闲 Shell 提示符才传 `atPrompt: true`。每个新命令生成 UUID requestId，同一请求重试复用该 ID。目录、export 和虚拟环境在当前 Shell 连续保持；命令及标记包装会显示在终端。
 4. `terminal_wait`：用 execute 返回的 actionId 等待。单次 timeoutMs<=30000，running 后继续等待相同 ID。completed 的 exitCode 才是已确认结果；unknown 不是失败，不允许自动重放有副作用的命令。

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 21;
+export const API_VERSION = 22;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -36,7 +36,22 @@ export type AgentDefinitionConfig = z.infer<typeof agentDefinitionSchema>;
 export interface AgentDefinition extends AgentDefinitionConfig { id: string }
 export const isCustomAgent = (agent: string) => agent === 'custom' || agent.startsWith('agent:');
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };
+export const sshConnectionSchema = z.object({
+  alias: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/, '别名只能包含字母、数字、点、横线和下划线'),
+  hostname: z.string().trim().min(1).max(254).refine(value => !/[\s\x00-\x1f]/.test(value), '请输入主机名或 IP'),
+  port: z.number().int().min(1).max(65535).default(22),
+  username: z.string().trim().min(1).max(256).refine(value => !/[\x00-\x1f]/.test(value)),
+  authentication: z.enum(['password', 'key', 'agent']),
+  privateKeyPath: singleLine.default(''),
+  allowAgent: z.boolean().default(true),
+}).strict().refine(value => value.authentication !== 'key' || !!value.privateKeyPath.trim(), '请选择私钥文件');
+export type SshConnectionConfig = z.infer<typeof sshConnectionSchema>;
+export interface SshConnection extends SshConnectionConfig { id: string }
+export const sshSecretSchema = z.object({ password: z.string().max(16384).optional(), passphrase: z.string().max(16384).optional() }).strict();
+export type SshSecret = z.infer<typeof sshSecretSchema>;
+export interface SshChallenge { id: string; connectionId: string; alias: string; kind: 'credentials' | 'hostKey'; fingerprint?: string; hostname?: string; port?: number }
 export const remoteSchema = z.object({
+  connectionId: z.uuid().optional(),
   host: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,253}$/, '请选择 SSH 主机别名'),
   directory: z.string().max(4096).refine(value => (!value || value.startsWith('/')) && !/[\r\n\x00]/.test(value), '请填写远端绝对目录或留空使用登录目录').default(''),
 }).strict();
@@ -61,6 +76,14 @@ export const gitDiffSchema = z.object({ projectId: id, path: z.string().min(1).m
 export type GitDiffRequest = z.infer<typeof gitDiffSchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
+  z.object({ id, method: z.literal('sshConnections'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('saveSshConnection'), params: z.object({ connectionId: id.optional(), config: sshConnectionSchema }).strict() }),
+  z.object({ id, method: z.literal('deleteSshConnection'), params: z.object({ connectionId: id }).strict() }),
+  z.object({ id, method: z.literal('registerSshProvider'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('sshChallengeReply'), params: z.object({ challengeId: id, secret: sshSecretSchema.optional(), accepted: z.boolean().optional() }).strict() }),
+  z.object({ id, method: z.literal('remoteAliases'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
+  z.object({ id, method: z.literal('remoteResolve'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
   z.object({ id, method: z.literal('sshHosts'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteInfo'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('remoteActions'), params: z.object({ sessionId: id, before: z.number().int().positive().optional() }).strict() }),
@@ -149,6 +172,7 @@ export type TerminalEvent =
 export interface RemoteInfo { commandTracking?: 'posix' | 'none'; sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
 export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null }
 export type ServerEvent =
+  | { event: 'sshChallenge'; data: SshChallenge }
   | { event: 'remote'; data: RemoteInfo }
   | { event: 'remoteAction'; data: RemoteAction }
   | { event: 'state'; data: State }
@@ -158,6 +182,9 @@ export interface Response { id: string; result?: unknown; error?: string }
 export interface RuntimeInfo { version: number; pid: number; port: number; token: string }
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface DesktopApi {
+  saveSshConnection(config: SshConnectionConfig, connectionId?: string, secret?: SshSecret, remember?: boolean): Promise<SshConnection>;
+  deleteSshConnection(connectionId: string): Promise<void>;
+  chooseSshKey(): Promise<string | null>;
   appInfo(): Promise<AppInfo>;
   mcpConfig(): Promise<string>;
   setAppearance(mode: AppearanceMode): Promise<void>;

@@ -1,14 +1,22 @@
 import { useEffect, useState } from 'react';
-import type { RemoteAction, RemoteConfig, RemoteInfo } from '../shared/protocol';
+import { SshConnectionEditor } from './SshConnections';
+import type { SshConnection, RemoteAction, RemoteConfig, RemoteInfo } from '../shared/protocol';
 import './remote.css';
 
 export function RemoteFields({ value, onChange, disabled, onError }: { value: RemoteConfig | null; onChange: (value: RemoteConfig | null) => void; disabled: boolean; onError: (error: string) => void }) {
-  const [hosts,setHosts] = useState<string[]>([]);
-  useEffect(() => { void window.berth.rpc<string[]>('sshHosts').then(setHosts).catch(reason => onError(String(reason))); }, []);
-  return <div className="remote-fields"><label>运行位置<select aria-label="运行位置" disabled={disabled} value={value ? 'ssh' : 'local'} onChange={event => onChange(event.target.value === 'ssh' ? { host: hosts[0] ?? '', directory: '' } : null)}><option value="local">本机</option><option value="ssh">远程 SSH · 实时终端</option></select></label>{value && <>
-    <label>SSH 主机别名<input aria-label="SSH 主机别名" disabled={disabled} required list="ssh-host-aliases" maxLength={254} pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]*" value={value.host} onChange={event => onChange({ ...value, host: event.target.value })} placeholder="例如 ascend-dev" /><datalist id="ssh-host-aliases">{hosts.map(host => <option key={host} value={host} />)}</datalist></label>
+  const [hosts,setHosts] = useState<string[]>([]), [connections,setConnections] = useState<SshConnection[]>([]), [creating,setCreating] = useState(false), [legacy,setLegacy] = useState(!!value?.host && !value?.connectionId);
+  useEffect(() => { void Promise.all([window.berth.rpc<string[]>('sshHosts').then(setHosts), window.berth.rpc<SshConnection[]>('sshConnections').then(setConnections)]).catch(reason => onError(String(reason))); }, []);
+  return <div className="remote-fields"><label>运行位置<select aria-label="运行位置" disabled={disabled} value={value ? 'ssh' : 'local'} onChange={event => onChange(event.target.value === 'ssh' ? { host: '', directory: '' } : null)}><option value="local">本机</option><option value="ssh">远程 SSH · 实时终端</option></select></label>{value && <>
+    <label>SSH 连接<select aria-label="SSH 连接" required disabled={disabled} value={value.connectionId ?? (creating ? 'new' : legacy ? 'legacy' : '')} onChange={event => {
+      if (event.target.value === 'new') { setLegacy(false); setCreating(true); return; }
+      setCreating(false);setLegacy(event.target.value === 'legacy');
+      const profile=connections.find(item=>item.id===event.target.value);
+      onChange({host:profile?.alias??'', connectionId:profile?.id, directory:value.directory});
+    }}><option value="" disabled>选择已保存连接</option>{connections.map(profile=><option key={profile.id} value={profile.id}>{profile.alias}</option>)}<option value="new">＋ 新建 SSH 连接</option><option value="legacy">沿用系统 SSH 配置（密钥登录）</option></select></label>
+    {creating && <SshConnectionEditor disabled={disabled} onError={onError} onCancel={()=>setCreating(false)} onSaved={profile=>{setConnections(previous=>[...previous,profile]);onChange({connectionId:profile.id,host:profile.alias,directory:value.directory});setCreating(false);}} />}
+    {!value.connectionId && legacy && <details open><summary>系统 SSH 配置</summary><label>SSH 主机别名<input aria-label="SSH 主机别名" disabled={disabled} required list="ssh-host-aliases" maxLength={254} pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]*" value={value.host} onChange={event => onChange({ ...value, host: event.target.value })} placeholder="例如 dev-server" /><datalist id="ssh-host-aliases">{hosts.map(host => <option key={host} value={host} />)}</datalist></label><p className="form-hint">高级：沿用 ~/.ssh/config 的密钥和跳板机，需先在系统终端登录并确认主机指纹。密码登录请选择新建 SSH 连接。</p></details>}
     <label>远端工作目录（可选）<input aria-label="远端工作目录" disabled={disabled} maxLength={4096} value={value.directory} pattern="(/.*)?" onChange={event => onChange({ ...value, directory: event.target.value })} placeholder="留空使用 SSH 登录目录" /></label>
-    <p className="form-hint">沿用 ~/.ssh/config 中的密钥、端口和跳板机。请先在系统终端成功登录并确认主机密钥；此处不弹出密码输入。远端无需额外安装；普通 SSH 登录 Shell 即可。项目分组、文件树与 Git 仍指向本机目录。</p>
+    <p className="form-hint">远端仅需 SSH 服务及已有 Shell。项目分组、文件树与 Git 仍指向本机目录。</p>
   </>}</div>;
 }
 
@@ -48,5 +56,5 @@ export function RemoteBar({ sessionId, runId, onControl, onError }: { sessionId:
 
 export function McpSettings({ disabled, onError }: { disabled: boolean; onError: (error: string) => void }) {
   const [copied,setCopied] = useState(false);
-  return <section className="settings-card"><h2>Agent 远程终端 · MCP</h2><p>在项目中新建“远程 SSH”会话。将配置加入你的 Agent MCP 设置，启动会话后点击“交给 Agent”，即可实时观看并随时接管。</p><p className="form-hint">配置包含本机程序路径，不含 SSH 密钥。AgentBerth 需保持后台运行；MCP 断开不关闭 SSH。主窗口关闭继续运行；托盘退出关闭 SSH。SSH 链路断开后，原进程不可保证恢复或停止。</p><div className="mcp-actions"><button className="subtle" disabled={disabled} onClick={() => void window.berth.mcpConfig().then(value => window.berth.copyText(value)).then(() => setCopied(true)).catch(reason => onError(String(reason)))}>{copied ? 'MCP 配置已复制' : '复制 MCP 配置'}</button><button className="subtle" onClick={() => void window.berth.copyText('请使用 AgentBerth MCP 操作我指定的远程终端。先 terminal_list 选择会话，terminal_screen 查看状态；仅在用户交给 Agent 后输入。POSIX Shell 命令使用 terminal_execute；phase=unknown 时先读屏确认空闲提示符，再传 atPrompt=true；其他 Shell 使用读屏和按键。新命令生成 UUID requestId，同一请求重试复用 ID；长任务用 terminal_wait 等待同一 actionId，不重复执行。TUI 用 terminal_screen 和 terminal_keys。结果 unknown 时先检查，不能重放。SSH 断线不会恢复原进程，用户重新连接会新建 Shell。不要同时用 ssh-skill 或直接 SSH 绕过共享终端；用户接管后停止输入。').catch(reason => onError(String(reason)))}>复制给 Agent 的说明</button></div></section>;
+  return <section className="settings-card"><h2>Agent 远程终端 · MCP</h2><p>先在 SSH 连接中保存别名和登录信息，再复制 MCP 配置加入 Agent。让 Agent 调用 terminal_open 并传入别名，即可打开同一个可见终端；你可随时接管。</p><p className="form-hint">配置包含本机程序路径，不含 SSH 密钥。AgentBerth 需保持后台运行；MCP 断开不关闭 SSH。主窗口关闭继续运行；托盘退出关闭 SSH。SSH 链路断开后，原进程不可保证恢复或停止。</p><div className="mcp-actions"><button className="subtle" disabled={disabled} onClick={() => void window.berth.mcpConfig().then(value => window.berth.copyText(value)).then(() => setCopied(true)).catch(reason => onError(String(reason)))}>{copied ? 'MCP 配置已复制' : '复制 MCP 配置'}</button><button className="subtle" onClick={() => void window.berth.copyText('请使用 AgentBerth MCP 操作我指定的远程终端。先 terminal_list 查看已保存连接，用 terminal_open({alias:"用户指定的别名"}) 打开；后续工具可直接传 alias，无需用户填写 UUID。terminal_screen 查看状态。已有会话被人工接管时停止输入，不能重新调用 open 抢回控制。POSIX Shell 命令使用 terminal_execute；phase=unknown 时先读屏确认空闲提示符，再传 atPrompt=true；其他 Shell 使用读屏和按键。新命令生成 UUID requestId，同一请求重试复用 ID；长任务用 terminal_wait 等待同一 actionId，不重复执行。TUI 用 terminal_screen 和 terminal_keys。结果 unknown 时先检查，不能重放。SSH 断线不会恢复原进程，用户重新连接会新建 Shell。不要同时用 ssh-skill 或直接 SSH 绕过共享终端；用户接管后停止输入。').catch(reason => onError(String(reason)))}>复制给 Agent 的说明</button></div></section>;
 }

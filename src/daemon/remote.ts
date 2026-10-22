@@ -109,7 +109,8 @@ export class RemoteTerminal implements TerminalProcess {
       posix=probe.stdout.trimEnd().endsWith('AgentBerth_POSIX');
     } catch(error) {
       if((error as {code?:unknown}).code===255 || typeof (error as {code?:unknown}).code!=='number') {
-        this.notify({connection:'disconnected',error:String(error)});throw error;
+        const message = '系统 SSH 配置登录失败；若使用密码，请在设置中新建 SSH 连接并填写用户名、密码。密钥登录请先在系统终端确认可登录及主机指纹。';
+        this.notify({connection:'disconnected',error:message});throw new Error(message);
       }
       // A non-POSIX login Shell remains usable as a real terminal through keys/read-screen.
     }

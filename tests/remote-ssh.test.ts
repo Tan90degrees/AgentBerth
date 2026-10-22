@@ -72,5 +72,33 @@ test('bundled MCP stdio initializes, exposes scoped tools and shuts down cleanly
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list',params:{}})+'\n');
   await eventually(async()=>stdout.trim().split('\n').length>=2,5000);child.stdin.end();
   assert.equal(await closed,0,stderr);const messages=stdout.trim().split('\n').map(line=>JSON.parse(line));
-  assert.equal(messages.find(message=>message.id===1).result.serverInfo.name,'agentberth-terminal');assert.equal(messages.find(message=>message.id===2).result.tools.length,6);
+  assert.equal(messages.find(message=>message.id===1).result.serverInfo.name,'agentberth-terminal');assert.equal(messages.find(message=>message.id===2).result.tools.length,7);
+});
+
+test('saved password and encrypted-key connections run real POSIX commands through sshd without remote dependencies', {skip:!process.env.AGENTBERTH_SSH_TEST_PORT,timeout:45000},async t=>{
+  const folder=mkdtempSync(path.join(tmpdir(),'ab-ssh-auth-')), server=new DaemonServer(path.join(folder,'data')), runtime=await server.listen();
+  let ui:DaemonConnection, password=process.env.AGENTBERTH_SSH_TEST_PASSWORD!;
+  const agent=await DaemonConnection.open(runtime,()=>{});
+  ui=await DaemonConnection.open(runtime,event=>{
+    if(event.event==='sshChallenge')void ui.rpc('sshChallengeReply',{challengeId:event.data.id,...(event.data.kind==='hostKey'?{accepted:true}:{secret:{password,passphrase:'fixture-key-passphrase'}})});
+  });
+  t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});ui.close();agent.close();await server.close();rmSync(folder,{recursive:true,force:true});});
+  await ui.rpc('registerSshProvider');
+  const connection={alias:'password-ssh',hostname:'127.0.0.1',port:Number(process.env.AGENTBERTH_SSH_TEST_PORT),username:process.env.AGENTBERTH_SSH_TEST_USERNAME!,authentication:'password',privateKeyPath:'',allowAgent:true};
+  await ui.rpc('saveSshConnection',{config:connection});
+  password='incorrect-fixture-password';await assert.rejects(agent.rpc('remoteOpen',{alias:connection.alias}),/认证失败/);
+  password=process.env.AGENTBERTH_SSH_TEST_PASSWORD!;
+  for(const config of [connection,{...connection,alias:'key-ssh',authentication:'key',privateKeyPath:process.env.AGENTBERTH_SSH_TEST_KEY!}]){
+    if(config.alias!==connection.alias)await ui.rpc('saveSshConnection',{config});
+    const target=await agent.rpc<{sessionId:string;runId:string;info:RemoteInfo}>('remoteOpen',{alias:config.alias});
+    assert.equal(target.info.commandTracking,'posix');assert.equal(target.info.owner,'agent');
+    const command='export AB_SSH_AUTH=42; cd /tmp; printf "AUTH_OK=%s\\n" "$AB_SSH_AUTH"; false';
+    const action=await agent.rpc<RemoteAction>('remoteExecute',{sessionId:target.sessionId,runId:target.runId,command,requestId:randomUUID()});
+    const result=await agent.rpc<RemoteAction>('remoteWait',{sessionId:target.sessionId,runId:target.runId,actionId:action.id,timeoutMs:5000});
+    assert.equal(result.status,'completed');assert.equal(result.exitCode,1);
+    const screen=await agent.rpc<{text:string;info:RemoteInfo}>('remoteScreen',{sessionId:target.sessionId,runId:target.runId});
+    assert.ok(screen.text.includes('AUTH_OK=42'));assert.equal(screen.info.cwd,'/tmp');
+    await ui.rpc('stop',{sessionId:target.sessionId});
+    assert.equal((await ui.rpc<Run[]>('runs',{sessionId:target.sessionId}))[0].status,'stopped');
+  }
 });
