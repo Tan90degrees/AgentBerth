@@ -1408,6 +1408,7 @@ try {
   console.error(error);
   const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
   console.error('Failure process state',JSON.stringify({daemonPid,daemonAlive:daemonPid?alive(daemonPid):false,runtimePresent:await fileExists(path.join(folder,'data','runtime.json')),launcherPid:application?.process().pid,launcherAlive:application?alive(application.process().pid):false}));
+  try { console.error('Daemon failure log:', (await readFile(path.join(folder,'data','daemon.log'),'utf8')).slice(-6000)); } catch {}
   if (application) {
     try {
       const page = application.windows()[0];

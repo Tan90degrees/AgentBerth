@@ -53,7 +53,7 @@ export class DaemonServer {
   private starting = new Set<string>();
   private editingProjects = new Set<string>();
 
-  constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}) {
+  constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn) {
     this.store = new Store(dataDirectory);
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
@@ -457,7 +457,7 @@ export class DaemonServer {
         const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }));
         const transport = new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) });
+      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) });
     }
     catch (error) {
       terminal.dispose();
@@ -469,6 +469,7 @@ export class DaemonServer {
     this.live.set(sessionId, live);
     this.pruneLogs();
     child.onData(text => {
+      if (live.closed) return;
       const bytes = Buffer.byteLength(text);
       live.queuedBytes += bytes;
       if (live.queuedBytes > 1024 * 1024) child.pause();
@@ -531,7 +532,7 @@ export class DaemonServer {
     if (session.latestRun) return { run: session.latestRun, ...this.store.savedScreen(session.latestRun.id) };
     return { run: null, snapshot: '', seq: 0, cols: 100, rows: 30 };
   }
-  private async finish(sessionId: string, live: LiveTerminal, exitCode: number): Promise<void> {
+  private async finish(sessionId: string, live: LiveTerminal, exitCode: number | null): Promise<void> {
     if (live.closed) return;
     live.closed = true; live.remote?.activity.finish();
     // taskkill ends the shell tree, but node-pty's ConPTY output worker and native
@@ -551,7 +552,16 @@ export class DaemonServer {
     const live = this.live.get(sessionId);
     if (!live || live.closed || live.stopping) return;
     live.stopping = true; this.store.stopping(live.run.id); this.changed();
-    try { if (live.remote) await live.remote.transport.stop(); else await terminateTree(live.pty as pty.IPty, () => this.live.get(sessionId) === live && !live.closed); }
+    try {
+      if (live.remote) await live.remote.transport.stop();
+      else {
+        await terminateTree(live.pty as pty.IPty, () => this.live.get(sessionId) === live && !live.closed);
+        // taskkill confirms termination of the Windows tree. ConPTY may not
+        // deliver onExit when stopped before its first output; do not leave a
+        // confirmed-dead process in "stopping" waiting for that notification.
+        if (process.platform === 'win32') await this.finish(sessionId, live, null);
+      }
+    }
     catch (error) {
       this.logError(error);
       if (!live.closed) { live.stopping = false; this.store.running(live.run.id); this.changed(); throw new Error('停止终端失败，请重试'); }
