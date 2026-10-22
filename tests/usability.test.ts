@@ -10,6 +10,18 @@ import { DaemonConnection } from '../src/main/connection';
 import { DEFAULT_SETTINGS, type Project, type Run, type Session, type State } from '../src/shared/protocol';
 import { clampSidebarWidth, loadCollapsedProjects, loadSidebarWidth, loadSelections, loadSettingsDraft, readStored, saveStored } from '../src/renderer/storage';
 import { matchesQuery } from '../src/renderer/QuickSwitcher';
+import { historyNotices } from '../src/renderer/history-notices';
+
+test('history diagnostics group repeated plugin scan notices, explain known messages and retain unknown diagnostics',()=>{
+  const skipped='Skipped an invalid or foreign-project session file.';
+  const multiple='Multiple conversations found; showing the most recent one. Use the session list to select a specific conversation.';
+  const source=[skipped,skipped,skipped,skipped,skipped,multiple,'Only recent conversation text is shown.','仅显示最近 512 KiB 对话文本','自定义诊断 <details>\n原始内容','  ',' '+skipped+' '];
+  const original=[...source],notices=historyNotices(source);
+  assert.equal(notices.length,5);assert.equal(notices[0].count,6);assert.equal(notices[0].kind,'scan');assert.equal(notices[0].original,skipped);
+  assert.equal(notices[1].kind,'selection');assert.ok(notices[1].text.includes('最新一条'));
+  assert.equal(notices[2].kind,'partial');assert.equal(notices[3].kind,'partial');assert.equal(notices[4].text,'自定义诊断 <details>\n原始内容');
+  assert.deepEqual(source,original);assert.deepEqual(historyNotices(['',' ']),[]);
+});
 
 test('unavailable/corrupt UI storage falls back safely and validated drafts keep terminal arguments intact', () => {
   const unavailable = { getItem() { throw new Error('cache denied'); }, setItem() { throw new Error('cache full'); }, removeItem() { throw new Error('cache denied'); } };

@@ -1109,7 +1109,8 @@ try {
   const pluginScript = packaged ? path.join(path.dirname(executablePath), 'resources', 'examples', 'agent-plugin.cjs') : path.resolve('examples/agent-plugin.cjs');
   await stat(pluginScript);
   const pluginBundle = path.join(folder, 'plugin-bundle'); await mkdir(pluginBundle);
-  const source = (await readFile(pluginScript, 'utf8')).replace("id:'my-agent',name:'我的 Agent',command:'my-agent'", "id:'beta-smoke',name:'Beta 新名称',command:'echo BETA_READY'");
+  const source = (await readFile(pluginScript, 'utf8')).replace("id:'my-agent',name:'我的 Agent',command:'my-agent'", "id:'beta-smoke',name:'Beta 新名称',command:'echo BETA_READY'").replace("warnings:bytes>512*1024?['Only recent conversation text is shown.']:[]", "warnings:data.warnings??(bytes>512*1024?['Only recent conversation text is shown.']:[])");
+  assert.ok(source.includes('warnings:data.warnings??'), 'History warning fixture was not applied');
   await writeFile(path.join(pluginBundle, 'adapter.cjs'), source);
   await writeFile(path.join(pluginBundle, 'plugin.cjs'), "setTimeout(()=>require('./adapter.cjs'),600);");
   const pluginManifest = path.join(pluginBundle, 'agentberth-plugin.json');
@@ -1117,7 +1118,7 @@ try {
   if (packaged) await stat(path.join(path.dirname(executablePath), 'resources', 'docs', 'agent-plugins.md'));
 
   const pluginData = path.join(folder, 'agent-session.json');
-  const sample = { cwd: folder, nativeSessionId: 'native-plugin-123', messages: [{ role: 'user', text: '自定义历史你好🙂' }, { role: 'assistant', text: '独立插件已连接' }] };
+  const sample = { cwd: folder, nativeSessionId: 'native-plugin-123', messages: [{ role: 'user', text: '自定义历史你好🙂' }, { role: 'assistant', text: '独立插件已连接' }], warnings: [...Array(5).fill('Skipped an invalid or foreign-project session file.'),'Multiple conversations found; showing the most recent one. Use the session list to select a specific conversation.'] };
   await writeFile(pluginData, JSON.stringify(sample));
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const alphaConfig = path.join(folder, 'alpha-agent.json');
@@ -1201,6 +1202,16 @@ try {
   await page.getByRole('button', { name: '读取对话', exact: true }).click();
   await page.getByText('独立插件已连接', { exact: true }).waitFor();
   assert.equal(await page.locator('.messages .message').count(), 2);
+  const diagnostics=page.locator('.history-diagnostics');
+  await diagnostics.waitFor();assert.equal(await diagnostics.getAttribute('open'),null);
+  assert.equal(await page.locator('.messages .history-warning').count(),0);
+  assert.equal(await diagnostics.locator('.history-diagnostic-path').isVisible(),false);
+  await diagnostics.locator('summary').click();
+  assert.equal(await diagnostics.locator('.history-diagnostics-content p').count(),2);
+  await diagnostics.getByText('（重复 5 次）',{exact:true}).waitFor();
+  assert.ok((await diagnostics.locator('.history-diagnostic-path code').innerText()).endsWith('agent-session.json'));
+  assert.equal(await page.getByText('Skipped an invalid or foreign-project session file.',{exact:true}).count(),0);
+  await diagnostics.locator('summary').click();
   step('switching sessions while a history plugin responds cannot replace another session history');
   await page.getByRole('button', { name: '刷新记录', exact: true }).click();
   await page.locator('.session-item').filter({ hasText: 'OpenCode 会话' }).click();
