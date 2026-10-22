@@ -131,6 +131,7 @@ export class DaemonServer {
   private remote(sessionId: string, runId: string) {
     const remote = this.terminal(sessionId, runId).remote;
     if (!remote) throw new Error('此会话不是远程终端');
+    if (this.terminal(sessionId,runId).stopping) throw new Error('终端正在停止');
     return remote;
   }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
@@ -140,10 +141,10 @@ export class DaemonServer {
       case 'remoteInfo': return this.live.get(request.params.sessionId)?.remote?.activity.info ?? null;
       case 'remoteActions': return this.store.remoteActions(request.params.sessionId, request.params.before);
       case 'remoteControl': return this.remote(request.params.sessionId, request.params.runId).activity.control(request.params.owner);
-      case 'remoteReconnect': this.remote(request.params.sessionId, request.params.runId).transport.reconnect(); return null;
+      case 'remoteReconnect': { const live=this.terminal(request.params.sessionId,request.params.runId); await this.remote(request.params.sessionId,request.params.runId).transport.reconnect(); this.store.setPid(live.run.id,live.pty.pid);live.run=this.store.run(live.run.id);this.changed();return null; }
       case 'remoteExecute': {
         const remote = this.remote(request.params.sessionId, request.params.runId);
-        return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.write(text));
+        return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.write(text), request.params.atPrompt);
       }
       case 'remoteKeys': {
         const remote = this.remote(request.params.sessionId, request.params.runId), { key, text } = request.params;
@@ -290,6 +291,7 @@ export class DaemonServer {
       case 'input': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
         if (this.live.get(request.params.sessionId)?.remote?.activity.info.owner === 'agent') throw new Error('Agent 正在操作，请先点击“接管”');
+        this.live.get(request.params.sessionId)?.remote?.activity.change({phase:'unknown'});
         const { data, binary } = request.params;
         this.terminal(request.params.sessionId, request.params.runId).pty.write(binary ? Buffer.from(data, 'latin1') : data); return null;
       }
@@ -452,7 +454,7 @@ export class DaemonServer {
     try {
       if (session.remote) {
         const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }));
-        const transport = new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd) => activity.marker(kind,status,cwd), selected.file);
+        const transport = new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
       } else child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) });
     }
@@ -570,8 +572,7 @@ export class DaemonServer {
   private async stopAll(): Promise<void> {
     this.closing = true;
     try {
-      // Starting SSH channels may already have created a remote tmux session.
-      // Drain their startup before issuing confirmed remote stop, avoiding a create/kill race.
+      // Drain in-flight SSH startup before closing the local channels.
       const startupDeadline = Date.now() + 45000;
       while (this.starting.size && Date.now() < startupDeadline) await new Promise(resolve => setTimeout(resolve, 25));
       if (this.starting.size) throw new Error('远端连接尚未完成，请稍后再次退出；后台保留以便确认清理');

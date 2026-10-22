@@ -25,11 +25,11 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - name: Prepare real SSH and tmux integration (Linux)
+      - name: Prepare dependency-free SSH integration (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends tmux openssh-server fonts-noto-cjk
+          sudo apt-get install -y --no-install-recommends openssh-server fonts-noto-cjk
           bash scripts/setup-ssh-test.sh
         timeout-minutes: 3
       - run: npm run check

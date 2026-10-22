@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 20;
+export const API_VERSION = 21;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -38,7 +38,7 @@ export const isCustomAgent = (agent: string) => agent === 'custom' || agent.star
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };
 export const remoteSchema = z.object({
   host: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,253}$/, '请选择 SSH 主机别名'),
-  directory: z.string().min(1).max(4096).refine(value => value.startsWith('/') && !/[\r\n\x00]/.test(value), '请填写远端绝对目录'),
+  directory: z.string().max(4096).refine(value => (!value || value.startsWith('/')) && !/[\r\n\x00]/.test(value), '请填写远端绝对目录或留空使用登录目录').default(''),
 }).strict();
 export type RemoteConfig = z.infer<typeof remoteSchema>;
 const remoteTarget = { sessionId: id, runId: id };
@@ -66,7 +66,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('remoteActions'), params: z.object({ sessionId: id, before: z.number().int().positive().optional() }).strict() }),
   z.object({ id, method: z.literal('remoteControl'), params: z.object({ ...remoteTarget, owner: z.enum(['user', 'agent']) }).strict() }),
   z.object({ id, method: z.literal('remoteReconnect'), params: z.object(remoteTarget).strict() }),
-  z.object({ id, method: z.literal('remoteExecute'), params: z.object({ ...remoteTarget, command: singleLine.refine(value => !!value.trim() && !/[\x00-\x1f\x7f]/.test(value)), requestId: id }).strict() }),
+  z.object({ id, method: z.literal('remoteExecute'), params: z.object({ ...remoteTarget, command: singleLine.refine(value => !!value.trim() && !/[\x00-\x1f\x7f]/.test(value)), requestId: id, atPrompt: z.boolean().default(false) }).strict() }),
   z.object({ id, method: z.literal('remoteKeys'), params: z.object({ ...remoteTarget, text: z.string().max(16384).refine(value => !/[\x00-\x1f\x7f]/.test(value)).optional(), key: remoteKeySchema.optional() }).strict().refine(value => (value.text !== undefined) !== (value.key !== undefined), '请选择文本或按键') }),
   z.object({ id, method: z.literal('remoteWait'), params: z.object({ ...remoteTarget, actionId: id, timeoutMs: z.number().int().min(0).max(30000).default(25000) }).strict() }),
   z.object({ id, method: z.literal('remoteScreen'), params: z.object(remoteTarget).strict() }),
@@ -146,7 +146,7 @@ export interface Attachment { run: Run | null; snapshot: string; seq: number; co
 export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
-export interface RemoteInfo { sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
+export interface RemoteInfo { commandTracking?: 'posix' | 'none'; sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
 export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null }
 export type ServerEvent =
   | { event: 'remote'; data: RemoteInfo }

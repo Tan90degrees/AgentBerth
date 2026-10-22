@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import type { Project, Session, Run, RemoteInfo, RemoteAction } from '../src/shared/protocol';
@@ -13,7 +13,7 @@ const host = process.env.AGENTBERTH_SSH_TEST_HOST;
 const wait = (ms: number) => new Promise(resolve=>setTimeout(resolve,ms));
 async function eventually(check:()=>Promise<boolean>, timeout=12000) { const deadline=Date.now()+timeout;while(Date.now()<deadline){if(await check())return;await wait(50);}throw new Error('Remote condition timed out'); }
 
-test('real SSH shares a persistent tmux terminal with MCP, supports takeover, reconnect and confirmed stop', {skip:!host,timeout:60000},async t=>{
+test('SSH-only remote shares a live terminal, survives MCP detach, and exposes reconnect as a new Shell', {skip:!host,timeout:60000},async t=>{
   const folder=mkdtempSync(path.join(tmpdir(),'ab-real-ssh-'));
   const server=new DaemonServer(path.join(folder,'data'));const runtime=await server.listen();
   const ui=await DaemonConnection.open(runtime,()=>{});let agent=await DaemonConnection.open(runtime,()=>{});
@@ -33,7 +33,7 @@ test('real SSH shares a persistent tmux terminal with MCP, supports takeover, re
   assert.equal((await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).cwd,'/');
   assert.equal((await execute('false')).exitCode,1);
   // A task may outlive its wait request and the MCP client, while the desktop remains attached.
-  const requestId=randomUUID();const command='sleep 1; printf "LONG_TASK_DONE\\n"';
+  const requestId=randomUUID();const command='/bin/sleep 1; printf "LONG_TASK_DONE\\n"';
   const action=await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId,command});
   assert.equal((await agent.rpc<RemoteAction>('remoteWait',{...target,actionId:action.id,timeoutMs:5})).status,'running');
   await ui.rpc('remoteControl',{...target,owner:'user'});
@@ -41,26 +41,26 @@ test('real SSH shares a persistent tmux terminal with MCP, supports takeover, re
   assert.equal((await agent.rpc<RemoteAction>('remoteWait',{...target,actionId:action.id,timeoutMs:5000})).status,'completed');
   await ui.rpc('remoteControl',{...target,owner:'agent'});
   assert.equal((await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId,command})).id,action.id);
-  // Use a non-TTY file as an external truth source to establish reconnect did not restart the shell.
-  const pidAction=await execute('echo $$ > /tmp/agentberth-'+sessionId+'.pid');assert.equal(pidAction.exitCode,0);
-  const pidBefore=execFileSync('ssh',['-T',host!,'cat /tmp/agentberth-'+sessionId+'.pid'],{encoding:'utf8'}).trim();
+  // Exit 255 is conservatively treated as lost SSH, not command success or restored execution.
+  const lost=await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId:randomUUID(),command:'exit 255'});
+  await eventually(async()=>(await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).connection==='disconnected');
+  assert.equal((await agent.rpc<RemoteAction>('remoteWait',{...target,actionId:lost.id,timeoutMs:0})).status,'unknown');
   await ui.rpc('remoteReconnect',target);
-  await eventually(async()=>(await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).connection==='connected');
-  const pidAfter=execFileSync('ssh',['-T',host!,'cat /tmp/agentberth-'+sessionId+'.pid'],{encoding:'utf8'}).trim();assert.equal(pidAfter,pidBefore);
-  // Reattach does not auto-send Enter or execute anything. Explicit Enter asks Bash for a fresh prompt.
-  await agent.rpc('remoteKeys',{...target,key:'Enter'});
-  await eventually(async()=>(await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).phase==='idle');
-  assert.equal((await execute('test "$AB_REMOTE_VALUE" = 42')).exitCode,0);
+  await eventually(async()=>{const info=await ui.rpc<RemoteInfo>('remoteInfo',{sessionId});return info.connection==='connected'&&info.phase==='idle';});
+  assert.equal((await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).owner,'user');
+  await ui.rpc('remoteControl',{...target,owner:'agent'});
+  assert.equal((await execute('test "${AB_REMOTE_VALUE-unset}" = unset && test "$PWD" = /tmp')).exitCode,0);
+  // The old request remains unknown and is never executed again in the new Shell.
+  assert.equal((await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId:lost.id,command:'exit 255'})).status,'unknown');
   await ui.rpc('resize',{...target,cols:110,rows:35});
   assert.equal((await agent.rpc<{cols:number}>('remoteScreen',target)).cols,110);
-  const long=await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId:randomUUID(),command:'sleep 2; echo SURVIVED_AGENT_EXIT'});
+  const long=await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId:randomUUID(),command:'/bin/sleep 2; echo SURVIVED_AGENT_EXIT'});
   agent.close();await wait(50);agent=await DaemonConnection.open(runtime,()=>{});
   await eventually(async()=>(await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).owner==='user');
   assert.equal((await agent.rpc<RemoteAction>('remoteWait',{...target,actionId:long.id,timeoutMs:5000})).status,'completed');
   await ui.rpc('stop',{sessionId});
   await eventually(async()=>{try{await ui.rpc('remoteScreen',target);return false;}catch{return true;}});
-  assert.throws(()=>execFileSync('ssh',['-T',host!,`tmux -L agentberth has-session -t ab-${sessionId}`],{stdio:'pipe'}));
-  execFileSync('ssh',['-T',host!,`rm -f /tmp/agentberth-${sessionId}.pid`]);
+  assert.equal((await ui.rpc<Run[]>('runs',{sessionId}))[0].status,'stopped');
 });
 
 test('bundled MCP stdio initializes, exposes scoped tools and shuts down cleanly', {timeout:10000},async()=>{

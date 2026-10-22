@@ -191,7 +191,7 @@ OpenCode 会话在项目目录中执行 `opencode export <sessionID> > session.j
 
 记录关联后，可点击 **刷新记录** 重新读取文件（OpenCode 导出快照更新后需要再次导出）。终端已结束时右键会话选择 **恢复原生会话**，分别调用 `codex resume <id>`、`claude --resume <id>` 或 `opencode --session <id>`。这是新进程加载原生历史；后台仍存活时的“接回终端”连接原有进程。手动关联 ID 会覆盖已有导入关联，需要时可重新导入文本。
 
-第一版管理从本工作台启动的终端。已有 Windows Terminal 中的进程不能直接迁入，需关联历史并从工作台恢复。Windows 原生 CLI 已纳入设计，WSL、SSH、远端 daemon 和自动扫描历史留待后续版本。
+第一版管理从本工作台启动的终端。已有 Windows Terminal 中的进程不能直接迁入，需关联历史并从工作台恢复。Windows 原生 CLI 已纳入设计，远程 SSH 终端见下文；WSL、远端 daemon 和自动扫描历史留待后续版本。
 
 ## 数据、生命周期与限制
 
@@ -265,6 +265,6 @@ Apache-2.0，沿用仓库原有许可证。
 
 ## 可观察的远程终端与 MCP
 
-新建会话时选择“远程 SSH”，使用现有 OpenSSH 主机别名连接 Linux Bash/tmux。设置中复制 MCP 配置，在终端点击“交给 Agent”，即可实时观看真实操作、随时接管并在断线后恢复原会话。长任务不会随工具超时停止；步骤可折叠和翻页。
+新建会话时选择“远程 SSH”，沿用现有 OpenSSH 主机别名；远端只需 SSH 服务和系统已有的登录 Shell，无需安装任何额外程序。设置中复制 MCP 配置，在终端点击“交给 Agent”，即可实时观看同一终端的真实操作并随时接管。主窗口关闭、MCP 超时或断开时，本机后台保持 SSH；SSH 链路真正中断后原任务结果未知，手动重新连接会建立新 Shell。步骤可折叠和翻页。
 
 详见 [使用与边界说明](docs/remote-terminals.md) 和 [提供给 Agent 的操作说明](docs/remote-terminal-agent.md)。
