@@ -71,6 +71,18 @@ test('raw input requires prompt confirmation; other login Shells use screen and 
   let input='';x.activity.keys(client,'echo raw','text',value=>input=value);assert.equal(input,'echo raw');
 });
 
+test('human interruption clears a pending command without inventing completion or replaying stale markers',t=>{
+  const x=setup();t.after(x.close);const client={},id=randomUUID();x.activity.control('agent');
+  x.activity.execute(client,id,'long task',()=>{});x.activity.marker('start',0,null,id);
+  x.activity.control('user');x.activity.input('\x03');
+  assert.equal(x.store.remoteAction(id)!.status,'unknown');assert.equal(x.info.phase,'unknown');
+  x.activity.control('agent');const next=randomUUID();
+  x.activity.execute(client,next,'echo next',()=>{},true);
+  x.activity.marker('ready',0,'/old',id);assert.equal(x.store.remoteAction(next)!.status,'running');
+  x.activity.marker('start',0,null,next);x.activity.marker('ready',0,'/next',next);
+  assert.equal(x.store.remoteAction(next)!.status,'completed');assert.equal(x.info.cwd,'/next');
+});
+
 test('remote configuration, durable steps, pagination and crash outcomes survive reopening',t=>{
   const x=setup();let closed=false;t.after(()=>{if(!closed)x.close();});
   const client={},id=randomUUID();x.activity.control('agent');x.activity.execute(client,id,'long task',()=>{});

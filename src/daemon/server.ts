@@ -290,10 +290,11 @@ export class DaemonServer {
       case 'detach': client.subscriptions.delete(request.params.sessionId); return null;
       case 'input': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
-        if (this.live.get(request.params.sessionId)?.remote?.activity.info.owner === 'agent') throw new Error('Agent 正在操作，请先点击“接管”');
-        this.live.get(request.params.sessionId)?.remote?.activity.change({phase:'unknown'});
+        const live = this.terminal(request.params.sessionId, request.params.runId);
+        if (live.remote?.activity.info.owner === 'agent') throw new Error('Agent 正在操作，请先点击“接管”');
         const { data, binary } = request.params;
-        this.terminal(request.params.sessionId, request.params.runId).pty.write(binary ? Buffer.from(data, 'latin1') : data); return null;
+        live.remote?.activity.input(data);
+        live.pty.write(binary ? Buffer.from(data, 'latin1') : data); return null;
       }
       case 'resize': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');

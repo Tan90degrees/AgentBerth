@@ -50,9 +50,14 @@ export class RemoteActivity {
   }
   keys(client: object, data: string, label: string, write: (text: string) => void): void {
     this.assertAgent(client); this.action('input', label);
-    if (data === '\x03') this.unknown();
-    else if (!this.pending) this.change({phase:'unknown'});
+    this.input(data);
     write(data);
+  }
+  input(data: string): void {
+    // Ctrl+C can abort the rest of the managed line, including its completion
+    // marker. Human takeover must not leave a permanently reserved command.
+    if (data.includes('\x03')) this.unknown();
+    if (!this.pending) this.change({phase:'unknown'});
   }
   marker(kind: 'ready' | 'start', status: number, cwd: string | null, requestId?: string): void {
     if (requestId && this.pending?.id !== requestId) return;
