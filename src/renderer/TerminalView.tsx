@@ -50,8 +50,14 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
   errorHandler.current = onError;
   const pathHandler = useRef(onOpenPath); pathHandler.current = onOpenPath;
   useEffect(() => { if (autoFocus && host.current?.clientWidth) instance.current?.focus(); }, [autoFocus]);
-  useEffect(() => { if (instance.current) instance.current.options.disableStdin = !inputEnabled; }, [inputEnabled]);
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
+  useEffect(() => {
+    const terminal = instance.current;
+    if (!terminal) return;
+    terminal.options.disableStdin = !inputEnabled;
+    const element = document.activeElement;
+    if (inputEnabled && mayFocus.current && host.current?.clientWidth && (!element || element === document.body || host.current.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
+  }, [inputEnabled]);
   const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty, inputEnabled);
   useEffect(() => {
     const terminal = new Terminal({ ...options, disableStdin: !allowedInput.current, theme: palette.current, fontSize, windowsPty });

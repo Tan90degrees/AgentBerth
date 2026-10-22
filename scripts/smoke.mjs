@@ -1371,9 +1371,11 @@ try {
     assert.ok((await page.getByLabel('远程终端控制',{exact:true}).boundingBox()).height <= 52,'Remote controls should stay compact');
     await page.screenshot({animations:'disabled',path:'test-results/remote-terminal-agent.png'});
     await page.getByRole('button', { name: '接管', exact: true }).click();
+    await page.getByRole('button', { name: '交给 Agent', exact: true }).waitFor();
+    await page.waitForFunction(() => { const input = document.querySelector('.terminal-mount .xterm-helper-textarea'); return input && !input.readOnly; });
     const remoteInput=page.locator('.terminal-mount .xterm-helper-textarea');await remoteInput.focus();
-    await page.keyboard.type('echo USER_TAKEOVER');await page.keyboard.press('Enter');
-    await eventually(async()=>(await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget)).text.includes('USER_TAKEOVER'),'Human takeover did not restore input');
+    await page.keyboard.type('echo USER_$((40+2))');await page.keyboard.press('Enter');
+    await eventually(async()=>(await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget)).text.includes('USER_42'),'Human takeover did not restore input');
     await menuAction(page, '停止终端');await page.getByRole('button', { name: '停止终端', exact: true }).click();await waitRunState(page,false);
   }
   await menuAction(page, '删除会话');await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
