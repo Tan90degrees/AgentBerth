@@ -546,6 +546,7 @@ export class DaemonServer {
     const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
+    this.changed(); // Make connection startup visible and cancellable in the sidebar.
     this.pruneLogs();
     child.onData(text => {
       if (live.closed) return;
@@ -562,6 +563,7 @@ export class DaemonServer {
       try { await remote.transport.connect(); this.store.setPid(run.id, child.pid); live.run = this.store.run(run.id); }
       catch (error) {
         remote.transport.kill(); remote.activity.finish();
+        if (live.stopping || live.closed) { await this.finish(sessionId,live,null); throw new Error('SSH 连接已取消'); }
         this.live.delete(sessionId); terminal.dispose();
         this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
       }
@@ -635,7 +637,7 @@ export class DaemonServer {
     if (!live || live.closed || live.stopping) return;
     live.stopping = true; this.store.stopping(live.run.id); this.changed();
     try {
-      if (live.remote) await live.remote.transport.stop();
+      if (live.remote) { await live.remote.transport.stop(); await this.finish(sessionId,live,null); }
       else {
         await terminateTree(live.pty as pty.IPty, () => this.live.get(sessionId) === live && !live.closed);
         // taskkill confirms termination of the Windows tree. ConPTY may not

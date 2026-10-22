@@ -20,6 +20,7 @@ export class SshTerminal implements TerminalProcess {
   private generation = 0;
   private closed = false;
   private reconnecting = false;
+  private startupAbort: AbortController | null = null;
   constructor(private config: SshConnection, private sessionId: string, private directory: string, private cols: number, private rows: number,
     private access: SshAccess, private notify: (change: Partial<RemoteInfo>) => void,
     private marker: (kind: 'ready' | 'start', status: number, cwd: string | null, requestId: string) => void) {}
@@ -29,9 +30,17 @@ export class SshTerminal implements TerminalProcess {
   resize(cols: number, rows: number): void { this.cols = cols; this.rows = rows; this.channel?.setWindow(rows, cols, 0, 0); }
   pause(): void { this.channel?.pause(); }
   resume(): void { this.channel?.resume(); }
-  kill(): void { this.closed = true; this.generation++; this.channel?.destroy(); this.channel = null; this.client?.destroy(); this.client = null; }
+  kill(): void { this.closed = true; this.generation++; this.startupAbort?.abort(); this.channel?.destroy(); this.channel = null; this.client?.destroy(); this.client = null; }
 
   async connect(): Promise<void> {
+    if (this.startupAbort) throw new Error('SSH 正在连接');
+    const abort = new AbortController(); this.startupAbort = abort;
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_resolve,reject) => { cancel = () => reject(new Error('SSH 连接已取消')); abort.signal.addEventListener('abort',cancel,{once:true}); });
+    try { await Promise.race([this.establish(abort.signal),cancelled]); }
+    finally { abort.signal.removeEventListener('abort',cancel); if (this.startupAbort === abort) this.startupAbort = null; }
+  }
+  private async establish(signal: AbortSignal): Promise<void> {
     if (this.closed) throw new Error('终端已关闭');
     const generation = ++this.generation;
     this.notify({ connection: 'connecting', phase: 'unknown', owner: 'user', error: null });
@@ -51,11 +60,14 @@ export class SshTerminal implements TerminalProcess {
       const fail = (message: string) => {
         if (!active()) return;
         this.notify({ connection: 'disconnected', phase: 'unknown', owner: 'user', error: message });
-        if (!settled) { settled = true; clearTimeout(timer); reject(new Error(message)); }
+        if (!settled) { settled = true; cleanup(); reject(new Error(message)); }
         client.destroy();
       };
-      const ready = () => { if (!active() || settled) return; settled = true; online = true; clearTimeout(timer); this.notify({ connection: 'connected', error: null }); resolve(); };
+      const ready = () => { if (!active() || settled) return; settled = true; online = true; cleanup(); this.notify({ connection: 'connected', error: null }); resolve(); };
       const timer = setTimeout(() => fail('SSH 连接超时，请检查地址、端口、认证方式或主机指纹确认窗口'), 45000);
+      const cancel = () => { cleanup(); if (!settled) { settled = true; reject(new Error('SSH 连接已取消')); } client.destroy(); };
+      const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort',cancel); };
+      signal.addEventListener('abort',cancel,{once:true});
       client.on('error', (error: Error & { level?: string; code?: string }) => {
         fail(verificationError?.message ?? (error.level === 'client-authentication' ? 'SSH 认证失败，请检查用户名、密码或密钥，以及服务器允许的登录方式' : error.code === 'ECONNREFUSED' ? '服务器拒绝 SSH 连接，请检查端口和 SSH 服务' : error.code === 'ENOTFOUND' ? '无法解析 SSH 主机名，请检查连接地址' : 'SSH 连接中断，请检查网络、登录方式或密钥口令；未确认的任务结果保留为未知'));
       });
@@ -65,7 +77,7 @@ export class SshTerminal implements TerminalProcess {
       });
       client.on('close', () => {
         if (!active()) return;
-        clearTimeout(timer); this.channel = null; this.client = null;
+        cleanup(); this.channel = null; this.client = null;
         if (!settled) { settled = true; reject(new Error(verificationError?.message ?? 'SSH 登录未完成，请检查连接设置')); }
         this.notify({ connection: 'disconnected', phase: 'unknown', owner: 'user', error: shellExit === null ? 'SSH 链路已断开，远端任务结果未知。重新连接将新建 Shell。' : 'SSH 会话已结束' });
         if (online && shellExit !== null) this.events.emit('exit', { exitCode: shellExit });
@@ -117,7 +129,7 @@ export class SshTerminal implements TerminalProcess {
     });
   }
   async reconnect(): Promise<void> {
-    if (this.reconnecting || this.closed) throw new Error('终端正在重新连接或已经关闭');
+    if (this.reconnecting || this.closed || this.startupAbort) throw new Error('终端正在重新连接或已经关闭');
     this.reconnecting = true;
     try { this.generation++; this.channel?.destroy(); this.client?.destroy(); this.channel = null; this.client = null; this.events.emit('data', '\r\n[新 SSH 连接：原 Shell 和任务未恢复]\r\n'); await this.connect(); }
     finally { this.reconnecting = false; }

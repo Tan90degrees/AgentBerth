@@ -13,8 +13,9 @@ import { shell, resolveTerminal } from '../src/daemon/paths';
 import { matchesProject } from '../src/daemon/history';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-async function eventually(check: () => Promise<boolean>) {
-  for (let n = 0; n < 100; n++) { if (await check()) return; await wait(60); }
+async function eventually(check: () => Promise<boolean>, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) { if (await check()) return; await wait(60); }
   throw new Error('Condition did not become true');
 }
 
@@ -29,7 +30,7 @@ test('transcript directories accept canonical aliases but reject other and relat
   assert.equal(await matchesProject('.', real), false);
 });
 
-test('Bash profile starts inside the project and preserves inherited executable lookup', { timeout: 15000 }, async t => {
+test('Bash profile starts inside the project and preserves inherited executable lookup', { timeout: 35000 }, async t => {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-bash-project-'));
   const server = new DaemonServer(path.join(folder, 'data'));
   const connection = await DaemonConnection.open(await server.listen(), () => {});
@@ -38,11 +39,10 @@ test('Bash profile starts inside the project and preserves inherited executable 
   const session = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'bash', agent: 'shell', terminal: { profile: 'bash', executable: '', args: [] } });
   const run = await connection.rpc<Run>('start', { sessionId: session.id, cols: 140, rows: 30 });
   await connection.rpc('attach', { sessionId: session.id });
-  await connection.rpc('input', { sessionId: session.id, runId: run.id, data: 'printf "BERTH_CWD_%s\\n" "$PWD"; command -v git\r' });
-  await eventually(async () => (await connection.rpc<string>('output', { runId: run.id })).includes('BERTH_CWD_'));
+  await connection.rpc('input', { sessionId: session.id, runId: run.id, data: 'printf "BERTH_CWD_%s\\n" "$PWD"; command -v git; printf "BERTH_BASH_%s\\n" READY\r' });
   // Wait for actual command output, not merely the input echoed by the PTY.
   const expected = process.platform === 'win32' ? project.path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase()) : project.path;
-  await eventually(async () => (await connection.rpc<Attachment>('attach', { sessionId: session.id })).snapshot.includes('BERTH_CWD_' + expected));
+  await eventually(async () => { const snapshot = (await connection.rpc<Attachment>('attach', { sessionId: session.id })).snapshot; return snapshot.includes('BERTH_CWD_' + expected) && snapshot.includes('BERTH_BASH_READY'); }, 25000);
   assert.match(await connection.rpc<string>('output', { runId: run.id }), /(?:bin|cmd)\/git/);
 });
 

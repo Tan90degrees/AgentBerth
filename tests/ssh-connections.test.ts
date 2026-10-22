@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Server } from 'ssh2';
+import { SshTerminal } from '../src/daemon/ssh-terminal';
 import { SshVault } from '../src/main/ssh-vault';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
@@ -35,9 +36,10 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   // An actual SSH protocol handshake, password auth and PTY channel, on both CI platforms.
   const key=generateKeyPairSync('rsa',{modulusLength:2048,privateKeyEncoding:{type:'pkcs1',format:'pem'},publicKeyEncoding:{type:'pkcs1',format:'pem'}});
   const connections=new Set<any>(); let authAttempts=0, handshakes=0, shellChannels=0, windows=0;
+  let holdAuthentication=false, authHeld: (()=>void) | undefined;
   const ssh=new Server({hostKeys:[key.privateKey]}, client=>{
     connections.add(client);client.on('error',()=>{});client.on('close',()=>connections.delete(client));
-    client.on('authentication',context=>{authAttempts++;if(context.method==='password'&&context.username==='fixture-user'&&context.password==='fixture-secret')context.accept();else context.reject(['password']);});
+    client.on('authentication',context=>{authAttempts++;if(holdAuthentication){authHeld?.();return;}if(context.method==='password'&&context.username==='fixture-user'&&context.password==='fixture-secret')context.accept();else context.reject(['password']);});
     client.on('ready',()=>{handshakes++;client.on('session',accept=>{
       const session=accept();session.on('pty',accept=>{accept?.();});session.on('window-change',accept=>{windows++;accept?.();});
       session.on('exec',(accept,_reject,info)=>{
@@ -99,6 +101,33 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   assert.ok(authAttempts>=3);
   await ui.rpc('stop',{sessionId:target.sessionId});
   assert.equal((await ui.rpc<any[]>('runs',{sessionId:target.sessionId}))[0].status,'stopped');
+  // Stop during a real unfinished SSH handshake, then start the same alias again.
+  holdAuthentication=true;
+  const held=new Promise<void>(resolve=>{authHeld=resolve;});
+  const opening=call('terminal_open',{alias:'test-server'});
+  const cancelled=assert.rejects(opening,/取消/);
+  let heldTimer: NodeJS.Timeout | undefined;
+  try { await Promise.race([held,new Promise<never>((_resolve,reject)=>{heldTimer=setTimeout(()=>reject(new Error('SSH auth was not reached')),3000);})]); }
+  finally {clearTimeout(heldTimer);}
+  await ui.rpc('stop',{sessionId:target.sessionId}); await cancelled;
+  assert.equal((await ui.rpc<any[]>('runs',{sessionId:target.sessionId}))[0].status,'stopped');
+  holdAuthentication=false;
+  const restarted=await call('terminal_open',{alias:'test-server'});
+  assert.notEqual(restarted.runId,target.runId);
+  await ui.rpc('stop',{sessionId:restarted.sessionId});
   const blocked=await ui.rpc<SshConnection>('saveSshConnection',{config:{...config(),alias:'manual-only',allowAgent:false,port:address.port}});
   await assert.rejects(call('terminal_open',{alias:blocked.alias}),/未允许/);
+});
+
+test('stopping SSH startup cancels a pending credential request immediately', async () => {
+  let supply!: (secret: {password: string}) => void;
+  const credentials = new Promise<{password:string}>(resolve => {supply=resolve;});
+  const transport = new SshTerminal({...config(),id:randomUUID()},randomUUID(),'',80,24,{credentials:()=>credentials,verify:async()=>true},()=>{},()=>{});
+  const connecting = transport.connect().then(()=>null,error=>error);
+  transport.kill();
+  let timer: NodeJS.Timeout | undefined;
+  const result = await Promise.race([connecting,new Promise<null>(resolve=>{timer=setTimeout(()=>resolve(null),300);})]);
+  clearTimeout(timer);supply({password:'fixture-secret'});await connecting;
+  assert.ok(result instanceof Error, 'Stop must release startup without waiting for a password or timeout');
+  assert.match(result.message,/取消|关闭|停止/);
 });
