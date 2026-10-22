@@ -1,0 +1,38 @@
+name: Prepare Electron dependencies
+description: Reuse an exact platform/runtime/dependency cache after a real native PTY probe.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      id: node
+      with:
+        node-version: '24'
+        cache: npm
+    - name: Restore compiled dependencies
+      id: dependencies
+      uses: actions/cache/restore@v4
+      with:
+        path: node_modules
+        key: electron-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json', 'package.json', 'scripts/setup.mjs', 'scripts/electron-runtime.mjs', 'scripts/verify-dependencies.mjs', '.github/actions/setup-dependencies/action.yml') }}
+    - name: Validate restored Electron and PTY ABI
+      id: restored
+      if: steps.dependencies.outputs.cache-hit == 'true'
+      continue-on-error: true
+      shell: bash
+      run: node scripts/verify-dependencies.mjs
+    - name: Install Electron and native dependencies
+      if: steps.dependencies.outputs.cache-hit != 'true' || steps.restored.outcome == 'failure'
+      shell: bash
+      run: npm ci --prefer-offline --no-audit --no-fund
+    - name: Verify Electron and native terminal
+      if: steps.dependencies.outputs.cache-hit != 'true' || steps.restored.outcome == 'failure'
+      shell: bash
+      run: node scripts/verify-dependencies.mjs
+    # Save before long tests so cancelled or failed checks can still reuse a
+    # successfully installed and verified dependency tree on the next revision.
+    - name: Cache compiled dependencies
+      if: steps.dependencies.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: node_modules
+        key: ${{ steps.dependencies.outputs.cache-primary-key }}
