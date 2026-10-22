@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 19;
+export const API_VERSION = 20;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -36,7 +36,15 @@ export type AgentDefinitionConfig = z.infer<typeof agentDefinitionSchema>;
 export interface AgentDefinition extends AgentDefinitionConfig { id: string }
 export const isCustomAgent = (agent: string) => agent === 'custom' || agent.startsWith('agent:');
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };
-const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null) };
+export const remoteSchema = z.object({
+  host: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,253}$/, '请选择 SSH 主机别名'),
+  directory: z.string().min(1).max(4096).refine(value => value.startsWith('/') && !/[\r\n\x00]/.test(value), '请填写远端绝对目录'),
+}).strict();
+export type RemoteConfig = z.infer<typeof remoteSchema>;
+const remoteTarget = { sessionId: id, runId: id };
+export const remoteKeySchema = z.enum(['Enter', 'Tab', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Ctrl+C', 'Ctrl+D', 'Ctrl+Z', 'Backspace']);
+export type RemoteKey = z.infer<typeof remoteKeySchema>;
+const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null), remote: remoteSchema.nullable().default(null) };
 export const nativeSessionIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 export const historyQuerySchema = z.object({ cursor: z.string().max(2048).nullable().default(null), limit: z.number().int().min(1).max(50).default(10), query: z.string().trim().max(100).default('') }).strict();
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
@@ -53,6 +61,15 @@ export const gitDiffSchema = z.object({ projectId: id, path: z.string().min(1).m
 export type GitDiffRequest = z.infer<typeof gitDiffSchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
+  z.object({ id, method: z.literal('sshHosts'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('remoteInfo'), params: z.object({ sessionId: id }).strict() }),
+  z.object({ id, method: z.literal('remoteActions'), params: z.object({ sessionId: id, before: z.number().int().positive().optional() }).strict() }),
+  z.object({ id, method: z.literal('remoteControl'), params: z.object({ ...remoteTarget, owner: z.enum(['user', 'agent']) }).strict() }),
+  z.object({ id, method: z.literal('remoteReconnect'), params: z.object(remoteTarget).strict() }),
+  z.object({ id, method: z.literal('remoteExecute'), params: z.object({ ...remoteTarget, command: singleLine.refine(value => !!value.trim() && !/[\x00-\x1f\x7f]/.test(value)), requestId: id }).strict() }),
+  z.object({ id, method: z.literal('remoteKeys'), params: z.object({ ...remoteTarget, text: z.string().max(16384).refine(value => !/[\x00-\x1f\x7f]/.test(value)).optional(), key: remoteKeySchema.optional() }).strict().refine(value => (value.text !== undefined) !== (value.key !== undefined), '请选择文本或按键') }),
+  z.object({ id, method: z.literal('remoteWait'), params: z.object({ ...remoteTarget, actionId: id, timeoutMs: z.number().int().min(0).max(30000).default(25000) }).strict() }),
+  z.object({ id, method: z.literal('remoteScreen'), params: z.object(remoteTarget).strict() }),
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id }).strict() }),
@@ -118,7 +135,7 @@ export interface GitStatus {
 export interface GitResult { status: GitStatus; message: string; output: string }
 export interface GitDiff { path: string; staged: boolean; patch: string; binary: boolean; truncated: boolean; message?: string }
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
-export interface Session { id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
+export interface Session { remote?: RemoteConfig | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
@@ -129,7 +146,11 @@ export interface Attachment { run: Run | null; snapshot: string; seq: number; co
 export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
+export interface RemoteInfo { sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
+export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null }
 export type ServerEvent =
+  | { event: 'remote'; data: RemoteInfo }
+  | { event: 'remoteAction'; data: RemoteAction }
   | { event: 'state'; data: State }
   | TerminalEvent
   | { event: 'connection'; data: { connected: boolean; error?: string } };
@@ -138,6 +159,7 @@ export interface RuntimeInfo { version: number; pid: number; port: number; token
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface DesktopApi {
   appInfo(): Promise<AppInfo>;
+  mcpConfig(): Promise<string>;
   setAppearance(mode: AppearanceMode): Promise<void>;
   openDataDirectory(): Promise<void>;
   rpc<T = unknown>(method: Method, params?: Record<string, unknown>): Promise<T>;

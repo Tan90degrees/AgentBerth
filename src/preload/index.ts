@@ -3,6 +3,7 @@ import type { DesktopApi, ServerEvent } from '../shared/protocol';
 
 const api: DesktopApi = {
   setAppearance: mode => ipcRenderer.invoke('berth:appearance', mode),
+  mcpConfig: () => ipcRenderer.invoke('berth:mcpConfig'),
   appInfo: () => ipcRenderer.invoke('berth:appInfo'),
   openDataDirectory: () => ipcRenderer.invoke('berth:dataDirectory'),
   rpc: (method, params = {}) => ipcRenderer.invoke('berth:rpc', method, params),

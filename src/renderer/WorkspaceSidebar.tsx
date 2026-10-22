@@ -8,7 +8,7 @@ import { clampSidebarWidth, DEFAULT_SIDEBAR_WIDTH, loadSidebarWidth, saveStored 
 
 const active = (session: Session) => ['running', 'stopping'].includes(session.latestRun?.status ?? '');
 export function matchesSession(session: Session, project: Project, query: string, filter: string, names = agentNames): boolean {
-  return matchesQuery(`${project.name} ${project.path} ${session.title} ${names[session.agent] ?? '自定义 Agent'} ${session.command} ${session.nativeSessionId ?? ''}`, query)
+  return matchesQuery(`${project.name} ${project.path} ${session.title} ${names[session.agent] ?? '自定义 Agent'} ${session.command} ${session.remote?.host ?? ''} ${session.remote?.directory ?? ''} ${session.nativeSessionId ?? ''}`, query)
     && (filter === 'all' || (filter === 'active' ? active(session) : filter === 'inactive' ? !active(session) : session.agent === filter));
 }
 
@@ -98,7 +98,7 @@ export const ProjectTree = memo(function ProjectTree({ projects, sessions, proje
         <button className="tree-more icon-button" aria-label={`项目操作 ${project.name}`} title="项目操作（也可右键）" onClick={event => menu('project', project.id, event.currentTarget)}>⋯</button>
       </div>
       {expanded && <ul className="session-list" id={`sessions-${project.id}`}>{children.map(session => <li key={session.id} className="session-row" data-session-id={session.id} onContextMenu={event => { event.preventDefault(); menu('session', session.id, event.currentTarget.querySelector<HTMLElement>('.session-item')!, event.clientX, event.clientY); }}><button className={`session-item ${sessionId === session.id ? 'selected' : ''}`} aria-current={sessionId === session.id ? 'page' : undefined} onKeyDown={event => { if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') { event.preventDefault(); menu('session', session.id, event.currentTarget); } }} onClick={() => onSession(project.id, session.id)} title={`${names[session.agent] ?? '自定义 Agent'} · ${statusNames[session.latestRun?.status ?? ''] ?? '待启动'}${session.nativeSessionId ? ' · 已关联对话' : ''}`}>
-        <span className={`dot ${active(session) ? 'live' : ''}`} /><span className="session-title">{session.title}</span>{active(session)?<ResourceBadge scope="session" id={session.id} runId={session.latestRun?.id} />:<span className="session-agent">{names[session.agent] ?? '自定义 Agent'}</span>}
+        <span className={`dot ${active(session) ? 'live' : ''}`} /><span className="session-title">{session.remote && <span title={`SSH · ${session.remote.host}`}>↗ </span>}{session.title}</span>{active(session)?<ResourceBadge scope="session" id={session.id} runId={session.latestRun?.id} />:<span className="session-agent">{names[session.agent] ?? '自定义 Agent'}</span>}
       </button><button className="tree-more icon-button" aria-label={`会话操作 ${session.title}`} title="会话操作（也可右键）" onClick={event => menu('session', session.id, event.currentTarget)}>⋯</button></li>)}{!children.length && <li className="tree-empty">{searching ? '没有匹配的会话' : <button className="text-button" disabled={disabled} onClick={() => onNewSession(project.id)}>新建第一个会话</button>}</li>}</ul>}
     </li>;
   })}</ul>{!visible.length && <p className="sidebar-empty">{searching ? '没有匹配的项目或会话' : '添加项目目录，开始第一个会话。'}</p>}</nav>;

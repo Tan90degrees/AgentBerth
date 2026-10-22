@@ -5,6 +5,7 @@ import { AgentManager } from './AgentManager';
 import { TerminalFields } from './TerminalFields';
 import { AppearanceControls } from './AppearanceControls';
 import { PreviewSettings } from './PreviewSettings';
+import { McpSettings } from './RemoteTerminal';
 import { AboutCard } from './AboutCard';
 
 export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSaveAgent, onDeleteAgent, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
@@ -31,6 +32,7 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
     </form>
     <AgentManager hotUpdates={apiVersion >= 15} agents={agents} used={usedAgents} defaultAgent={settings.defaultAgent} disabled={disabled} busy={busy} error={error} onError={onError} onSave={onSaveAgent} onDelete={onDeleteAgent} />
     <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再更新后台。` : '安装新版本后，可在这里更新后台以加载新功能。项目、会话和设置会保留。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>更新后台</button></section>
+    {apiVersion >= 20 && <McpSettings disabled={!connected} onError={onError} />}
     <AboutCard connected={connected} apiVersion={apiVersion} running={running} onError={onError} />
   </section>;
 }

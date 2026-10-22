@@ -20,15 +20,17 @@ import { RunLog } from './logs';
 import { readHistory } from './history';
 import { terminateTree } from './processes';
 import { trackMouseEncoding } from '../shared/terminal-modes';
+import { RemoteTerminal, sshHosts, type TerminalProcess } from './remote';
+import { RemoteActivity, remoteKeys } from './remote-activity';
 import { windowsPtyFor } from '../shared/desktop';
 
 interface LiveTerminal {
-  run: Run; pty: pty.IPty; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
+  run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null;
 }
-interface Client { subscriptions: Set<string>; pending: number }
+interface Client { subscriptions: Set<string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
   private store: Store;
@@ -60,10 +62,10 @@ export class DaemonServer {
       this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
     });
     this.ws.on('connection', socket => {
-      const client: Client = { subscriptions: new Set(), pending: 0 };
+      const client: Client = { subscriptions: new Set(), pending: 0, abort: new AbortController() };
       this.clients.set(socket, client);
       socket.on('error', () => socket.close());
-      socket.on('close', () => this.clients.delete(socket));
+      socket.on('close', () => { client.abort.abort(); for (const live of this.live.values()) live.remote?.activity.release(client); this.clients.delete(socket); });
       socket.on('message', (bytes, isBinary) => {
         if (isBinary || client.pending >= 128) { socket.close(1008, 'Invalid or excessive requests'); return; }
         let parsed: unknown;
@@ -126,11 +128,38 @@ export class DaemonServer {
     return live;
   }
 
+  private remote(sessionId: string, runId: string) {
+    const remote = this.terminal(sessionId, runId).remote;
+    if (!remote) throw new Error('此会话不是远程终端');
+    return remote;
+  }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
+      case 'sshHosts': return sshHosts();
+      case 'remoteInfo': return this.live.get(request.params.sessionId)?.remote?.activity.info ?? null;
+      case 'remoteActions': return this.store.remoteActions(request.params.sessionId, request.params.before);
+      case 'remoteControl': return this.remote(request.params.sessionId, request.params.runId).activity.control(request.params.owner);
+      case 'remoteReconnect': this.remote(request.params.sessionId, request.params.runId).transport.reconnect(); return null;
+      case 'remoteExecute': {
+        const remote = this.remote(request.params.sessionId, request.params.runId);
+        return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.write(text));
+      }
+      case 'remoteKeys': {
+        const remote = this.remote(request.params.sessionId, request.params.runId), { key, text } = request.params;
+        remote.activity.keys(client, key ? remoteKeys[key] : text!, key ? `按键 ${key}` : `输入文本（${text!.length} 字符）`, data => remote.transport.write(data)); return null;
+      }
+      case 'remoteWait': return this.remote(request.params.sessionId, request.params.runId).activity.wait(request.params.actionId, request.params.timeoutMs, client.abort.signal);
+      case 'remoteScreen': {
+        const live = this.terminal(request.params.sessionId, request.params.runId);
+        if (!live.remote) throw new Error('此会话不是远程终端');
+        const screen = await this.screen(live);
+        const buffer = live.terminal.buffer.active, lines: string[] = [];
+        for (let row = buffer.baseY; row < buffer.baseY + live.terminal.rows; row++) lines.push(buffer.getLine(row)?.translateToString(true) ?? '');
+        return { seq: screen.seq, cols: screen.cols, rows: screen.rows, text: lines.join('\n'), cursor: { x: buffer.cursorX, y: buffer.cursorY }, info: live.remote.activity.info };
+      }
       case 'state': return this.store.state();
-      case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
+      case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed && !live.remote).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
       case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
       case 'gitDiff': return this.git.diff(this.store.project(request.params.projectId).path, request.params);
       case 'projectFiles': return this.files.list(this.store.project(request.params.projectId).path, request.params.path, request.params.offset, request.params.limit);
@@ -187,18 +216,20 @@ export class DaemonServer {
       case 'createSession': {
         this.requireProjectAvailable(request.params.projectId);
         if (request.params.agent === 'custom' && (!request.params.command.trim() || /[\r\n\x00]/.test(request.params.command))) throw new Error('请填写单行启动命令');
-        const session = this.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal);
+        this.validateRemote(request.params);
+        const session = this.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote);
         this.changed(); return session;
       }
       case 'updateSession': {
-        const { sessionId, title, agent, command, terminal } = request.params;
+        const { sessionId, title, agent, command, terminal, remote } = request.params;
         const previous = this.store.session(sessionId);
         this.requireProjectAvailable(previous.projectId);
         if (this.historyBusy.has(sessionId)) throw new Error('会话正在读取对话记录，请稍后编辑');
-        const launchChanged = agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal);
+        this.validateRemote(request.params);
+        const launchChanged = JSON.stringify(remote) !== JSON.stringify(previous.remote ?? null) || agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal);
         if (launchChanged) this.requireIdle(sessionId);
         if (agent === 'custom' && !command.trim()) throw new Error('请填写单行启动命令');
-        const session = this.store.updateSession(sessionId, title, agent, command, terminal); this.changed(); return session;
+        const session = this.store.updateSession(sessionId, title, agent, command, terminal, remote); this.changed(); return session;
       }
       case 'deleteSession': {
         const id = request.params.sessionId;
@@ -258,6 +289,7 @@ export class DaemonServer {
       case 'detach': client.subscriptions.delete(request.params.sessionId); return null;
       case 'input': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
+        if (this.live.get(request.params.sessionId)?.remote?.activity.info.owner === 'agent') throw new Error('Agent 正在操作，请先点击“接管”');
         const { data, binary } = request.params;
         this.terminal(request.params.sessionId, request.params.runId).pty.write(binary ? Buffer.from(data, 'latin1') : data); return null;
       }
@@ -384,6 +416,9 @@ export class DaemonServer {
     finally { this.starting.delete(sessionId); }
   }
 
+  private validateRemote(config: { remote: unknown; agent: string; command: string }): void {
+    if (config.remote && (config.agent !== 'shell' || config.command.trim())) throw new Error('远程会话请选择默认终端；Agent 通过 MCP 操作此终端');
+  }
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
     const session = this.store.session(sessionId);
     const projectPath = this.store.project(session.projectId).path;
@@ -396,7 +431,7 @@ export class DaemonServer {
     let selected: { file: string; args: string[] };
     try {
       cwd = await directory(this.store.project(session.projectId).path);
-      selected = await resolveTerminal(config);
+      selected = await resolveTerminal(session.remote ? { profile: 'custom', executable: 'ssh', args: [] } : config);
     } catch (error) {
       if (!this.closing) {
         const failed = this.store.createRun(sessionId, command, cols, rows, config.profile === 'custom' ? config.executable : '');
@@ -412,14 +447,22 @@ export class DaemonServer {
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);
     const mouseEncoding = trackMouseEncoding(terminal);
-    let child: pty.IPty;
-    try { child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) }); }
+    let child: TerminalProcess;
+    let remote: LiveTerminal['remote'];
+    try {
+      if (session.remote) {
+        const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }));
+        const transport = new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd) => activity.marker(kind,status,cwd), selected.file);
+        remote = { transport, activity }; child = transport;
+      } else child = pty.spawn(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) });
+    }
     catch (error) {
       terminal.dispose();
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
     }
     this.store.setPid(run.id, child.pid);
-    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
+    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
+    if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
     this.pruneLogs();
     child.onData(text => {
@@ -431,7 +474,14 @@ export class DaemonServer {
       else live.outputTimer ??= setTimeout(() => this.flushOutput(live), 16);
     });
     child.onExit(({ exitCode }) => { void this.finish(sessionId, live, exitCode); });
-    if (command) child.write(`${command}\r`);
+    if (remote) {
+      try { await remote.transport.connect(); this.store.setPid(run.id, child.pid); live.run = this.store.run(run.id); }
+      catch (error) {
+        remote.transport.kill(); remote.activity.finish();
+        this.live.delete(sessionId); terminal.dispose();
+        this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
+      }
+    } else if (command) child.write(`${command}\r`);
     this.changed();
     return live.run;
   }
@@ -477,7 +527,7 @@ export class DaemonServer {
   }
   private async finish(sessionId: string, live: LiveTerminal, exitCode: number): Promise<void> {
     if (live.closed) return;
-    live.closed = true;
+    live.closed = true; live.remote?.activity.finish();
     // taskkill ends the shell tree, but node-pty's ConPTY output worker and native
     // handles still require disposal. Without it a stopped terminal keeps the
     // daemon (and the Windows test process) alive indefinitely.
@@ -495,7 +545,7 @@ export class DaemonServer {
     const live = this.live.get(sessionId);
     if (!live || live.closed || live.stopping) return;
     live.stopping = true; this.store.stopping(live.run.id); this.changed();
-    try { await terminateTree(live.pty, () => this.live.get(sessionId) === live && !live.closed); }
+    try { if (live.remote) await live.remote.transport.stop(); else await terminateTree(live.pty as pty.IPty, () => this.live.get(sessionId) === live && !live.closed); }
     catch (error) {
       this.logError(error);
       if (!live.closed) { live.stopping = false; this.store.running(live.run.id); this.changed(); throw new Error('停止终端失败，请重试'); }

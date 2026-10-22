@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
+import type { RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, MAX_ACTIVE_TERMINALS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
@@ -45,6 +45,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
     `);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS remote_actions (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+      sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
+    ); CREATE INDEX IF NOT EXISTS remote_actions_by_session ON remote_actions(sessionId, sequence);`);
+    if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'remote')) this.db.exec('ALTER TABLE sessions ADD COLUMN remote TEXT');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS remote_requests (
+      id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
+    )`);
     // Additive migration preserves 0.1 projects, native history and saved screens.
     if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'terminal')) this.db.exec('ALTER TABLE sessions ADD COLUMN terminal TEXT');
     if (!this.db.prepare('PRAGMA table_info(runs)').all().some(row => row.name === 'shell')) this.db.exec("ALTER TABLE runs ADD COLUMN shell TEXT NOT NULL DEFAULT ''");
@@ -57,6 +65,7 @@ export class Store {
         SELECT projectId, agent, nativeSessionId, title, updatedAt, history FROM sessions WHERE nativeSessionId IS NOT NULL ORDER BY updatedAt DESC`);
     }
     this.db.exec('PRAGMA user_version = 5');
+    for (const table of ['remote_actions', 'remote_requests']) for (const row of this.db.prepare(`SELECT id,value FROM ${table}`).all()) { const a = JSON.parse(String(row.value)); if (a.status === 'running') this.db.prepare(`UPDATE ${table} SET value=? WHERE id=?`).run(JSON.stringify({ ...a, status: 'unknown', endedAt: new Date().toISOString() }), row.id); }
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
   }
@@ -67,8 +76,8 @@ export class Store {
       FROM sessions s JOIN runs r ON r.rowid = (SELECT rowid FROM runs WHERE sessionId = s.id ORDER BY rowid DESC LIMIT 1)
       WHERE s.archived = 0`).all() as unknown as Run[];
     const bySession = new Map(latest.map(run => [run.sessionId, run]));
-    const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
-      .map(row => ({ ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
+    const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
+      .map(row => ({ ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
     return { projects, sessions, agents: this.agents(), maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings: this.settings(), apiVersion: API_VERSION };
   }
 
@@ -119,31 +128,31 @@ export class Store {
   }
 
   session(id: string): Session {
-    const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
+    const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
     if (!row) throw new Error('会话不存在');
     const latestRun = this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error, recordOutput FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 1').get(id) ?? null;
-    return { ...row, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
+    return { ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
   }
 
-  createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null): Session {
+  createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null, remote: RemoteConfig | null = null): Session {
     this.project(projectId);
     command = this.sessionCommand(agent, command);
     if (Number(this.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE archived = 0').get()!.count) >= 2000) throw new Error('最多管理 2000 个未归档会话');
     const id = randomUUID();
     const now = new Date().toISOString();
-    this.db.prepare('INSERT INTO sessions (id, projectId, title, agent, command, terminal, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, agent, command, terminal ? JSON.stringify(terminal) : null, now, now);
+    this.db.prepare('INSERT INTO sessions (id, projectId, title, agent, command, terminal, remote, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, agent, command, terminal ? JSON.stringify(terminal) : null, remote ? JSON.stringify(remote) : null, now, now);
     return this.session(id);
   }
 
   rename(id: string, title: string): void { this.session(id); this.db.prepare('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?').run(title, new Date().toISOString(), id); }
   archive(id: string): void { this.session(id); this.db.prepare('UPDATE sessions SET archived = 1 WHERE id = ?').run(id); }
 
-  updateSession(id: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null): Session {
+  updateSession(id: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null, remote: RemoteConfig | null = null): Session {
     const previous = this.session(id);
     command = this.sessionCommand(agent, command);
     this.transaction(() => {
       if (previous.agent !== agent) this.writeHistory(id, emptyHistory());
-      this.db.prepare('UPDATE sessions SET title = ?, agent = ?, command = ?, terminal = ?, updatedAt = ? WHERE id = ?').run(title, agent, command, terminal ? JSON.stringify(terminal) : null, new Date().toISOString(), id);
+      this.db.prepare('UPDATE sessions SET title = ?, agent = ?, command = ?, terminal = ?, remote = ?, updatedAt = ? WHERE id = ?').run(title, agent, command, terminal ? JSON.stringify(terminal) : null, remote ? JSON.stringify(remote) : null, new Date().toISOString(), id);
     });
     return this.session(id);
   }
@@ -158,6 +167,20 @@ export class Store {
     return runIds;
   }
 
+  saveRemoteAction(action: Omit<RemoteAction, 'sequence'>): RemoteAction {
+    this.db.prepare('INSERT INTO remote_actions (id,sessionId,value) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(action.id, action.sessionId, JSON.stringify(action));
+    if (action.kind === 'command') this.db.prepare('INSERT INTO remote_requests VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(action.id,action.sessionId,JSON.stringify(action));
+    this.db.prepare('DELETE FROM remote_actions WHERE sessionId=? AND sequence NOT IN (SELECT sequence FROM remote_actions WHERE sessionId=? ORDER BY sequence DESC LIMIT 1000)').run(action.sessionId, action.sessionId);
+    return this.remoteAction(action.id)!;
+  }
+  remoteAction(id: string): RemoteAction | null {
+    const row = this.db.prepare('SELECT sequence,value FROM remote_actions WHERE id=?').get(id) ?? this.db.prepare('SELECT 0 AS sequence,value FROM remote_requests WHERE id=?').get(id);
+    return row ? { ...JSON.parse(String(row.value)), sequence: Number(row.sequence) } : null;
+  }
+  remoteActions(sessionId: string, before = Number.MAX_SAFE_INTEGER): RemoteAction[] {
+    this.session(sessionId);
+    return this.db.prepare('SELECT sequence,value FROM remote_actions WHERE sessionId=? AND sequence<? ORDER BY sequence DESC LIMIT 50').all(sessionId, before).map(row => ({ ...JSON.parse(String(row.value)), sequence: Number(row.sequence) }));
+  }
   settings(): Settings {
     const row = this.db.prepare('SELECT value FROM settings WHERE id = 1').get();
     if (row) { const parsed = settingsSchema.safeParse(JSON.parse(String(row.value))); if (parsed.success) return parsed.data; }
@@ -210,6 +233,7 @@ export class Store {
     this.session(sessionId);
     const id = randomUUID();
     const now = new Date().toISOString();
+    this.db.prepare('DELETE FROM remote_requests WHERE sessionId=?').run(sessionId);
     this.db.prepare("INSERT INTO runs (id, sessionId, status, startedAt, command, cols, rows, shell) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)").run(id, sessionId, now, command, cols, rows, shell);
     this.db.prepare('UPDATE runs SET recordOutput = ? WHERE id = ?').run(this.session(sessionId).agent === 'shell' ? 1 : 0, id);
     this.db.prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(now, sessionId);

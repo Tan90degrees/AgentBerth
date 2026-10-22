@@ -1,0 +1,12 @@
+.remote-session { flex: 0 0 auto; min-width: 0; border-bottom: 1px solid var(--border); background: var(--bg); }
+.remote-toolbar { min-height: 36px; display: flex; align-items: center; gap: 10px; padding: 4px 12px; font-size: 11px; color: var(--text-muted); }
+.remote-toolbar button { font-size: 11px; padding: 4px 8px; white-space: nowrap; }
+.remote-location { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.remote-error { margin: 2px 12px 6px; font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.remote-steps { max-height: 180px; overflow-y: auto; scrollbar-gutter: stable; padding: 4px 12px 8px; font-size: 11px; }
+.remote-step { display: grid; grid-template-columns: 70px minmax(0,1fr) 70px; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.remote-step time, .remote-step > span { color: var(--text-muted); }
+.remote-step code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.remote-step .remote-unknown { color: var(--warning, #c99b4b); }
+.remote-fields { margin-bottom: 12px; }
+.remote-watch-note { color: var(--text-muted); font-size: 11px; }

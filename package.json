@@ -109,6 +109,10 @@
           "app.png",
           "app.ico"
         ]
+      },
+      {
+        "from": "dist/mcp.cjs",
+        "to": "mcp/mcp.cjs"
       }
     ]
   }
