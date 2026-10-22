@@ -46,11 +46,13 @@ export function shellBootstrap(sessionId: string, directory: string): string {
 }
 export function managedCommand(sessionId: string, requestId: string, command: string): string {
   const prefix = `\\033]777;AgentBerth;${sessionId};`;
-  const characters = Array.from(command), chunks: string[] = [];
-  // SSH PTYs can have a 4 KiB canonical input limit. Shell continuations keep
-  // physical input lines short while eval still receives one exact argument.
-  for (let offset = 0; offset < characters.length; offset += 256) chunks.push(shellQuote(characters.slice(offset, offset + 256).join('')));
-  return `printf '${prefix}start;${requestId}\\007'; eval ${chunks.join('\\\r')}; __ab_status=$?; printf '${prefix}ready;${requestId};%s;%s\\007' "$__ab_status" "$PWD"; (exit "$__ab_status")\r`;
+  const bytes = Buffer.from(command), chunks: string[] = [];
+  // Kernel echo and Shell PS2 can interleave even inside a UTF-8 character.
+  // Send only ASCII, decoded by the existing printf builtin. Continuations keep
+  // each physical line below the PTY's canonical limit, including escaped bytes.
+  for (let offset = 0; offset < bytes.length; offset += 256) chunks.push(shellQuote(Array.from(bytes.subarray(offset, offset + 256), byte => `\\0${byte.toString(8).padStart(3,'0')}`).join('')));
+  // The sentinel preserves trailing newlines through command substitution.
+  return `printf '${prefix}start;${requestId}\\007'; __ab_command=$(printf '%b_' ${chunks.join('\\\r') || "''"}); eval "${'${__ab_command%_}'}"; __ab_status=$?; printf '${prefix}ready;${requestId};%s;%s\\007' "$__ab_status" "$PWD"; (exit "$__ab_status")\r`;
 }
 export class ShellMarkers {
   private buffer = '';

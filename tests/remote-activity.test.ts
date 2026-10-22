@@ -30,7 +30,7 @@ test('remote control has one Agent writer; takeover revokes it immediately witho
   const x=setup();t.after(x.close);const a={},b={},id=randomUUID();let written='';
   assert.throws(()=>x.activity.execute(a,id,'sleep 1',text=>written+=text),/用户控制/);
   x.activity.control('agent');x.activity.execute(a,id,'sleep 1',text=>written+=text);
-  assert.ok(written.includes("eval 'sleep 1'"));assert.ok(written.endsWith('\r'));
+  assert.ok(written.includes(`start;${id}`));assert.ok(written.endsWith('\r'));
   assert.throws(()=>x.activity.keys(b,'x','text',()=>{}),/另一个 Agent/);
   x.activity.marker('start',0,null);x.activity.control('user');
   assert.throws(()=>x.activity.keys(a,'\x03','Ctrl+C',()=>{}),/用户控制/);
@@ -118,6 +118,19 @@ test('managed command echo becomes the original command across fragmented UTF-8,
   assert.deepEqual(seen,[['start',0,null,request],['ready',7,'/tmp/中',request]]);
 });
 
+test('continuation prompts interleaved inside echoed input cannot corrupt Unicode commands',()=>{
+  const id=randomUUID(),request=randomUUID(),command=`printf '%s\\n' ${shellQuote("中😀'\\\n".repeat(150))}`,wire=managedCommand(id,request,command);
+  assert.match(wire,/^[\x00-\x7f]*$/);
+  let output='';const display=new ManagedOutput(id,text=>output+=text,()=>{});
+  display.begin(request,command,wire);
+  // dash writes PS2 while the kernel is still echoing subsequent input. It may
+  // land at any byte, not just at the physical continuation-line boundary.
+  const echo=wire.replaceAll('\r','\r\n').replace(/[^]{137}/g,chunk=>chunk+'> ');
+  display.feed(Buffer.from(echo+`\x1b]777;AgentBerth;${id};start;${request}\x07REAL 中😀\r\n`));
+  display.end();
+  assert.equal(output,command+'\r\nREAL 中😀\r\n');
+});
+
 test('echo filtering preserves background output, no-echo terminals and wrapper-like real program output',()=>{
   const id=randomUUID(),request=randomUUID(),command='printf REAL',wire=managedCommand(id,request,command);
   let output='';const display=new ManagedOutput(id,text=>output+=text,()=>{});
@@ -148,7 +161,7 @@ test('cancelled and oversized submissions flush safely; malformed or partial mar
 for(const shell of ['/bin/sh','/bin/bash'])test(`real ${shell} PTY displays original commands and output without bookkeeping`,{skip:process.platform==='win32',timeout:15000},async t=>{
   const id=randomUUID(),request=randomUUID(),payload="😀'中 ".repeat(150),command=`AB_VALUE=${shellQuote(payload)}; cd /tmp; printf '%s\\n' "$AB_VALUE"; false`;
   const child=pty.spawn(shell,shell.endsWith('bash')?['--noprofile','--norc','-i']:['-i'],{cols:50,rows:24,env:{...process.env,PATH:'/nonexistent-agentberth',SHELL:shell,PS1:'FIXTURE> ',PS2:'> ',PROMPT_COMMAND:'',ENV:'/dev/null',HISTFILE:'/dev/null'}});
-  t.after(()=>{try{child.kill();}catch{}});
+  t.after(()=>{try{child.kill('SIGKILL');}catch{}});
   let output='',sent=false;
   await new Promise<void>((resolve,reject)=>{
     const timer=setTimeout(()=>reject(new Error('No completion from clean-echo PTY')),12000);
@@ -179,7 +192,7 @@ test('long Unicode commands survive canonical PTY line limits without extra prog
   const input=managedCommand(id,requestId,command);
   for(const line of input.split('\r'))assert.ok(Buffer.byteLength(line)<4096);
   const child=pty.spawn('/bin/sh',['-i'],{cols:80,rows:24,env:{...process.env,PATH:'/nonexistent-agentberth',SHELL:'/bin/sh'}});
-  t.after(()=>{try{child.kill();}catch{}});
+  t.after(()=>{try{child.kill('SIGKILL');}catch{}});
   let output='',sent=false;
   await new Promise<void>((resolve,reject)=>{
     const timer=setTimeout(()=>reject(new Error('No completion marker from long PTY command')),8000);
