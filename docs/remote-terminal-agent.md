@@ -16,11 +16,16 @@
 
 ## 命令与交互
 
-1. `terminal_screen` 读取当前画面、光标和状态。后续工具可用 alias 或 sessionId/runId，二选一；多个运行会话必须用 ID。
-2. `terminal_execute` 在 commandTracking=posix 且 phase=idle 时执行单行命令。phase=unknown 时先读屏，确认空闲 Shell 提示符后才传 atPrompt=true。新命令生成 UUID requestId，重试复用原 ID。目录、export 和虚拟环境保持在同一个 Shell。
-3. `terminal_wait` 用 execute 返回的 actionId 等待，单次 timeoutMs<=30000。running 后继续等待相同 ID；completed 的 exitCode 才是已确认结果。unknown 不代表失败，不能自动重放有副作用的命令。
-4. `terminal_keys` 在读屏后发送 text 或一个 named key，二选一。用于 TUI 和 commandTracking=none 的登录 Shell。Enter 提交输入，Ctrl+C 明确中断前台任务；按键不自动重试，不为探测状态擅自发送 Enter。
-5. `terminal_actions` 按 sequence 翻页，before 取上一页最小 sequence。包含命令、连接、控制和传输记录，不代替当前读屏。
+1. `terminal_execute` 在 commandTracking=posix 且 phase=idle 时直接执行单行命令；已知 idle 不必先读屏。返回同一对象中的 `id`、`status`、`exitCode`、`info` 和 `output`，普通命令一次调用就能获得结果。phase=unknown 时才先读屏确认空闲提示符，并传 atPrompt=true。每条新命令生成 UUID requestId，重试原样复用，不重放 unknown 操作。目录、export 和虚拟环境保持在同一个 Shell。
+2. `status=completed` 且 `output.hasMore=false` 时已经获得完整的缓存结果，不再调用 wait/screen 验证。`terminal_execute` 默认最多等待 1000 ms（waitMs 可选 0..25000），完成即返回；waitMs=0 立即提交。`requestMs` 是本次后台请求耗时，`elapsedMs` 是命令从提交开始的持续时间，均不包含模型推理和客户端调度。
+3. 长任务和流式日志用 `terminal_read_output({"alias":"dev-server","actionId":"<execute 返回的 id>","cursor":<output.nextCursor>,"timeoutMs":25000})`。有新增输出、完成、结果未知或缓存缺失立即返回；没有新输出时按事件等待，最长 30000 ms，不能写 sleep 或频繁轮询读屏。每次原样传回 output.nextCursor，同一游标只用于同一个 actionId/runId。`output.hasMore=true` 时先继续取剩余分页。只有 status=completed 才有已确认的退出码，安静、空输出和超时不代表完成。
+4. 只关心最终完成时可用 `terminal_wait`，同样返回输出和 info，cursor/maxChars 参数与增量读取一致。它等待完成而非等待新日志；持续输出的任务优先用 read_output。
+5. TUI 和 commandTracking=none 的 Shell 使用 `terminal_screen` 与 `terminal_keys`。读屏后才发 text 或 named key；Enter 提交，Ctrl+C 明确中断。不为探测提示符擅自发送 Enter，也不自动重试按键。
+6. `terminal_actions` 按 sequence 翻页，before 取上一页最小 sequence。包含命令、连接、控制和传输记录，不代替当前读屏。所有后续工具可传 alias 或 sessionId/runId；多个运行会话必须用 ID。
+
+输出是命令开始标记和完成标记之间的共享终端文本，不包含注入的命令回显和结束提示符；stdout/stderr 已由 PTY 合并，可能包含 ANSI、回车或后台程序交错输出，不可作为 TUI 画面替代。maxChars 默认 16384、范围 256..32768，分页不切断完整 Unicode 字符。
+
+缓存只在内存中保留每会话最近 8 条命令、每条最近 128K 个 UTF-16 编码单元；不是永久日志。`output.truncated=true` 表示游标之前的部分已丢失，`available=false` 表示命令缓存已淘汰/不可用，不能把空文本当作命令没有输出，也不能为找回输出重新执行命令。后续 cursor 从返回的 nextCursor 继续。更新后台到 **API 26** 并重新连接 MCP 后使用，共 18 个工具。
 
 命令包装只用于内部识别开始、退出码和工作目录。已确认的包装回显会替换成原始命令，实际程序输出保留；遇到无法确认的 Shell 重绘或交错输出时保留原始数据，避免误删日志。
 

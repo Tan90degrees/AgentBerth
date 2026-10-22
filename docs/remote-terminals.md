@@ -19,9 +19,9 @@ SSH 会话独立管理。第一版文件树、预览、Git 和资源统计用于
 
 ## 命令、长任务和交互程序
 
-POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；内部包装的已确认回显替换成原始命令，不显示 UUID 和转义串；实际程序输出保持原样。遇到无法确认的重绘或交错输出会保留原始数据，避免误删日志。目录和 export 保持有效。每个新命令生成 UUID requestId，重试复用原 ID，避免重复执行。返回 actionId 用于 `terminal_wait`，completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
+POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；内部包装的已确认回显替换成原始命令，不显示 UUID 和转义串；实际程序输出保持原样。遇到无法确认的重绘或交错输出会保留原始数据，避免误删日志。目录和 export 保持有效。每个新命令生成 UUID requestId，重试复用原 ID，避免重复执行。一次返回状态、退出码、Shell 信息及有界 output，不必再读屏取普通命令结果。长任务用 `terminal_read_output` 按 actionId=id 与 cursor=output.nextCursor 获取新增内容，有输出或完成立即唤醒；`terminal_wait` 仅用于等待最终完成。completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
 
-后台按事件等待，单次最长 30 秒。工具返回 running 后，继续等待同一 actionId，不重新启动命令。部分 MCP 客户端不能由后台事件自动唤醒模型，仍需后续有界等待；任务不会因一次等待超时而中断。
+后台按事件等待，单次最长 30 秒。工具返回 running 后，按相同 actionId 和返回游标继续获取新增输出，不重新启动命令。部分 MCP 客户端不能由后台事件自动唤醒模型，仍需后续有界等待；任务不会因一次等待超时而中断。
 
 对于 vim、top、其他非 POSIX 登录 Shell，使用 `terminal_screen` 与 `terminal_keys`。输入回到提示符后，phase 可能为 unknown；先读屏确认空闲提示符，POSIX Shell 下一次 execute 显式传 `atPrompt: true`。不要为了探测提示符擅自发送 Enter。Ctrl+C 明确中断前台任务，未能收到完成标记的命令保留 unknown。执行 exit、替换 Shell 或程序接管终端也可能无法获得退出码，不得自动重放。
 
@@ -45,7 +45,7 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 25。
+用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 26。
 
 ## 文件传输
 
@@ -54,3 +54,9 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 传输是后台任务，terminal_transfer_status 可读取进度或事件式等待，terminal_transfer_cancel 可取消。进度在 SSH 面板显示，重试同一 requestId 不重复传输；MCP 超时和退出不取消已提交传输。默认不覆盖；显式 resume 会先核对已有文件前缀，失败或取消可能留下部分文件。服务器间通过本机有界流转发，不落地中转文件，不转发 SSH Agent。
 
 接口能力参考 [ssh-skill 的文件传输契约](https://github.com/badseal/ssh-skill/blob/main/references/commands.md)，实现使用应用自带的 SSH/SFTP 客户端，无需安装该 Skill 的 Python 依赖。
+
+## 输出与响应速度
+
+普通命令由一次 MCP 调用完成提交、等待及输出读取，不需要每条命令再读屏。完成即返回，默认的 1 秒是等待上限，不是固定延迟。长任务可按游标等待新增日志；TUI 保留按需读屏，读屏不再额外序列化历史。返回 requestMs/elapsedMs 可区分后台请求与命令持续时间；模型推理及客户端调度需在客户端另外测量。
+
+输出缓存有界且仅在内存中保留：每会话最近 8 条命令，每条最多 128K UTF-16 编码单元。truncated/available=false 明确提示丢失；PTY 输出合并 stdout/stderr，可能含 ANSI。不承诺永久保存完整日志或由 MCP 通知自动唤醒模型。

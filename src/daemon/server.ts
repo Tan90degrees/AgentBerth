@@ -298,6 +298,17 @@ export class DaemonServer {
         const remote = this.remote(request.params.sessionId, request.params.runId);
         return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.writeManaged(request.params.requestId,request.params.command,text), request.params.atPrompt);
       }
+      case 'remoteCommand': {
+        const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
+        remote.activity.execute(client,p.requestId,p.command,text=>remote.transport.writeManaged(p.requestId,p.command,text),p.atPrompt);
+        await remote.activity.wait(p.requestId,p.waitMs,client.abort.signal);
+        return {...remote.activity.result(p.requestId,0,p.maxChars),requestMs:performance.now()-started};
+      }
+      case 'remoteReadOutput': {
+        const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
+        const value=await remote.activity.readOutput(p.actionId,p.cursor,p.maxChars,p.timeoutMs,p.waitFor,client.abort.signal);
+        return {...value,requestMs:performance.now()-started};
+      }
       case 'remoteKeys': {
         const remote = this.remote(request.params.sessionId, request.params.runId), { key, text } = request.params;
         remote.activity.keys(client, key ? remoteKeys[key] : text!, key ? `按键 ${key}` : `输入文本（${text!.length} 字符）`, data => remote.transport.write(data)); return null;
@@ -306,7 +317,7 @@ export class DaemonServer {
       case 'remoteScreen': {
         const live = this.terminal(request.params.sessionId, request.params.runId);
         if (!live.remote) throw new Error('此会话不是远程终端');
-        const screen = await this.screen(live);
+        const screen = await this.screen(live,false);
         const buffer = live.terminal.buffer.active, lines: string[] = [];
         for (let row = buffer.baseY; row < buffer.baseY + live.terminal.rows; row++) lines.push(buffer.getLine(row)?.translateToString(true) ?? '');
         return { seq: screen.seq, cols: screen.cols, rows: screen.rows, text: lines.join('\n'), cursor: { x: buffer.cursorX, y: buffer.cursorY }, info: live.remote.activity.info };
@@ -636,6 +647,7 @@ export class DaemonServer {
     this.pruneLogs();
     child.onData(text => {
       if (live.closed) return;
+      live.remote?.activity.capture(text);
       const bytes = Buffer.byteLength(text);
       live.queuedBytes += bytes;
       if (live.queuedBytes > 1024 * 1024) child.pause();

@@ -13,6 +13,7 @@ import { requestSchema, type Method, type RemoteAction, type RemoteInfo } from '
 import { Terminal } from '@xterm/headless';
 import { isTerminalReply } from '../src/shared/terminal-replies';
 import { TerminalMcp, McpError } from '../src/mcp/server';
+import { CommandOutput } from '../src/daemon/remote-output';
 
 function setup() {
   const folder = mkdtempSync(path.join(tmpdir(), 'berth-remote-'));
@@ -230,15 +231,68 @@ test('host import excludes patterns and honors bounded includes; SSH arguments n
   assert.ok(requestSchema.safeParse({id:randomUUID(),method:'createSession',params:{projectId:randomUUID(),title:'test',agent:'shell',remote:{host:'dev'}}}).success);
 });
 
-test('MCP advertises only scoped terminal tools and delegates bounded waits without replaying commands',async()=>{
+test('MCP executes with output in one daemon request and exposes incremental waits without replay',async()=>{
   const calls:{method:string;params:unknown}[]=[];const id=randomUUID();
   const server=new TerminalMcp({rpc:async<T>(method: Method,params?: Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteExecute'?{id,status:'running'}:{status:'running'}) as T;}});
   const initialized:any=await server.request('initialize',{protocolVersion:'2025-11-25'});assert.equal(initialized.protocolVersion,'2025-11-25');
-  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,17);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
+  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,18);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:id,command:'sleep 100',waitMs:10}});
-  assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteExecute','remoteWait']);
+  assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteCommand']);
+  assert.equal((calls[0].params as any).waitMs,10);
+  await server.request('tools/call',{name:'terminal_read_output',arguments:{sessionId:randomUUID(),runId:randomUUID(),actionId:id,cursor:123}});
+  assert.equal(calls[1].method,'remoteReadOutput');assert.equal((calls[1].params as any).cursor,123);assert.equal((calls[1].params as any).waitFor,'output');
+  await server.request('tools/call',{name:'terminal_wait',arguments:{sessionId:randomUUID(),runId:randomUUID(),actionId:id,cursor:456}});
+  assert.equal((calls[2].params as any).waitFor,'completion');assert.equal((calls[2].params as any).cursor,456);
   await assert.rejects(server.request('tools/call',{name:'shutdown'}),McpError);
   await assert.rejects(server.request('tools/call',{name:'terminal_screen',arguments:{anything:'bad'}}),McpError);
+});
+
+test('command output streams exclude wrappers/prompts, wake on data, and preserve completion-only waits',async t=>{
+  const x=setup();t.after(x.close);const id=randomUUID(),client={};x.activity.control('agent');
+  x.activity.execute(client,id,'printf streamed',()=>{});x.activity.capture('echoed wrapper');
+  x.activity.marker('start',0,null,id);
+  const first=x.activity.readOutput(id,0,256,30000,'output');assert.equal(x.activity.events.listenerCount('output'),1);
+  x.activity.capture('FIRST 中😀\r\n');
+  const page=await first;assert.equal(page.status,'running');assert.equal(page.output.text,'FIRST 中😀\r\n');assert.equal(x.activity.events.listenerCount('output'),0);
+  let completed=false;
+  const final=x.activity.readOutput(id,page.output.nextCursor,256,30000,'completion').then(value=>{completed=true;return value;});
+  x.activity.capture('SECOND\r\n');await Promise.resolve();assert.equal(completed,false);
+  x.activity.marker('ready',7,'/work/changed',id);x.activity.capture('prompt> ');
+  const done=await final;assert.equal(done.status,'completed');assert.equal(done.exitCode,7);assert.equal(done.info.cwd,'/work/changed');assert.equal(done.output.text,'SECOND\r\n');
+  assert.equal(x.activity.result(id).output.text,'FIRST 中😀\r\nSECOND\r\n');
+  assert.equal(x.activity.events.listenerCount('change'),0);assert.equal(x.activity.events.listenerCount('output'),0);
+});
+
+test('an older backend gets upgrade guidance without a fallback execution or replay',async()=>{
+  const calls:string[]=[];
+  const server=new TerminalMcp({rpc:async(method)=>{calls.push(method);throw new Error('请求参数无效');}});
+  const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:randomUUID(),command:'once'}});
+  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 26/);assert.deepEqual(calls,['remoteCommand']);
+});
+
+test('incremental waits cancel without stopping commands; quiet tasks and interruptions never imply success',async t=>{
+  const x=setup();t.after(x.close);const id=randomUUID(),client={};x.activity.control('agent');x.activity.execute(client,id,'quiet task',()=>{});x.activity.marker('start',0,null,id);
+  const abort=new AbortController(),waiting=x.activity.readOutput(id,0,256,30000,'output',abort.signal);abort.abort();
+  assert.equal((await waiting).status,'running');assert.equal(x.activity.events.listenerCount('output'),0);
+  assert.equal((await x.activity.readOutput(id,0,256,1,'output')).status,'running');
+  x.activity.control('user');x.activity.capture('PARTIAL');
+  assert.equal((await x.activity.readOutput(id,0,256,0,'output')).output.text,'PARTIAL','Read-only output remains available after takeover');
+  const ended=x.activity.readOutput(id,7,256,30000,'output');x.activity.input('\x03');
+  assert.equal((await ended).status,'unknown');assert.equal(x.activity.result(id).exitCode,null);
+  assert.throws(()=>x.activity.result(randomUUID()),/不属于/);
+});
+
+test('bounded output pages Unicode without overlap and explicitly reports buffer eviction',t=>{
+  const buffer=new CommandOutput(10);buffer.append('OLD');buffer.append('中😀1234567');
+  const first=buffer.read(0,2);assert.equal(first.truncated,true);assert.equal(first.text,'中');
+  const second=buffer.read(first.nextCursor,2);assert.equal(second.text,'😀');assert.equal(second.truncated,false);
+  const last=buffer.read(second.nextCursor,10);assert.equal(last.text,'1234567');assert.equal(last.hasMore,false);
+  assert.throws(()=>buffer.read(last.nextCursor+1,10),/游标/);
+  const x=setup();t.after(x.close);const client={},ids:string[]=[];let writes=0;x.activity.control('agent');
+  for(let i=0;i<9;i++){const id=randomUUID();ids.push(id);x.activity.execute(client,id,'once',()=>writes++);x.activity.marker('start',0,null,id);x.activity.capture(String(i));x.activity.marker('ready',0,'/work',id);}
+  assert.equal(x.activity.result(ids[0]).output.available,false);assert.equal(x.activity.result(ids[0]).output.truncated,true);
+  x.activity.execute(client,ids[0],'once',()=>writes++);assert.equal(writes,9,'Evicted output must never cause replay');
+  assert.equal(x.activity.result(ids.at(-1)!).output.text,'8');
 });
 
 

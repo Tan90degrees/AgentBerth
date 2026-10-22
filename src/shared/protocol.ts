@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 25;
+export const API_VERSION = 26;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -57,6 +57,8 @@ export const remoteSchema = z.object({
 }).strict();
 export type RemoteConfig = z.infer<typeof remoteSchema>;
 const remoteTarget = { sessionId: id, runId: id };
+const remoteCommandInput = { ...remoteTarget, command: singleLine.refine(value => !!value.trim() && !/[\x00-\x1f\x7f]/.test(value)), requestId: id, atPrompt: z.boolean().default(false) };
+const remoteOutputInput = { cursor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0), maxChars: z.number().int().min(256).max(32768).default(16384) };
 const transferPath=z.string().min(1).max(4096).refine(value=>!/[\x00\r\n]/.test(value));
 export const transferEndpointSchema=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('local'),path:transferPath}).strict(),
@@ -105,7 +107,9 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('remoteActions'), params: z.object({ sessionId: id, before: z.number().int().positive().optional() }).strict() }),
   z.object({ id, method: z.literal('remoteControl'), params: z.object({ ...remoteTarget, owner: z.enum(['user', 'agent']) }).strict() }),
   z.object({ id, method: z.literal('remoteReconnect'), params: z.object(remoteTarget).strict() }),
-  z.object({ id, method: z.literal('remoteExecute'), params: z.object({ ...remoteTarget, command: singleLine.refine(value => !!value.trim() && !/[\x00-\x1f\x7f]/.test(value)), requestId: id, atPrompt: z.boolean().default(false) }).strict() }),
+  z.object({ id, method: z.literal('remoteExecute'), params: z.object(remoteCommandInput).strict() }),
+  z.object({ id, method: z.literal('remoteCommand'), params: z.object({ ...remoteCommandInput, maxChars: remoteOutputInput.maxChars, waitMs: z.number().int().min(0).max(25000).default(1000) }).strict() }),
+  z.object({ id, method: z.literal('remoteReadOutput'), params: z.object({ ...remoteTarget, ...remoteOutputInput, actionId: id, timeoutMs: z.number().int().min(0).max(30000).default(25000), waitFor: z.enum(['output','completion']).default('output') }).strict() }),
   z.object({ id, method: z.literal('remoteKeys'), params: z.object({ ...remoteTarget, text: z.string().max(16384).refine(value => !/[\x00-\x1f\x7f]/.test(value)).optional(), key: remoteKeySchema.optional() }).strict().refine(value => (value.text !== undefined) !== (value.key !== undefined), '请选择文本或按键') }),
   z.object({ id, method: z.literal('remoteWait'), params: z.object({ ...remoteTarget, actionId: id, timeoutMs: z.number().int().min(0).max(30000).default(25000) }).strict() }),
   z.object({ id, method: z.literal('remoteScreen'), params: z.object(remoteTarget).strict() }),
@@ -187,6 +191,8 @@ export type TerminalEvent =
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
 export interface RemoteInfo { commandTracking?: 'posix' | 'none'; sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
 export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection' | 'transfer'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null; transfer?:RemoteTransfer }
+export interface RemoteCommandOutput { text: string; nextCursor: number; earliestCursor: number | null; truncated: boolean; hasMore: boolean; available: boolean; format: 'terminal' }
+export interface RemoteCommandResult extends RemoteAction { output: RemoteCommandOutput; info: RemoteInfo; elapsedMs: number; requestMs?: number }
 export type ServerEvent =
   | { event: 'sshChallenge'; data: SshChallenge }
   | { event: 'remote'; data: RemoteInfo }

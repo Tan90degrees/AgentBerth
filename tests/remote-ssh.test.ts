@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
+import { TerminalMcp } from '../src/mcp/server';
+import type { RemoteCommandResult } from '../src/shared/protocol';
 import type { Project, Session, Run, RemoteInfo, RemoteAction } from '../src/shared/protocol';
 
 const host = process.env.AGENTBERTH_SSH_TEST_HOST;
@@ -32,6 +34,15 @@ test('SSH-only remote shares a live terminal, survives MCP detach, and exposes r
   await eventually(async()=>{const screen=await ui.rpc<{text:string}>('remoteScreen',target);return screen.text.includes('REMOTE_VALUE=42');});
   assert.equal((await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).cwd,'/');
   assert.equal((await execute('false')).exitCode,1);
+  const mcp=new TerminalMcp(agent);
+  async function call(name:string,args:Record<string,unknown>):Promise<RemoteCommandResult>{const result:any=await mcp.request('tools/call',{name,arguments:{...target,...args}});assert.ok(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);}
+  const fast=await call('terminal_execute',{requestId:randomUUID(),command:'printf "ONE_CALL=%s\\n" "$AB_REMOTE_VALUE"; false'});
+  assert.equal(fast.status,'completed');assert.equal(fast.exitCode,1);assert.equal(fast.output.text,'ONE_CALL=42\r\n');assert.equal(fast.info.cwd,'/');
+  t.diagnostic(`short command: one MCP call, backend ${fast.requestMs?.toFixed(1)} ms, command ${fast.elapsedMs} ms`);
+  const streaming=await call('terminal_execute',{requestId:randomUUID(),command:'printf "STREAM_FIRST\\n"; read AB_STREAM; printf "STREAM_LAST\\n"',waitMs:0});
+  let page=streaming,stream=page.output.text,pages=0,sawRunning=false;
+  while(page.status==='running'||page.output.hasMore){page=await call('terminal_read_output',{actionId:streaming.id,cursor:page.output.nextCursor,timeoutMs:5000});stream+=page.output.text;if(!sawRunning&&page.status==='running'&&stream.includes('STREAM_FIRST')){sawRunning=true;await agent.rpc('remoteKeys',{...target,key:'Ctrl+D'});}assert.ok(++pages<10);}
+  assert.equal(stream,'STREAM_FIRST\r\nSTREAM_LAST\r\n');assert.ok(sawRunning,'Output must arrive while the command is still running');assert.equal(page.exitCode,0);
   // A task may outlive its wait request and the MCP client, while the desktop remains attached.
   const requestId=randomUUID();const command='/bin/sleep 1; printf "LONG_TASK_DONE\\n"';
   const action=await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId,command});
@@ -72,7 +83,7 @@ test('bundled MCP stdio initializes, exposes scoped tools and shuts down cleanly
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list',params:{}})+'\n');
   await eventually(async()=>stdout.trim().split('\n').length>=2,5000);child.stdin.end();
   assert.equal(await closed,0,stderr);const messages=stdout.trim().split('\n').map(line=>JSON.parse(line));
-  assert.equal(messages.find(message=>message.id===1).result.serverInfo.name,'agentberth-terminal');assert.equal(messages.find(message=>message.id===2).result.tools.length,17);
+  assert.equal(messages.find(message=>message.id===1).result.serverInfo.name,'agentberth-terminal');assert.equal(messages.find(message=>message.id===2).result.tools.length,18);
 });
 
 test('saved password and encrypted-key connections run real POSIX commands through sshd without remote dependencies', {skip:!process.env.AGENTBERTH_SSH_TEST_PORT,timeout:45000},async t=>{

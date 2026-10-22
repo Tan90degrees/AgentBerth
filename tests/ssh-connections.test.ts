@@ -115,6 +115,9 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   await assert.rejects(ui.rpc('saveSshConnection',{connectionId:profile.id,config:{...config(),port:address.port}}),/停止终端/);
   const action:RemoteAction=await call('terminal_execute',{alias:'test-server',requestId:randomUUID(),command:'printf fixture-command-output'});
   assert.equal(action.status,'completed');assert.equal(action.exitCode,0);
+  const fast:any=action;assert.equal(fast.output.text,'fixture-command-output\r\n');assert.equal(fast.output.hasMore,false);assert.equal(fast.info.phase,'idle');assert.ok(fast.requestMs>=0);
+  const drained=await call('terminal_read_output',{alias:'test-server',actionId:action.id,cursor:fast.output.nextCursor,timeoutMs:0});
+  assert.equal(drained.output.text,'');assert.equal(drained.status,'completed');
   assert.match((await call('terminal_screen',{alias:'test-server'})).text,/fixture-command-output/);
   await ui.rpc('attach',{sessionId:target.sessionId});
   await ui.rpc('resize',{sessionId:target.sessionId,runId:target.runId,cols:112,rows:32});
