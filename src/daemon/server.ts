@@ -38,7 +38,7 @@ interface Client { subscriptions: Set<string>; pending: number; abort: AbortCont
 export class DaemonServer {
   private sshProvider: Client | null = null;
   private sshChallenges = new Map<string, { client: Client; resolve: (value: {secret?: SshSecret; accepted?: boolean}) => void; reject: (error: Error) => void }>();
-  private openingAliases = new Set<string>();
+  private openingAliases = new Map<string, Promise<{sessionId:string;runId:string;info: import('../shared/protocol').RemoteInfo}>>();
   private store: Store;
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
@@ -187,21 +187,24 @@ export class DaemonServer {
       }
       case 'remoteOpen': {
         const {profile, session: previous} = this.aliasTarget(request.params.alias);
-        if (!profile.allowAgent) throw new Error('此连接未允许 Agent 打开，请在 SSH 设置中修改');
-        if (this.openingAliases.has(profile.id)) throw new Error('此连接正在启动，请稍后读取 terminal_list');
+        if (request.params.owner === 'agent' && !profile.allowAgent) throw new Error('此连接未允许 Agent 打开，请在 SSH 设置中修改');
+        const pending = this.openingAliases.get(profile.id);
+        if (pending) return pending;
         if (previous && this.live.has(previous.id)) {
           const live = this.terminal(previous.id);
-          return { sessionId: previous.id, runId: live.run.id, info: live.remote?.activity.info };
+          return { sessionId: previous.id, runId: live.run.id, info: live.remote!.activity.info };
         }
-        this.openingAliases.add(profile.id);
-        try {
+        const opening = (async () => {
           const folder = path.join(this.dataDirectory,'remote-sessions'); mkdirSync(folder,{recursive:true,mode:0o700});
           const project = previous ? null : this.store.createProject('远程连接', folder);
           const session = previous ?? this.store.createSession(project!.id, profile.alias, 'shell', '', null, { connectionId: profile.id, host: profile.alias, directory: '' });
           const run = await this.start(session.id, false, 100, 30);
-          const info = this.remote(session.id,run.id).activity.control('agent');
+          const info = this.remote(session.id,run.id).activity.control(request.params.owner);
           this.changed(); return { sessionId: session.id, runId: run.id, info };
-        } finally { this.openingAliases.delete(profile.id); }
+        })();
+        this.openingAliases.set(profile.id, opening);
+        try { return await opening; }
+        finally { if (this.openingAliases.get(profile.id) === opening) this.openingAliases.delete(profile.id); }
       }
       case 'sshHosts': return sshHosts();
       case 'remoteInfo': return this.live.get(request.params.sessionId)?.remote?.activity.info ?? null;
@@ -512,7 +515,7 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台无法再启动终端');
     if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
-    const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: windowsPtyFor(process.platform, release()) });
+    const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: session.remote ? undefined : windowsPtyFor(process.platform, release()) });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const serialize = new SerializeAddon();
     terminal.loadAddon(serialize);

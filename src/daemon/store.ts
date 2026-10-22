@@ -13,7 +13,7 @@ const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, n
 export class Store {
   private db: DatabaseSync;
 
-  constructor(directory: string) {
+  constructor(private directory: string) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path.join(directory, 'berth.sqlite'));
     this.db.exec(`
@@ -98,7 +98,7 @@ export class Store {
   }
 
   state(): State {
-    const projects = this.db.prepare('SELECT id, name, path, createdAt FROM projects ORDER BY createdAt DESC').all() as unknown as Project[];
+    const projects = (this.db.prepare('SELECT id, name, path, createdAt FROM projects ORDER BY createdAt DESC').all() as unknown as Project[]).map(project => ({...project, remoteWorkspace: (process.platform==='win32'?path.resolve(project.path).toLowerCase():path.resolve(project.path)) === (process.platform==='win32'?path.resolve(this.directory,'remote-sessions').toLowerCase():path.resolve(this.directory,'remote-sessions'))}));
     const latest = this.db.prepare(`SELECT r.id, r.sessionId, r.pid, r.status, r.startedAt, r.endedAt, r.exitCode, r.command, r.shell, r.error, r.recordOutput
       FROM sessions s JOIN runs r ON r.rowid = (SELECT rowid FROM runs WHERE sessionId = s.id ORDER BY rowid DESC LIMIT 1)
       WHERE s.archived = 0`).all() as unknown as Run[];

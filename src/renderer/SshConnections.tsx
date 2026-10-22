@@ -39,7 +39,7 @@ export function SshConnections({disabled,onError}: {disabled:boolean;onError:(er
   const [connections,setConnections]=useState<SshConnection[]>([]), [editing,setEditing]=useState<SshConnection|null|undefined>(undefined);
   const load=()=>window.berth.rpc<SshConnection[]>('sshConnections').then(setConnections).catch(error=>onError(String(error)));
   useEffect(()=>{if(!disabled)void load();},[disabled]);
-  return <section className="settings-card"><h2>SSH 连接</h2><p>保存一次登录信息，Agent 即可通过 MCP 的 terminal_open 按别名打开可见终端。</p>
+  return <section className="settings-card" id="ssh-connections"><h2>SSH 连接</h2><p>保存一次登录信息，Agent 即可通过 MCP 的 terminal_open 按别名打开可见终端。</p>
     {connections.length === 0 && <p className="form-hint">尚未保存连接。地址、用户名和密码均由你填写。</p>}
     {connections.map(value=><div className="ssh-profile" key={value.id}><span><strong>{value.alias}</strong><small>{authLabels[value.authentication]} · {value.allowAgent?'允许 Agent 打开':'仅手动使用'}</small></span><button type="button" className="subtle" disabled={disabled} onClick={()=>setEditing(value)}>编辑</button><button type="button" className="subtle" disabled={disabled} onClick={()=>void window.berth.deleteSshConnection(value.id).then(load).catch(error=>onError(String(error)))}>删除</button></div>)}
     {editing === undefined ? <button type="button" className="subtle" disabled={disabled} onClick={()=>setEditing(null)}>新建 SSH 连接</button> : <SshConnectionEditor key={editing?.id??'new'} value={editing??undefined} disabled={disabled} onError={onError} onCancel={()=>setEditing(undefined)} onSaved={()=>{setEditing(undefined);void load();}} />}

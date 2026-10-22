@@ -145,6 +145,13 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   if(method==='resources')return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128)});
   return connection!.rpc(method, request.data.params);
 });
+ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {
+  trusted(event);
+  if (quitting || typeof alias !== 'string' || !alias || alias.length > 100) throw new Error('SSH 连接别名无效');
+  if (connecting) await connecting;
+  if (!connection) await reconnect();
+  return connection!.rpc('remoteOpen', {alias, owner:'user'});
+});
 ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, connectionId: unknown, rawSecret: unknown, remember: unknown) => {
   trusted(event);
   const config = sshConnectionSchema.safeParse(rawConfig), secret = sshSecretSchema.safeParse(rawSecret ?? {});

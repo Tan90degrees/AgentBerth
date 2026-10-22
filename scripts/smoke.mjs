@@ -1374,8 +1374,25 @@ try {
   await page.getByRole('heading', { name: '远程终端演示', exact: true }).waitFor();
   const remoteSession = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.title === '远程终端演示');
   assert.equal(remoteSession.remote.directory, '/tmp');
+  const dock=page.getByRole('region',{name:'SSH 实时终端',exact:true});
+  await dock.waitFor();
+  assert.equal(await page.locator('.projects .session-item').filter({hasText:'远程终端演示'}).count(),0,'Remote sessions belong in the dock, not the sidebar');
+  const beforeSshToggle=await page.evaluate(()=>window.berth.rpc('state'));
+  for(let index=0;index<4;index++){
+    await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await dock.waitFor({state:'hidden'});
+    await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await dock.waitFor();
+    assert.equal(await page.locator('.ssh-dock').count(),1,'SSH toggles must not append a dock');
+  }
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).sessions.length,beforeSshToggle.sessions.length,'Opening the SSH view must not create sessions');
+  let localSshObserver;
   if (process.env.AGENTBERTH_SSH_TEST_HOST) {
-    await menuAction(page, '启动终端');
+    localSshObserver=await page.evaluate(async projectId=>{
+      const session=await window.berth.rpc('createSession',{projectId,title:'本机与 SSH 同时观察',agent:'shell',terminal:{profile:'bash',executable:'',args:[]}});
+      await window.berth.rpc('start',{sessionId:session.id,cols:100,rows:30});return session;
+    },remoteSession.projectId);
+    await page.locator('.session-item').filter({hasText:'本机与 SSH 同时观察'}).click();
+    await page.locator('.workspace-host .xterm').waitFor();
+    await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'启动终端',exact:true}).click();
     await page.getByRole('button', { name: '交给 Agent', exact: true }).waitFor();
     await eventually(async()=> (await page.evaluate(id=>window.berth.rpc('remoteInfo',{sessionId:id}),remoteSession.id))?.phase === 'idle','Remote Bash did not become idle');
     await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
@@ -1384,20 +1401,38 @@ try {
     const remoteResult=await page.evaluate(args=>window.berth.rpc('remoteWait',args),{...remoteTarget,actionId:remoteAction.id,timeoutMs:5000});
     assert.equal(remoteResult.exitCode,0);
     await eventually(async()=>(await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget)).text.includes('REMOTE_UI_READY'),'Remote terminal output did not reach renderer backing screen');
-    await findTerminalText(page, 'REMOTE_UI_READY'); // Search stays available while Agent owns input.
-    await page.getByRole('button', { name: '操作步骤', exact: false }).click();
+    await findTerminalText(dock, 'REMOTE_UI_READY'); // Search stays available while Agent owns input.
+    await dock.getByRole('button', { name: '操作步骤', exact: false }).click();
     await page.getByLabel('远程操作步骤', { exact: true }).getByText('退出 0', { exact: true }).waitFor();
     assert.ok((await page.getByLabel('远程终端控制',{exact:true}).boundingBox()).height <= 52,'Remote controls should stay compact');
+    const secondSsh=await page.evaluate(async ({projectId,host})=>{
+      const session=await window.berth.rpc('createSession',{projectId,title:'第二个 SSH 终端',agent:'shell',remote:{host,directory:'/tmp'}});
+      await window.berth.rpc('start',{sessionId:session.id,cols:100,rows:30});return session;
+    },{projectId:remoteSession.projectId,host:process.env.AGENTBERTH_SSH_TEST_HOST});
+    for(let index=0;index<6;index++){
+      await dock.getByLabel('SSH 终端',{exact:true}).selectOption(index%2?secondSsh.id:remoteSession.id);
+      assert.equal(await dock.locator('.remote-session').count(),1,'SSH switches must not accumulate status rows');
+      assert.equal(await dock.locator('.xterm').count(),1,'SSH switches must leave only the current terminal');
+    }
+    await dock.getByLabel('SSH 终端',{exact:true}).selectOption(remoteSession.id);
+    await page.evaluate(async id=>{await window.berth.rpc('stop',{sessionId:id});await window.berth.rpc('deleteSession',{sessionId:id});},secondSsh.id);
+    await page.evaluate(()=>{window.localBeforeSshToggle=document.querySelector('.workspace-host .xterm');window.remoteBeforeSshToggle=document.querySelector('.ssh-dock .xterm');});
+    for(let index=0;index<3;index++){await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await page.getByRole('button',{name:'SSH 面板',exact:true}).click();}
+    assert.equal(await page.evaluate(()=>window.localBeforeSshToggle===document.querySelector('.workspace-host .xterm')&&window.remoteBeforeSshToggle===document.querySelector('.ssh-dock .xterm')),true,'Toggling SSH must retain both terminal instances');
+    const localBounds=await page.locator('.workspace-host .terminal-mount').boundingBox(),remoteBounds=await dock.locator('.terminal-mount').boundingBox();
+    assert.ok(localBounds&&remoteBounds&&localBounds.height>40&&remoteBounds.height>40&&remoteBounds.y>=localBounds.y+localBounds.height,'Both local Agent and remote SSH must be visible, with SSH below');
     await page.screenshot({animations:'disabled',path:'test-results/remote-terminal-agent.png'});
     await page.getByRole('button', { name: '接管', exact: true }).click();
     await page.getByRole('button', { name: '交给 Agent', exact: true }).waitFor();
-    await page.waitForFunction(() => { const input = document.querySelector('.terminal-mount .xterm-helper-textarea'); return input && !input.readOnly; });
-    const remoteInput=page.locator('.terminal-mount .xterm-helper-textarea');await remoteInput.focus();
+    await page.waitForFunction(() => { const input = document.querySelector('.ssh-dock .terminal-mount .xterm-helper-textarea'); return input && !input.readOnly; });
+    const remoteInput=dock.locator('.terminal-mount .xterm-helper-textarea');await remoteInput.focus();
     await page.keyboard.type('echo USER_$((40+2))');await page.keyboard.press('Enter');
     await eventually(async()=>(await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget)).text.includes('USER_42'),'Human takeover did not restore input');
-    await menuAction(page, '停止终端');await page.getByRole('button', { name: '停止终端', exact: true }).click();await waitRunState(page,false);
+    await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'停止终端',exact:true}).click();await page.getByRole('button', { name: '停止终端', exact: true }).click();await eventually(async()=>(await page.evaluate(id=>window.berth.rpc('runs',{sessionId:id}),remoteSession.id))[0].status==='stopped','Remote dock stop did not complete');
   }
-  await menuAction(page, '删除会话');await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'删除会话',exact:true}).click();await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
+  await page.getByRole('button',{name:'收起 SSH 面板',exact:true}).click();
+  if(localSshObserver)await page.evaluate(async id=>{await window.berth.rpc('stop',{sessionId:id});await window.berth.rpc('deleteSession',{sessionId:id});},localSshObserver.id);
   step('an unlinked conversation preview is cleared when the project directory changes');
   await page.locator('.session-item').filter({hasText:'OpenCode 会话'}).click();
   await page.getByRole('tab',{name:'对话历史',exact:true}).click();

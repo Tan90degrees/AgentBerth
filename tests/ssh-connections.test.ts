@@ -82,7 +82,8 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   assert.deepEqual((await call('terminal_list')).connections,[{alias:'test-server',allowAgent:true}]);
   rejectTrust=true;await assert.rejects(call('terminal_open',{alias:'test-server'}),/指纹/);
   rejectTrust=false;password='wrong-fixture-secret';await assert.rejects(call('terminal_open',{alias:'test-server'}),/认证失败/);
-  password='fixture-secret';const target=await call('terminal_open',{alias:'test-server'});
+  password='fixture-secret';const opened=await Promise.all(Array.from({length:4},()=>call('terminal_open',{alias:'test-server'})));const target=opened[0];
+  assert.equal(new Set(opened.map(value=>value.runId)).size,1,'Repeated opens share one in-flight SSH connection');
   assert.equal(target.info.owner,'agent');assert.equal(hostConfirmations,2);assert.equal(handshakes,1);assert.equal(shellChannels,1);
   const again=await call('terminal_open',{alias:'test-server'});assert.equal(again.runId,target.runId);assert.equal(shellChannels,1);
   await assert.rejects(ui.rpc('saveSshConnection',{connectionId:profile.id,config:{...config(),port:address.port}}),/停止终端/);
@@ -94,7 +95,7 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   await ui.rpc('remoteControl',{sessionId:target.sessionId,runId:target.runId,owner:'user'});
   assert.equal((await call('terminal_open',{alias:'test-server'})).info.owner,'user');
   await assert.rejects(call('terminal_keys',{alias:'test-server',key:'Enter'}),/用户控制/);
-  const state=await ui.rpc<any>('state');assert.equal(state.sessions.length,1);
+  const state=await ui.rpc<any>('state');assert.equal(state.sessions.length,1);assert.equal(state.projects.find((project:any)=>project.id===state.sessions[0].projectId).remoteWorkspace,true);
   const exposed=JSON.stringify({state,list:await call('terminal_list'),screen:await call('terminal_screen',{alias:'test-server'})});
   assert.ok(!exposed.includes('fixture-secret'));
   assert.ok(!readFileSync(path.join(folder,'data','berth.sqlite')).includes(Buffer.from('fixture-secret')));
@@ -117,6 +118,9 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   await ui.rpc('stop',{sessionId:restarted.sessionId});
   const blocked=await ui.rpc<SshConnection>('saveSshConnection',{config:{...config(),alias:'manual-only',allowAgent:false,port:address.port}});
   await assert.rejects(call('terminal_open',{alias:blocked.alias}),/未允许/);
+  const manual=await ui.rpc<{sessionId:string;runId:string;info:RemoteInfo}>('remoteOpen',{alias:blocked.alias,owner:'user'});assert.equal(manual.info.owner,'user');
+  await assert.rejects(call('terminal_open',{alias:blocked.alias}),/未允许/);
+  await ui.rpc('stop',{sessionId:manual.sessionId});
 });
 
 test('stopping SSH startup cancels a pending credential request immediately', async () => {

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 22;
+export const API_VERSION = 23;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -82,7 +82,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('registerSshProvider'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('sshChallengeReply'), params: z.object({ challengeId: id, secret: sshSecretSchema.optional(), accepted: z.boolean().optional() }).strict() }),
   z.object({ id, method: z.literal('remoteAliases'), params: z.object({}).strict() }),
-  z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
+  z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100), owner: z.enum(['user','agent']).default('agent') }).strict() }),
   z.object({ id, method: z.literal('remoteResolve'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
   z.object({ id, method: z.literal('sshHosts'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteInfo'), params: z.object({ sessionId: id }).strict() }),
@@ -139,7 +139,7 @@ export const requestSchema = z.discriminatedUnion('method', [
 export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
-export interface Project { id: string; name: string; path: string; createdAt: string }
+export interface Project { remoteWorkspace?: boolean; id: string; name: string; path: string; createdAt: string }
 export interface ProjectFile { name: string; path: string; kind: 'directory' | 'file' | 'other'; ignored: boolean; symlink: boolean; unavailable?: boolean }
 export interface ProjectFilePage { path: string; entries: ProjectFile[]; nextOffset: number | null; total: number; truncated: boolean; gitAvailable: boolean; warning?: string }
 export interface FilePreview { path: string; name: string; size: number; modifiedAt: string; kind: 'text' | 'image' | 'binary'; content: string | null; truncated: boolean; encoding?: string; mime?: string; message?: string }
@@ -182,6 +182,7 @@ export interface Response { id: string; result?: unknown; error?: string }
 export interface RuntimeInfo { version: number; pid: number; port: number; token: string }
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface DesktopApi {
+  openSshConnection(alias: string): Promise<{sessionId: string; runId: string; info: RemoteInfo}>;
   saveSshConnection(config: SshConnectionConfig, connectionId?: string, secret?: SshSecret, remember?: boolean): Promise<SshConnection>;
   deleteSshConnection(connectionId: string): Promise<void>;
   chooseSshKey(): Promise<string | null>;

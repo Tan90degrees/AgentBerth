@@ -20,3 +20,24 @@
 .ssh-profile {display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);}
 .ssh-profile>span {flex:1;min-width:0;}
 .ssh-profile small {display:block;color:var(--text-muted);margin-top:4px;}
+
+.workbench-split {display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden;}
+.workbench-split[hidden], .workspace-host[hidden], .ssh-dock-slot[hidden], .ssh-dock[hidden] {display:none!important;}
+.ssh-dock-slot {display:contents;}
+.ssh-dock {display:flex;flex:0 0 clamp(280px,42vh,480px);flex-direction:column;min-height:180px;min-width:0;border-top:1px solid var(--border);background:var(--terminal);overflow:hidden;}
+.ssh-dock.expanded {flex:2 1 0;}
+.ssh-dock.sole-terminal {flex:1;}
+.ssh-dock-header {display:flex;align-items:center;gap:8px;min-height:36px;padding:4px 12px;background:var(--bg);}
+.ssh-dock-header h2 {font-size:12px;line-height:20px;margin:0;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ssh-dock-header select {flex:1;min-width:100px;max-width:340px;font-size:11px;padding:4px 8px;}
+.ssh-dock-header button {white-space:nowrap;font-size:11px;}
+.ssh-dock-empty {padding:16px;color:var(--text-secondary);font-size:12px;}
+.ssh-dock-empty small {color:var(--text-muted);}
+.ssh-toggle {display:inline-flex;gap:6px;align-items:center;}
+.ssh-toggle.selected {background:var(--surface-hover);color:var(--text);}
+.ssh-count {font-size:10px;min-width:14px;border-radius:4px;background:var(--surface-hover);}
+.remote-current {display:flex;align-items:center;gap:10px;padding:3px 12px 6px;font-size:11px;color:var(--text-muted);min-width:0;}
+.remote-current code {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;color:var(--text-secondary);}
+
+.ssh-dock .remote-steps {max-height:72px;}
+.ssh-dock .terminal-host {padding:6px 10px 4px 18px;}
