@@ -100,6 +100,10 @@ async function registerSshProvider(): Promise<void> {
 }
 function emit(event: ServerEvent) {
   if (event.event === 'sshChallenge') { void answerSshChallenge(event.data); return; }
+  if (event.event === 'output' && window && (!window.isVisible() || window.isMinimized())) {
+    const { sessionId, runId, seq } = event.data;
+    event = { event: 'terminalActivity', data: { sessionId, runId, seq } };
+  }
   if (window && !window.isDestroyed() && ((event.event !== 'output' && event.event !== 'resize') || (window.isVisible() && !window.isMinimized()))) window.webContents.send('berth:event', event);
   if (event.event === 'connection' && !event.data.connected && !quitting && !restarting && !exitPromise) {
     connection = null;

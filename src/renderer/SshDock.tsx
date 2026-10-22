@@ -5,11 +5,12 @@ import { RemoteBar } from './RemoteTerminal';
 import { Dialog } from './Dialog';
 import { SshConnections } from './SshConnections';
 import { TerminalView } from './TerminalView';
+import { OutputBadge } from './useTerminalActivity';
 import { readStored, saveStored } from './storage';
 
 /** One mounted remote viewport. Opening the dock never starts a new SSH session. */
-export function SshDock({state,visible,connected,sessionId,onSelect,onClose,onMenu,onError,connectionEpoch,hasLocal}: {
-  state: State; visible: boolean; connected: boolean; sessionId: string; onSelect: (id:string)=>void; onClose:()=>void;
+export function SshDock({unread,state,visible,connected,sessionId,onSelect,onClose,onMenu,onError,connectionEpoch,hasLocal}: {
+  unread: ReadonlySet<string>; state: State; visible: boolean; connected: boolean; sessionId: string; onSelect: (id:string)=>void; onClose:()=>void;
   onMenu:(target:TreeMenuTarget)=>void; onError:(error:string)=>void; connectionEpoch:number; hasLocal:boolean;
 }) {
   const sessions=state.sessions.filter(session=>session.remote);
@@ -23,10 +24,10 @@ export function SshDock({state,visible,connected,sessionId,onSelect,onClose,onMe
   const menu=(element:HTMLElement,x?:number,y?:number)=>{if(!session)return;const box=element.getBoundingClientRect();onMenu({kind:'session',id:session.id,opener:element,x:x??box.right,y:y??box.bottom});};
   return <section className={`ssh-dock${expanded?' expanded':''}${!hasLocal?' sole-terminal':''}`} hidden={!visible} aria-label="SSH 实时终端">
     <header className="ssh-dock-header" data-session-id={session?.id} onContextMenu={event=>{event.preventDefault();menu(event.currentTarget,event.clientX,event.clientY);}}>
-      <h2>{session?.title??'SSH 远端终端'}</h2>
+      <h2>{session?.title??'SSH 远端终端'}</h2>{sessions.some(value=>unread.has(value.id))&&<OutputBadge />}
       <select aria-label="SSH 终端" value={session?.id??''} disabled={!sessions.length} onChange={event=>onSelect(event.target.value)}>
         <option value="">选择 Agent 会话</option>
-        {sessions.length>0&&<optgroup label="已有会话">{sessions.map(value=><option key={value.id} value={value.id}>{value.title} · {value.remote?.host}{value.latestRun?.status==='running'?' · 运行中':''}</option>)}</optgroup>}
+        {sessions.length>0&&<optgroup label="已有会话">{sessions.map(value=><option key={value.id} value={value.id}>{unread.has(value.id)?'[新输出] ':''}{value.title} · {value.remote?.host}{value.latestRun?.status==='running'?' · 运行中':''}</option>)}</optgroup>}
       </select>
       {session&&<button type="button" className="subtle" aria-label="SSH 会话操作" onClick={event=>menu(event.currentTarget)}>⋯</button>}
       <button ref={serverOpener} type="button" className="subtle" disabled={!connected||state.apiVersion<22} onClick={()=>{setServerError('');setServersOpen(true);}}>服务器</button>

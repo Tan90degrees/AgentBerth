@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 27;
+export const API_VERSION = 28;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -197,6 +197,7 @@ export interface RemoteAction { sequence: number; id: string; sessionId: string;
 export interface RemoteCommandOutput { text: string; nextCursor: number; earliestCursor: number | null; truncated: boolean; hasMore: boolean; available: boolean; format: 'terminal' }
 export interface RemoteCommandResult extends RemoteAction { output: RemoteCommandOutput; info: RemoteInfo; elapsedMs: number; requestMs?: number }
 export type ServerEvent =
+  | { event: 'terminalActivity'; data: { sessionId: string; runId: string; seq: number } }
   | { event: 'sshChallenge'; data: SshChallenge }
   | { event: 'remote'; data: RemoteInfo }
   | { event: 'remoteAction'; data: RemoteAction }

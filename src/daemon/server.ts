@@ -34,7 +34,7 @@ interface LiveTerminal {
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null; finishing: Promise<void> | null;
 }
-interface Client { subscriptions: Set<string>; pending: number; abort: AbortController }
+interface Client { subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
   private sshProvider: Client | null = null;
@@ -75,7 +75,7 @@ export class DaemonServer {
       this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
     });
     this.ws.on('connection', socket => {
-      const client: Client = { subscriptions: new Set(), pending: 0, abort: new AbortController() };
+      const client: Client = { subscriptions: new Set(), activity: new Map(), pending: 0, abort: new AbortController() };
       this.clients.set(socket, client);
       socket.on('error', () => socket.close());
       socket.on('close', () => { if (this.sshProvider === client) this.sshProvider = null; for (const pending of this.sshChallenges.values()) if (pending.client === client) pending.reject(new Error('请打开 AgentBerth 后重试 SSH 连接')); client.abort.abort(); for (const live of this.live.values()) live.remote?.activity.release(client); this.clients.delete(socket); });
@@ -116,11 +116,24 @@ export class DaemonServer {
   }
   private broadcast(event: ServerEvent): void {
     for (const [socket, client] of this.clients) {
-      if ((event.event === 'output' || event.event === 'resize') && !client.subscriptions.has(event.data.sessionId)) continue;
+      if ((event.event === 'output' || event.event === 'resize') && !client.subscriptions.has(event.data.sessionId)) {
+        // One lightweight reminder until this client attaches again. Never
+        // stream background terminal content just to light an unread label.
+        if (event.event === 'output' && event.data.text && client.activity.get(event.data.sessionId) !== event.data.runId) {
+          client.activity.set(event.data.sessionId, event.data.runId);
+          const { sessionId, runId, seq } = event.data;
+          this.send(socket, { event: 'terminalActivity', data: { sessionId, runId, seq } });
+        }
+        continue;
+      }
       this.send(socket, event);
     }
   }
-  private changed(): void { this.broadcast({ event: 'state', data: this.store.state() }); }
+  private changed(): void {
+    const state = this.store.state(), valid = new Set(state.sessions.map(session => session.id));
+    for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
+    this.broadcast({ event: 'state', data: state });
+  }
 
   async listen(): Promise<RuntimeInfo> {
     await new Promise<void>((resolve, reject) => {
@@ -449,8 +462,8 @@ export class DaemonServer {
         this.store.archive(request.params.sessionId); this.changed(); return null;
       case 'start': return this.start(request.params.sessionId, request.params.resume, request.params.cols, request.params.rows);
       case 'stop': await this.stop(request.params.sessionId); return null;
-      case 'attach': client.subscriptions.add(request.params.sessionId); return this.attach(request.params.sessionId);
-      case 'detach': client.subscriptions.delete(request.params.sessionId); return null;
+      case 'attach': client.activity.delete(request.params.sessionId); client.subscriptions.add(request.params.sessionId); return this.attach(request.params.sessionId);
+      case 'detach': client.activity.delete(request.params.sessionId); client.subscriptions.delete(request.params.sessionId); return null;
       case 'input': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
         const live = this.terminal(request.params.sessionId, request.params.runId);

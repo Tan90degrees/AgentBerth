@@ -175,6 +175,21 @@ h2 {
   background: var(--success-soft);
   box-shadow: 0 0 8px var(--shadow-color)
 }
+.output-badge,.project-item .output-badge {
+  display: inline-block;
+  flex: 0 0 auto;
+  overflow: visible;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--selected);
+  align-self: center;
+}
 .main {
   min-width: 0;
   flex: 1;
