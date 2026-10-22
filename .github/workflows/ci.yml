@@ -25,11 +25,37 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Cache Linux CJK test font
+        if: runner.os == 'Linux'
+        id: cjk-font
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/fonts/agentberth-ci
+          key: ${{ runner.os }}-agentberth-wqy-microhei-v1
+      - name: Prepare Linux CJK test font
+        if: runner.os == 'Linux' && steps.cjk-font.outputs.cache-hit != 'true'
+        run: |
+          font_package_dir="$(mktemp -d)"
+          trap 'rm -rf "$font_package_dir"' EXIT
+          cd "$font_package_dir"
+          if ! apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 download fonts-wqy-microhei; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update -qq
+            apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 download fonts-wqy-microhei
+          fi
+          dpkg-deb --extract ./fonts-wqy-microhei_*.deb extracted
+          install -Dm644 extracted/usr/share/fonts/truetype/wqy/wqy-microhei.ttc "$HOME/.local/share/fonts/agentberth-ci/wqy-microhei.ttc"
+        timeout-minutes: 3
+      - name: Refresh Linux CJK font cache
+        if: runner.os == 'Linux'
+        run: fc-cache -f "$HOME/.local/share/fonts/agentberth-ci"
+        timeout-minutes: 2
       - name: Prepare dependency-free SSH integration (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update -qq
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-upgrade --no-install-recommends openssh-server fonts-wqy-microhei
+          if [ ! -x /usr/sbin/sshd ]; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update -qq
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-upgrade --no-install-recommends openssh-server
+          fi
           bash scripts/setup-ssh-test.sh
         timeout-minutes: 5
       - run: npm run check
