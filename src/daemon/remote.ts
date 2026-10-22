@@ -55,21 +55,85 @@ export function managedCommand(sessionId: string, requestId: string, command: st
 export class ShellMarkers {
   private buffer = '';
   private decoder = new StringDecoder('utf8');
-  constructor(private sessionId: string, private onMarker: (kind: 'ready' | 'start', status: number, cwd: string | null, requestId: string) => void) {}
+  constructor(private sessionId: string, private onMarker: (kind: 'ready' | 'start', status: number, cwd: string | null, requestId: string) => void, private onText: (text:string)=>void = ()=>{}) {}
   feed(bytes: Buffer): void {
     this.buffer += this.decoder.write(bytes);
     const prefix = `\x1b]777;AgentBerth;${this.sessionId};`;
     for (;;) {
       const start = this.buffer.indexOf(prefix);
-      if (start < 0) { this.buffer = this.buffer.slice(-prefix.length); return; }
-      const end = this.buffer.indexOf('\x07', start);
-      if (end < 0) { this.buffer = this.buffer.slice(start, start + 16384); return; }
-      const body = this.buffer.slice(start + prefix.length, end);
+      if (start < 0) {
+        let keep = Math.min(prefix.length-1,this.buffer.length);
+        while (keep && !prefix.startsWith(this.buffer.slice(-keep))) keep--;
+        this.onText(this.buffer.slice(0,this.buffer.length-keep));
+        this.buffer = keep ? this.buffer.slice(-keep) : ''; return;
+      }
+      if (start) { this.onText(this.buffer.slice(0,start)); this.buffer=this.buffer.slice(start); }
+      const end = this.buffer.indexOf('\x07');
+      if (end < 0) {
+        if (this.buffer.length>16384) { this.onText(this.buffer);this.buffer=''; }
+        return;
+      }
+      const raw = this.buffer.slice(0,end+1), body = this.buffer.slice(prefix.length, end);
       this.buffer = this.buffer.slice(end + 1);
       const match = /^(start|ready);([^;]*)(?:;(\d{1,3});([\s\S]*))?$/.exec(body);
-      if (!match) continue;
+      if (!match) {this.onText(raw);continue;}
       if (match[1] === 'start') this.onMarker('start',0,null,match[2]);
       else if (match[3] !== undefined) this.onMarker('ready',Number(match[3]),match[4],match[2]);
+    }
+  }
+  end():void {this.buffer+=this.decoder.end();this.onText(this.buffer);this.buffer='';}
+}
+
+/** Replaces only a verified echo of the submitted wrapper, before its start
+ * marker. Output after start, including text resembling our code, is untouched. */
+export class ManagedOutput {
+  private pending: {id:string;command:string;wire:string;text:string} | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private markers: ShellMarkers;
+  constructor(sessionId:string, private output:(text:string)=>void, marker:(kind:'ready'|'start',status:number,cwd:string|null,id:string)=>void) {
+    this.markers=new ShellMarkers(sessionId,(kind,status,cwd,id)=>{
+      if(kind==='start'&&this.pending?.id===id)this.flush(true);
+      marker(kind,status,cwd,id);
+    },text=>{
+      if(!text)return;
+      if(this.pending){this.pending.text+=text;if(this.pending.text.length>128*1024)this.flush(false);}
+      else this.output(text);
+    });
+  }
+  begin(id:string,command:string,wire:string):void {
+    this.flush(false);this.pending={id,command,wire,text:''};
+    this.timer=setTimeout(()=>this.flush(false),3000);this.timer.unref();
+  }
+  feed(bytes:Buffer):void {this.markers.feed(bytes);}
+  cancel():void {this.flush(false);}
+  end():void {this.markers.end();this.flush(false);}
+  private flush(started:boolean):void {
+    if(this.timer)clearTimeout(this.timer);this.timer=null;
+    const pending=this.pending;if(!pending)return;this.pending=null;
+    // Readline may insert cursor controls, padding, wrapped lines and PS2.
+    // Keep a source map so text outside the exact echo is retained verbatim.
+    const normalize=(text:string)=>{
+      let value='',indices:number[]=[];
+      const tokens=/\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\s|>|[^]/gu;
+      for(const match of text.matchAll(tokens)){
+        if(match[0].startsWith('\x1b')||/^[\s>]$/u.test(match[0]))continue;
+        for(let i=0;i<match[0].length;i++){value+=match[0][i];indices.push(match.index!+i);}
+      }
+      return {value,indices};
+    };
+    const actual=normalize(pending.text), expected=normalize(pending.wire).value;
+    const found=actual.value.indexOf(expected);
+    if(found>=0){
+      const start=actual.indices[found],end=actual.indices[found+expected.length-1]+1;
+      const modes=(text:string)=>text.match(/\x1b\[[0-?]*[hl]/g)?.join('')??'';
+      this.output(pending.text.slice(0,start)+modes(pending.text.slice(start,end))+pending.command+'\r\n');
+      const tail=pending.text.slice(end);this.output(normalize(tail).value?tail:modes(tail));
+    }else {
+      // Unexpected shell redraws or interleaved background output fail open;
+      // never discard real output just because a marker or timeout occurred.
+      if(pending.text)this.output(pending.text);
+      const echoPrefix=normalize(pending.wire.slice(0,pending.wire.indexOf(';start;')+7)).value;
+      if(started&&!actual.value.includes(echoPrefix))this.output(pending.command+'\r\n');
     }
   }
 }
@@ -82,6 +146,7 @@ export class RemoteTerminal implements TerminalProcess {
   private closed = false;
   private reconnecting = false;
   private generation = 0;
+  private display: ManagedOutput | null = null;
   private cols: number;
   private rows: number;
   constructor(readonly config: RemoteConfig, readonly sessionId: string, cols: number, rows: number,
@@ -93,12 +158,15 @@ export class RemoteTerminal implements TerminalProcess {
   onExit(listener: (value: {exitCode:number;signal?:number}) => void) { this.events.on('exit',listener); return {dispose:()=>{this.events.off('exit',listener);}}; }
   write(data: string | Buffer): void {
     if (!this.viewer || this.closed) throw new Error('SSH 未连接，输入未发送');
+    if(data.includes('\x03'))this.display?.cancel();
     this.viewer.write(data);
   }
+  writeManaged(requestId:string,command:string,wire:string):void {this.display?.begin(requestId,command,wire);try{this.write(wire);}catch(error){this.display?.cancel();throw error;}}
+  async sftp():Promise<import('ssh2').SFTPWrapper> {throw new Error('文件传输请使用已填写服务器信息的 SSH 连接；系统 SSH 配置兼容会话暂不支持 SFTP');}
   resize(cols:number,rows:number):void {this.cols=cols;this.rows=rows;this.viewer?.resize(cols,rows);}
   pause():void {this.viewer?.pause();}
   resume():void {this.viewer?.resume();}
-  kill():void {this.closed=true;this.generation++;try{this.viewer?.kill();}catch{}this.viewer=null;}
+  kill():void {this.display?.end();this.display=null;this.closed=true;this.generation++;try{this.viewer?.kill();}catch{}this.viewer=null;}
   async connect():Promise<void> {
     if(this.closed)throw new Error('终端已关闭');
     const generation=++this.generation;
@@ -122,17 +190,16 @@ export class RemoteTerminal implements TerminalProcess {
     let settled=false;
     return new Promise<void>((resolve,reject)=>{
       const ready=()=>{if(settled)return;settled=true;clearTimeout(timer);this.notify({connection:'connected',error:null});resolve();};
-      const markers=new ShellMarkers(this.sessionId,(kind,status,cwd,requestId)=>{if(generation!==this.generation)return;if(!requestId&&kind==='ready')ready();this.marker(kind,status,cwd,requestId);});
+      this.display=posix?new ManagedOutput(this.sessionId,text=>this.events.emit('data',text),(kind,status,cwd,requestId)=>{if(generation!==this.generation)return;if(!requestId&&kind==='ready')ready();this.marker(kind,status,cwd,requestId);}):null;
       const timer=setTimeout(()=>{if(settled)return;settled=true;child.kill();reject(new Error('SSH 登录超时，请检查主机密钥、登录方式与 Shell'));},15000);
       child.onData(text=>{
         if(generation!==this.generation||this.closed)return;
-        if(posix)markers.feed(Buffer.from(text));else ready();
-        this.events.emit('data',text);
+        if(this.display)this.display.feed(Buffer.from(text));else {ready();this.events.emit('data',text);}
       });
       child.onExit(({exitCode})=>{
         try{child.kill();}catch{} // Dispose native ConPTY handles as well as the process.
         if(generation!==this.generation||this.closed)return;
-        this.viewer=null;clearTimeout(timer);
+        this.display?.end();this.display=null;this.viewer=null;clearTimeout(timer);
         this.notify({connection:'disconnected',phase:'unknown',owner:'user',error:exitCode===255?'SSH 链路已断开，远端任务结果未知。重新连接会新建 Shell，不会恢复或重放旧任务。':'SSH 会话已结束'});
         if(!settled){settled=true;reject(new Error('SSH 登录失败；请先确认系统终端可登录此主机'));}
         else if(exitCode!==255)this.events.emit('exit',{exitCode});
@@ -151,6 +218,7 @@ export class RemoteTerminal implements TerminalProcess {
     finally {this.reconnecting=false;}
   }
   private async closeChannel():Promise<void> {
+    this.display?.end();this.display=null;
     this.generation++;
     const child=this.viewer;if(!child)return;
     let exited=false;

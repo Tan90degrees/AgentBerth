@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { SshTerminal } from './ssh-terminal';
-import type { SshChallenge, SshSecret } from '../shared/protocol';
+import type { SshChallenge, SshSecret, TransferEndpoint } from '../shared/protocol';
+import { localTransferFs, RemoteTransfers, sftpTransferFs } from './remote-transfer';
 import { createServer, type IncomingMessage } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -40,6 +41,7 @@ export class DaemonServer {
   private sshChallenges = new Map<string, { client: Client; resolve: (value: {secret?: SshSecret; accepted?: boolean}) => void; reject: (error: Error) => void }>();
   private openingAliases = new Map<string, Promise<{sessionId:string;runId:string;info: import('../shared/protocol').RemoteInfo}>>();
   private store: Store;
+  private transfers: RemoteTransfers;
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
   private git = new GitWorkspace();
@@ -61,6 +63,11 @@ export class DaemonServer {
 
   constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn) {
     this.store = new Store(dataDirectory);
+    this.transfers=new RemoteTransfers(this.store,async endpoint=>endpoint.kind==='local'?localTransferFs():sftpTransferFs(await this.remote(endpoint.sessionId,endpoint.runId).transport.sftp()),data=>this.broadcast({event:'remoteTransfer',data}),data=>this.broadcast({event:'remoteAction',data}),endpoint=>{
+      if(endpoint.kind==='local')return 'local';
+      const profile=this.store.sshConnection(this.store.session(endpoint.sessionId).remote!.connectionId!);
+      return `ssh:${profile.hostname.toLowerCase()}:${profile.port}:${profile.username}`;
+    });
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
     this.http.on('upgrade', (request, socket, head) => {
@@ -165,6 +172,13 @@ export class DaemonServer {
     mkdirSync(folder, {recursive:true, mode:0o700});
     return this.store.createProject('远程连接', folder);
   }
+  private authorizeRemote(endpoint:TransferEndpoint,client:Client,connected=true):void {
+    if(endpoint.kind==='local')return;
+    const session=this.store.session(endpoint.sessionId);
+    if(!session.remote?.connectionId||!this.store.sshConnection(session.remote.connectionId).allowAgent)throw new Error('请使用已填写服务器信息并允许 Agent 使用的 SSH 连接');
+    const remote=this.remote(endpoint.sessionId,endpoint.runId);
+    if(connected)remote.activity.assertAgent(client);else remote.activity.assertManage(client);
+  }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
@@ -211,6 +225,66 @@ export class DaemonServer {
         finally { if (this.openingAliases.get(profile.id) === opening) this.openingAliases.delete(profile.id); }
       }
       case 'sshHosts': return sshHosts();
+      case 'remoteManage': {
+        const params=request.params;
+        if(params.action==='create'){
+          const profile=this.store.sshConnections().find(item=>item.alias.toLowerCase()===params.alias!.toLowerCase());
+          if(!profile)throw new Error('服务器别名不存在，请先填写服务器信息');
+          if(!profile.allowAgent)throw new Error('此服务器未允许 Agent 打开');
+          const key=`${profile.id}:${params.title}`;
+          const pending=this.openingAliases.get(key);if(pending)return pending;
+          const previous=this.store.state().sessions.find(item=>item.remote?.connectionId===profile.id&&item.title===params.title);
+          if(previous&&(previous.remote?.directory??'')!==(params.directory??''))throw new Error('同名 SSH 会话使用不同目录，请选择不同会话名称或停止后编辑');
+          const opening=(async()=>{
+            const session=previous??this.store.createSession(this.remoteProject().id,params.title!,'shell','',null,{connectionId:profile.id,host:profile.alias,directory:params.directory??''});
+            const existing=this.live.get(session.id);if(existing)return {sessionId:session.id,runId:existing.run.id,info:existing.remote!.activity.info};
+            const run=await this.start(session.id,false,100,30),info=this.remote(session.id,run.id).activity.control('agent');
+            this.changed();return {sessionId:session.id,runId:run.id,info};
+          })();
+          this.openingAliases.set(key,opening);try{return await opening;}finally{this.openingAliases.delete(key);}
+        }
+        let session;
+        if(params.alias){
+          const {profile}=this.aliasTarget(params.alias);
+          const matches=this.store.state().sessions.filter(item=>item.remote?.connectionId===profile.id);
+          if(matches.length!==1)throw new Error('此别名没有唯一会话，请从 terminal_list 选择 sessionId 和 runId');
+          session=matches[0];
+        }else session=this.store.session(params.sessionId!);
+        if(!session.remote?.connectionId||!this.store.sshConnection(session.remote.connectionId).allowAgent)throw new Error('此 SSH 会话未允许 Agent 管理');
+        const live=this.live.get(session.id);
+        if(params.runId&&session.latestRun?.id!==params.runId)throw new Error('终端运行实例已变化，请重新读取会话列表');
+        if(live){if(params.sessionId&&!params.runId)throw new Error('管理运行中的会话请同时提供 runId');live.remote!.activity.assertManage(client);}
+        if(params.action==='close'){await this.stop(session.id);return this.store.session(session.id);}
+        if(params.action==='delete'){
+          this.requireIdle(session.id);this.removeLogs(this.store.deleteSession(session.id));this.changed();return {deleted:true,sessionId:session.id};
+        }
+        if(params.action==='reconnect'){
+          if(!live)throw new Error('SSH 会话已停止，请调用 terminal_open');
+          await live.remote!.transport.reconnect();live.remote!.activity.assertManage(client);live.remote!.activity.control('agent');this.changed();
+          return {sessionId:session.id,runId:live.run.id,info:live.remote!.activity.info};
+        }
+        if(params.title===undefined&&params.directory===undefined)throw new Error('请提供会话名称或远端目录');
+        const remote={...session.remote,directory:params.directory??session.remote.directory};
+        if(remote.directory!==session.remote.directory)this.requireIdle(session.id);
+        const updated=this.store.updateSession(session.id,params.title??session.title,'shell','',null,remote);this.changed();return updated;
+      }
+      case 'remoteTransferStart': {
+        for(const endpoint of [request.params.source,request.params.destination])this.authorizeRemote(endpoint,client);
+        const {source,destination}=request.params;
+        if(source.kind==='remote'&&destination.kind==='remote'&&path.posix.normalize(source.path)===path.posix.normalize(destination.path)){
+          const a=this.store.sshConnection(this.store.session(source.sessionId).remote!.connectionId!),b=this.store.sshConnection(this.store.session(destination.sessionId).remote!.connectionId!);
+          if(a.hostname.toLowerCase()===b.hostname.toLowerCase()&&a.port===b.port&&a.username===b.username)throw new Error('同一服务器的源路径和目标路径相同');
+        }
+        return this.transfers.start(request.params);
+      }
+      case 'remoteTransferStatus': return this.transfers.wait(request.params.requestId,request.params.timeoutMs,client.abort.signal);
+      case 'remoteTransferCancel': {
+        const transfer=this.transfers.get(request.params.requestId);
+        if(transfer.status!=='running')return transfer;
+        if(request.params.owner==='agent')for(const endpoint of [transfer.spec.source,transfer.spec.destination])this.authorizeRemote(endpoint,client,false);
+        return this.transfers.cancel(request.params.requestId);
+      }
+      case 'remoteTransfers': this.store.session(request.params.sessionId);return this.transfers.list(request.params.sessionId);
       case 'createRemoteSession': {
         this.validateRemote({...request.params, agent:'shell', command:''});
         const session = this.store.createSession(this.remoteProject().id, request.params.title, 'shell', '', null, request.params.remote);
@@ -222,7 +296,7 @@ export class DaemonServer {
       case 'remoteReconnect': { const live=this.terminal(request.params.sessionId,request.params.runId); await this.remote(request.params.sessionId,request.params.runId).transport.reconnect(); this.store.setPid(live.run.id,live.pty.pid);live.run=this.store.run(live.run.id);this.changed();return null; }
       case 'remoteExecute': {
         const remote = this.remote(request.params.sessionId, request.params.runId);
-        return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.write(text), request.params.atPrompt);
+        return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.writeManaged(request.params.requestId,request.params.command,text), request.params.atPrompt);
       }
       case 'remoteKeys': {
         const remote = this.remote(request.params.sessionId, request.params.runId), { key, text } = request.params;
@@ -649,6 +723,7 @@ export class DaemonServer {
     if (!live || live.closed || live.stopping) return;
     live.stopping = true; this.store.stopping(live.run.id); this.changed();
     try {
+      await this.transfers.stopSession(sessionId);
       if (live.remote) { await live.remote.transport.stop(); await this.finish(sessionId,live,null); }
       else {
         await terminateTree(live.pty as pty.IPty, () => this.live.get(sessionId) === live && !live.closed);
@@ -687,6 +762,7 @@ export class DaemonServer {
       while (this.starting.size && Date.now() < startupDeadline) await new Promise(resolve => setTimeout(resolve, 25));
       if (this.starting.size) throw new Error('远端连接尚未完成，请稍后再次退出；后台保留以便确认清理');
       await this.resources.close();
+      await this.transfers.close();
       await this.git.close();
       await this.plugins.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));

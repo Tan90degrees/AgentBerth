@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
+import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, MAX_ACTIVE_TERMINALS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
@@ -196,7 +196,7 @@ export class Store {
 
   saveRemoteAction(action: Omit<RemoteAction, 'sequence'>): RemoteAction {
     this.db.prepare('INSERT INTO remote_actions (id,sessionId,value) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(action.id, action.sessionId, JSON.stringify(action));
-    if (action.kind === 'command') this.db.prepare('INSERT INTO remote_requests VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(action.id,action.sessionId,JSON.stringify(action));
+    if (action.kind === 'command'||action.kind==='transfer') this.db.prepare('INSERT INTO remote_requests VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(action.id,action.sessionId,JSON.stringify(action));
     this.db.prepare('DELETE FROM remote_actions WHERE sessionId=? AND sequence NOT IN (SELECT sequence FROM remote_actions WHERE sessionId=? ORDER BY sequence DESC LIMIT 1000)').run(action.sessionId, action.sessionId);
     return this.remoteAction(action.id)!;
   }
@@ -207,6 +207,12 @@ export class Store {
   remoteActions(sessionId: string, before = Number.MAX_SAFE_INTEGER): RemoteAction[] {
     this.session(sessionId);
     return this.db.prepare('SELECT sequence,value FROM remote_actions WHERE sessionId=? AND sequence<? ORDER BY sequence DESC LIMIT 50').all(sessionId, before).map(row => ({ ...JSON.parse(String(row.value)), sequence: Number(row.sequence) }));
+  }
+  remoteTransfers(sessionId:string):RemoteTransfer[] {
+    return this.db.prepare("SELECT value FROM remote_requests WHERE json_extract(value,'$.kind')='transfer' AND (sessionId=? OR json_extract(value,'$.transfer.spec.destination.sessionId')=?) ORDER BY rowid DESC LIMIT 20").all(sessionId,sessionId).map(row=>{
+      const action=JSON.parse(String(row.value)) as RemoteAction;
+      return {...action.transfer!,status:action.status==='unknown'?'unknown':action.transfer!.status};
+    });
   }
   settings(): Settings {
     const row = this.db.prepare('SELECT value FROM settings WHERE id = 1').get();

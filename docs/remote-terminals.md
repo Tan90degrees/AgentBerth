@@ -11,15 +11,15 @@ AgentBerth 让 Agent 操作用户正在观看的同一个真实 SSH 终端。目
 5. 告诉 Agent 使用连接别名（例如 `dev-server`）。Agent 调用 `terminal_open({"alias":"dev-server"})`，自动打开工作区底部的 SSH 实时终端，本机 Agent 终端保留在上方，两边可以同时观察。SSH 会话不再混在左侧本机会话列表。后续读屏、执行、按键和等待都可传同一 alias，无需用户复制会话 UUID。重复 open 会复用现有会话，不会抢回人工控制权，也不会自动重连已断开的 SSH。
 6. 用户可滚动、选中、复制、查找，点击 **接管** 收回输入权，任务继续运行。点击 **交给 Agent** 再次允许输入。如果同一连接有多个正在运行的会话，Agent 需从 terminal_list 选择 sessionId/runId，以免操作错会话。
 
-也可直接点击顶部 **SSH**，在底部面板选择已保存连接并点击 **连接**。反复点击 SSH 只开关同一个面板，不创建连接或重复显示行。面板收起后连接继续运行，再次展开接回同一终端；选择器可切换多个 SSH 会话，旁边的 **⋯** 或右键可启动、停止、编辑和删除。最近命令、执行状态与人工接管按钮显示在远端画面旁；完整步骤仍可展开查看。
+点击顶部 **SSH → 服务器** 也可直接填写服务器信息；保存信息不会建立连接。会话由 Agent 通过 MCP 打开或管理。反复点击 SSH 只开关同一个面板，不创建连接或重复显示行。面板收起后连接继续运行，再次展开接回同一终端；选择器可切换多个 SSH 会话，旁边的 **⋯** 或右键可启动、停止、编辑和删除。最近命令、执行状态与人工接管按钮显示在远端画面旁；完整步骤仍可展开查看。
 
-也可打开顶部 SSH 面板，点击「新建 SSH 会话」，选择已保存连接或直接新建连接，并填写可选远端目录。手动启动的会话初始由用户控制。高级“沿用系统 SSH 配置”保留 OpenSSH 的端口、IdentityFile、ProxyJump，适合已有免交互密钥登录；需先在系统终端完成首次主机指纹确认。密码登录使用上面的保存连接入口。多因素验证码尚不支持自动填写。
+常规流程不需要手动创建 SSH 会话；Agent 可按别名创建、改名、关闭、删除或明确重连。面板中的会话菜单仍保留人工处理入口。高级“沿用系统 SSH 配置”保留 OpenSSH 的端口、IdentityFile、ProxyJump，适合已有免交互密钥登录；需先在系统终端完成首次主机指纹确认。密码登录使用上面的保存连接入口。多因素验证码尚不支持自动填写。
 
 SSH 会话独立管理。第一版文件树、预览、Git 和资源统计用于本机项目目录，不把远端路径当成本机文件，也不采集远端 CPU/内存。
 
 ## 命令、长任务和交互程序
 
-POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；辅助包装也会真实显示在终端。目录和 export 保持有效。每个新命令生成 UUID requestId，重试复用原 ID，避免重复执行。返回 actionId 用于 `terminal_wait`，completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
+POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；内部包装的已确认回显替换成原始命令，不显示 UUID 和转义串；实际程序输出保持原样。遇到无法确认的重绘或交错输出会保留原始数据，避免误删日志。目录和 export 保持有效。每个新命令生成 UUID requestId，重试复用原 ID，避免重复执行。返回 actionId 用于 `terminal_wait`，completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
 
 后台按事件等待，单次最长 30 秒。工具返回 running 后，继续等待同一 actionId，不重新启动命令。部分 MCP 客户端不能由后台事件自动唤醒模型，仍需后续有界等待；任务不会因一次等待超时而中断。
 
@@ -39,10 +39,18 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 顶部“操作步骤”默认折叠，记录命令、Agent 输入、控制权和连接变化；每页 50 条，每会话保留最近 1000 条。命令去重账本独立于可见步骤上限，淘汰旧步骤不会导致命令重放。旧 run 和当前 run 分开识别。
 
-这不是模型内部推理或完整 TUI 录像。第一版文件修改通过可见终端命令进行，没有独立远程文件传输工具；步骤不会拆解脚本内部的每个动作。
+这不是模型内部推理或完整 TUI 录像。文件传输通过同一 SSH 连接的独立 SFTP 通道执行，进度和结果显示在面板；步骤不会拆解脚本内部的每个动作。
 
 提供给 Agent 的说明：[remote-terminal-agent.md](remote-terminal-agent.md)。
 
-## 新建与管理 SSH 会话
+## 服务器与会话
 
-打开顶部 SSH 面板，点击「新建 SSH 会话」，选择已有连接或直接保存一个新连接；也可使用系统 SSH 配置。填写可选的远端目录后创建，无需添加本机项目。切换、重命名、编辑、复制、启动、停止和删除都在 SSH 面板的会话菜单内完成。普通项目的「新建会话」仅创建本机 Agent 会话。安装后在设置中更新空闲后台至 API 24。
+用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 25。
+
+## 文件传输
+
+支持 terminal_upload、terminal_download、terminal_transfer，覆盖文件和显式 recursive 目录传输。SFTP 复用保存服务器信息后建立的 SSH 连接，Shell 和 TUI 继续运行。SSH 服务需启用标准 SFTP 子系统，无需另装 Python、Node、rsync 或代理；系统 SSH 配置兼容会话暂不支持文件接口。
+
+传输是后台任务，terminal_transfer_status 可读取进度或事件式等待，terminal_transfer_cancel 可取消。进度在 SSH 面板显示，重试同一 requestId 不重复传输；MCP 超时和退出不取消已提交传输。默认不覆盖；显式 resume 会先核对已有文件前缀，失败或取消可能留下部分文件。服务器间通过本机有界流转发，不落地中转文件，不转发 SSH Agent。
+
+接口能力参考 [ssh-skill 的文件传输契约](https://github.com/badseal/ssh-skill/blob/main/references/commands.md)，实现使用应用自带的 SSH/SFTP 客户端，无需安装该 Skill 的 Python 依赖。

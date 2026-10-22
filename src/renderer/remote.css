@@ -41,3 +41,5 @@
 
 .ssh-dock .remote-steps {max-height:72px;}
 .ssh-dock .terminal-host {padding:6px 10px 4px 18px;}
+.remote-transfer progress {width:70px;height:4px;accent-color:var(--text-secondary);}
+.remote-transfer button {font-size:11px;white-space:nowrap;}

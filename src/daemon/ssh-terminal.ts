@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { Client, type ClientChannel, type ConnectConfig } from 'ssh2';
+import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from 'ssh2';
 import { StringDecoder } from 'node:string_decoder';
-import { shellBootstrap, ShellMarkers, type TerminalProcess } from './remote';
+import { shellBootstrap, ManagedOutput, type TerminalProcess } from './remote';
 import type { RemoteInfo, SshConnection, SshSecret } from '../shared/protocol';
 
 export interface SshAccess {
@@ -21,16 +21,32 @@ export class SshTerminal implements TerminalProcess {
   private closed = false;
   private reconnecting = false;
   private startupAbort: AbortController | null = null;
+  private display: ManagedOutput | null = null;
   constructor(private config: SshConnection, private sessionId: string, private directory: string, private cols: number, private rows: number,
     private access: SshAccess, private notify: (change: Partial<RemoteInfo>) => void,
     private marker: (kind: 'ready' | 'start', status: number, cwd: string | null, requestId: string) => void) {}
   onData(listener: (text: string) => void) { this.events.on('data', listener); return { dispose: () => { this.events.off('data', listener); } }; }
   onExit(listener: (value: {exitCode: number; signal?: number}) => void) { this.events.on('exit', listener); return { dispose: () => { this.events.off('exit', listener); } }; }
-  write(data: string | Buffer): void { if (!this.channel || this.closed) throw new Error('SSH 未连接，输入未发送'); this.channel.write(data); }
+  write(data: string | Buffer): void { if (!this.channel || this.closed) throw new Error('SSH 未连接，输入未发送');if(data.includes('\x03'))this.display?.cancel(); this.channel.write(data); }
+  writeManaged(requestId:string,command:string,wire:string):void {this.display?.begin(requestId,command,wire);try{this.write(wire);}catch(error){this.display?.cancel();throw error;}}
+  sftp():Promise<SFTPWrapper> {
+    const client=this.client,generation=this.generation;
+    if(!client||!this.channel||this.closed)return Promise.reject(new Error('SSH 未连接'));
+    return new Promise((resolve,reject)=>{
+      let settled=false;
+      const timer=setTimeout(()=>{settled=true;reject(new Error('服务器未响应 SFTP 子系统；请确认 SSH 服务允许文件传输'));},10000);
+      client.sftp((error,sftp)=>{
+        if(settled){sftp?.end();return;}settled=true;clearTimeout(timer);
+        if(error){reject(new Error('SSH 服务未启用 SFTP 文件传输子系统'));return;}
+        if(this.closed||this.generation!==generation){sftp.end();reject(new Error('SSH 连接已变化'));return;}
+        sftp.on('error',()=>{});resolve(sftp);
+      });
+    });
+  }
   resize(cols: number, rows: number): void { this.cols = cols; this.rows = rows; this.channel?.setWindow(rows, cols, 0, 0); }
   pause(): void { this.channel?.pause(); }
   resume(): void { this.channel?.resume(); }
-  kill(): void { this.closed = true; this.generation++; this.startupAbort?.abort(); this.channel?.destroy(); this.channel = null; this.client?.destroy(); this.client = null; }
+  kill(): void { this.display?.end();this.display=null;this.closed = true; this.generation++; this.startupAbort?.abort(); this.channel?.destroy(); this.channel = null; this.client?.destroy(); this.client = null; }
 
   async connect(): Promise<void> {
     if (this.startupAbort) throw new Error('SSH 正在连接');
@@ -77,7 +93,7 @@ export class SshTerminal implements TerminalProcess {
       });
       client.on('close', () => {
         if (!active()) return;
-        cleanup(); this.channel = null; this.client = null;
+        this.display?.end();this.display=null;cleanup(); this.channel = null; this.client = null;
         if (!settled) { settled = true; reject(new Error(verificationError?.message ?? 'SSH 登录未完成，请检查连接设置')); }
         this.notify({ connection: 'disconnected', phase: 'unknown', owner: 'user', error: shellExit === null ? 'SSH 链路已断开，远端任务结果未知。重新连接将新建 Shell。' : 'SSH 会话已结束' });
         if (online && shellExit !== null) this.events.emit('exit', { exitCode: shellExit });
@@ -98,8 +114,8 @@ export class SshTerminal implements TerminalProcess {
               if (!active()) { channel.destroy(); return; }
               this.channel = channel;
               const decoder = new StringDecoder('utf8');
-              const markers = new ShellMarkers(this.sessionId, (kind, status, cwd, requestId) => { if (!requestId && kind === 'ready') ready(); this.marker(kind, status, cwd, requestId); });
-              const data = (bytes: Buffer) => { if (!active()) return; if (posix) markers.feed(bytes); else ready(); this.events.emit('data', decoder.write(bytes)); };
+              this.display=posix?new ManagedOutput(this.sessionId,text=>this.events.emit('data',text),(kind, status, cwd, requestId) => { if (!requestId && kind === 'ready') ready(); this.marker(kind, status, cwd, requestId); }):null;
+              const data = (bytes: Buffer) => { if (!active()) return; if(this.display)this.display.feed(bytes);else {ready();this.events.emit('data', decoder.write(bytes));} };
               channel.on('data', data); channel.stderr.on('data', data);
               channel.on('error', () => fail('SSH 终端连接中断，任务结果未知'));
               channel.on('exit', (code: number | null) => { shellExit = typeof code === 'number' ? code : null; });
@@ -131,7 +147,7 @@ export class SshTerminal implements TerminalProcess {
   async reconnect(): Promise<void> {
     if (this.reconnecting || this.closed || this.startupAbort) throw new Error('终端正在重新连接或已经关闭');
     this.reconnecting = true;
-    try { this.generation++; this.channel?.destroy(); this.client?.destroy(); this.channel = null; this.client = null; this.events.emit('data', '\r\n[新 SSH 连接：原 Shell 和任务未恢复]\r\n'); await this.connect(); }
+    try { this.display?.end();this.display=null;this.generation++; this.channel?.destroy(); this.client?.destroy(); this.channel = null; this.client = null; this.events.emit('data', '\r\n[新 SSH 连接：原 Shell 和任务未恢复]\r\n'); await this.connect(); }
     finally { this.reconnecting = false; }
   }
   async stop(): Promise<void> {

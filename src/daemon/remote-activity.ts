@@ -12,6 +12,7 @@ export class RemoteActivity {
   private pending: RemoteAction | null = null;
   private started = false;
   private holder: object | null = null;
+  private agentGranted = false;
   constructor(readonly info: RemoteInfo, private store: Pick<Store, 'remoteAction' | 'saveRemoteAction'>,
     private publish: (info: RemoteInfo) => void, private publishAction: (action: RemoteAction) => void) {}
   change(update: Partial<RemoteInfo>): void {
@@ -22,11 +23,17 @@ export class RemoteActivity {
     if (update.connection && previousConnection !== update.connection) this.action('connection', update.connection === 'connected' ? 'SSH 已连接' : update.connection === 'connecting' ? '连接 SSH' : 'SSH 已断开，远端任务结果未知');
   }
   control(owner: 'user' | 'agent'): RemoteInfo {
+    this.agentGranted=owner==='agent';
     this.holder = null;
     this.change({ owner }); this.action('control', owner === 'user' ? '人工接管' : '允许 Agent 操作');
     return { ...this.info };
   }
   release(client: object): void { if (this.holder === client) this.control('user'); }
+  assertManage(client:object):void {
+    if(!this.agentGranted)throw new Error('终端由用户控制，请等待用户交还控制权');
+    if(this.holder&&this.holder!==client)throw new Error('另一个 Agent 正在操作此终端');
+    this.holder=client;
+  }
   assertAgent(client: object): void {
     if (this.info.owner !== 'agent') throw new Error('终端由用户控制，请让用户点击“交给 Agent”；不要自动抢回控制权');
     if (this.holder && this.holder !== client) throw new Error('另一个 Agent 正在操作此终端');

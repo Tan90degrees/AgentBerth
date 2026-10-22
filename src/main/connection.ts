@@ -38,7 +38,7 @@ export class DaemonConnection {
     if (this.pending.size >= 128) return Promise.reject(new Error('请求过多，请稍后重试'));
     const id = randomUUID();
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, method === 'gitOperation' ? 600000 : ['start', 'remoteOpen', 'stop', 'shutdown', 'remoteReconnect'].includes(method) ? 60000 : method === 'remoteWait' ? 35000 : 15000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, method === 'gitOperation' ? 600000 : ['start', 'remoteOpen', 'remoteManage', 'stop', 'shutdown', 'remoteReconnect'].includes(method) ? 60000 : ['remoteWait','remoteTransferStatus'].includes(method) ? 35000 : 15000);
       this.pending.set(id, { resolve: value => resolve(value as T), reject, timer });
       this.socket.send(JSON.stringify({ id, method, params }));
     });

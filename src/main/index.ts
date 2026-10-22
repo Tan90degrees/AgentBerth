@@ -143,6 +143,7 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   if (connecting) await connecting;
   if (!connection) await reconnect();
   if(method==='resources')return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128)});
+  if(method==='remoteTransferCancel')return connection!.rpc(method,{...request.data.params,owner:'user'});
   return connection!.rpc(method, request.data.params);
 });
 ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {

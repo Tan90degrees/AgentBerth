@@ -72,7 +72,7 @@ test('bundled MCP stdio initializes, exposes scoped tools and shuts down cleanly
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list',params:{}})+'\n');
   await eventually(async()=>stdout.trim().split('\n').length>=2,5000);child.stdin.end();
   assert.equal(await closed,0,stderr);const messages=stdout.trim().split('\n').map(line=>JSON.parse(line));
-  assert.equal(messages.find(message=>message.id===1).result.serverInfo.name,'agentberth-terminal');assert.equal(messages.find(message=>message.id===2).result.tools.length,7);
+  assert.equal(messages.find(message=>message.id===1).result.serverInfo.name,'agentberth-terminal');assert.equal(messages.find(message=>message.id===2).result.tools.length,17);
 });
 
 test('saved password and encrypted-key connections run real POSIX commands through sshd without remote dependencies', {skip:!process.env.AGENTBERTH_SSH_TEST_PORT,timeout:45000},async t=>{

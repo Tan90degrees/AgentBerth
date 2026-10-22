@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 24;
+export const API_VERSION = 25;
 export const MAX_ACTIVE_TERMINALS = 16;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
@@ -57,6 +57,16 @@ export const remoteSchema = z.object({
 }).strict();
 export type RemoteConfig = z.infer<typeof remoteSchema>;
 const remoteTarget = { sessionId: id, runId: id };
+const transferPath=z.string().min(1).max(4096).refine(value=>!/[\x00\r\n]/.test(value));
+export const transferEndpointSchema=z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('local'),path:transferPath}).strict(),
+  z.object({kind:z.literal('remote'),...remoteTarget,path:transferPath.refine(value=>value.startsWith('/'),'远端请使用绝对路径')}).strict(),
+]);
+export const transferSpecSchema=z.object({requestId:id,source:transferEndpointSchema,destination:transferEndpointSchema,recursive:z.boolean().default(false),resume:z.boolean().default(false),overwrite:z.boolean().default(false)}).strict().refine(value=>value.source.kind==='remote'||value.destination.kind==='remote','至少一端必须是 SSH 服务器').refine(value=>!value.resume||!value.overwrite,'续传和覆盖不能同时选择');
+export type TransferEndpoint=z.infer<typeof transferEndpointSchema>;
+export type TransferSpec=z.infer<typeof transferSpecSchema>;
+export interface RemoteTransfer {id:string;spec:TransferSpec;sessionId:string;runId:string;status:'running'|'completed'|'failed'|'cancelled'|'unknown';bytes:number;totalBytes:number;files:number;totalFiles:number;startedAt:string;endedAt:string|null;error:string|null}
+export const remoteManageSchema=z.object({action:z.enum(['create','update','close','delete','reconnect']),alias:z.string().min(1).max(100).optional(),sessionId:id.optional(),runId:id.optional(),title:title.optional(),directory:remoteSchema.shape.directory.optional()}).strict().refine(value=>value.action==='create'?!!value.alias&&!!value.title:!!value.alias||!!value.sessionId,'请提供服务器别名或会话 ID').refine(value=>!(value.alias&&value.sessionId),'别名和会话 ID 二选一');
 export const remoteKeySchema = z.enum(['Enter', 'Tab', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Ctrl+C', 'Ctrl+D', 'Ctrl+Z', 'Backspace']);
 export type RemoteKey = z.infer<typeof remoteKeySchema>;
 const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null), remote: remoteSchema.nullable().default(null) };
@@ -84,6 +94,11 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('remoteAliases'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100), owner: z.enum(['user','agent']).default('agent') }).strict() }),
   z.object({ id, method: z.literal('remoteResolve'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
+  z.object({ id, method: z.literal('remoteManage'), params: remoteManageSchema }),
+  z.object({ id, method: z.literal('remoteTransferStart'), params: transferSpecSchema }),
+  z.object({ id, method: z.literal('remoteTransferStatus'), params: z.object({requestId:id,timeoutMs:z.number().int().min(0).max(30000).default(0)}).strict() }),
+  z.object({ id, method: z.literal('remoteTransferCancel'), params: z.object({requestId:id,owner:z.enum(['user','agent']).default('agent')}).strict() }),
+  z.object({ id, method: z.literal('remoteTransfers'), params: z.object({sessionId:id}).strict() }),
   z.object({ id, method: z.literal('sshHosts'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('createRemoteSession'), params: z.object({ title, remote: remoteSchema }).strict() }),
   z.object({ id, method: z.literal('remoteInfo'), params: z.object({ sessionId: id }).strict() }),
@@ -171,11 +186,12 @@ export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
 export interface RemoteInfo { commandTracking?: 'posix' | 'none'; sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
-export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null }
+export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection' | 'transfer'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null; transfer?:RemoteTransfer }
 export type ServerEvent =
   | { event: 'sshChallenge'; data: SshChallenge }
   | { event: 'remote'; data: RemoteInfo }
   | { event: 'remoteAction'; data: RemoteAction }
+  | { event: 'remoteTransfer'; data: RemoteTransfer }
   | { event: 'state'; data: State }
   | TerminalEvent
   | { event: 'connection'; data: { connected: boolean; error?: string } };

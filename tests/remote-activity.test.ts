@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { RemoteActivity } from '../src/daemon/remote-activity';
-import { managedCommand, RemoteTerminal, shellQuote, ShellMarkers, sshArguments, sshHosts } from '../src/daemon/remote';
+import { managedCommand, ManagedOutput, RemoteTerminal, shellQuote, ShellMarkers, sshArguments, sshHosts } from '../src/daemon/remote';
 import * as pty from 'node-pty';
 import { Store } from '../src/daemon/store';
 import { requestSchema, type Method, type RemoteAction, type RemoteInfo } from '../src/shared/protocol';
@@ -101,6 +101,68 @@ test('Shell builtin markers handle UTF-8, semicolons and arbitrary fragmentation
   assert.deepEqual(seen,[['start',0,null,requestId],['ready',17,'/项目/hello;world',requestId]]);
 });
 
+test('managed command echo becomes the original command across fragmented UTF-8, wrapping and Readline controls',()=>{
+  const id=randomUUID(),request=randomUUID(),command=`printf '%s\\n' ${shellQuote("quotes ' 中😀 ".repeat(40))}`,wire=managedCommand(id,request,command);
+  let output='';const seen:unknown[]=[];
+  const display=new ManagedOutput(id,text=>output+=text,(...event)=>seen.push(event));
+  display.begin(request,command,wire);
+  const echo=wire.replaceAll('\\\r','\\\r\n\x1b[?2004l\r\x1b[?2004h> ').replace(/\r$/, '\r\n\x1b[?2004l\r');
+  const realOutput='\x1b[31mREAL 中😀\x1b[0m\r\nprintf wrapper-like __ab_status must stay\r\n';
+  const text=`prompt> ${echo}\x1b]777;AgentBerth;${id};start;${request}\x07${realOutput}\x1b]777;AgentBerth;${id};ready;${request};7;/tmp/中\x07prompt> `;
+  for(const byte of Buffer.from(text))display.feed(Buffer.from([byte]));
+  display.end();
+  assert.ok(output.startsWith('prompt> '));assert.ok(output.includes(command+'\r\n'));
+  assert.ok(output.includes(realOutput));assert.ok(output.endsWith('prompt> '));
+  assert.ok(!output.includes(`AgentBerth;${id}`));assert.ok(!output.includes('; __ab_status=$?;'));
+  assert.ok(output.includes('\x1b[?2004l'),'Terminal mode transitions must survive echo replacement');
+  assert.deepEqual(seen,[['start',0,null,request],['ready',7,'/tmp/中',request]]);
+});
+
+test('echo filtering preserves background output, no-echo terminals and wrapper-like real program output',()=>{
+  const id=randomUUID(),request=randomUUID(),command='printf REAL',wire=managedCommand(id,request,command);
+  let output='';const display=new ManagedOutput(id,text=>output+=text,()=>{});
+  display.begin(request,command,wire);
+  display.feed(Buffer.from(`BACKGROUND before\r\n${wire.replaceAll('\r','\r\n')}BACKGROUND after\r\n\x1b]777;AgentBerth;${id};start;${request}\x07`));
+  assert.ok(output.includes('BACKGROUND before\r\n'));assert.ok(output.includes('BACKGROUND after\r\n'));
+  assert.ok(output.includes(command+'\r\n'));assert.ok(!output.includes('; __ab_status=$?;'));
+  display.feed(Buffer.from(wire));assert.ok(output.endsWith(wire),'Do not filter program output after command start');
+  output='';display.begin(request,command,wire);
+  display.feed(Buffer.from(`prompt> \x1b]777;AgentBerth;${id};start;${request}\x07REAL\r\n`));
+  assert.equal(output,`prompt> ${command}\r\nREAL\r\n`);
+  output='';display.begin(request,command,wire);
+  const interleaved=wire.slice(0,100)+'BACKGROUND INTERLEAVED\r\n'+wire.slice(100);
+  display.feed(Buffer.from(interleaved+`\x1b]777;AgentBerth;${id};start;${request}\x07`));
+  assert.equal(output,interleaved,'An unrecognized echo must fail open without losing background logs');
+  display.end();
+});
+
+test('cancelled and oversized submissions flush safely; malformed or partial markers retain data',()=>{
+  const id=randomUUID(),request=randomUUID(),wire=managedCommand(id,request,'false');let output='';
+  const display=new ManagedOutput(id,text=>output+=text,()=>{});
+  display.begin(request,'false',wire);display.feed(Buffer.from('PARTIAL INPUT'));display.cancel();assert.equal(output,'PARTIAL INPUT');
+  output='';display.begin(request,'false',wire);const large='x'.repeat(129*1024);display.feed(Buffer.from(large));assert.equal(output,large);
+  display.feed(Buffer.from(`\x1b]777;AgentBerth;${id};malformed\x07tail\x1b]777;AgentBerth;${id};rea`));display.end();
+  assert.ok(output.endsWith(`\x1b]777;AgentBerth;${id};malformed\x07tail\x1b]777;AgentBerth;${id};rea`));
+});
+
+for(const shell of ['/bin/sh','/bin/bash'])test(`real ${shell} PTY displays original commands and output without bookkeeping`,{skip:process.platform==='win32',timeout:15000},async t=>{
+  const id=randomUUID(),request=randomUUID(),payload="😀'中 ".repeat(150),command=`AB_VALUE=${shellQuote(payload)}; cd /tmp; printf '%s\\n' "$AB_VALUE"; false`;
+  const child=pty.spawn(shell,shell.endsWith('bash')?['--noprofile','--norc','-i']:['-i'],{cols:50,rows:24,env:{...process.env,PATH:'/nonexistent-agentberth',SHELL:shell,PS1:'FIXTURE> ',PS2:'> ',PROMPT_COMMAND:'',ENV:'/dev/null',HISTFILE:'/dev/null'}});
+  t.after(()=>{try{child.kill();}catch{}});
+  let output='',sent=false;
+  await new Promise<void>((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('No completion from clean-echo PTY')),12000);
+    const display=new ManagedOutput(id,text=>output+=text,(kind,status,cwd,actionId)=>{
+      if(kind==='ready'&&actionId===request){clearTimeout(timer);try{assert.equal(status,1);assert.equal(cwd,'/tmp');resolve();}catch(error){reject(error);}}
+    });
+    t.after(()=>{clearTimeout(timer);display.end();});
+    child.onData(text=>{display.feed(Buffer.from(text));if(!sent&&output.includes('FIXTURE> ')){sent=true;const wire=managedCommand(id,request,command);display.begin(request,command,wire);child.write(wire);}});
+    child.onExit(()=>{clearTimeout(timer);reject(new Error('Shell exited before completion'));});
+  });
+  assert.ok(output.includes(command+'\r\n'),JSON.stringify(output));assert.ok(output.includes(payload),JSON.stringify(output));
+  assert.ok(!output.includes(`AgentBerth;${id}`));assert.ok(!output.includes('; __ab_status=$?;'));
+});
+
 test('POSIX builtins track commands and keep state with no remote programs in PATH', {skip:process.platform==='win32'},()=>{
   const id=randomUUID(),commandIds=[randomUUID(),randomUUID(),randomUUID()];
   const input=[managedCommand(id,commandIds[0],'export AB_TEST_STATE=42; cd /'),managedCommand(id,commandIds[1],'false'),managedCommand(id,commandIds[2],'printf "VALUE=%s\\n" "$AB_TEST_STATE"')].join('').replaceAll('\r','\n')+'exit\n';
@@ -159,7 +221,7 @@ test('MCP advertises only scoped terminal tools and delegates bounded waits with
   const calls:{method:string;params:unknown}[]=[];const id=randomUUID();
   const server=new TerminalMcp({rpc:async<T>(method: Method,params?: Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteExecute'?{id,status:'running'}:{status:'running'}) as T;}});
   const initialized:any=await server.request('initialize',{protocolVersion:'2025-11-25'});assert.equal(initialized.protocolVersion,'2025-11-25');
-  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,7);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
+  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,17);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:id,command:'sleep 100',waitMs:10}});
   assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteExecute','remoteWait']);
   await assert.rejects(server.request('tools/call',{name:'shutdown'}),McpError);
