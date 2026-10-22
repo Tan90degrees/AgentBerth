@@ -28,7 +28,7 @@ interface LiveTerminal {
   run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
   log: RunLog | null;
-  output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null;
+  output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null; finishing: Promise<void> | null;
 }
 interface Client { subscriptions: Set<string>; pending: number; abort: AbortController }
 
@@ -464,7 +464,7 @@ export class DaemonServer {
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
     }
     this.store.setPid(run.id, child.pid);
-    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
+    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
     this.pruneLogs();
@@ -532,20 +532,23 @@ export class DaemonServer {
     if (session.latestRun) return { run: session.latestRun, ...this.store.savedScreen(session.latestRun.id) };
     return { run: null, snapshot: '', seq: 0, cols: 100, rows: 30 };
   }
-  private async finish(sessionId: string, live: LiveTerminal, exitCode: number | null): Promise<void> {
-    if (live.closed) return;
-    live.closed = true; live.remote?.activity.finish();
-    // taskkill ends the shell tree, but node-pty's ConPTY output worker and native
-    // handles still require disposal. Without it a stopped terminal keeps the
-    // daemon (and the Windows test process) alive indefinitely.
-    if (process.platform === 'win32') {
-      try { live.pty.kill(); } catch (error) { this.logError(error); }
-    }
-    const screen = await this.screen(live, !!live.run.recordOutput);
-    this.store.finish(live.run.id, live.stopping ? 'stopped' : 'exited', exitCode, null, screen.snapshot, screen.seq, screen.cols, screen.rows);
-    if (this.live.get(sessionId) === live) this.live.delete(sessionId);
-    live.terminal.dispose();
-    this.changed();
+  private finish(sessionId: string, live: LiveTerminal, exitCode: number | null): Promise<void> {
+    if (live.finishing) return live.finishing;
+    live.closed = true;
+    // Publish one completion promise before cleanup can trigger another exit.
+    live.finishing = Promise.resolve().then(async () => {
+      live.remote?.activity.finish();
+      // Dispose ConPTY's output worker as well as the terminated process.
+      if (process.platform === 'win32') {
+        try { live.pty.kill(); } catch (error) { this.logError(error); }
+      }
+      const screen = await this.screen(live, !!live.run.recordOutput);
+      this.store.finish(live.run.id, live.stopping ? 'stopped' : 'exited', exitCode, null, screen.snapshot, screen.seq, screen.cols, screen.rows);
+      if (this.live.get(sessionId) === live) this.live.delete(sessionId);
+      live.terminal.dispose();
+      this.changed();
+    });
+    return live.finishing;
   }
   private async stop(sessionId: string): Promise<void> {
     this.store.session(sessionId);
@@ -561,6 +564,9 @@ export class DaemonServer {
         // confirmed-dead process in "stopping" waiting for that notification.
         if (process.platform === 'win32') await this.finish(sessionId, live, null);
       }
+      // Remote stop emits exit synchronously; await the queued screen flush
+      // and durable status update before acknowledging that stop completed.
+      if (live.finishing) await live.finishing;
     }
     catch (error) {
       this.logError(error);
