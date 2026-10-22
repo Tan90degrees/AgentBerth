@@ -27,7 +27,7 @@
 .ssh-dock {display:flex;flex:0 0 clamp(280px,42vh,480px);flex-direction:column;min-height:180px;min-width:0;border-top:1px solid var(--border);background:var(--terminal);overflow:hidden;}
 .ssh-dock.expanded {flex:2 1 0;}
 .ssh-dock.sole-terminal {flex:1;}
-.ssh-dock-header {display:flex;align-items:center;gap:8px;min-height:36px;padding:4px 12px;background:var(--bg);}
+.ssh-dock-header {display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:36px;padding:4px 12px;background:var(--bg);}
 .ssh-dock-header h2 {font-size:12px;line-height:20px;margin:0;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ssh-dock-header select {flex:1;min-width:100px;max-width:340px;font-size:11px;padding:4px 8px;}
 .ssh-dock-header button {white-space:nowrap;font-size:11px;}

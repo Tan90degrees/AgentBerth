@@ -1362,20 +1362,38 @@ try {
   await eventually(async()=> (await page.evaluate(()=>window.berth.rpc('sshConnections'))).length===0,'SSH profile was not deleted');
   await page.locator('.projects .project-item').click();
   await menuAction(page, '新建会话', 'project');
+  assert.equal(await page.getByLabel('运行位置',{exact:true}).count(),0,'Local session creation must not expose SSH');
+  assert.equal(await page.getByLabel('SSH 连接',{exact:true}).count(),0);
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.getByRole('button',{name:'SSH 面板',exact:true}).click();
+  await page.getByRole('button',{name:'新建 SSH 会话',exact:true}).click();
+  await page.getByRole('dialog',{name:'新建 SSH 会话',exact:true}).waitFor();
   await page.getByLabel('会话名称', { exact: true }).fill('远程终端演示');
-  await page.getByLabel('运行位置', { exact: true }).selectOption('ssh');
+  assert.equal(await page.getByLabel('运行位置',{exact:true}).count(),0);
+  assert.equal(await page.getByLabel('Agent 类型',{exact:true}).count(),0,'SSH creation must not expose local Agent controls');
   await page.getByLabel('SSH 连接', { exact: true }).selectOption('legacy');
   await page.getByLabel('SSH 主机别名', { exact: true }).fill(process.env.AGENTBERTH_SSH_TEST_HOST || 'dev-server');
   await page.getByLabel('远端工作目录', { exact: true }).fill('/tmp');
-  assert.equal(await page.getByLabel('Agent 类型', { exact: true }).isDisabled(), true);
   await page.getByLabel('创建后立即启动', { exact: true }).uncheck();
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}remote-session-config.png`});
   await page.getByRole('button', { name: '创建会话', exact: true }).click();
   await page.getByRole('heading', { name: '远程终端演示', exact: true }).waitFor();
   const remoteSession = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.title === '远程终端演示');
   assert.equal(remoteSession.remote.directory, '/tmp');
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).projects.find(item=>item.id===remoteSession.projectId).remoteWorkspace,true,'SSH creation must use its independent workspace');
   const dock=page.getByRole('region',{name:'SSH 实时终端',exact:true});
   await dock.waitFor();
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();
+  assert.equal(await page.getByRole('menuitem',{name:'新建会话',exact:true}).count(),0,'SSH menu must not create a local session');
+  await page.getByRole('menuitem',{name:'新建 SSH 会话',exact:true}).click();
+  await page.getByRole('dialog',{name:'新建 SSH 会话',exact:true}).waitFor();
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();
+  await page.getByRole('menuitem',{name:'编辑会话',exact:true}).click();
+  await page.getByRole('dialog',{name:'编辑 SSH 会话',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('远端工作目录',{exact:true}).inputValue(),'/tmp');
+  assert.equal(await page.getByLabel('Agent 类型',{exact:true}).count(),0);
+  await page.getByRole('button',{name:'取消',exact:true}).click();
   assert.equal(await page.locator('.projects .session-item').filter({hasText:'远程终端演示'}).count(),0,'Remote sessions belong in the dock, not the sidebar');
   const beforeSshToggle=await page.evaluate(()=>window.berth.rpc('state'));
   for(let index=0;index<4;index++){
@@ -1389,7 +1407,7 @@ try {
     localSshObserver=await page.evaluate(async projectId=>{
       const session=await window.berth.rpc('createSession',{projectId,title:'本机与 SSH 同时观察',agent:'shell',terminal:{profile:'bash',executable:'',args:[]}});
       await window.berth.rpc('start',{sessionId:session.id,cols:100,rows:30});return session;
-    },remoteSession.projectId);
+    },beforeSshToggle.projects.find(project=>!project.remoteWorkspace).id);
     await page.locator('.session-item').filter({hasText:'本机与 SSH 同时观察'}).click();
     await page.locator('.workspace-host .xterm').waitFor();
     await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'启动终端',exact:true}).click();
@@ -1405,10 +1423,10 @@ try {
     await dock.getByRole('button', { name: '操作步骤', exact: false }).click();
     await page.getByLabel('远程操作步骤', { exact: true }).getByText('退出 0', { exact: true }).waitFor();
     assert.ok((await page.getByLabel('远程终端控制',{exact:true}).boundingBox()).height <= 52,'Remote controls should stay compact');
-    const secondSsh=await page.evaluate(async ({projectId,host})=>{
-      const session=await window.berth.rpc('createSession',{projectId,title:'第二个 SSH 终端',agent:'shell',remote:{host,directory:'/tmp'}});
+    const secondSsh=await page.evaluate(async host=>{
+      const session=await window.berth.rpc('createRemoteSession',{title:'第二个 SSH 终端',remote:{host,directory:'/tmp'}});
       await window.berth.rpc('start',{sessionId:session.id,cols:100,rows:30});return session;
-    },{projectId:remoteSession.projectId,host:process.env.AGENTBERTH_SSH_TEST_HOST});
+    },process.env.AGENTBERTH_SSH_TEST_HOST);
     for(let index=0;index<6;index++){
       await dock.getByLabel('SSH 终端',{exact:true}).selectOption(index%2?secondSsh.id:remoteSession.id);
       assert.equal(await dock.locator('.remote-session').count(),1,'SSH switches must not accumulate status rows');
@@ -1455,7 +1473,28 @@ try {
   await menuAction(page, '删除项目', 'project');
   await page.getByRole('button', { name: '确认删除项目', exact: true }).click();
   await page.getByRole('button', { name: '添加第一个项目', exact: true }).waitFor();
-  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).projects.length, 0);
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).projects.filter(project=>!project.remoteWorkspace).length, 0);
+  step('SSH creation and copying stay independent with no local project');
+  await page.getByRole('button',{name:'SSH 面板',exact:true}).click();
+  await dock.getByRole('button',{name:'新建 SSH 会话',exact:true}).click();
+  await page.getByLabel('会话名称',{exact:true}).fill('独立 SSH');
+  await page.getByLabel('SSH 连接',{exact:true}).selectOption('legacy');
+  await page.getByLabel('SSH 主机别名',{exact:true}).fill('fixture-server');
+  await page.getByLabel('创建后立即启动',{exact:true}).uncheck();
+  await page.getByRole('button',{name:'创建会话',exact:true}).click();
+  await dock.getByRole('heading',{name:'独立 SSH',exact:true}).waitFor();
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).projects.filter(project=>!project.remoteWorkspace).length,0);
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();
+  await page.getByRole('menuitem',{name:'复制会话',exact:true}).click();
+  await page.getByRole('dialog',{name:'新建 SSH 会话',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('会话名称',{exact:true}).inputValue(),'独立 SSH · 副本');
+  assert.equal(await page.getByLabel('SSH 主机别名',{exact:true}).inputValue(),'fixture-server');
+  assert.equal(await page.getByLabel('Agent 类型',{exact:true}).count(),0);
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();
+  await page.getByRole('menuitem',{name:'删除会话',exact:true}).click();
+  await page.getByRole('button',{name:'确认删除会话',exact:true}).click();
+  await dock.getByRole('button',{name:'收起 SSH 面板',exact:true}).click();
   await stat(exportPath); await stat(moved);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();

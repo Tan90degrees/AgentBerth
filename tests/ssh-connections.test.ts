@@ -10,10 +10,36 @@ import { SshVault } from '../src/main/ssh-vault';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import { TerminalMcp } from '../src/mcp/server';
-import { sshConnectionSchema, type SshConnection, type SshConnectionConfig, type RemoteInfo, type RemoteAction } from '../src/shared/protocol';
+import { sshConnectionSchema, type SshConnection, type SshConnectionConfig, type RemoteInfo, type RemoteAction, type Session, type State, type Project } from '../src/shared/protocol';
 
 const config = (): SshConnectionConfig => ({alias:'test-server',hostname:'127.0.0.1',port:22,username:'fixture-user',authentication:'password',privateKeyPath:'',allowAgent:true});
 const temporary = () => mkdtempSync(path.join(tmpdir(),'ab-ssh-profile-'));
+
+test('SSH sessions can be created and managed without a local project', async t => {
+  const folder=temporary(), daemon=new DaemonServer(path.join(folder,'data'));
+  const ui=await DaemonConnection.open(await daemon.listen(),()=>{});
+  t.after(async()=>{ui.close();await daemon.close();rmSync(folder,{recursive:true,force:true});});
+  assert.equal((await ui.rpc<State>('state')).projects.length,0);
+  await assert.rejects(ui.rpc('createRemoteSession',{title:'Invalid',remote:{connectionId:randomUUID(),host:'missing',directory:''}}));
+  assert.equal((await ui.rpc<State>('state')).projects.length,0,'Validation must not create an empty workspace');
+  const remote={host:'fixture-server',directory:'/tmp'};
+  const first=await ui.rpc<Session>('createRemoteSession',{title:'SSH A',remote});
+  const second=await ui.rpc<Session>('createRemoteSession',{title:'SSH B',remote});
+  assert.equal(first.projectId,second.projectId);
+  assert.equal(first.agent,'shell');assert.equal(first.terminal,null);assert.equal(first.latestRun,null);
+  assert.deepEqual(first.remote,remote);
+  const managed=(await ui.rpc<State>('state')).projects;
+  assert.equal(managed.length,1);assert.equal(managed[0].remoteWorkspace,true);
+  const local=await ui.rpc<Project>('createProject',{name:'Local project',path:folder});
+  const localSession=await ui.rpc<Session>('createSession',{projectId:local.id,title:'Local session',agent:'shell'});
+  assert.notEqual(first.projectId,localSession.projectId);
+  await ui.rpc('deleteProject',{projectId:local.id});
+  await ui.rpc('updateSession',{sessionId:first.id,title:'SSH renamed',agent:'shell',remote:{...remote,directory:'/var/tmp'}});
+  const state=await ui.rpc<State>('state');
+  assert.equal(state.sessions.length,2);assert.equal(state.sessions.find(item=>item.id===first.id)?.remote?.directory,'/var/tmp');
+  await ui.rpc('deleteSession',{sessionId:first.id});await ui.rpc('deleteSession',{sessionId:second.id});
+  assert.equal((await ui.rpc<State>('state')).sessions.length,0);
+});
 
 test('SSH password vault keeps memory-only secrets off disk and refuses plaintext fallback', () => {
   const folder=temporary();

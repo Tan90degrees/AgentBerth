@@ -3,10 +3,10 @@ import { SshConnectionEditor } from './SshConnections';
 import type { SshConnection, RemoteAction, RemoteConfig, RemoteInfo } from '../shared/protocol';
 import './remote.css';
 
-export function RemoteFields({ value, onChange, disabled, onError }: { value: RemoteConfig | null; onChange: (value: RemoteConfig | null) => void; disabled: boolean; onError: (error: string) => void }) {
+export function RemoteFields({ value, onChange, disabled, onError }: { value: RemoteConfig; onChange: (value: RemoteConfig) => void; disabled: boolean; onError: (error: string) => void }) {
   const [hosts,setHosts] = useState<string[]>([]), [connections,setConnections] = useState<SshConnection[]>([]), [creating,setCreating] = useState(false), [legacy,setLegacy] = useState(!!value?.host && !value?.connectionId);
   useEffect(() => { void Promise.all([window.berth.rpc<string[]>('sshHosts').then(setHosts), window.berth.rpc<SshConnection[]>('sshConnections').then(setConnections)]).catch(reason => onError(String(reason))); }, []);
-  return <div className="remote-fields"><label>运行位置<select aria-label="运行位置" disabled={disabled} value={value ? 'ssh' : 'local'} onChange={event => onChange(event.target.value === 'ssh' ? { host: '', directory: '' } : null)}><option value="local">本机</option><option value="ssh">远程 SSH · 实时终端</option></select></label>{value && <>
+  return <div className="remote-fields">
     <label>SSH 连接<select aria-label="SSH 连接" required disabled={disabled} value={value.connectionId ?? (creating ? 'new' : legacy ? 'legacy' : '')} onChange={event => {
       if (event.target.value === 'new') { setLegacy(false); setCreating(true); return; }
       setCreating(false);setLegacy(event.target.value === 'legacy');
@@ -16,8 +16,8 @@ export function RemoteFields({ value, onChange, disabled, onError }: { value: Re
     {creating && <SshConnectionEditor disabled={disabled} onError={onError} onCancel={()=>setCreating(false)} onSaved={profile=>{setConnections(previous=>[...previous,profile]);onChange({connectionId:profile.id,host:profile.alias,directory:value.directory});setCreating(false);}} />}
     {!value.connectionId && legacy && <details open><summary>系统 SSH 配置</summary><label>SSH 主机别名<input aria-label="SSH 主机别名" disabled={disabled} required list="ssh-host-aliases" maxLength={254} pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]*" value={value.host} onChange={event => onChange({ ...value, host: event.target.value })} placeholder="例如 dev-server" /><datalist id="ssh-host-aliases">{hosts.map(host => <option key={host} value={host} />)}</datalist></label><p className="form-hint">高级：沿用 ~/.ssh/config 的密钥和跳板机，需先在系统终端登录并确认主机指纹。密码登录请选择新建 SSH 连接。</p></details>}
     <label>远端工作目录（可选）<input aria-label="远端工作目录" disabled={disabled} maxLength={4096} value={value.directory} pattern="(/.*)?" onChange={event => onChange({ ...value, directory: event.target.value })} placeholder="留空使用 SSH 登录目录" /></label>
-    <p className="form-hint">远端仅需 SSH 服务及已有 Shell。项目分组、文件树与 Git 仍指向本机目录。</p>
-  </>}</div>;
+    <p className="form-hint">远端仅需 SSH 服务及已有 Shell。SSH 会话独立管理，无需本机项目目录。</p>
+  </div>;
 }
 
 export function RemoteBar({ sessionId, runId, onControl, onError }: { sessionId: string; runId: string; onControl: (info: RemoteInfo | null) => void; onError: (error: string) => void }) {

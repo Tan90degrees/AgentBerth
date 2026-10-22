@@ -160,6 +160,11 @@ export class DaemonServer {
     if (active.length > 1) throw new Error('此别名有多个运行会话，请从 terminal_list 选择 sessionId 和 runId');
     return { profile, session: active[0] ?? sessions[0] };
   }
+  private remoteProject() {
+    const folder = path.join(this.dataDirectory, 'remote-sessions');
+    mkdirSync(folder, {recursive:true, mode:0o700});
+    return this.store.createProject('远程连接', folder);
+  }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
     if (this.closing) throw new Error('后台正在退出');
     switch (request.method) {
@@ -195,8 +200,7 @@ export class DaemonServer {
           return { sessionId: previous.id, runId: live.run.id, info: live.remote!.activity.info };
         }
         const opening = (async () => {
-          const folder = path.join(this.dataDirectory,'remote-sessions'); mkdirSync(folder,{recursive:true,mode:0o700});
-          const project = previous ? null : this.store.createProject('远程连接', folder);
+          const project = previous ? null : this.remoteProject();
           const session = previous ?? this.store.createSession(project!.id, profile.alias, 'shell', '', null, { connectionId: profile.id, host: profile.alias, directory: '' });
           const run = await this.start(session.id, false, 100, 30);
           const info = this.remote(session.id,run.id).activity.control(request.params.owner);
@@ -207,6 +211,11 @@ export class DaemonServer {
         finally { if (this.openingAliases.get(profile.id) === opening) this.openingAliases.delete(profile.id); }
       }
       case 'sshHosts': return sshHosts();
+      case 'createRemoteSession': {
+        this.validateRemote({...request.params, agent:'shell', command:''});
+        const session = this.store.createSession(this.remoteProject().id, request.params.title, 'shell', '', null, request.params.remote);
+        this.changed(); return session;
+      }
       case 'remoteInfo': return this.live.get(request.params.sessionId)?.remote?.activity.info ?? null;
       case 'remoteActions': return this.store.remoteActions(request.params.sessionId, request.params.before);
       case 'remoteControl': return this.remote(request.params.sessionId, request.params.runId).activity.control(request.params.owner);

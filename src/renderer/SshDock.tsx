@@ -6,9 +6,9 @@ import { TerminalView } from './TerminalView';
 import { readStored, saveStored } from './storage';
 
 /** One mounted remote viewport. Opening the dock never starts a new SSH session. */
-export function SshDock({state,visible,connected,sessionId,onSelect,onClose,onSettings,onMenu,onError,connectionEpoch,hasLocal}: {
+export function SshDock({state,visible,connected,sessionId,onSelect,onClose,onNew,onSettings,onMenu,onError,connectionEpoch,hasLocal}: {
   state: State; visible: boolean; connected: boolean; sessionId: string; onSelect: (id:string)=>void; onClose:()=>void; onSettings:()=>void;
-  onMenu:(target:TreeMenuTarget)=>void; onError:(error:string)=>void; connectionEpoch:number; hasLocal:boolean;
+  onNew:()=>void; onMenu:(target:TreeMenuTarget)=>void; onError:(error:string)=>void; connectionEpoch:number; hasLocal:boolean;
 }) {
   const sessions=state.sessions.filter(session=>session.remote);
   const session=sessions.find(item=>item.id===sessionId);
@@ -41,6 +41,7 @@ export function SshDock({state,visible,connected,sessionId,onSelect,onClose,onSe
         {sessions.length>0&&<optgroup label="已有会话">{sessions.map(value=><option key={value.id} value={value.id}>{value.title} · {value.remote?.host}{value.latestRun?.status==='running'?' · 运行中':''}</option>)}</optgroup>}
         <optgroup label="已保存连接">{profiles.filter(profile=>!sessions.some(value=>value.remote?.connectionId===profile.id)).map(profile=><option key={profile.id} value={'profile:'+profile.id}>{profile.alias}</option>)}</optgroup>
       </select>
+      <button type="button" className="subtle" disabled={!connected||busy||state.apiVersion<24} onClick={onNew}>新建 SSH 会话</button>
       {session&&<button type="button" className="subtle" aria-label="SSH 会话操作" onClick={event=>menu(event.currentTarget)}>⋯</button>}
       {!active&&<button type="button" className="subtle" disabled={!connected||busy||state.apiVersion<23||(!session&&!choice)||session?.latestRun?.status==='stopping'} onClick={()=>void connect()}>{busy?'连接中…':session?.latestRun?.status==='stopping'?'正在停止':session?.latestRun?'重新启动':'连接'}</button>}
       <button type="button" className="text-button" onClick={onSettings}>管理连接</button>
