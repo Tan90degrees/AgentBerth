@@ -52,9 +52,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
   useEffect(() => { if (autoFocus && host.current?.clientWidth) instance.current?.focus(); }, [autoFocus]);
   useEffect(() => { if (instance.current) instance.current.options.disableStdin = !inputEnabled; }, [inputEnabled]);
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
-  const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty);
-  const inputReady = useRef(false);
-  useEffect(() => { setReady(inputEnabled && inputReady.current); }, [inputEnabled, setReady]);
+  const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty, inputEnabled);
   useEffect(() => {
     const terminal = new Terminal({ ...options, disableStdin: !allowedInput.current, theme: palette.current, fontSize, windowsPty });
     instance.current=terminal;
@@ -83,7 +81,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
       if (event.event === 'state' && runId) {
         const latest = event.data.sessions.find(session => session.id === sessionId)?.latestRun;
         running = latest?.id === runId && latest.status === 'running';
-        inputReady.current = ready && running; setReady(inputReady.current && allowedInput.current);
+        setReady(ready && running);
       }
       if ((event.event !== 'output' && event.event !== 'resize') || event.data.sessionId !== sessionId) return;
       if (!ready) {
@@ -149,7 +147,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
       terminal.write(attachment.snapshot, () => {
         if (disposed) return;
         ready = true;
-        inputReady.current = running; setReady(running && allowedInput.current);
+        setReady(running);
         for (const event of pending) apply(event);
         pending = []; pendingBytes = 0;
         if (!attachment.run) terminal.writeln('\x1b[2m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');
@@ -160,7 +158,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
     void document.fonts.ready.then(() => { if (!disposed) requestResize(); });
     return () => {
-      instance.current=null;inputReady.current=false;disposed = true; resize.dispose(); metricsChanged.dispose(); observer.disconnect(); window.removeEventListener('resize', requestResize); disposeRenderer(); disposePaths(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
+      instance.current=null;disposed = true; resize.dispose(); metricsChanged.dispose(); observer.disconnect(); window.removeEventListener('resize', requestResize); disposeRenderer(); disposePaths(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
   }, [sessionId, remoteSession, fontSize, windowsPty, orderedResize, binaryMouse, bind, setReady]);

@@ -3,7 +3,7 @@ import type { Terminal, IDisposable } from '@xterm/xterm';
 import { TerminalSearch } from './terminal-search';
 
 interface Owner { terminal: Terminal; search: TerminalSearch; canPaste: () => boolean; disposed: boolean; subscriptions: IDisposable[] }
-export function useTerminalActions(onError: (error: string) => void, readOnly = false, inferWindowsWrap = false) {
+export function useTerminalActions(onError: (error: string) => void, readOnly = false, inferWindowsWrap = false, inputEnabled = true) {
   const owner = useRef<Owner | null>(null);
   const error = useRef(onError); error.current = onError;
   const input = useRef<HTMLInputElement>(null);
@@ -80,7 +80,7 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
     {!searchOpen && <div className="terminal-toolbar" aria-label={readOnly ? '输出操作' : '终端操作'}>
       <span className="terminal-tool-status" role="status" title={`拖动选字；TUI 内按住 ${selectionModifier} 拖动强制选字；Ctrl/⌘+点击打开路径或网页链接`}>{message || (readOnly ? '只读输出' : mouseTracking ? `${selectionModifier}+拖动选字` : '选中文字后可复制')}</span>
       <button disabled={!selection} onMouseDown={event => event.preventDefault()} onClick={() => void copy()} title="Ctrl+Shift+C">复制选中</button>
-      {!readOnly && <button disabled={!ready} onClick={() => void paste()} title="Ctrl+Shift+V">粘贴</button>}
+      {!readOnly && <button disabled={!ready || !inputEnabled} onClick={() => void paste()} title="Ctrl+Shift+V">粘贴</button>}
       <button disabled={!ready} onClick={openSearch} title="Ctrl+Shift+F">查找</button>
       <button disabled={!ready} onClick={() => { owner.current?.terminal.scrollToBottom(); owner.current?.terminal.focus(); }}>到底部</button>
     </div>}

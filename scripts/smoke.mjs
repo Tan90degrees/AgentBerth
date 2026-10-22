@@ -1365,6 +1365,7 @@ try {
     const remoteResult=await page.evaluate(args=>window.berth.rpc('remoteWait',args),{...remoteTarget,actionId:remoteAction.id,timeoutMs:5000});
     assert.equal(remoteResult.exitCode,0);
     await eventually(async()=>(await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget)).text.includes('REMOTE_UI_READY'),'Remote terminal output did not reach renderer backing screen');
+    await findTerminalText(page, 'REMOTE_UI_READY'); // Search stays available while Agent owns input.
     await page.getByRole('button', { name: '操作步骤', exact: false }).click();
     await page.getByLabel('远程操作步骤', { exact: true }).getByText('退出 0', { exact: true }).waitFor();
     assert.ok((await page.getByLabel('远程终端控制',{exact:true}).boundingBox()).height <= 52,'Remote controls should stay compact');
