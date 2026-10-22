@@ -94,6 +94,7 @@ export class RemoteTerminal implements TerminalProcess {
   private viewer: pty.IPty | null = null;
   private control: ChildProcessWithoutNullStreams | null = null;
   private closed = false;
+  private stopping = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private generation = 0;
   private retries = 0;
@@ -172,6 +173,7 @@ export class RemoteTerminal implements TerminalProcess {
       clearTimeout(timer);
       readyReject(new Error(errorText || 'SSH 连接已断开；远端需要安装 bash 和 tmux，并预先确认主机密钥'));
       if (generation !== this.generation || this.closed) return;
+      if (this.stopping) { this.connected = false; this.control = null; return; }
       this.connected = false; this.rejectPending(new Error('控制连接中断，命令结果未知；不要自动重放'));
       if (code === 0 && !initial) { this.dispose(); this.events.emit('exit', { exitCode: 0 }); }
       else this.lost(errorText || 'SSH 连接中断，正在重连', generation);
@@ -187,7 +189,7 @@ export class RemoteTerminal implements TerminalProcess {
       this.viewer = pty.spawn(this.executable, sshArguments(this.config.host, `${tmux} attach-session -t ${this.name}`, true), { cols: this.cols, rows: this.rows, name: 'xterm-256color', env: { ...process.env, TERM: 'xterm-256color' } });
       const viewer = this.viewer;
       viewer.onData(text => { if (generation === this.generation && !this.closed) this.events.emit('data', text); });
-      viewer.onExit(() => { if (generation === this.generation && !this.closed) { try { viewer.kill(); } catch {} this.lost('终端显示连接已断开，正在重连', generation); } });
+      viewer.onExit(() => { if (generation === this.generation && !this.closed && !this.stopping) { try { viewer.kill(); } catch {} this.lost('终端显示连接已断开，正在重连', generation); } });
       this.connected = true; this.retries = 0;
       this.notify({ connection: 'connected', error: null });
       // An idle Bash emits its prompt again after a harmless refresh only on initial bootstrap.
@@ -211,11 +213,16 @@ export class RemoteTerminal implements TerminalProcess {
   }
   reconnect(): void { this.lost('正在重新连接原会话；不会重放命令', this.generation); }
   async stop(): Promise<void> {
-    // Never acknowledge stop by only killing local ssh: confirm removal of the remote tmux session.
-    if (this.connected) await this.command(`kill-session -t ${this.name}`);
-    else {
-      await executeFile(this.executable, sshArguments(this.config.host, `${tmux} has-session -t ${this.name} 2>/dev/null && ${tmux} kill-session -t ${this.name} || ! ${tmux} has-session -t ${this.name} 2>/dev/null`), { windowsHide: true, timeout: 14000, maxBuffer: 16384 });
+    // Use an independent acknowledgement channel: killing the tmux session also
+    // closes its attached clients, which must not cancel the stop confirmation.
+    this.stopping = true;
+    try {
+      await executeFile(this.executable, sshArguments(this.config.host, `command -v tmux >/dev/null || exit 127; if ${tmux} has-session -t ${this.name} 2>/dev/null; then ${tmux} kill-session -t ${this.name} || exit $?; fi; ! ${tmux} has-session -t ${this.name} 2>/dev/null`), { windowsHide: true, timeout: 14000, maxBuffer: 16384 });
+      this.dispose(); this.events.emit('exit', { exitCode: 0 });
+    } catch (error) {
+      this.stopping = false;
+      if (!this.connected) this.lost('停止未确认；正在恢复连接以便重试', this.generation);
+      throw error;
     }
-    this.dispose(); this.events.emit('exit', { exitCode: 0 });
   }
 }

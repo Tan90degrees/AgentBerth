@@ -20,7 +20,7 @@ export class TerminalMcp {
   async request(method: string, params: unknown): Promise<unknown> {
     if (method === 'initialize') {
       const requested = (params as { protocolVersion?: string })?.protocolVersion;
-      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'agentberth-terminal', version: '0.1.0' }, instructions: 'Use only user-created remote sessions. User grants/revokes Agent input in AgentBerth. Always inspect screen before interactive input. Preserve requestId and actionId across retries. Wait is bounded by the client; running jobs survive timeout and disconnect. Never claim that a quiet TUI has completed.' };
+      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'agentberth-terminal', version: '0.14.0' }, instructions: 'Use only user-created remote sessions. User grants/revokes Agent input in AgentBerth. Always inspect screen before interactive input. Preserve requestId and actionId across retries. Wait is bounded by the client; running jobs survive timeout and disconnect. Never claim that a quiet TUI has completed.' };
     }
     if (method === 'ping') return {};
     if (method === 'tools/list') return { tools };

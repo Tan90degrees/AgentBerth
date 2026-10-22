@@ -473,7 +473,8 @@ export class DaemonServer {
       if (live.outputBytes >= 64 * 1024) this.flushOutput(live);
       else live.outputTimer ??= setTimeout(() => this.flushOutput(live), 16);
     });
-    child.onExit(({ exitCode }) => { void this.finish(sessionId, live, exitCode); });
+    let connectedRun = false, startupExit: number | null = null;
+    child.onExit(({ exitCode }) => { if (remote && !connectedRun) { startupExit = exitCode; return; } void this.finish(sessionId, live, exitCode); });
     if (remote) {
       try { await remote.transport.connect(); this.store.setPid(run.id, child.pid); live.run = this.store.run(run.id); }
       catch (error) {
@@ -482,6 +483,8 @@ export class DaemonServer {
         this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
       }
     } else if (command) child.write(`${command}\r`);
+    connectedRun = true;
+    if (startupExit !== null) await this.finish(sessionId, live, startupExit);
     this.changed();
     return live.run;
   }
@@ -567,6 +570,11 @@ export class DaemonServer {
   private async stopAll(): Promise<void> {
     this.closing = true;
     try {
+      // Starting SSH channels may already have created a remote tmux session.
+      // Drain their startup before issuing confirmed remote stop, avoiding a create/kill race.
+      const startupDeadline = Date.now() + 45000;
+      while (this.starting.size && Date.now() < startupDeadline) await new Promise(resolve => setTimeout(resolve, 25));
+      if (this.starting.size) throw new Error('远端连接尚未完成，请稍后再次退出；后台保留以便确认清理');
       await this.resources.close();
       await this.git.close();
       await this.plugins.close();

@@ -262,3 +262,9 @@ daemon 拥有终端，工作台是可断开的客户端。后台合并短时间�
 ## 许可证
 
 Apache-2.0，沿用仓库原有许可证。
+
+## 可观察的远程终端与 MCP
+
+新建会话时选择“远程 SSH”，使用现有 OpenSSH 主机别名连接 Linux Bash/tmux。设置中复制 MCP 配置，在终端点击“交给 Agent”，即可实时观看真实操作、随时接管并在断线后恢复原会话。长任务不会随工具超时停止；步骤可折叠和翻页。
+
+详见 [使用与边界说明](docs/remote-terminals.md) 和 [提供给 Agent 的操作说明](docs/remote-terminal-agent.md)。

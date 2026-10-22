@@ -9,6 +9,8 @@ import { RemoteActivity } from '../src/daemon/remote-activity';
 import { decodeTmuxOutput, shellBootstrap, ShellMarkers, sshArguments, sshHosts } from '../src/daemon/remote';
 import { Store } from '../src/daemon/store';
 import { requestSchema, type Method, type RemoteAction, type RemoteInfo } from '../src/shared/protocol';
+import { Terminal } from '@xterm/headless';
+import { isTerminalReply } from '../src/shared/terminal-replies';
 import { TerminalMcp, McpError } from '../src/mcp/server';
 
 function setup() {
@@ -98,4 +100,20 @@ test('MCP advertises only scoped terminal tools and delegates bounded waits with
   assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteExecute','remoteWait']);
   await assert.rejects(server.request('tools/call',{name:'shutdown'}),McpError);
   await assert.rejects(server.request('tools/call',{name:'terminal_screen',arguments:{anything:'bad'}}),McpError);
+});
+
+
+test('request deduplication outlives the visible timeline retention limit',t=>{
+  const x=setup();t.after(x.close);const client={},id=randomUUID();let writes=0;
+  x.activity.control('agent');x.activity.execute(client,id,'echo one',()=>writes++);x.activity.marker('start',0,null);x.activity.marker('ready',0,'/tmp');
+  for(let i=0;i<1010;i++)x.activity.control('agent');
+  x.activity.execute(client,id,'echo one',()=>writes++);assert.equal(writes,1);assert.equal(x.store.remoteAction(id)!.status,'completed');
+});
+
+test('remote viewer suppresses terminal protocol replies while the daemon answers them without a UI',async()=>{
+  const terminal=new Terminal({cols:80,rows:24,allowProposedApi:true});const replies:string[]=[];terminal.onData(data=>replies.push(data));
+  await new Promise<void>(resolve=>terminal.write('\x1b[c\x1b[>c\x1b[5n\x1b[6n\x1b[?6n',resolve));
+  assert.ok(replies.length>=5);for(const reply of replies)assert.ok(isTerminalReply(reply),JSON.stringify(reply));
+  for(const data of ['echo hacked\r','\x1b[A','\r','\x03','\x1b[0necho bad\r'])assert.equal(isTerminalReply(data),false);
+  terminal.dispose();
 });
