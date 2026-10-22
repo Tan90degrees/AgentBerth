@@ -12,7 +12,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
-import { MAX_ACTIVE_TERMINALS, PROTOCOL_VERSION, requestSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
+import { PROTOCOL_VERSION, requestSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
 import { ResourceSampler } from './resources';
 import { GitWorkspace } from './git';
@@ -576,7 +576,12 @@ export class DaemonServer {
     this.requireProjectAvailable(session.projectId);
     if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
     if (this.historyWrites.has(sessionId)) throw new Error('会话正在关联对话记录，请稍后启动');
-    if (this.live.size + this.starting.size >= MAX_ACTIVE_TERMINALS) throw new Error(`最多同时运行 ${MAX_ACTIVE_TERMINALS} 个终端`);
+    const ssh=!!session.remote,settings=this.store.settings(),limit=ssh?settings.maxSshTerminals:settings.maxActiveTerminals;
+    // A connecting SSH is in both maps. Reserve each session exactly once and
+    // keep local/SSH capacity independent, including concurrent starts.
+    const reserved=new Set([...this.live.keys(),...this.starting]);
+    const count=[...reserved].filter(id=>!this.live.get(id)?.closed&&!!this.store.session(id).remote===ssh).length;
+    if(count>=limit)throw new Error(`${ssh?'SSH 会话':'本机终端'}已达上限 ${limit}，请在设置中调整或停止一个${ssh?' SSH 会话':'本机终端'}`);
     this.starting.add(sessionId);
     try { return await this.spawn(sessionId, resume, cols, rows); }
     finally { this.starting.delete(sessionId); }

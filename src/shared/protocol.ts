@@ -2,8 +2,9 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 26;
-export const MAX_ACTIVE_TERMINALS = 16;
+export const API_VERSION = 27;
+export const DEFAULT_TERMINAL_LIMIT = 16;
+export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
 export type Agent = z.infer<typeof agentSchema>;
@@ -20,9 +21,11 @@ export const settingsSchema = z.object({
   defaultAgent: agentSchema,
   defaultCommand: singleLine.default(''),
   fontSize: z.number().int().min(10).max(24),
+  maxActiveTerminals: z.number().int().min(1).max(TERMINAL_LIMIT_MAX).default(DEFAULT_TERMINAL_LIMIT),
+  maxSshTerminals: z.number().int().min(1).max(TERMINAL_LIMIT_MAX).default(DEFAULT_TERMINAL_LIMIT),
 }).strict();
 export type Settings = z.infer<typeof settingsSchema>;
-export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', defaultCommand: '', fontSize: 14 };
+export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', defaultCommand: '', fontSize: 14, maxActiveTerminals: DEFAULT_TERMINAL_LIMIT, maxSshTerminals: DEFAULT_TERMINAL_LIMIT };
 const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
@@ -180,7 +183,7 @@ export interface GitDiff { path: string; staged: boolean; patch: string; binary:
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
 export interface Session { remote?: RemoteConfig | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
-export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }

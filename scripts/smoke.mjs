@@ -284,8 +284,12 @@ try {
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'cmd' : 'bash');
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByLabel('终端字号', { exact: true }).fill('16');
+  await page.getByLabel('本机终端上限', { exact: true }).fill('24');
+  await page.getByLabel('SSH 会话上限', { exact: true }).fill('8');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
+  const limits=await page.evaluate(()=>window.berth.rpc('state'));
+  assert.equal(limits.maxActiveTerminals,24);assert.equal(limits.maxSshTerminals,8);
   await page.locator('.projects .project-item').click();
   await menuAction(page, '新建会话', 'project');
   assert.equal(await page.getByLabel('Agent 类型', { exact: true }).inputValue(), 'opencode');
@@ -882,6 +886,8 @@ try {
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '19');
   await page.getByRole('button', { name: '取消修改', exact: true }).click();
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '16');
+  assert.equal(await page.getByLabel('本机终端上限', { exact: true }).inputValue(), '24');
+  assert.equal(await page.getByLabel('SSH 会话上限', { exact: true }).inputValue(), '8');
   await page.locator('.projects .project-item').click();
   const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), after.sessions[0].id);
   assert.match(snapshot.snapshot, /FLOW_DONE/);

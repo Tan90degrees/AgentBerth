@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
-import { API_VERSION, DEFAULT_SETTINGS, MAX_ACTIVE_TERMINALS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
+import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
 
@@ -105,7 +105,8 @@ export class Store {
     const bySession = new Map(latest.map(run => [run.sessionId, run]));
     const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
       .map(row => ({ ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
-    return { projects, sessions, agents: this.agents(), maxActiveTerminals: MAX_ACTIVE_TERMINALS, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings: this.settings(), apiVersion: API_VERSION };
+    const settings=this.settings();
+    return { projects, sessions, agents: this.agents(), maxActiveTerminals: settings.maxActiveTerminals, maxSshTerminals: settings.maxSshTerminals, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings, apiVersion: API_VERSION };
   }
 
   project(id: string): Project {

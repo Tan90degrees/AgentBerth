@@ -45,7 +45,7 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 26。
+用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 27。
 
 ## 文件传输
 
@@ -60,3 +60,7 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 普通命令由一次 MCP 调用完成提交、等待及输出读取，不需要每条命令再读屏。完成即返回，默认的 1 秒是等待上限，不是固定延迟。长任务可按游标等待新增日志；TUI 保留按需读屏，读屏不再额外序列化历史。返回 requestMs/elapsedMs 可区分后台请求与命令持续时间；模型推理及客户端调度需在客户端另外测量。
 
 输出缓存有界且仅在内存中保留：每会话最近 8 条命令，每条最多 128K UTF-16 编码单元。truncated/available=false 明确提示丢失；PTY 输出合并 stdout/stderr，可能含 ANSI。不承诺永久保存完整日志或由 MCP 通知自动唤醒模型。
+
+## 并发上限
+
+“设置 → 终端与会话”分别设置本机终端上限和 SSH 会话上限，默认各 16，范围 1–128。两类独立计数，所有 SSH 登录方式均使用 SSH 名额；等待凭据或连接中的会话也占一个名额。调高后可立即启动更多会话；调低不会停止已有会话，只有占用降到上限以下才可新启动。达到限额时，界面和 MCP 均返回对应类别与设置提示。配置保存在本机后台，重启保留。

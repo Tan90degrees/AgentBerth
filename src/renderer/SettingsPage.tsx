@@ -1,6 +1,6 @@
 import { SshConnections } from './SshConnections';
 import { useState } from 'react';
-import { DEFAULT_SETTINGS, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
+import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
 import { agentLabels } from './labels';
 import { AgentManager } from './AgentManager';
 import { TerminalFields } from './TerminalFields';
@@ -29,6 +29,9 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
       <label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{Object.entries(agentLabels(agents)).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
       {draft.defaultAgent === 'custom' && <><label>默认启动命令<input aria-label="默认启动命令" required pattern=".*\S.*" title="请填写至少一个非空白字符" maxLength={4096} value={draft.defaultCommand} disabled={disabled} onChange={event => change({ ...draft, defaultCommand: event.target.value })} placeholder="例如 my-agent --interactive" /></label><p className="form-hint">保存后自动填入新建的自定义 Agent 会话，可在会话中单独修改。</p></>}
       <label>终端字号<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label>
+      <label>本机终端上限<input aria-label="本机终端上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxActiveTerminals} disabled={disabled} onChange={event => change({ ...draft, maxActiveTerminals: Number(event.target.value) })} /></label>
+      <label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event => change({ ...draft, maxSshTerminals: Number(event.target.value) })} /></label>
+      <p className="form-hint">两类独立计数，均支持 1–{TERMINAL_LIMIT_MAX}。启动中和运行中均占名额，保存后立即应用；降低上限不会停止已有会话。</p>
       <footer><span role="status">{saved ? '设置已保存' : JSON.stringify(draft) !== key ? '草稿已保留，保存后应用' : ''}</span>{JSON.stringify(draft) !== key && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled} onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button className="primary" disabled={disabled || JSON.stringify(draft) === key}>保存设置</button></footer>
     </form>
     {apiVersion >= 22 && <SshConnections disabled={!connected || busy} onError={onError} />}
