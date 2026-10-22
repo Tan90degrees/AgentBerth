@@ -1432,7 +1432,11 @@ try {
   }
   await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'删除会话',exact:true}).click();await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
   await page.getByRole('button',{name:'收起 SSH 面板',exact:true}).click();
-  if(localSshObserver)await page.evaluate(async id=>{await window.berth.rpc('stop',{sessionId:id});await window.berth.rpc('deleteSession',{sessionId:id});},localSshObserver.id);
+  if(localSshObserver){
+    await page.evaluate(id=>window.berth.rpc('stop',{sessionId:id}),localSshObserver.id);
+    await eventually(async()=>!['running','stopping'].includes((await page.evaluate(id=>window.berth.rpc('runs',{sessionId:id}),localSshObserver.id))[0].status),'Local observer cleanup must await the process exit');
+    await page.evaluate(id=>window.berth.rpc('deleteSession',{sessionId:id}),localSshObserver.id);
+  }
   step('an unlinked conversation preview is cleared when the project directory changes');
   await page.locator('.session-item').filter({hasText:'OpenCode 会话'}).click();
   await page.getByRole('tab',{name:'对话历史',exact:true}).click();
