@@ -13,7 +13,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: node_modules
-        key: electron-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json', 'package.json', 'scripts/setup.mjs', 'scripts/electron-runtime.mjs', 'scripts/verify-dependencies.mjs', '.github/actions/setup-dependencies/action.yml') }}
+        key: electron-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json', 'package.json', 'scripts/setup.mjs', 'scripts/electron-runtime.mjs', 'scripts/verify-dependencies.mjs', 'scripts/native-probe.cjs', '.github/actions/setup-dependencies/action.yml') }}
     - name: Validate restored Electron and PTY ABI
       id: restored
       if: steps.dependencies.outputs.cache-hit == 'true'
