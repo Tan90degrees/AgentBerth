@@ -45,7 +45,7 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 29。
+用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 30。
 
 ## 文件传输
 
@@ -64,3 +64,10 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 ## 并发上限
 
 “设置 → 常用设置”分别设置本机终端上限和 SSH 会话上限，默认各 16，范围 1–128。两类独立计数，所有 SSH 登录方式均使用 SSH 名额；等待凭据或连接中的会话也占一个名额。调高后可立即启动更多会话；调低不会停止已有会话，只有占用降到上限以下才可新启动。达到限额时，界面和 MCP 均返回对应类别与设置提示。配置保存在本机后台，重启保留。
+
+
+## Agent 误把滚屏当成输出丢失
+
+读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 30 会在读屏中提供对应命令的 continuation，从头读取缓存；有后续分页或运行中输出时，命令响应也提供确切的下一步读取参数。Agent 应沿用它读取原命令，不应重跑、重新排序或 clear 以获取上半部分。
+
+忘记 ID 可省略 actionId 从头读最近可靠关联的命令，后续分页必须使用返回的命令 ID 和游标。空闲 POSIX Shell 中通过文本加回车执行的命令也会自动捕获；交互程序、部分输入和未知提示符仍按原始按键处理，不能关联旧命令冒充新结果。

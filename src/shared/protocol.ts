@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 29;
+export const API_VERSION = 30;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -112,7 +112,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('remoteReconnect'), params: z.object(remoteTarget).strict() }),
   z.object({ id, method: z.literal('remoteExecute'), params: z.object(remoteCommandInput).strict() }),
   z.object({ id, method: z.literal('remoteCommand'), params: z.object({ ...remoteCommandInput, maxChars: remoteOutputInput.maxChars, waitMs: z.number().int().min(0).max(25000).default(5000) }).strict() }),
-  z.object({ id, method: z.literal('remoteReadOutput'), params: z.object({ ...remoteTarget, ...remoteOutputInput, actionId: id, timeoutMs: z.number().int().min(0).max(30000).default(25000), waitFor: z.enum(['output','completion']).default('output') }).strict() }),
+  z.object({ id, method: z.literal('remoteReadOutput'), params: z.object({ ...remoteTarget, ...remoteOutputInput, actionId: id.optional(), timeoutMs: z.number().int().min(0).max(30000).default(25000), waitFor: z.enum(['output','completion']).default('output') }).strict().refine(value=>value.actionId!==undefined||value.cursor===0,'未指定 actionId 时 cursor 必须为 0；后续分页请使用 continuation 中的 actionId 和游标') }),
   z.object({ id, method: z.literal('remoteKeys'), params: z.object({ ...remoteTarget, text: z.string().max(16384).refine(value => !/[\x00-\x1f\x7f]/.test(value)).optional(), key: remoteKeySchema.optional(), enter: z.boolean().default(true) }).strict().refine(value => (value.text !== undefined) !== (value.key !== undefined), '请选择文本或按键').refine(value => value.key === undefined || value.enter, 'enter 仅用于文本输入') }),
   z.object({ id, method: z.literal('remoteWait'), params: z.object({ ...remoteTarget, actionId: id, timeoutMs: z.number().int().min(0).max(30000).default(25000) }).strict() }),
   z.object({ id, method: z.literal('remoteScreen'), params: z.object(remoteTarget).strict() }),

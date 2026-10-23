@@ -94,6 +94,13 @@ export class RemoteActivity {
     this.outputs.get(this.pending.id)?.append(text);
     this.events.emit('output');
   }
+  latestCommand():RemoteAction|null {
+    // Raw/partial input has no trustworthy command boundary. Never associate a
+    // new untracked screen with a previous completed command.
+    if(this.info.phase==='unknown'&&!this.pending)return null;
+    const id=this.pending?.id??[...this.outputs.keys()].at(-1);
+    return id?this.store.remoteAction(id):null;
+  }
   result(actionId:string,cursor=0,maxChars=32768):RemoteCommandResult {
     const action=this.store.remoteAction(actionId);
     if(!action||action.kind!=='command'||action.sessionId!==this.info.sessionId||action.runId!==this.info.runId)throw new Error('命令不属于当前运行实例');

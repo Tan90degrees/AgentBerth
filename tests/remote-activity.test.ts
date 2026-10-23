@@ -267,7 +267,7 @@ test('an older backend gets upgrade guidance without a fallback execution or rep
   const calls:string[]=[];
   const server=new TerminalMcp({rpc:async<T>(method:Method)=>{calls.push(method);if(method==='state')return {apiVersion:25} as T;throw new Error('请求参数无效');}});
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:randomUUID(),command:'once'}});
-  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 25.*API 29/);assert.deepEqual(calls,['remoteCommand','state']);
+  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 25.*API 30/);assert.deepEqual(calls,['remoteCommand','state']);
 });
 
 test('incremental waits cancel without stopping commands; quiet tasks and interruptions never imply success',async t=>{
@@ -342,4 +342,15 @@ test('disk output cache wraps with exact cursors and Unicode and cleans files on
     let cursor=0;
     for(let n=0;n<20;n++){const expected=memory.read(cursor,4),actual=disk.read(cursor,4);assert.deepEqual(actual,expected);cursor=actual.nextCursor;if(!actual.hasMore)break;assert.ok(n<19);}
   }
+});
+
+
+test('latest command discovery refuses to associate untracked input with an old result',t=>{
+  const x=setup();t.after(x.close);const client={},id=randomUUID();x.activity.control('agent');
+  assert.equal(x.activity.latestCommand(),null);
+  x.activity.execute(client,id,'printf one',()=>{});assert.equal(x.activity.latestCommand()?.id,id);
+  x.activity.marker('start',0,null,id);x.activity.capture('one');x.activity.marker('ready',0,'/work',id);
+  assert.equal(x.activity.latestCommand()?.id,id);
+  x.activity.keys(client,'partial','partial input',()=>{});assert.equal(x.activity.latestCommand(),null);
+  assert.equal(x.activity.result(id).output.text,'one','Explicit historical IDs remain readable');
 });

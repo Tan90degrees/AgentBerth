@@ -124,6 +124,8 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   await ui.rpc('remoteControl',{sessionId:target.sessionId,runId:target.runId,owner:'user'});
   assert.equal((await call('terminal_open',{alias:'test-server'})).info.owner,'user');
   await assert.rejects(call('terminal_keys',{alias:'test-server',key:'Enter'}),/用户控制/);
+  await assert.rejects(call('terminal_keys',{alias:'test-server',text:'printf SHOULD_NOT_RUN'}),/用户控制/);
+  assert.equal((await call('terminal_read_output',{alias:'test-server',timeoutMs:0})).id,action.id,'Read-only recovery stays available during human takeover');
   const state=await ui.rpc<any>('state');assert.equal(state.sessions.length,1);assert.equal(state.projects.find((project:any)=>project.id===state.sessions[0].projectId).remoteWorkspace,true);
   const exposed=JSON.stringify({state,list:await call('terminal_list'),screen:await call('terminal_screen',{alias:'test-server'})});
   assert.ok(!exposed.includes('fixture-secret'));

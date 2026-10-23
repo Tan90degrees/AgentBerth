@@ -84,6 +84,28 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   const screen:any=await ui.rpc('remoteScreen',{sessionId:target.sessionId,runId:target.runId});assert.ok(screen.text.includes('FIRST'));assert.ok(screen.text.includes('LAST'));assert.ok(!screen.text.includes('__ab_command'));assert.ok(!screen.text.includes(']777;AgentBerth;'));
   await assert.rejects(agent.rpc('remoteReadOutput',{sessionId:target.sessionId,runId:randomUUID(),actionId:streamId}),/变化/);
   await assert.rejects(agent.rpc('remoteReadOutput',{sessionId:target.sessionId,runId:target.runId,actionId:streamId,cursor:stream.output.nextCursor+100}),/游标/);
+  // Reproduce a long image-list command sent via keys, followed by reading only
+  // the bottom five terminal rows. Recover all rows without any re-execution.
+  await ui.rpc('resize',{sessionId:target.sessionId,runId:target.runId,cols:80,rows:5});
+  const listCommand='AB_LIST_RUNS=$((${AB_LIST_RUNS:-0}+1)); i=0; while [ "$i" -lt 120 ]; do printf "image-%03d created-order-%03d\\n" "$i" "$i"; i=$((i+1)); done';
+  let listed=await call('terminal_keys',{text:listCommand});assert.equal(listed.scope,'command');assert.ok(listed.id);
+  if(listed.status==='running')listed=await call('terminal_wait',{actionId:listed.id,timeoutMs:5000});
+  const expectedList=Array.from({length:120},(_,i)=>`image-${String(i).padStart(3,'0')} created-order-${String(i).padStart(3,'0')}\r\n`).join('');
+  assert.equal(listed.output.text,expectedList);assert.equal(listed.allOutputInThisResponse,true);
+  const bottom=await call('terminal_screen');assert.equal(bottom.scope,'viewport');assert.equal(bottom.allOutputInThisResponse,false);assert.ok(bottom.scrollbackLines>0);assert.ok(!bottom.text.includes('image-000'));assert.ok(bottom.text.includes('image-119'));
+  const follow=async(next:any)=>{const response:any=await mcp.request('tools/call',{name:next.tool,arguments:next.arguments});assert.ok(!response.isError,JSON.stringify(response));return JSON.parse(response.content[0].text);};
+  const recovered=await follow(bottom.continuation);assert.equal(recovered.output.text,expectedList);assert.equal(recovered.allOutputInThisResponse,true);
+  let listPage=await call('terminal_read_output',{maxChars:256,timeoutMs:0}),reassembled=listPage.output.text;
+  assert.equal(listPage.id,listed.id);assert.ok(listPage.continuation);assert.equal(listPage.allOutputInThisResponse,false);
+  while(listPage.continuation){listPage=await follow(listPage.continuation);reassembled+=listPage.output.text;}
+  assert.equal(reassembled,expectedList);assert.equal(listPage.allOutputInThisResponse,false,'Final page alone is not the entire list');
+  const count=await call('terminal_execute',{command:'printf "%s\\n" "$AB_LIST_RUNS"'});assert.equal(count.output.text,'1\r\n');
+  // Partial typing and input to a running program must remain literal. Unknown
+  // prompt state cannot silently reuse the previous command's output.
+  const partial=await call('terminal_keys',{text:'AB_PARTIAL=literal',enter:false});assert.equal(partial.inputKind,'interactive');assert.equal((await call('terminal_screen')).command,null);
+  const noCommand:any=await mcp.request('tools/call',{name:'terminal_read_output',arguments:{alias:'output-fixture',timeoutMs:0}});assert.ok(noCommand.isError);assert.match(noCommand.content[0].text,/没有可关联/);
+  await call('terminal_keys',{key:'Enter'});
+  const restored=await call('terminal_execute',{command:'printf "%s\\n" "$AB_PARTIAL"',atPrompt:true});assert.equal(restored.output.text,'literal\r\n');
   const quiet=await call('terminal_execute',{requestId:randomUUID(),command:'read AB_STOP',waitMs:0});
   const waiting=call('terminal_read_output',{actionId:quiet.id,cursor:0,timeoutMs:30000});
   await call('terminal_keys',{key:'Ctrl+C'});assert.equal((await waiting).status,'unknown');

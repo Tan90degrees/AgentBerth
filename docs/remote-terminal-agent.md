@@ -17,7 +17,7 @@
 ## 命令与交互
 
 1. `terminal_execute` 在 commandTracking=posix 且 phase=idle 时直接执行命令（支持换行、Tab 和多行脚本，最多 16384 字符）；已知 idle 不必先读屏。返回同一对象中的 `id`、`status`、`exitCode`、`info` 和 `output`，普通命令一次调用就能获得结果。phase=unknown 时才先读屏确认空闲提示符，并传 atPrompt=true。普通调用只需 alias 和 command；requestId 可省略，由工具生成并返回为 id。需要显式重试去重时传 UUID requestId，重试原样复用；传输失败会在错误中给出 ID，不以新 ID 重放 unknown 操作。目录、export 和虚拟环境保持在同一个 Shell。
-2. `status=completed` 且 `output.hasMore=false` 时已经获得完整的缓存结果，不再调用 wait/screen 验证。`terminal_execute` 默认最多等待 5000 ms（waitMs 可选 0..25000），完成即返回，首段输出后最多合并等待 75 ms 以接收短命令退出码，持续输出的命令先返回首段，不等满上限；waitMs=0 立即提交。`requestMs` 是本次后台请求耗时，`elapsedMs` 是命令从提交开始的持续时间，均不包含模型推理和客户端调度。
+2. `allOutputInThisResponse=true` 时，本次响应已包含本轮完整的已捕获输出；若从非零游标读到末尾，应合并此前各页，不再调用 wait/screen 验证。`terminal_execute` 默认最多等待 5000 ms（waitMs 可选 0..25000），完成即返回，首段输出后最多合并等待 75 ms 以接收短命令退出码，持续输出的命令先返回首段，不等满上限；waitMs=0 立即提交。`requestMs` 是本次后台请求耗时，`elapsedMs` 是命令从提交开始的持续时间，均不包含模型推理和客户端调度。
 3. 长任务和流式日志用 `terminal_read_output({"alias":"dev-server","actionId":"<execute 返回的 id>","cursor":<output.nextCursor>,"timeoutMs":25000})`。有新增输出、完成、结果未知或缓存缺失立即返回；没有新输出时按事件等待，最长 30000 ms，不能写 sleep 或频繁轮询读屏。每次原样传回 output.nextCursor，同一游标只用于同一个 actionId/runId。`output.hasMore=true` 时先继续取剩余分页。只有 status=completed 才有已确认的退出码，安静、空输出和超时不代表完成。
 4. 只关心最终完成时可用 `terminal_wait`，同样返回输出和 info，cursor/maxChars 参数与增量读取一致。它等待完成而非等待新日志；持续输出的任务优先用 read_output。
 5. TUI 和 commandTracking=none 的 Shell 使用 `terminal_screen` 与 `terminal_keys`。读屏后才发 text 或 named key；text 默认一次发送文本和 Enter，不再单独调用 Enter；只有显式 enter=false 才不提交（例如输入 TUI 搜索框、补全文本）。命名 key 始终只发送一次，不会附带额外 Enter。Ctrl+C 明确中断。不为探测提示符擅自发送 Enter，也不自动重试按键。
@@ -27,7 +27,7 @@
 
 输出是命令开始标记和完成标记之间的共享终端文本，不包含注入的命令回显和结束提示符；stdout/stderr 已由 PTY 合并，可能包含 ANSI、回车或后台程序交错输出，不可作为 TUI 画面替代。maxChars 默认 32768、范围 256..65536，分页不切断完整 Unicode 字符。
 
-每会话最近 8 条命令通过本机私有临时文件缓存，每条保留最近 8M 个 UTF-16 编码单元（磁盘上限 16 MiB），读取只加载本页；停止会话或重启后台会清除，不是永久日志。文件写入失败会明确返回 available=false，不阻断远端命令。`output.truncated=true` 表示游标之前的部分已丢失，`available=false` 表示命令缓存已淘汰/不可用，不能把空文本当作命令没有输出，也不能为找回输出重新执行命令。后续 cursor 从返回的 nextCursor 继续。更新后台到 **API 29** 并重新连接 MCP 后使用，共 18 个工具。
+每会话最近 8 条命令通过本机私有临时文件缓存，每条保留最近 8M 个 UTF-16 编码单元（磁盘上限 16 MiB），读取只加载本页；停止会话或重启后台会清除，不是永久日志。文件写入失败会明确返回 available=false，不阻断远端命令。`output.truncated=true` 表示游标之前的部分已丢失，`available=false` 表示命令缓存已淘汰/不可用，不能把空文本当作命令没有输出，也不能为找回输出重新执行命令。后续 cursor 从返回的 nextCursor 继续。更新后台到 **API 30** 并重新连接 MCP 后使用，共 18 个工具。
 
 命令包装只用于内部识别开始、退出码和工作目录。已确认的包装回显会替换成原始命令，实际程序输出保留；遇到无法确认的 Shell 重绘或交错输出时保留原始数据，避免误删日志。
 
@@ -70,3 +70,14 @@
 ```
 
 MCP 负责已有 SSH 连接、共享 PTY、去重和结果游标；本说明可以作为 Agent 的工作指导，与 MCP 配合使用。改为另开 SSH 或 HTTP 不会减少模型调度开销，还会失去同一终端的现场。不要每条命令执行连接探测或列表查询；复用已知目标和上一条返回的 info。需要批量获取同一主机的相关只读信息时，可在一个 command 中用分号或换行组织。
+
+
+## 终端只显示了列表下半部分时
+
+`terminal_screen` 返回 `scope=viewport`，只描述人当前能看到的画面，**不是完整命令结果**。普通的 `docker images`、`ls`、`ps` 等应使用 `terminal_execute`；不要根据屏幕行数重新运行原命令、修改排序或 clear 来“找回”上半部分。
+
+1. 优先照响应里的 `continuation` 调用指定工具和参数。读屏的 continuation 从该命令 cursor=0 读取；命令结果的 continuation 读取后续分页或等待新增输出，不执行命令。
+2. 如果没有记住命令 ID，调用 `terminal_read_output({"alias":"dev-server"})` 可从头读取最近可可靠关联的命令；后续游标必须与明确 actionId 一起使用，直接沿用 continuation。
+3. `scope=command` 才是按命令捕获的结果。`allOutputInThisResponse=false` 不一定表示丢失：可能还有分页、命令仍在运行，或这只是最后一页。按 notice/continuation 处理，并合并各页。
+4. 从已确认空闲的 POSIX Shell 用 `terminal_keys` 一次提交完整文本时，会自动走同样的命令捕获通道并返回 id/output；输入给正在运行的程序、命名按键和 enter=false 仍是原始交互输入。
+5. 未跟踪的人工输入、部分输入或未知提示符可能没有可靠的命令边界。这时不关联旧命令冒充新结果，会明确指出没有记录；不可自动重跑，必要时向用户说明。缓存真实丢失则遵循 truncated/available 提示，不宣称完整。

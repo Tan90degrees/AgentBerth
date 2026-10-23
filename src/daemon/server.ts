@@ -312,26 +312,20 @@ export class DaemonServer {
         const remote = this.remote(request.params.sessionId, request.params.runId);
         return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.writeManaged(request.params.requestId,request.params.command,text), request.params.atPrompt);
       }
-      case 'remoteCommand': {
-        const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
-        remote.activity.execute(client,p.requestId,p.command,text=>remote.transport.writeManaged(p.requestId,p.command,text),p.atPrompt);
-        const first=await remote.activity.readOutput(p.requestId,0,p.maxChars,p.waitMs,'output',client.abort.signal);
-        // Let short commands deliver their exit marker in the same call, while
-        // streaming jobs return their first output without waiting the full cap.
-        if(first.status==='running'&&first.output.text&&!client.abort.signal.aborted){
-          const remaining=Math.max(0,p.waitMs-(performance.now()-started));
-          if(remaining)await remote.activity.wait(p.requestId,Math.min(75,remaining),client.abort.signal);
-        }
-        return {...remote.activity.result(p.requestId,0,p.maxChars),requestMs:performance.now()-started};
-      }
+      case 'remoteCommand': return this.runRemoteCommand(client,request.params);
       case 'remoteReadOutput': {
         const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
-        const value=await remote.activity.readOutput(p.actionId,p.cursor,p.maxChars,p.timeoutMs,p.waitFor,client.abort.signal);
+        const actionId=p.actionId??remote.activity.latestCommand()?.id;
+        if(!actionId)throw new Error('当前没有可关联的命令输出。按键或人工输入可能未记录命令边界，不能把终端画面当成完整结果，也不要自动重跑；普通命令请使用 terminal_execute。');
+        const value=await remote.activity.readOutput(actionId,p.cursor,p.maxChars,p.timeoutMs,p.waitFor,client.abort.signal);
         return {...value,requestMs:performance.now()-started};
       }
       case 'remoteKeys': {
         const remote = this.remote(request.params.sessionId, request.params.runId), { key, text, enter } = request.params;
-        remote.activity.keys(client, key ? remoteKeys[key] : text! + (enter ? '\r' : ''), key ? `按键 ${key}` : `输入文本（${text!.length} 字符${enter?'，回车':''}）`, data => remote.transport.write(data)); return null;
+        if(text!==undefined&&enter&&text.trim()&&remote.activity.info.phase==='idle'&&remote.activity.info.commandTracking==='posix'){
+          return this.runRemoteCommand(client,{sessionId:request.params.sessionId,runId:request.params.runId,command:text,requestId:randomUUID(),atPrompt:false,waitMs:5000,maxChars:32768});
+        }
+        remote.activity.keys(client, key ? remoteKeys[key] : text! + (enter ? '\r' : ''), key ? `按键 ${key}` : `输入文本（${text!.length} 字符${enter?'，回车':''}）`, data => remote.transport.write(data)); return {inputKind:'interactive',info:{...remote.activity.info}};
       }
       case 'remoteWait': return this.remote(request.params.sessionId, request.params.runId).activity.wait(request.params.actionId, request.params.timeoutMs, client.abort.signal);
       case 'remoteScreen': {
@@ -340,7 +334,8 @@ export class DaemonServer {
         const screen = await this.screen(live,false);
         const buffer = live.terminal.buffer.active, lines: string[] = [];
         for (let row = buffer.baseY; row < buffer.baseY + live.terminal.rows; row++) lines.push(buffer.getLine(row)?.translateToString(true) ?? '');
-        return { seq: screen.seq, cols: screen.cols, rows: screen.rows, text: lines.join('\n'), cursor: { x: buffer.cursorX, y: buffer.cursorY }, info: live.remote.activity.info };
+        const command=live.remote.activity.latestCommand();
+        return { scope:'viewport', scrollbackLines:buffer.baseY, command:command?{id:command.id,status:command.status,sessionId:command.sessionId,runId:command.runId}:null, seq: screen.seq, cols: screen.cols, rows: screen.rows, text: lines.join('\n'), cursor: { x: buffer.cursorX, y: buffer.cursorY }, info: live.remote.activity.info };
       }
       case 'state': return this.store.state();
       case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed && !live.remote).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
@@ -524,6 +519,18 @@ export class DaemonServer {
         return this.importHistory(request.params.sessionId, session.transcriptPath);
       }
     }
+  }
+
+  private async runRemoteCommand(client:Client,p:Extract<Request,{method:'remoteCommand'}>['params']) {
+    const started=performance.now(),remote=this.remote(p.sessionId,p.runId);
+    remote.activity.execute(client,p.requestId,p.command,text=>remote.transport.writeManaged(p.requestId,p.command,text),p.atPrompt);
+    const first=await remote.activity.readOutput(p.requestId,0,p.maxChars,p.waitMs,'output',client.abort.signal);
+    // Short commands include completion; streaming commands return first output.
+    if(first.status==='running'&&first.output.text&&!client.abort.signal.aborted){
+      const remaining=Math.max(0,p.waitMs-(performance.now()-started));
+      if(remaining)await remote.activity.wait(p.requestId,Math.min(75,remaining),client.abort.signal);
+    }
+    return {...remote.activity.result(p.requestId,0,p.maxChars),requestMs:performance.now()-started};
   }
 
   private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
