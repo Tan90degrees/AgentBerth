@@ -52,6 +52,26 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   assert.equal(fast.status,'completed');assert.equal(fast.exitCode,1);assert.equal(fast.info.phase,'idle');assert.equal(fast.info.cwd,'/tmp');assert.equal(fast.output.text,'DIRECT=42\r\n');
   assert.deepEqual((await call('terminal_execute',{requestId,command})).output,fast.output,'A retry returns cached output without re-executing');
   t.diagnostic(`one-call result: backend ${fast.requestMs?.toFixed(1)} ms; command ${fast.elapsedMs} ms (loopback SSH, real PTY)`);
+  // The user's OS inspection accepts alias+command only; no manually generated ID.
+  const os=await call('terminal_execute',{command:'echo "===== OS RELEASE ====="; /bin/cat /etc/os-release 2>/dev/null; echo "===== KERNEL ====="; /bin/uname -a; echo "===== HOSTNAME ====="; /bin/hostname; echo "===== UPTIME ====="; /usr/bin/uptime'});
+  assert.equal(os.status,'completed');assert.ok(os.output.text.includes('===== KERNEL ====='));assert.ok(!os.output.text.includes('DIRECT=42'),'Only this command output is returned');
+  const multiline=await call('terminal_execute',{command:'printf "LINE_ONE\\n"\nprintf\t"LINE_TWO\\n"\n'});
+  assert.equal(multiline.output.text,'LINE_ONE\r\nLINE_TWO\r\n');
+  const large=await call('terminal_execute',{command:'printf "%200000s\\n" X',waitMs:5000});
+  let largePage=large,largeText=large.output.text;
+  assert.equal(large.output.truncated,false);assert.equal(large.output.hasMore,true);
+  while(largePage.output.hasMore){largePage=await call('terminal_read_output',{actionId:large.id,cursor:largePage.output.nextCursor});assert.equal(largePage.output.truncated,false);largeText+=largePage.output.text;}
+  assert.equal(largeText,' '.repeat(199999)+'X\r\n','Output exceeding the former 128K cap must remain readable independently of viewport height');
+  // Text defaults to submitting in the same tool call. Explicit false leaves it pending.
+  for(const enter of [true,false]){
+    const reading=await call('terminal_execute',{command:'read AB_TEXT; printf "INPUT=%s\\n" "$AB_TEXT"',waitMs:0});
+    await call('terminal_keys',{text:enter?'submitted':'partial',...(enter?{}:{enter:false})});
+    if(!enter){const pending=await call('terminal_read_output',{actionId:reading.id,cursor:0,timeoutMs:20});assert.equal(pending.status,'running');await call('terminal_keys',{key:'Enter'});}
+    const done=await call('terminal_wait',{actionId:reading.id,timeoutMs:5000});assert.equal(done.status,'completed');assert.ok(done.output.text.includes('INPUT='+(enter?'submitted':'partial')));
+  }
+  const early=await call('terminal_execute',{command:'printf "EARLY_STREAM\\n"; read AB_EARLY'});
+  assert.equal(early.status,'running');assert.ok(early.output.text.includes('EARLY_STREAM'));assert.ok(early.requestMs<2000,'First streaming output must not wait for the default 5-second cap');
+  await call('terminal_keys',{text:'done'});assert.equal((await call('terminal_wait',{actionId:early.id,timeoutMs:5000})).status,'completed');
   const lines=Array.from({length:200},(_,i)=>String(i)+'\r\n').join('');
   let page:RemoteCommandResult=await call('terminal_execute',{requestId:randomUUID(),command:'i=0; while [ "$i" -lt 200 ]; do printf "%s\\n" "$i"; i=$((i+1)); done',maxChars:256,waitMs:5000});
   assert.ok(page.output.hasMore);const actionId=page.id;let all=page.output.text;

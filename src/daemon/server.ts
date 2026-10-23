@@ -68,6 +68,7 @@ export class DaemonServer {
       const profile=this.store.sshConnection(this.store.session(endpoint.sessionId).remote!.connectionId!);
       return `ssh:${profile.hostname.toLowerCase()}:${profile.port}:${profile.username}`;
     });
+    rmSync(path.join(dataDirectory,'command-output'),{recursive:true,force:true});
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
     this.http.on('upgrade', (request, socket, head) => {
@@ -86,7 +87,7 @@ export class DaemonServer {
         const result = requestSchema.safeParse(parsed);
         if (!result.success) {
           const id = parsed && typeof parsed === 'object' && 'id' in parsed ? String(parsed.id) : '';
-          this.send(socket, { id, error: '请求参数无效' });
+          this.send(socket, { id, error: '请求参数无效：' + result.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') });
           return;
         }
         // Resource polling is cancelled by close() and must not block an idle restart.
@@ -314,7 +315,13 @@ export class DaemonServer {
       case 'remoteCommand': {
         const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
         remote.activity.execute(client,p.requestId,p.command,text=>remote.transport.writeManaged(p.requestId,p.command,text),p.atPrompt);
-        await remote.activity.wait(p.requestId,p.waitMs,client.abort.signal);
+        const first=await remote.activity.readOutput(p.requestId,0,p.maxChars,p.waitMs,'output',client.abort.signal);
+        // Let short commands deliver their exit marker in the same call, while
+        // streaming jobs return their first output without waiting the full cap.
+        if(first.status==='running'&&first.output.text&&!client.abort.signal.aborted){
+          const remaining=Math.max(0,p.waitMs-(performance.now()-started));
+          if(remaining)await remote.activity.wait(p.requestId,Math.min(75,remaining),client.abort.signal);
+        }
         return {...remote.activity.result(p.requestId,0,p.maxChars),requestMs:performance.now()-started};
       }
       case 'remoteReadOutput': {
@@ -323,8 +330,8 @@ export class DaemonServer {
         return {...value,requestMs:performance.now()-started};
       }
       case 'remoteKeys': {
-        const remote = this.remote(request.params.sessionId, request.params.runId), { key, text } = request.params;
-        remote.activity.keys(client, key ? remoteKeys[key] : text!, key ? `按键 ${key}` : `输入文本（${text!.length} 字符）`, data => remote.transport.write(data)); return null;
+        const remote = this.remote(request.params.sessionId, request.params.runId), { key, text, enter } = request.params;
+        remote.activity.keys(client, key ? remoteKeys[key] : text! + (enter ? '\r' : ''), key ? `按键 ${key}` : `输入文本（${text!.length} 字符${enter?'，回车':''}）`, data => remote.transport.write(data)); return null;
       }
       case 'remoteWait': return this.remote(request.params.sessionId, request.params.runId).activity.wait(request.params.actionId, request.params.timeoutMs, client.abort.signal);
       case 'remoteScreen': {
@@ -636,7 +643,7 @@ export class DaemonServer {
     let remote: LiveTerminal['remote'];
     try {
       if (session.remote) {
-        const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }));
+        const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }), path.join(this.dataDirectory,'command-output',run.id));
         const profile = session.remote.connectionId ? this.store.sshConnection(session.remote.connectionId) : null;
         const transport = profile ? new SshTerminal(profile, sessionId, session.remote.directory, cols, rows, {
           credentials: async () => (await this.challenge(profile,'credentials')).secret ?? {},

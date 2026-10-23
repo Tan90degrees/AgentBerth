@@ -154,7 +154,7 @@ test('cancelled and oversized submissions flush safely; malformed or partial mar
   const id=randomUUID(),request=randomUUID(),wire=managedCommand(id,request,'false');let output='';
   const display=new ManagedOutput(id,text=>output+=text,()=>{});
   display.begin(request,'false',wire);display.feed(Buffer.from('PARTIAL INPUT'));display.cancel();assert.equal(output,'PARTIAL INPUT');
-  output='';display.begin(request,'false',wire);const large='x'.repeat(129*1024);display.feed(Buffer.from(large));assert.equal(output,large);
+  output='';display.begin(request,'false',wire);const large='x'.repeat(513*1024);display.feed(Buffer.from(large));assert.equal(output,large);
   display.feed(Buffer.from(`\x1b]777;AgentBerth;${id};malformed\x07tail\x1b]777;AgentBerth;${id};rea`));display.end();
   assert.ok(output.endsWith(`\x1b]777;AgentBerth;${id};malformed\x07tail\x1b]777;AgentBerth;${id};rea`));
 });
@@ -233,7 +233,7 @@ test('host import excludes patterns and honors bounded includes; SSH arguments n
 
 test('MCP executes with output in one daemon request and exposes incremental waits without replay',async()=>{
   const calls:{method:string;params:unknown}[]=[];const id=randomUUID();
-  const server=new TerminalMcp({rpc:async<T>(method: Method,params?: Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteExecute'?{id,status:'running'}:{status:'running'}) as T;}});
+  const server=new TerminalMcp({rpc:async<T>(method: Method,params?: Record<string,unknown>)=>{calls.push({method,params});return (method==='state'?{apiVersion:25}:{id,status:'running'}) as T;}});
   const initialized:any=await server.request('initialize',{protocolVersion:'2025-11-25'});assert.equal(initialized.protocolVersion,'2025-11-25');
   const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,18);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:id,command:'sleep 100',waitMs:10}});
@@ -265,9 +265,9 @@ test('command output streams exclude wrappers/prompts, wake on data, and preserv
 
 test('an older backend gets upgrade guidance without a fallback execution or replay',async()=>{
   const calls:string[]=[];
-  const server=new TerminalMcp({rpc:async(method)=>{calls.push(method);throw new Error('请求参数无效');}});
+  const server=new TerminalMcp({rpc:async<T>(method:Method)=>{calls.push(method);if(method==='state')return {apiVersion:25} as T;throw new Error('请求参数无效');}});
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:randomUUID(),command:'once'}});
-  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 26/);assert.deepEqual(calls,['remoteCommand']);
+  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 25.*API 29/);assert.deepEqual(calls,['remoteCommand','state']);
 });
 
 test('incremental waits cancel without stopping commands; quiet tasks and interruptions never imply success',async t=>{
@@ -309,4 +309,36 @@ test('remote viewer suppresses terminal protocol replies while the daemon answer
   assert.ok(replies.length>=5);for(const reply of replies)assert.ok(isTerminalReply(reply),JSON.stringify(reply));
   for(const data of ['echo hacked\r','\x1b[A','\r','\x03','\x1b[0necho bad\r'])assert.equal(isTerminalReply(data),false);
   terminal.dispose();
+});
+
+
+test('MCP accepts minimal execute, validates UUID fields before sending and never masks invalid input as an upgrade',async()=>{
+  const calls:{method:string;params:any}[]=[];
+  const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteResolve'?{sessionId:'f165a277-fbfa-4363-9c80-f2840d756b47',runId:'c4955082-2c98-49ae-b493-195693763fb9'}:{id:params?.requestId}) as T;}});
+  const command='echo "===== OS RELEASE ====="; cat /etc/os-release 2>/dev/null; echo "===== KERNEL ====="; uname -a; echo "===== HOSTNAME ====="; hostname; echo "===== UPTIME ====="; uptime';
+  const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{alias:'dev-server',command}});
+  assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteResolve','remoteCommand']);assert.match(calls[1].params.requestId,/^[a-f0-9-]{36}$/);assert.equal(calls[1].params.command,command);assert.equal(calls[1].params.waitMs,5000);assert.equal(calls[1].params.maxChars,32768);
+  const invalid:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:'not-a-uuid',command:'uname -a'}});
+  assert.ok(invalid.isError);assert.match(invalid.content[0].text,/params.requestId/);assert.doesNotMatch(invalid.content[0].text,/更新后台/);assert.equal(calls.length,2);
+  const keys=(await server.request('tools/list',{}) as any).tools.find((tool:any)=>tool.name==='terminal_keys');assert.equal(keys.inputSchema.properties.enter.default,true);
+  for(const args of [{text:'yes'},{text:'partial',enter:false},{key:'Enter'},{key:'Tab'}]){
+    const response:any=await server.request('tools/call',{name:'terminal_keys',arguments:{sessionId:randomUUID(),runId:randomUUID(),...args}});assert.ok(!response.isError);assert.equal(calls.at(-1)!.params.enter,'enter' in args?false:true);
+  }
+});
+
+test('multiline scripts accept tabs and trailing newlines, rejecting terminal controls without transmission',()=>{
+  for(const command of ['uname -a\n','printf "first\\n"\nprintf "second\\n"','printf\tOK']){
+    const request=requestSchema.safeParse({id:randomUUID(),method:'remoteCommand',params:{sessionId:randomUUID(),runId:randomUUID(),requestId:randomUUID(),command}});assert.ok(request.success,command);
+  }
+  for(const command of ['\x1b[2J','\x03','\x00','   '])assert.equal(requestSchema.safeParse({id:randomUUID(),method:'remoteCommand',params:{sessionId:randomUUID(),runId:randomUUID(),requestId:randomUUID(),command}}).success,false);
+});
+
+test('disk output cache wraps with exact cursors and Unicode and cleans files on disposal',t=>{
+  const folder=mkdtempSync(path.join(tmpdir(),'ab-output-ring-'));t.after(()=>rmSync(folder,{recursive:true,force:true}));
+  const memory=new CommandOutput(31),disk=new CommandOutput(31,path.join(folder,'ring.bin'));t.after(()=>disk.dispose());
+  for(const text of ['abc😀中','1234567890123456789012345678901234567890','😀','tail','\r\n','😀'.repeat(30)]){
+    memory.append(text);disk.append(text);
+    let cursor=0;
+    for(let n=0;n<20;n++){const expected=memory.read(cursor,4),actual=disk.read(cursor,4);assert.deepEqual(actual,expected);cursor=actual.nextCursor;if(!actual.hasMore)break;assert.ok(n<19);}
+  }
 });

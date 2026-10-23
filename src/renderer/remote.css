@@ -24,7 +24,7 @@
 .workbench-split {display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden;}
 .workbench-split[hidden], .workspace-host[hidden], .ssh-dock-slot[hidden], .ssh-dock[hidden] {display:none!important;}
 .ssh-dock-slot {display:contents;}
-.ssh-dock {display:flex;flex:0 0 clamp(280px,42vh,480px);flex-direction:column;min-height:180px;min-width:0;border-top:1px solid var(--border);background:var(--terminal);overflow:hidden;}
+.ssh-dock {display:flex;position:relative;flex:0 0 var(--ssh-height,clamp(280px,42vh,480px));flex-direction:column;min-height:120px;min-width:0;border-top:1px solid var(--border);background:var(--terminal);overflow:hidden;}
 .ssh-dock.expanded {flex:2 1 0;}
 .ssh-dock.sole-terminal {flex:1;}
 .ssh-dock-header {display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:36px;padding:4px 12px;background:var(--bg);}
@@ -43,3 +43,7 @@
 .ssh-dock .terminal-host {padding:6px 10px 4px 18px;}
 .remote-transfer progress {width:70px;height:4px;accent-color:var(--text-secondary);}
 .remote-transfer button {font-size:11px;white-space:nowrap;}
+
+.ssh-height-resizer {position:absolute;top:0;left:0;right:0;height:6px;z-index:8;cursor:row-resize;touch-action:none;outline:none;}
+.ssh-height-resizer:hover,.ssh-height-resizer:focus-visible {background:var(--text-muted);opacity:.65;}
+body.terminal-height-resizing,body.terminal-height-resizing * {cursor:row-resize!important;user-select:none!important;}

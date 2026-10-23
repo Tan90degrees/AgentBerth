@@ -98,7 +98,7 @@ export class ManagedOutput {
       marker(kind,status,cwd,id);
     },text=>{
       if(!text)return;
-      if(this.pending){this.pending.text+=text;if(this.pending.text.length>128*1024)this.flush(false);}
+      if(this.pending){this.pending.text+=text;if(this.pending.text.length>512*1024)this.flush(false);}
       else this.output(text);
     });
   }

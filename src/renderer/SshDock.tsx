@@ -7,12 +7,14 @@ import { SshConnections } from './SshConnections';
 import { TerminalView } from './TerminalView';
 import { OutputBadge } from './useTerminalActivity';
 import { readStored, saveStored } from './storage';
+import { useSshHeight } from './useSshHeight';
 
 /** One mounted remote viewport. Opening the dock never starts a new SSH session. */
 export function SshDock({unread,state,visible,connected,sessionId,onSelect,onClose,onMenu,onError,connectionEpoch,hasLocal}: {
   unread: ReadonlySet<string>; state: State; visible: boolean; connected: boolean; sessionId: string; onSelect: (id:string)=>void; onClose:()=>void;
   onMenu:(target:TreeMenuTarget)=>void; onError:(error:string)=>void; connectionEpoch:number; hasLocal:boolean;
 }) {
+  const resize=useSshHeight();
   const sessions=state.sessions.filter(session=>session.remote);
   const session=sessions.find(item=>item.id===sessionId);
   const [serversOpen,setServersOpen]=useState(false),[serverError,setServerError]=useState('');
@@ -22,7 +24,13 @@ export function SshDock({unread,state,visible,connected,sessionId,onSelect,onClo
   const active=session?.latestRun?.status==='running';
   useEffect(()=>{setInfo(null);},[sessionId,session?.latestRun?.id]);
   const menu=(element:HTMLElement,x?:number,y?:number)=>{if(!session)return;const box=element.getBoundingClientRect();onMenu({kind:'session',id:session.id,opener:element,x:x??box.right,y:y??box.bottom});};
-  return <section className={`ssh-dock${expanded?' expanded':''}${!hasLocal?' sole-terminal':''}`} hidden={!visible} aria-label="SSH 实时终端">
+  return <section ref={resize.host} className={`ssh-dock${expanded?' expanded':''}${!hasLocal?' sole-terminal':''}`} hidden={!visible} aria-label="SSH 实时终端">
+    {hasLocal&&<div className="ssh-height-resizer" role="separator" tabIndex={0} aria-label="调整终端高度" aria-orientation="horizontal" aria-valuemin={120} aria-valuemax={Math.max(120,resize.available-120)} aria-valuenow={resize.height}
+      title="拖动调整终端高度，双击恢复默认；方向键微调"
+      onDoubleClick={()=>{setExpanded(false);saveStored('berth.sshExpanded','false');resize.reset();}}
+      onPointerDown={event=>{if(event.button!==0)return;setExpanded(false);saveStored('berth.sshExpanded','false');resize.onPointerDown(event);}}
+      onPointerMove={resize.onPointerMove} onPointerUp={resize.finish} onPointerCancel={resize.finish} onLostPointerCapture={resize.finish}
+      onKeyDown={event=>{if(!['ArrowUp','ArrowDown','Home','End'].includes(event.key))return;event.preventDefault();setExpanded(false);saveStored('berth.sshExpanded','false');resize.adjust(event.key==='Home'?120:event.key==='End'?resize.available-120:resize.height+(event.key==='ArrowUp'?1:-1)*(event.shiftKey?50:10));}} />}
     <header className="ssh-dock-header" data-session-id={session?.id} onContextMenu={event=>{event.preventDefault();menu(event.currentTarget,event.clientX,event.clientY);}}>
       <h2>{session?.title??'SSH 远端终端'}</h2>{sessions.some(value=>unread.has(value.id))&&<OutputBadge />}
       <select aria-label="SSH 终端" value={session?.id??''} disabled={!sessions.length} onChange={event=>onSelect(event.target.value)}>

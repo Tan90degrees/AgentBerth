@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { RemoteAction, RemoteCommandResult, RemoteInfo, RemoteKey } from '../shared/protocol';
 import type { Store } from './store';
-import { CommandOutput } from './remote-output';
+import { CommandOutput, COMMAND_OUTPUT_CAPACITY } from './remote-output';
+import { mkdirSync, rmSync } from 'node:fs';
+import path from 'node:path';
 
 export const remoteKeys: Record<RemoteKey, string> = { Enter: '\r', Tab: '\t', Escape: '\x1b', Up: '\x1b[A', Down: '\x1b[B', Right: '\x1b[C', Left: '\x1b[D', 'Ctrl+C': '\x03', 'Ctrl+D': '\x04', 'Ctrl+Z': '\x1a', Backspace: '\x7f' };
 
@@ -16,7 +18,7 @@ export class RemoteActivity {
   private agentGranted = false;
   private outputs = new Map<string, CommandOutput>();
   constructor(readonly info: RemoteInfo, private store: Pick<Store, 'remoteAction' | 'saveRemoteAction'>,
-    private publish: (info: RemoteInfo) => void, private publishAction: (action: RemoteAction) => void) {}
+    private publish: (info: RemoteInfo) => void, private publishAction: (action: RemoteAction) => void, private outputDirectory?:string) {}
   change(update: Partial<RemoteInfo>): void {
     const previousConnection = this.info.connection;
     Object.assign(this.info, update);
@@ -52,8 +54,9 @@ export class RemoteActivity {
     if (this.info.commandTracking === 'none') throw new Error('当前登录 Shell 请使用读屏和按键操作；无需安装额外程序');
     if (this.pending || (this.info.phase !== 'idle' && !atPrompt)) throw new Error('终端不在已确认的 Shell 提示符，请先读取画面；交互程序请使用按键工具');
     const action = this.save({ id: requestId, sessionId: this.info.sessionId, runId: this.info.runId, kind: 'command', label: command, status: 'running', startedAt: new Date().toISOString(), endedAt: null, exitCode: null });
-    this.outputs.set(requestId,new CommandOutput());
-    if(this.outputs.size>8)this.outputs.delete(this.outputs.keys().next().value!);
+    if(this.outputDirectory)try{mkdirSync(this.outputDirectory,{recursive:true,mode:0o700});}catch{/* Output reports unavailable; command execution stays usable. */}
+    this.outputs.set(requestId,new CommandOutput(COMMAND_OUTPUT_CAPACITY,this.outputDirectory?path.join(this.outputDirectory,requestId+'.bin'):undefined));
+    if(this.outputs.size>8){const oldest=this.outputs.keys().next().value!;this.outputs.get(oldest)?.dispose();this.outputs.delete(oldest);}
     this.pending = action; this.started = false; this.change({ phase: 'busy' });
     try { write(managedCommand(this.info.sessionId,requestId,command)); }
     catch (error) { this.unknown(); throw error; }
@@ -85,13 +88,13 @@ export class RemoteActivity {
     this.info.phase = 'unknown';
     if (this.pending) {const action=this.pending;this.pending=null;this.started=false;this.save({ ...action, status: 'unknown', endedAt: new Date().toISOString() });}
   }
-  finish(): void { this.unknown(); this.events.emit('change'); this.events.removeAllListeners(); }
+  finish(): void { this.unknown(); for(const output of this.outputs.values())output.dispose();this.outputs.clear();if(this.outputDirectory)try{rmSync(this.outputDirectory,{recursive:true,force:true});}catch{}this.events.emit('change'); this.events.removeAllListeners(); }
   capture(text:string):void {
     if(!this.pending||!this.started||!text)return;
     this.outputs.get(this.pending.id)?.append(text);
     this.events.emit('output');
   }
-  result(actionId:string,cursor=0,maxChars=16384):RemoteCommandResult {
+  result(actionId:string,cursor=0,maxChars=32768):RemoteCommandResult {
     const action=this.store.remoteAction(actionId);
     if(!action||action.kind!=='command'||action.sessionId!==this.info.sessionId||action.runId!==this.info.runId)throw new Error('命令不属于当前运行实例');
     const output=this.outputs.get(actionId)?.read(cursor,maxChars)??{text:'',nextCursor:cursor,earliestCursor:null,truncated:true,hasMore:false,available:false,format:'terminal' as const};

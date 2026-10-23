@@ -11,7 +11,7 @@ AgentBerth 让 Agent 操作用户正在观看的同一个真实 SSH 终端。目
 5. 告诉 Agent 使用连接别名（例如 `dev-server`）。Agent 调用 `terminal_open({"alias":"dev-server"})`，自动打开工作区底部的 SSH 实时终端，本机 Agent 终端保留在上方，两边可以同时观察。SSH 会话不再混在左侧本机会话列表。后续读屏、执行、按键和等待都可传同一 alias，无需用户复制会话 UUID。重复 open 会复用现有会话，不会抢回人工控制权，也不会自动重连已断开的 SSH。
 6. 用户可滚动、选中、复制、查找，点击 **接管** 收回输入权，任务继续运行。点击 **交给 Agent** 再次允许输入。如果同一连接有多个正在运行的会话，Agent 需从 terminal_list 选择 sessionId/runId，以免操作错会话。
 
-点击顶部 **SSH → 服务器** 也可直接填写服务器信息；保存信息不会建立连接。会话由 Agent 通过 MCP 打开或管理。反复点击 SSH 只开关同一个面板，不创建连接或重复显示行。面板收起后连接继续运行，再次展开接回同一终端；选择器可切换多个 SSH 会话，旁边的 **⋯** 或右键可启动、停止、编辑和删除。最近命令、执行状态与人工接管按钮显示在远端画面旁；完整步骤仍可展开查看。
+点击顶部 **SSH → 服务器** 也可直接填写服务器信息；保存信息不会建立连接。会话由 Agent 通过 MCP 打开或管理。反复点击 SSH 只开关同一个面板，不创建连接或重复显示行。拖动 SSH 面板上边缘可调整本机与远端的高度分配，方向键微调、双击恢复默认；高度在本机保存。面板收起后连接继续运行，再次展开接回同一终端；选择器可切换多个 SSH 会话，旁边的 **⋯** 或右键可启动、停止、编辑和删除。最近命令、执行状态与人工接管按钮显示在远端画面旁；完整步骤仍可展开查看。
 
 常规流程不需要手动创建 SSH 会话；Agent 可按别名创建、改名、关闭、删除或明确重连。面板中的会话菜单仍保留人工处理入口。高级“沿用系统 SSH 配置”保留 OpenSSH 的端口、IdentityFile、ProxyJump，适合已有免交互密钥登录；需先在系统终端完成首次主机指纹确认。密码登录使用上面的保存连接入口。多因素验证码尚不支持自动填写。
 
@@ -19,11 +19,11 @@ SSH 会话独立管理。第一版文件树、预览、Git 和资源统计用于
 
 ## 命令、长任务和交互程序
 
-POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；内部包装的已确认回显替换成原始命令，不显示 UUID 和转义串；实际程序输出保持原样。遇到无法确认的重绘或交错输出会保留原始数据，避免误删日志。目录和 export 保持有效。每个新命令生成 UUID requestId，重试复用原 ID，避免重复执行。一次返回状态、退出码、Shell 信息及有界 output，不必再读屏取普通命令结果。长任务用 `terminal_read_output` 按 actionId=id 与 cursor=output.nextCursor 获取新增内容，有输出或完成立即唤醒；`terminal_wait` 仅用于等待最终完成。completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
+POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；内部包装的已确认回显替换成原始命令，不显示 UUID 和转义串；实际程序输出保持原样。遇到无法确认的重绘或交错输出会保留原始数据，避免误删日志。目录和 export 保持有效。普通调用只需别名和 command，requestId 可省略，工具自动生成并返回 id；显式去重重试须复用原 UUID，避免重复执行。命令支持换行、Tab 和多行脚本。一次返回状态、退出码、Shell 信息及有界 output，不必再读屏取普通命令结果。长任务用 `terminal_read_output` 按 actionId=id 与 cursor=output.nextCursor 获取新增内容，有输出或完成立即唤醒；`terminal_wait` 仅用于等待最终完成。completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
 
 后台按事件等待，单次最长 30 秒。工具返回 running 后，按相同 actionId 和返回游标继续获取新增输出，不重新启动命令。部分 MCP 客户端不能由后台事件自动唤醒模型，仍需后续有界等待；任务不会因一次等待超时而中断。
 
-对于 vim、top、其他非 POSIX 登录 Shell，使用 `terminal_screen` 与 `terminal_keys`。输入回到提示符后，phase 可能为 unknown；先读屏确认空闲提示符，POSIX Shell 下一次 execute 显式传 `atPrompt: true`。不要为了探测提示符擅自发送 Enter。Ctrl+C 明确中断前台任务，未能收到完成标记的命令保留 unknown。执行 exit、替换 Shell 或程序接管终端也可能无法获得退出码，不得自动重放。
+对于 vim、top、其他非 POSIX 登录 Shell，使用 `terminal_screen` 与 `terminal_keys`。text 默认附带回车，显式 enter=false 才只输入不提交；命名 key 只发送一次。输入回到提示符后，phase 可能为 unknown；先读屏确认空闲提示符，POSIX Shell 下一次 execute 显式传 `atPrompt: true`。不要为了探测提示符擅自发送 Enter。Ctrl+C 明确中断前台任务，未能收到完成标记的命令保留 unknown。执行 exit、替换 Shell 或程序接管终端也可能无法获得退出码，不得自动重放。
 
 ## 连接生命周期
 
@@ -45,7 +45,7 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 28。
+用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 29。
 
 ## 文件传输
 
@@ -57,9 +57,9 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## 输出与响应速度
 
-普通命令由一次 MCP 调用完成提交、等待及输出读取，不需要每条命令再读屏。完成即返回，默认的 1 秒是等待上限，不是固定延迟。长任务可按游标等待新增日志；TUI 保留按需读屏，读屏不再额外序列化历史。返回 requestMs/elapsedMs 可区分后台请求与命令持续时间；模型推理及客户端调度需在客户端另外测量。
+普通命令由一次 MCP 调用完成提交、等待及输出读取，不需要每条命令再读屏。完成即返回，默认的 5 秒是等待上限，不是固定延迟；首段输出后最多合并等待 75 ms 以接收短命令退出码，流式命令会先返回首段。长任务可按游标等待新增日志；TUI 保留按需读屏，读屏不再额外序列化历史。返回 requestMs/elapsedMs 可区分后台请求与命令持续时间；模型推理及客户端调度需在客户端另外测量。
 
-输出缓存有界且仅在内存中保留：每会话最近 8 条命令，每条最多 128K UTF-16 编码单元。truncated/available=false 明确提示丢失；PTY 输出合并 stdout/stderr，可能含 ANSI。不承诺永久保存完整日志或由 MCP 通知自动唤醒模型。
+输出缓存通过本机私有临时文件保留：每会话最近 8 条命令，每条最近 8M UTF-16 编码单元（磁盘上限 16 MiB），停止会话或重启后台清除；读取只加载本页。默认每页 32768 字符，可选 256..65536，hasMore 时按 nextCursor 继续，不代表内容已丢失。终端画面与本轮输出独立，不需要 clear，也不受面板高度影响。truncated/available=false 明确提示丢失；PTY 输出合并 stdout/stderr，可能含 ANSI。不承诺永久保存完整日志或由 MCP 通知自动唤醒模型。
 
 ## 并发上限
 
