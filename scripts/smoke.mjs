@@ -1425,6 +1425,8 @@ try {
   await openSettings(page);
   await settingsCategory(page, 'MCP');
   await page.getByRole('button', { name: '复制 MCP 配置', exact: true }).click();
+  assert.equal(await page.getByRole('button',{name:'复制给 Agent 的说明',exact:true}).count(),0);
+  await page.getByText('无需复制额外提示词',{exact:false}).waitFor();
   const mcpConfiguration = JSON.parse(await application.evaluate(({ clipboard }) => clipboard.readText())).mcpServers.agentberth;
   assert.equal(mcpConfiguration.env.ELECTRON_RUN_AS_NODE, '1');
   assert.ok(path.isAbsolute(mcpConfiguration.command));

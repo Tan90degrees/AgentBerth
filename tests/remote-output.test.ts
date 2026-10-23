@@ -46,9 +46,11 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   await ui.rpc('saveSshConnection',{config:{alias:'output-fixture',hostname:'127.0.0.1',port:address.port,username:'fixture',authentication:'password',privateKeyPath:'',allowAgent:true}});
   const mcp=new TerminalMcp(agent);
   const call=async(name:string,args:Record<string,unknown>={})=>{const result:any=await mcp.request('tools/call',{name,arguments:{alias:'output-fixture',...args}});assert.ok(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);};
-  const target=await call('terminal_open');await ui.rpc('attach',{sessionId:target.sessionId});
+  await mcp.request('tools/list',{}); // No copied instructions or explicit open.
   const requestId=randomUUID(),command='export AB_STATE=42; cd /tmp; printf "DIRECT=%s\\n" "$AB_STATE"; false';
   const fast:RemoteCommandResult=await call('terminal_execute',{requestId,command,waitMs:5000});
+  const target={sessionId:fast.sessionId,runId:fast.runId};await ui.rpc('attach',{sessionId:target.sessionId});
+  assert.equal((fast as any).harness.state,'completed');assert.equal((fast as any).harness.next,null);
   assert.equal(fast.status,'completed');assert.equal(fast.exitCode,1);assert.equal(fast.info.phase,'idle');assert.equal(fast.info.cwd,'/tmp');assert.equal(fast.output.text,'DIRECT=42\r\n');
   assert.deepEqual((await call('terminal_execute',{requestId,command})).output,fast.output,'A retry returns cached output without re-executing');
   t.diagnostic(`one-call result: backend ${fast.requestMs?.toFixed(1)} ms; command ${fast.elapsedMs} ms (loopback SSH, real PTY)`);
@@ -77,6 +79,7 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   }
   const early=await call('terminal_execute',{command:'printf "EARLY_STREAM\\n"; read AB_EARLY'});
   assert.equal(early.status,'running');assert.ok(early.output.text.includes('EARLY_STREAM'));assert.ok(early.requestMs<2000,'First streaming output must not wait for the default 5-second cap');
+  const busy:any=await mcp.request('tools/call',{name:'terminal_execute',arguments:{alias:'output-fixture',command:'printf SHOULD_NOT_EXECUTE'}});const blocked=JSON.parse(busy.content[0].text);assert.equal(blocked.error.code,'COMMAND_RUNNING');assert.equal(blocked.harness.next.arguments.actionId,early.id);
   await call('terminal_keys',{text:'done'});assert.equal((await call('terminal_wait',{actionId:early.id,timeoutMs:5000})).status,'completed');
   const lines=Array.from({length:200},(_,i)=>String(i)+'\r\n').join('');
   let page:RemoteCommandResult=await call('terminal_execute',{requestId:randomUUID(),command:'i=0; while [ "$i" -lt 200 ]; do printf "%s\\n" "$i"; i=$((i+1)); done',maxChars:256,mode:'page',waitMs:5000});
@@ -109,11 +112,13 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   // Partial typing and input to a running program must remain literal. Unknown
   // prompt state cannot silently reuse the previous command's output.
   const partial=await call('terminal_keys',{text:'AB_PARTIAL=literal',enter:false});assert.equal(partial.inputKind,'interactive');assert.equal((await call('terminal_screen')).command,null);
-  const noCommand:any=await mcp.request('tools/call',{name:'terminal_read_output',arguments:{alias:'output-fixture',timeoutMs:0}});assert.ok(noCommand.isError);assert.match(noCommand.content[0].text,/没有可关联/);
+  const noCommand:any=await mcp.request('tools/call',{name:'terminal_read_output',arguments:{alias:'output-fixture',timeoutMs:0}});assert.ok(noCommand.isError);assert.match(JSON.parse(noCommand.content[0].text).error.message,/没有可关联/);
   await call('terminal_keys',{key:'Enter'});
   const restored=await call('terminal_execute',{command:'printf "%s\\n" "$AB_PARTIAL"',atPrompt:true});assert.equal(restored.output.text,'literal\r\n');
   const quiet=await call('terminal_execute',{requestId:randomUUID(),command:'read AB_STOP',waitMs:0});
   const waiting=call('terminal_read_output',{actionId:quiet.id,cursor:0,timeoutMs:30000});
   await call('terminal_keys',{key:'Ctrl+C'});assert.equal((await waiting).status,'unknown');
+  await ui.rpc('remoteControl',{...target,owner:'user'});
+  const denied:any=await mcp.request('tools/call',{name:'terminal_execute',arguments:{alias:'output-fixture',command:'printf MUST_NOT_STEAL'}});const deniedValue=JSON.parse(denied.content[0].text);assert.equal(deniedValue.error.code,'USER_CONTROLLED');assert.equal(deniedValue.harness.next,null);assert.equal((await ui.rpc<any>('remoteInfo',{sessionId:target.sessionId})).owner,'user');
   assert.equal(logins,1);assert.equal(shells,1,'All operations must use the one visible Shell');
 });

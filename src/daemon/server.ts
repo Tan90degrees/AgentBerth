@@ -26,6 +26,7 @@ import { terminateTree } from './processes';
 import { trackMouseEncoding } from '../shared/terminal-modes';
 import { RemoteTerminal, sshHosts, type TerminalProcess } from './remote';
 import { RemoteActivity, remoteKeys } from './remote-activity';
+import { RemoteOperationError } from '../shared/remote-errors';
 import { windowsPtyFor } from '../shared/desktop';
 
 interface LiveTerminal {
@@ -87,14 +88,14 @@ export class DaemonServer {
         const result = requestSchema.safeParse(parsed);
         if (!result.success) {
           const id = parsed && typeof parsed === 'object' && 'id' in parsed ? String(parsed.id) : '';
-          this.send(socket, { id, error: '请求参数无效：' + result.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') });
+          this.send(socket, { id, errorCode:'INVALID_ARGUMENTS', error: '请求参数无效：' + result.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') });
           return;
         }
         // Resource polling is cancelled by close() and must not block an idle restart.
         const blocksIdleShutdown = result.data.method !== 'resources';
         client.pending++;
         if (blocksIdleShutdown) this.pendingWork++;
-        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value })).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败' })).finally(() => {
+        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value })).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败', ...(error instanceof RemoteOperationError?{errorCode:error.code,errorDetails:error.details}:{}) })).finally(() => {
           client.pending--;
           if (blocksIdleShutdown) this.pendingWork--;
         });
@@ -150,8 +151,8 @@ export class DaemonServer {
 
   private terminal(sessionId: string, runId?: string): LiveTerminal {
     const live = this.live.get(sessionId);
-    if (!live || live.closed) throw new Error('终端已结束，请重新启动');
-    if (runId && live.run.id !== runId) throw new Error('终端运行实例已变化，请重新连接');
+    if (!live || live.closed) throw new RemoteOperationError('SESSION_NOT_OPEN','终端已结束，请重新启动',{sessionId});
+    if (runId && live.run.id !== runId) throw new RemoteOperationError('STALE_RUN','终端运行实例已变化，请重新连接',{sessionId,runId});
     return live;
   }
 
@@ -175,10 +176,10 @@ export class DaemonServer {
   }
   private aliasTarget(alias: string) {
     const profile = this.store.sshConnections().find(item => item.alias.toLowerCase() === alias.toLowerCase());
-    if (!profile) throw new Error('连接别名不存在，请先在 AgentBerth 设置中保存 SSH 连接');
+    if (!profile) throw new RemoteOperationError('ALIAS_NOT_FOUND','连接别名不存在，请先在 AgentBerth 设置中保存 SSH 连接',{alias});
     const sessions = this.store.state().sessions.filter(session => session.remote?.connectionId === profile.id);
     const active = sessions.filter(session => this.live.has(session.id));
-    if (active.length > 1) throw new Error('此别名有多个运行会话，请从 terminal_list 选择 sessionId 和 runId');
+    if (active.length > 1) throw new RemoteOperationError('ALIAS_AMBIGUOUS','此别名有多个运行会话，请从 terminal_list 选择 sessionId 和 runId',{alias});
     return { profile, session: active[0] ?? sessions[0] };
   }
   private remoteProject() {
@@ -214,7 +215,7 @@ export class DaemonServer {
       case 'remoteAliases': return this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent }));
       case 'remoteResolve': {
         const {session} = this.aliasTarget(request.params.alias);
-        if (!session) throw new Error('此连接尚未打开，请先调用 terminal_open');
+        if (!session) throw new RemoteOperationError('SESSION_NOT_OPEN','此连接尚未打开，请先调用 terminal_open',{alias:request.params.alias});
         const live = this.terminal(session.id);
         return { sessionId: session.id, runId: live.run.id };
       }

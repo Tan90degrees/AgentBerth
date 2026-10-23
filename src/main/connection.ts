@@ -4,6 +4,11 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { PROTOCOL_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
+import type { RemoteErrorDetails } from '../shared/remote-errors';
+
+export class DaemonRpcError extends Error {
+  constructor(message:string,readonly code?:string,readonly details:RemoteErrorDetails={}) { super(message); }
+}
 
 export class DaemonConnection {
   private silent = false;
@@ -16,7 +21,7 @@ export class DaemonConnection {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id); clearTimeout(pending.timer);
-      if (message.error) pending.reject(new Error(message.error)); else pending.resolve(message.result);
+      if (message.error) pending.reject(new DaemonRpcError(message.error,message.errorCode,message.errorDetails)); else pending.resolve(message.result);
     });
     socket.on('close', () => {
       for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error('后台连接已断开')); }

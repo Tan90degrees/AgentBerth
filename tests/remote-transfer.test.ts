@@ -109,7 +109,7 @@ test('Agent manages sessions and uploads/downloads/streams over the same authent
   t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});agent.close();ui.close();await daemon.close();for(const client of clients)client.destroy();await new Promise<void>(resolve=>ssh.close(()=>resolve()));await rm(folder,{recursive:true,force:true});});
   await ui.rpc('registerSshProvider');
   await ui.rpc<SshConnection>('saveSshConnection',{config:{alias:'fixture-server',hostname:'127.0.0.1',port:address.port,username:'fixture-user',authentication:'password',privateKeyPath:'',allowAgent:true}});
-  const call=async(name:string,args:Record<string,unknown>={})=>{const result:any=await mcp.request('tools/call',{name,arguments:args});if(result.isError)throw new Error(result.content[0].text);return JSON.parse(result.content[0].text);};
+  const call=async(name:string,args:Record<string,unknown>={})=>{const result:any=await mcp.request('tools/call',{name,arguments:args});if(result.isError)throw new Error(JSON.parse(result.content[0].text).error.message);return JSON.parse(result.content[0].text);};
   const [a,b]=await Promise.all([call('terminal_create',{alias:'fixture-server',title:'worker'}),call('terminal_create',{alias:'fixture-server',title:'worker'})]);
   assert.equal(a.runId,b.runId);assert.equal(handshakes,1);
   const payload=randomBytes(512*1024+5),local=path.join(folder,'payload'),download=path.join(folder,'download');await writeFile(local,payload);

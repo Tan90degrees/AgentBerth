@@ -6,6 +6,7 @@ import type { Store } from './store';
 import { CommandOutput, COMMAND_OUTPUT_CAPACITY } from './remote-output';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { RemoteOperationError } from '../shared/remote-errors';
 
 export const remoteKeys: Record<RemoteKey, string> = { Enter: '\r', Tab: '\t', Escape: '\x1b', Up: '\x1b[A', Down: '\x1b[B', Right: '\x1b[C', Left: '\x1b[D', 'Ctrl+C': '\x03', 'Ctrl+D': '\x04', 'Ctrl+Z': '\x1a', Backspace: '\x7f' };
 
@@ -34,14 +35,14 @@ export class RemoteActivity {
   }
   release(client: object): void { if (this.holder === client) this.control('user'); }
   assertManage(client:object):void {
-    if(!this.agentGranted)throw new Error('终端由用户控制，请等待用户交还控制权');
-    if(this.holder&&this.holder!==client)throw new Error('另一个 Agent 正在操作此终端');
+    if(!this.agentGranted)throw new RemoteOperationError('USER_CONTROLLED','终端由用户控制，请等待用户交还控制权',this.target());
+    if(this.holder&&this.holder!==client)throw new RemoteOperationError('AGENT_BUSY','另一个 Agent 正在操作此终端',this.target());
     this.holder=client;
   }
   assertAgent(client: object): void {
-    if (this.info.owner !== 'agent') throw new Error('终端由用户控制，请让用户点击“交给 Agent”；不要自动抢回控制权');
-    if (this.holder && this.holder !== client) throw new Error('另一个 Agent 正在操作此终端');
-    if (this.info.connection !== 'connected') throw new Error('SSH 尚未连接，操作未发送');
+    if (this.info.owner !== 'agent') throw new RemoteOperationError('USER_CONTROLLED','终端由用户控制，请让用户点击“交给 Agent”；不要自动抢回控制权',this.target());
+    if (this.holder && this.holder !== client) throw new RemoteOperationError('AGENT_BUSY','另一个 Agent 正在操作此终端',this.target());
+    if (this.info.connection !== 'connected') throw new RemoteOperationError('DISCONNECTED','SSH 尚未连接，操作未发送',this.target());
     this.holder = client;
   }
   execute(client: object, requestId: string, command: string, write: (text: string) => void, atPrompt = false): RemoteAction {
@@ -51,17 +52,18 @@ export class RemoteActivity {
       if (previous.sessionId !== this.info.sessionId || previous.runId !== this.info.runId || previous.label !== command) throw new Error('requestId 已用于另一个操作');
       return previous; // A retried MCP request must never replay a command.
     }
-    if (this.info.commandTracking === 'none') throw new Error('当前登录 Shell 请使用读屏和按键操作；无需安装额外程序');
-    if (this.pending || (this.info.phase !== 'idle' && !atPrompt)) throw new Error('终端不在已确认的 Shell 提示符，请先读取画面；交互程序请使用按键工具');
+    if (this.info.commandTracking === 'none') throw new RemoteOperationError('SHELL_UNSUPPORTED','当前登录 Shell 请使用读屏和按键操作；无需安装额外程序',this.target());
+    if (this.pending || (this.info.phase !== 'idle' && !atPrompt)) throw new RemoteOperationError(this.pending?'COMMAND_RUNNING':'PROMPT_REQUIRED','终端不在已确认的 Shell 提示符，请先读取画面；交互程序请使用按键工具',{...this.target(),...(this.pending?{actionId:this.pending.id}:{})});
     const action = this.save({ id: requestId, sessionId: this.info.sessionId, runId: this.info.runId, kind: 'command', label: command, status: 'running', startedAt: new Date().toISOString(), endedAt: null, exitCode: null });
     if(this.outputDirectory)try{mkdirSync(this.outputDirectory,{recursive:true,mode:0o700});}catch{/* Output reports unavailable; command execution stays usable. */}
     this.outputs.set(requestId,new CommandOutput(COMMAND_OUTPUT_CAPACITY,this.outputDirectory?path.join(this.outputDirectory,requestId+'.bin'):undefined));
     if(this.outputs.size>8){const oldest=this.outputs.keys().next().value!;this.outputs.get(oldest)?.dispose();this.outputs.delete(oldest);}
     this.pending = action; this.started = false; this.change({ phase: 'busy' });
     try { write(managedCommand(this.info.sessionId,requestId,command)); }
-    catch (error) { this.unknown(); throw error; }
+    catch (error) { this.unknown(); throw new RemoteOperationError('OUTCOME_UNKNOWN',error instanceof Error?error.message:'终端写入结果未知',{...this.target(),actionId:requestId}); }
     return action;
   }
+  private target() { return {sessionId:this.info.sessionId,runId:this.info.runId}; }
   keys(client: object, data: string, label: string, write: (text: string) => void): void {
     this.assertAgent(client); this.action('input', label);
     this.input(data);
@@ -111,7 +113,7 @@ export class RemoteActivity {
   }
   async readOutput(actionId:string,cursor:number,maxChars:number,timeoutMs:number,waitFor:'output'|'completion',signal?:AbortSignal,mode:'summary'|'page'='page'):Promise<RemoteCommandResult> {
     const read=()=>this.result(actionId,cursor,maxChars,mode);
-    const ready=(value:RemoteCommandResult)=>value.status!=='running'||!value.output.available||(waitFor==='output'&&(!!value.output.text||value.output.truncated));
+    const ready=(value:RemoteCommandResult)=>value.status!=='running'||(waitFor==='output'&&(!value.output.available||!!value.output.text||value.output.truncated));
     const current=read();if(ready(current)||!timeoutMs||signal?.aborted)return current;
     return new Promise((resolve,reject)=>{
       const cleanup=()=>{clearTimeout(timer);this.events.off('change',change);this.events.off('output',change);signal?.removeEventListener('abort',end);};

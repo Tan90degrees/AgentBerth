@@ -271,6 +271,6 @@ Apache-2.0，沿用仓库原有许可证。
 
 ## 可观察的远程终端与 MCP
 
-在设置中保存 SSH 连接别名、地址、用户名和登录方式（密码、私钥或 SSH Agent），再让 Agent 调用 MCP 的 terminal_open 按别名打开可见终端；远端只需 SSH 服务和系统已有的登录 Shell，无需安装任何额外程序。设置中复制本机 stdio MCP 配置，Agent 通过别名执行、读屏和按键；无需用户填写会话 UUID，可实时观看真实操作并随时接管。主窗口关闭、MCP 超时或断开时，本机后台保持 SSH；SSH 链路真正中断后原任务结果未知，手动重新连接会建立新 Shell。步骤可折叠和翻页。
+在设置中保存 SSH 连接别名、地址、用户名和登录方式（密码、私钥或 SSH Agent），添加 MCP 配置后即可描述任务，无需复制额外提示词；普通命令可按别名直接执行并自动打开或复用可见终端。远端只需 SSH 服务和系统已有的登录 Shell，无需安装任何额外程序。设置中复制本机 stdio MCP 配置，Agent 通过别名执行、读屏和按键；无需用户填写会话 UUID，可实时观看真实操作并随时接管。主窗口关闭、MCP 超时或断开时，本机后台保持 SSH；SSH 链路真正中断后原任务结果未知，手动重新连接会建立新 Shell。步骤可折叠和翻页。
 
-详见 [使用与边界说明](docs/remote-terminals.md) 和 [提供给 Agent 的操作说明](docs/remote-terminal-agent.md)。
+详见 [使用与边界说明](docs/remote-terminals.md) 和 [内置 MCP 契约参考](docs/remote-terminal-agent.md)。

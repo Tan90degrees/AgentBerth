@@ -81,9 +81,12 @@ test('bundled MCP stdio initializes, exposes scoped tools and shuts down cleanly
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25'}})+'\n');
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list',params:{}})+'\n');
-  await eventually(async()=>stdout.trim().split('\n').length>=2,5000);child.stdin.end();
+  child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:3,method:'resources/list',params:{}})+'\n');
+  child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:4,method:'resources/read',params:{uri:'agentberth://guide/remote-terminal'}})+'\n');
+  await eventually(async()=>stdout.trim().split('\n').length>=4,5000);child.stdin.end();
   assert.equal(await closed,0,stderr);const messages=stdout.trim().split('\n').map(line=>JSON.parse(line));
   assert.equal(messages.find(message=>message.id===1).result.serverInfo.name,'agentberth-terminal');assert.equal(messages.find(message=>message.id===2).result.tools.length,18);
+  assert.equal(messages.find(message=>message.id===3).result.resources.length,1);assert.match(messages.find(message=>message.id===4).result.contents[0].text,/built-in terminal contract/);
 });
 
 test('saved password and encrypted-key connections run real POSIX commands through sshd without remote dependencies', {skip:!process.env.AGENTBERTH_SSH_TEST_PORT,timeout:45000},async t=>{

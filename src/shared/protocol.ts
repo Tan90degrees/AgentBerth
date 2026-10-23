@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 31;
+export const API_VERSION = 32;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -206,7 +206,7 @@ export type ServerEvent =
   | { event: 'state'; data: State }
   | TerminalEvent
   | { event: 'connection'; data: { connected: boolean; error?: string } };
-export interface Response { id: string; result?: unknown; error?: string }
+export interface Response { id: string; result?: unknown; error?: string; errorCode?: string; errorDetails?: import('./remote-errors').RemoteErrorDetails }
 export interface RuntimeInfo { version: number; pid: number; port: number; token: string }
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface DesktopApi {

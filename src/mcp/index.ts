@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { DaemonConnection } from '../main/connection';
+import { DaemonConnection, DaemonRpcError } from '../main/connection';
 import type { RuntimeInfo } from '../shared/protocol';
 import { McpError, TerminalMcp } from './server';
 
@@ -14,7 +14,7 @@ async function connect(): Promise<DaemonConnection> {
     const runtime: RuntimeInfo = JSON.parse(readFileSync(path.join(directory, 'runtime.json'), 'utf8'));
     if (runtime.version !== 1 || !Number.isInteger(runtime.port) || runtime.port < 1 || runtime.port > 65535 || !/^[a-f0-9]{64}$/.test(runtime.token)) throw new Error('请先启动 AgentBerth，并更新后台');
     connection = await DaemonConnection.open(runtime, () => {}); if (ending) { connection.close(true); throw new Error('MCP client disconnected'); } return connection;
-  })().finally(() => { connecting = null; });
+  })().catch(() => { throw new DaemonRpcError('AgentBerth 后台不可用，请打开应用并在设置中更新后台后重连 MCP。','BACKEND_UNAVAILABLE'); }).finally(() => { connecting = null; });
   return connecting;
 }
 const server = new TerminalMcp({ rpc: async (method,params) => (await connect()).rpc(method,params) });

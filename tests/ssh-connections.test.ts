@@ -102,7 +102,7 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   await assert.rejects(ui.rpc('saveSshConnection',{config:{...config(),port:address.port}}),/别名已存在/);
   const call=async(name:string,args:Record<string,unknown>={})=>{
     const result:any=await mcp.request('tools/call',{name,arguments:args});
-    if(result.isError)throw new Error(result.content[0].text);
+    if(result.isError)throw new Error(JSON.parse(result.content[0].text).error.message);
     return JSON.parse(result.content[0].text);
   };
   assert.deepEqual((await call('terminal_list')).connections,[{alias:'test-server',allowAgent:true}]);

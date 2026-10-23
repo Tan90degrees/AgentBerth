@@ -1,4 +1,6 @@
-# AgentBerth Remote Terminal — Agent 操作说明
+# AgentBerth Remote Terminal — 内置 MCP 契约参考
+
+日常使用只需配置 MCP 并描述任务，**无需将本文复制给 Agent**。初始化指引、工具说明、标准注解和结果中的 `harness` 会自动提供操作约束；本文是可选参考，也通过 `agentberth://guide/remote-terminal` MCP 资源按需提供。
 
 用户只需保存服务器别名、地址、用户名和登录方式。你通过 AgentBerth MCP 管理 SSH 会话并操作用户正在观看的真实终端；不要用直接 SSH 或另一个执行器绕过该终端。不要向工具传入密码或私钥内容。
 
@@ -16,7 +18,7 @@
 
 ## 命令与交互
 
-1. `terminal_execute` 在 commandTracking=posix 且 phase=idle 时直接执行命令（支持换行、Tab 和多行脚本，最多 16384 字符）；已知 idle 不必先读屏。返回同一对象中的 `id`、`status`、`exitCode`、`info` 和 `output`，普通命令一次调用就能获得结果。phase=unknown 时才先读屏确认空闲提示符，并传 atPrompt=true。普通调用只需 alias 和 command；requestId 可省略，由工具生成并返回为 id。需要显式重试去重时传 UUID requestId，重试原样复用；传输失败会在错误中给出 ID，不以新 ID 重放 unknown 操作。目录、export 和虚拟环境保持在同一个 Shell。
+1. `terminal_execute` 在 commandTracking=posix 且 phase=idle 时直接执行命令（支持换行、Tab 和多行脚本，最多 16384 字符）；已知 idle 不必先读屏。返回同一对象中的 `id`、`status`、`exitCode`、`info` 和 `output`，普通命令一次调用就能获得结果。phase=unknown 时才先读屏确认空闲提示符，并传 atPrompt=true。普通调用只需 alias 和 command，MCP 会打开或复用已授权的连接；requestId 可省略，由工具生成并返回为 id。需要显式重试去重时传 UUID requestId，重试原样复用；传输失败会在错误中给出 ID，不以新 ID 重放 unknown 操作。目录、export 和虚拟环境保持在同一个 Shell。
 2. `allOutputInThisResponse=true` 时，本次响应已包含本轮完整的已捕获输出；默认直接使用有界结果，不再调用 wait/screen 验证，也不因该标记为 false 自动读完缓存。`terminal_execute` 默认最多等待 5000 ms（waitMs 可选 0..25000），完成即返回，首段输出后最多合并等待 75 ms 以接收短命令退出码，持续输出的命令先返回首段，不等满上限；waitMs=0 立即提交。`requestMs` 是本次后台请求耗时，`elapsedMs` 是命令从提交开始的持续时间，均不包含模型推理和客户端调度。
 3. 长任务和流式日志用 `terminal_read_output({"alias":"dev-server","actionId":"<execute 返回的 id>","cursor":<output.nextCursor>,"timeoutMs":25000})`。有新增输出、完成、结果未知或缓存缺失立即返回；没有新输出时按事件等待，最长 30000 ms，不能写 sleep 或频繁轮询读屏。每次原样传回 output.nextCursor，同一游标只用于同一个 actionId/runId。默认 mode=summary，每次只返回该游标之后的有界首尾摘要并推进到当前末尾，不回读省略的中间内容。只有 status=completed 才有已确认的退出码，安静、空输出和超时不代表完成。
 4. 只关心最终完成时可用 `terminal_wait`，同样返回输出和 info，mode/cursor 参数与增量读取一致。它等待完成而非等待新日志；持续输出的任务优先用 read_output。
@@ -31,7 +33,7 @@
 
 输出是命令开始和完成标记之间的共享终端文本，不包含注入的命令回显和结束提示符；stdout/stderr 由 PTY 合并，可能包含 ANSI、回车或后台程序交错输出，不可作为 TUI 画面替代。
 
-本机缓存与模型上下文分开：每会话最近 8 条命令，每条保留最近 8M 个 UTF-16 编码单元（磁盘上限 16 MiB）；停止会话或重启后台清除，不是永久日志。`omitted=true` 表示按预算主动省略，`cacheLost=true` 表示游标之前的缓存实际淘汰，`available=false` 表示缓存不可用。`truncated` 可能由预算或缓存丢失引起，不能单独据此判断日志丢失。空文本也不表示命令没有输出。后续流式读取传回 nextCursor，不重新执行命令。更新后台到 **API 31** 并重新连接 MCP 后使用，共 18 个工具。
+本机缓存与模型上下文分开：每会话最近 8 条命令，每条保留最近 8M 个 UTF-16 编码单元（磁盘上限 16 MiB）；停止会话或重启后台清除，不是永久日志。`omitted=true` 表示按预算主动省略，`cacheLost=true` 表示游标之前的缓存实际淘汰，`available=false` 表示缓存不可用。`truncated` 可能由预算或缓存丢失引起，不能单独据此判断日志丢失。空文本也不表示命令没有输出。后续流式读取传回 nextCursor，不重新执行命令。更新后台到 **API 32** 并重新连接 MCP 后使用，共 18 个工具。
 
 命令包装只用于内部识别开始、退出码和工作目录。已确认的包装回显会替换成原始命令，实际程序输出保留；遇到无法确认的 Shell 重绘或交错输出时保留原始数据，避免误删日志。
 
@@ -47,7 +49,7 @@
 
 路径是完整目标路径，不自动追加源文件名。本机路径遵循当前系统格式，Windows 使用本机盘符路径；远端一律使用 POSIX 绝对路径。目录需 recursive=true，最多 10000 个条目和 64 层，不跟随符号链接；目标父目录会按需创建。
 
-传输返回后台任务，id 等于 requestId。使用 `terminal_transfer_status({"requestId":"…","timeoutMs":25000})` 事件式等待，或 timeoutMs=0 立即读状态。工具不返回文件内容。进度和最终状态会显示在 SSH 面板。MCP 超时、断开或用户接管不自动取消已经提交的传输；`terminal_transfer_cancel` 可明确取消。用户也可直接在面板取消传输。
+传输的 requestId 可省略，由 MCP 生成；返回后台任务，id 等于 requestId。使用 `terminal_transfer_status({"requestId":"…","timeoutMs":25000})` 事件式等待，或 timeoutMs=0 立即读状态。工具不返回文件内容。进度和最终状态会显示在 SSH 面板。MCP 超时、断开或用户接管不自动取消已经提交的传输；`terminal_transfer_cancel` 可明确取消。用户也可直接在面板取消传输。
 
 默认不覆盖目标。明确允许覆盖时传 overwrite=true；已知中断文件需要 resume=true，续传前会通过流式 SHA-256 核对已有前缀。resume 与 overwrite 不能同时使用。失败、取消或断线可能留下部分文件；unknown 表示结果未确认，先检查状态。复用原 requestId 只查询原任务，不会重新复制；显式续传需新 requestId，不能循环重试覆盖。
 
@@ -85,3 +87,11 @@ MCP 负责已有 SSH 连接、共享 PTY、去重和结果游标；本说明可�
 3. `scope=command` 才是按命令捕获的结果。`allOutputInThisResponse=false` 可能表示预算省略、运行中或非零起点；不等于需要读完所有分页。运行中按 continuation 读取新增有界输出，完成后不自动续读。
 4. 从已确认空闲的 POSIX Shell 用 `terminal_keys` 一次提交完整文本时，会自动走同样的命令捕获通道并返回 id/output；输入给正在运行的程序、命名按键和 enter=false 仍是原始交互输入。
 5. 未跟踪的人工输入、部分输入或未知提示符可能没有可靠的命令边界。这时不关联旧命令冒充新结果，会明确指出没有记录；不可自动重跑。缓存真实丢失遵循 cacheLost/available 提示，不宣称完整。
+
+## 不依赖额外提示词的运行引导
+
+每个工具结果提供 `harness.state` 和 `harness.next`：后者是准确的工具名及参数，或 null。它是任务需要继续时的候选步骤，不会自行执行。完成的命令 next=null；运行中的命令指向按原 ID/游标等待新增输出，日志不可用时改为等待完成，避免立即返回造成轮询。读屏之后不再自动读屏；下一次交互由当前画面与任务决定。传输同样返回准确的状态等待入口。
+
+错误使用后端生成的稳定错误码，不根据远端输出猜测状态：USER_CONTROLLED 需用户交还输入；COMMAND_RUNNING 指向现有命令；PROMPT_REQUIRED/SHELL_UNSUPPORTED 指向读屏；STALE_RUN/ALIAS_AMBIGUOUS 指向重新选择目标。error.execution=not_started 表示被前置检查阻止，unknown 表示执行结果尚未确认。未知结果只查询原 ID，不重发操作。后端同时强制检查输入归属、单写入者、忙碌命令与运行实例，无需依赖模型记住文档。
+
+工具说明与返回引导在客户端未注入初始化指引、未加载资源时也可使用。这里验证的是协议与状态机行为；实际工具选择仍由 Agent 客户端和模型执行。
