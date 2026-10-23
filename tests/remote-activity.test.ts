@@ -334,8 +334,9 @@ test('multiline scripts accept tabs and trailing newlines, rejecting terminal co
 });
 
 test('disk output cache wraps with exact cursors and Unicode and cleans files on disposal',t=>{
-  const folder=mkdtempSync(path.join(tmpdir(),'ab-output-ring-'));t.after(()=>rmSync(folder,{recursive:true,force:true}));
-  const memory=new CommandOutput(31),disk=new CommandOutput(31,path.join(folder,'ring.bin'));t.after(()=>disk.dispose());
+  const folder=mkdtempSync(path.join(tmpdir(),'ab-output-ring-'));
+  const memory=new CommandOutput(31),disk=new CommandOutput(31,path.join(folder,'ring.bin'));
+  t.after(()=>{disk.dispose();rmSync(folder,{recursive:true,force:true,maxRetries:5});});
   for(const text of ['abc😀中','1234567890123456789012345678901234567890','😀','tail','\r\n','😀'.repeat(30)]){
     memory.append(text);disk.append(text);
     let cursor=0;
