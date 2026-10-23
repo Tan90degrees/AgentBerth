@@ -59,7 +59,7 @@
 
 软件包自带 Electron、Node 运行时和 `node-pty`，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code / OpenCode 需在本机单独安装、配置，并能从所选 Shell 的 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。升级前停止全部后台任务；安装新版后通过提示或 **设置 → 后台服务 → 更新后台** 加载新后台，0.1 数据会自动迁移并保留。
 
-第一版软件包没有代码签名，Windows 可能显示“未知发布者”。正常包应对应成功的 Windows 打包任务且 `build-info.json` 中 `packagedSmoke` 为 `success`；若测试失败，构建产物会保留供排查，但不代表已验证可用。
+第一版软件包没有代码签名，Windows 可能显示“未知发布者”。正常包应对应成功的 Windows 打包任务且 `build-info.json` 中 `packagedSmoke` 为 `success`；新构建还在 `packagedSuites` 中分别记录工作台与文件预览/Git 测试结果，两组均通过才标记验证成功。若测试失败，构建产物会保留供排查，但不代表已验证可用。
 
 ## 开发环境与启动
 

@@ -56,15 +56,29 @@ jobs:
         timeout-minutes: 5
       - run: npm run check
         timeout-minutes: 8
-      - name: Desktop smoke (Linux)
+      - name: Workbench smoke (Linux)
+        id: desktop-linux
         if: runner.os == 'Linux'
-        run: xvfb-run -a node scripts/test-desktop.mjs
+        run: xvfb-run -a node scripts/smoke.mjs
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
-      - name: Desktop smoke (Windows)
+      - name: File preview smoke (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        run: xvfb-run -a node scripts/smoke-files.mjs
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:browser
+      - name: Workbench smoke (Windows)
+        id: desktop-windows
         if: runner.os == 'Windows'
-        run: node scripts/test-desktop.mjs
+        run: node scripts/smoke.mjs
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:browser
+      - name: File preview smoke (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        run: node scripts/smoke-files.mjs
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
@@ -106,7 +120,14 @@ jobs:
         timeout-minutes: 6
       - name: Test packaged application with real terminal
         id: packaged-smoke
-        run: npm run test:packaged
+        run: node scripts/smoke.mjs --packaged
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:browser
+      - name: Test packaged file preview and Git
+        id: packaged-files-smoke
+        if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
+        run: node scripts/smoke-files.mjs --packaged
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
@@ -114,7 +135,8 @@ jobs:
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         env:
-          PACKAGED_SMOKE_RESULT: ${{ steps.packaged-smoke.outcome }}
+          PACKAGED_WORKBENCH_RESULT: ${{ steps.packaged-smoke.outcome }}
+          PACKAGED_FILES_RESULT: ${{ steps.packaged-files-smoke.outcome }}
           INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
         run: |
           $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.zip' }
@@ -125,7 +147,8 @@ jobs:
           }
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $env:PACKAGED_SMOKE_RESULT; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success') { 'success' } else { 'failure' }
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
