@@ -101,14 +101,16 @@ export class RemoteActivity {
     const id=this.pending?.id??[...this.outputs.keys()].at(-1);
     return id?this.store.remoteAction(id):null;
   }
-  result(actionId:string,cursor=0,maxChars=32768):RemoteCommandResult {
+  result(actionId:string,cursor=0,maxChars=32768,mode:'summary'|'page'='page'):RemoteCommandResult {
     const action=this.store.remoteAction(actionId);
     if(!action||action.kind!=='command'||action.sessionId!==this.info.sessionId||action.runId!==this.info.runId)throw new Error('命令不属于当前运行实例');
-    const output=this.outputs.get(actionId)?.read(cursor,maxChars)??{text:'',nextCursor:cursor,earliestCursor:null,truncated:true,hasMore:false,available:false,format:'terminal' as const};
+    const cached=this.outputs.get(actionId);
+    const page=mode==='page'?cached?.read(cursor,maxChars):undefined;
+    const output=(mode==='summary'?cached?.summary(cursor):page?{...page,mode:'page' as const,cacheLost:page.truncated}:undefined)??{text:'',nextCursor:cursor,earliestCursor:null,truncated:true,hasMore:false,available:false,format:'terminal' as const};
     return {...action,output,info:{...this.info},elapsedMs:Math.max(0,Date.parse(action.endedAt??new Date().toISOString())-Date.parse(action.startedAt))};
   }
-  async readOutput(actionId:string,cursor:number,maxChars:number,timeoutMs:number,waitFor:'output'|'completion',signal?:AbortSignal):Promise<RemoteCommandResult> {
-    const read=()=>this.result(actionId,cursor,maxChars);
+  async readOutput(actionId:string,cursor:number,maxChars:number,timeoutMs:number,waitFor:'output'|'completion',signal?:AbortSignal,mode:'summary'|'page'='page'):Promise<RemoteCommandResult> {
+    const read=()=>this.result(actionId,cursor,maxChars,mode);
     const ready=(value:RemoteCommandResult)=>value.status!=='running'||!value.output.available||(waitFor==='output'&&(!!value.output.text||value.output.truncated));
     const current=read();if(ready(current)||!timeoutMs||signal?.aborted)return current;
     return new Promise((resolve,reject)=>{

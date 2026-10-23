@@ -45,7 +45,7 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 30。
+用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 31。
 
 ## 文件传输
 
@@ -59,7 +59,9 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 普通命令由一次 MCP 调用完成提交、等待及输出读取，不需要每条命令再读屏。完成即返回，默认的 5 秒是等待上限，不是固定延迟；首段输出后最多合并等待 75 ms 以接收短命令退出码，流式命令会先返回首段。长任务可按游标等待新增日志；TUI 保留按需读屏，读屏不再额外序列化历史。返回 requestMs/elapsedMs 可区分后台请求与命令持续时间；模型推理及客户端调度需在客户端另外测量。
 
-输出缓存通过本机私有临时文件保留：每会话最近 8 条命令，每条最近 8M UTF-16 编码单元（磁盘上限 16 MiB），停止会话或重启后台清除；读取只加载本页。默认每页 32768 字符，可选 256..65536，hasMore 时按 nextCursor 继续，不代表内容已丢失。终端画面与本轮输出独立，不需要 clear，也不受面板高度影响。truncated/available=false 明确提示丢失；PTY 输出合并 stdout/stderr，可能含 ANSI。不承诺永久保存完整日志或由 MCP 通知自动唤醒模型。
+默认输出限长对齐 [ssh-skill 的固定版本](https://github.com/badseal/ssh-skill/tree/c6c8a184a7d8c8b217860a015f5860418647d8ea)：256 KiB、4000 行，字节预算中保留 64 KiB 尾部。超限保留首尾并报告原始总字节数、总行数与省略标记；完整工具结果 JSON 另有 256 KiB 总上限，包含转义和元数据，进一步裁剪会报告 resultLimit。不会引导 Agent 自动读完所有分页。运行中只取游标后的新增有界输出；完成后仅在任务需要时显式 mode=page 读取明细，每页默认 32768 字符，可选 256..65536。
+
+本机私有临时文件缓存每会话最近 8 条命令，每条最近 8M UTF-16 编码单元（磁盘上限 16 MiB），停止会话或重启后台清除。保留缓存不等于全部发送给模型。omitted 表示预算省略，cacheLost 表示实际淘汰，available=false 表示缓存不可用；truncated 可能由预算或实际丢失引起。终端画面与本轮输出独立，不需要 clear，也不受面板高度影响。PTY 合并 stdout/stderr，可能含 ANSI；不承诺永久日志或由 MCP 通知自动唤醒模型。
 
 ## 并发上限
 
@@ -68,6 +70,6 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## Agent 误把滚屏当成输出丢失
 
-读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 30 会在读屏中提供对应命令的 continuation，从头读取缓存；有后续分页或运行中输出时，命令响应也提供确切的下一步读取参数。Agent 应沿用它读取原命令，不应重跑、重新排序或 clear 以获取上半部分。
+读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 31 的读屏提供可选 details，按需取对应命令的有界首尾摘要；不会自动恢复所有输出。命令响应的 continuation 仅用于运行中新增输出，明细分页需主动选择。Agent 不应重跑、重新排序或 clear 以获取上半部分。
 
 忘记 ID 可省略 actionId 从头读最近可靠关联的命令，后续分页必须使用返回的命令 ID 和游标。空闲 POSIX Shell 中通过文本加回车执行的命令也会自动捕获；交互程序、部分输入和未知提示符仍按原始按键处理，不能关联旧命令冒充新结果。

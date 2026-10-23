@@ -57,11 +57,17 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   assert.equal(os.status,'completed');assert.ok(os.output.text.includes('===== KERNEL ====='));assert.ok(!os.output.text.includes('DIRECT=42'),'Only this command output is returned');
   const multiline=await call('terminal_execute',{command:'printf "LINE_ONE\\n"\nprintf\t"LINE_TWO\\n"\n'});
   assert.equal(multiline.output.text,'LINE_ONE\r\nLINE_TWO\r\n');
-  const large=await call('terminal_execute',{command:'printf "%200000s\\n" X',waitMs:5000});
+  const large=await call('terminal_execute',{command:'printf "%200000s\\n" X',mode:'page',waitMs:5000});
   let largePage=large,largeText=large.output.text;
   assert.equal(large.output.truncated,false);assert.equal(large.output.hasMore,true);
-  while(largePage.output.hasMore){largePage=await call('terminal_read_output',{actionId:large.id,cursor:largePage.output.nextCursor});assert.equal(largePage.output.truncated,false);largeText+=largePage.output.text;}
+  while(largePage.output.hasMore){largePage=await call('terminal_read_output',{actionId:large.id,cursor:largePage.output.nextCursor,mode:'page'});assert.equal(largePage.output.truncated,false);largeText+=largePage.output.text;}
   assert.equal(largeText,' '.repeat(199999)+'X\r\n','Output exceeding the former 128K cap must remain readable independently of viewport height');
+  const budgetCommand='printf "BUDGET_HEAD\\n"; i=0; while [ "$i" -lt 6000 ]; do printf "row-%04d test output\\n" "$i"; i=$((i+1)); done; printf "BUDGET_TAIL\\n"';
+  let budget=await call('terminal_execute',{command:budgetCommand});
+  if(budget.status==='running')budget=await call('terminal_wait',{actionId:budget.id,timeoutMs:5000});
+  assert.equal(budget.output.mode,'summary');assert.equal(budget.output.omitted,true);assert.equal(budget.output.truncated,true);assert.equal(budget.output.cacheLost,false);assert.equal(budget.output.totalLines,6002);
+  assert.ok(budget.output.text.startsWith('BUDGET_HEAD'));assert.ok(budget.output.text.endsWith('BUDGET_TAIL\r\n'));assert.ok(budget.output.text.split('\n').length<=4001);assert.equal(budget.output.hasMore,false);assert.equal(budget.continuation,null);assert.ok(budget.details);
+  const noRepeat=await call('terminal_read_output',{actionId:budget.id,cursor:budget.output.nextCursor,timeoutMs:0});assert.equal(noRepeat.output.text,'');assert.equal(noRepeat.output.omitted,false);
   // Text defaults to submitting in the same tool call. Explicit false leaves it pending.
   for(const enter of [true,false]){
     const reading=await call('terminal_execute',{command:'read AB_TEXT; printf "INPUT=%s\\n" "$AB_TEXT"',waitMs:0});
@@ -73,9 +79,9 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   assert.equal(early.status,'running');assert.ok(early.output.text.includes('EARLY_STREAM'));assert.ok(early.requestMs<2000,'First streaming output must not wait for the default 5-second cap');
   await call('terminal_keys',{text:'done'});assert.equal((await call('terminal_wait',{actionId:early.id,timeoutMs:5000})).status,'completed');
   const lines=Array.from({length:200},(_,i)=>String(i)+'\r\n').join('');
-  let page:RemoteCommandResult=await call('terminal_execute',{requestId:randomUUID(),command:'i=0; while [ "$i" -lt 200 ]; do printf "%s\\n" "$i"; i=$((i+1)); done',maxChars:256,waitMs:5000});
+  let page:RemoteCommandResult=await call('terminal_execute',{requestId:randomUUID(),command:'i=0; while [ "$i" -lt 200 ]; do printf "%s\\n" "$i"; i=$((i+1)); done',maxChars:256,mode:'page',waitMs:5000});
   assert.ok(page.output.hasMore);const actionId=page.id;let all=page.output.text;
-  while(page.output.hasMore){page=await call('terminal_read_output',{actionId,cursor:page.output.nextCursor,maxChars:256});all+=page.output.text;}
+  while(page.output.hasMore){page=await call('terminal_read_output',{actionId,cursor:page.output.nextCursor,maxChars:256,mode:'page'});all+=page.output.text;}
   assert.equal(all,lines,'Output must include lines that have scrolled out of the visible terminal');
   let stream:RemoteCommandResult=await call('terminal_execute',{requestId:randomUUID(),command:'printf "FIRST\\n"; read AB_STREAM; printf "LAST\\n"',waitMs:0});
   const streamId=stream.id;let streamed=stream.output.text,sawRunning=false,reads=0;
@@ -94,10 +100,10 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   assert.equal(listed.output.text,expectedList);assert.equal(listed.allOutputInThisResponse,true);
   const bottom=await call('terminal_screen');assert.equal(bottom.scope,'viewport');assert.equal(bottom.allOutputInThisResponse,false);assert.ok(bottom.scrollbackLines>0);assert.ok(!bottom.text.includes('image-000'));assert.ok(bottom.text.includes('image-119'));
   const follow=async(next:any)=>{const response:any=await mcp.request('tools/call',{name:next.tool,arguments:next.arguments});assert.ok(!response.isError,JSON.stringify(response));return JSON.parse(response.content[0].text);};
-  const recovered=await follow(bottom.continuation);assert.equal(recovered.output.text,expectedList);assert.equal(recovered.allOutputInThisResponse,true);
-  let listPage=await call('terminal_read_output',{maxChars:256,timeoutMs:0}),reassembled=listPage.output.text;
-  assert.equal(listPage.id,listed.id);assert.ok(listPage.continuation);assert.equal(listPage.allOutputInThisResponse,false);
-  while(listPage.continuation){listPage=await follow(listPage.continuation);reassembled+=listPage.output.text;}
+  const recovered=await follow(bottom.details);assert.equal(recovered.output.text,expectedList);assert.equal(recovered.allOutputInThisResponse,true);
+  let listPage=await call('terminal_read_output',{mode:'page',maxChars:256,timeoutMs:0}),reassembled=listPage.output.text;
+  assert.equal(listPage.id,listed.id);assert.ok(listPage.details);assert.equal(listPage.continuation,null);assert.equal(listPage.allOutputInThisResponse,false);
+  while(listPage.details){listPage=await follow(listPage.details);reassembled+=listPage.output.text;}
   assert.equal(reassembled,expectedList);assert.equal(listPage.allOutputInThisResponse,false,'Final page alone is not the entire list');
   const count=await call('terminal_execute',{command:'printf "%s\\n" "$AB_LIST_RUNS"'});assert.equal(count.output.text,'1\r\n');
   // Partial typing and input to a running program must remain literal. Unknown

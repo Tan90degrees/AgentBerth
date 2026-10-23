@@ -9,9 +9,9 @@ const fixture=():RemoteCommandResult=>({id:randomUUID(),sessionId:randomUUID(),r
 test('command replies distinguish whole results, pages, running output and loss with exact read continuations',()=>{
   const value=fixture(),whole=commandReply(value);assert.equal(whole.scope,'command');assert.equal(whole.allOutputInThisResponse,true);assert.equal(whole.continuation,null);
   value.output.hasMore=true;
-  const page=commandReply(value,0,256);assert.equal(page.allOutputInThisResponse,false);assert.deepEqual(page.continuation,{tool:'terminal_read_output',arguments:{sessionId:value.sessionId,runId:value.runId,actionId:value.id,cursor:23,timeoutMs:0,maxChars:256}});assert.match(page.notice,/勿重新执行/);
+  const page=commandReply(value,0,256);assert.equal(page.allOutputInThisResponse,false);assert.equal(page.continuation,null);assert.deepEqual(page.details,{tool:'terminal_read_output',arguments:{sessionId:value.sessionId,runId:value.runId,actionId:value.id,cursor:23,timeoutMs:0,mode:'page',maxChars:256}});assert.match(page.notice,/不要.*自动读完/);
   value.output.hasMore=false;
-  const last=commandReply(value,23);assert.equal(last.allOutputInThisResponse,false);assert.match(last.notice,/各页合并/);
+  const last=commandReply(value,23);assert.equal(last.allOutputInThisResponse,false);assert.match(last.notice,/不自动读取此前/);
   value.status='running';assert.equal(commandReply(value).continuation?.arguments.timeoutMs,25000);assert.equal(commandReply(value).allOutputInThisResponse,false);
   value.status='unknown';assert.equal(commandReply(value).continuation,null);assert.equal(commandReply(value).allOutputInThisResponse,false);
   value.status='completed';value.output.truncated=true;assert.equal(commandReply(value).allOutputInThisResponse,false);assert.match(commandReply(value).notice,/不能宣称结果完整/);
@@ -20,8 +20,8 @@ test('command replies distinguish whole results, pages, running output and loss 
 
 test('viewport results never claim complete command output and recover from the beginning, not the last screen',()=>{
   const command=fixture();const screen=screenReply({text:'image-last',command});
-  assert.equal(screen.scope,'viewport');assert.equal(screen.allOutputInThisResponse,false);assert.equal(screen.continuation?.arguments.actionId,command.id);assert.equal(screen.continuation?.arguments.cursor,0);assert.match(screen.notice,/不等于结果丢失/);
-  const raw=screenReply({text:'partial untracked output',command:null});assert.equal(raw.continuation,null);assert.match(raw.notice,/没有可可靠关联/);
+  assert.equal(screen.continuation,null);assert.equal(screen.details?.arguments.mode,'summary');assert.equal(screen.scope,'viewport');assert.equal(screen.allOutputInThisResponse,false);assert.equal(screen.details?.arguments.actionId,command.id);assert.equal(screen.details?.arguments.cursor,0);assert.match(screen.notice,/不等于命令输出丢失/);
+  const raw=screenReply({text:'partial untracked output',command:null});assert.equal(raw.continuation,null);assert.match(raw.notice,/没有可靠/);
 });
 
 
@@ -30,4 +30,11 @@ test('latest-command discovery starts at zero and later cursors require an expli
   assert.equal(requestSchema.safeParse(request({})).success,true);
   assert.equal(requestSchema.safeParse(request({cursor:42})).success,false);
   assert.equal(requestSchema.safeParse(request({cursor:42,actionId:randomUUID()})).success,true);
+});
+
+
+test('budget omission never instructs the Agent to drain every page',()=>{
+  const value=fixture();value.output={...value.output,mode:'summary',omitted:true,truncated:true,cacheLost:false,totalBytes:500000,totalLines:6000};
+  const result=commandReply(value);assert.equal(result.continuation,null);assert.equal(result.details?.arguments.mode,'page');assert.equal(result.allOutputInThisResponse,false);assert.match(result.notice,/不要自动读完分页/);assert.doesNotMatch(result.notice,/缓存已丢失/);
+  value.status='running';const running=commandReply(value);assert.equal(running.continuation?.arguments.cursor,value.output.nextCursor);assert.equal(running.continuation?.arguments.mode,'summary');
 });

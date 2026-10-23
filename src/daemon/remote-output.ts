@@ -1,4 +1,5 @@
 import type { RemoteCommandOutput } from '../shared/protocol';
+import { BoundedText } from '../shared/bounded-text';
 import { openSync, closeSync, readSync, writeSync, unlinkSync } from 'node:fs';
 
 export const COMMAND_OUTPUT_CAPACITY = 8 * 1024 * 1024;
@@ -8,6 +9,7 @@ export const COMMAND_OUTPUT_CAPACITY = 8 * 1024 * 1024;
 export class CommandOutput {
   private chunks: { start: number; text: string }[] = [];
   private end = 0;
+  private preview = new BoundedText();
   private fd: number | null = null;
   private failed = false;
   constructor(private capacity = COMMAND_OUTPUT_CAPACITY, private file?: string) {
@@ -24,6 +26,7 @@ export class CommandOutput {
 
   append(text: string): void {
     if (!text) return;
+    this.preview.append(text);
     if(this.file){
       const end=this.end+text.length;
       if(!this.failed)try{
@@ -46,6 +49,19 @@ export class CommandOutput {
       if (/[\uDC00-\uDFFF]/.test(first.text[drop] ?? '')) drop++;
       first.text = first.text.slice(drop); first.start += drop;
     }
+  }
+
+  summary(cursor=0):RemoteCommandOutput {
+    // Preserve the same range validation and cache-loss semantics as page reads.
+    const first=this.read(cursor,65536);
+    if(!first.available)return {...first,mode:'summary',omitted:false};
+    let collected=this.preview;
+    if(cursor!==0){
+      collected=new BoundedText();let page=first;
+      for(;;){collected.append(page.text);if(!page.hasMore)break;const next=this.read(page.nextCursor,65536);if(next.nextCursor===page.nextCursor)break;page=next;}
+    }
+    const preview=collected.preview();
+    return {...first,...preview,truncated:first.truncated||preview.omitted,cacheLost:first.truncated,mode:'summary',nextCursor:this.end,hasMore:false};
   }
 
   read(cursor: number, maxChars: number): RemoteCommandOutput {
