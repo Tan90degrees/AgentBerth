@@ -2,7 +2,7 @@
 
 ## 导入 Agent
 
-1. 在 **设置 → 自定义 Agent 类型 → 导入 Agent** 选择一个 `.json` 配置或 `.cjs` / `.mjs` / `.js` 自描述脚本。
+1. 在 **设置 → Agent → 自定义 Agent 类型 → 导入 Agent** 选择一个 `.json` 配置或 `.cjs` / `.mjs` / `.js` 自描述脚本。
 2. 确认或修改名称，点 **保存 Agent 类型**。不需要填写命令、选择程序或启用扩展。
 3. 新建会话选择该类型。有原生历史能力时，在对话历史页点 **读取对话**；支持刷新、选择文件和关联原生 ID。
 
@@ -24,7 +24,7 @@
 
 ## 让编程 Agent 开发插件
 
-在设置点击 **导出开发套件**，选择保存位置。软件生成新目录，包含完整开发指南、清单、可运行模板和独立检查工具 check-plugin.cjs，并自动复制开发指令。把指令粘贴给编程 Agent，告诉它你要适配的 CLI 和历史/恢复需求即可。开发 Agent 可直接检查协议、多会话分页和按 ID 读取，检查失败时得到具体原因；你仍只需导入它交付的文件。
+在 **设置 → Agent** 点击 **导出开发套件**，选择保存位置。软件生成新目录，包含完整开发指南、清单、可运行模板和独立检查工具 check-plugin.cjs，并自动复制开发指令。把指令粘贴给编程 Agent，告诉它你要适配的 CLI 和历史/恢复需求即可。开发 Agent 可直接检查协议、多会话分页和按 ID 读取，检查失败时得到具体原因；你仍只需导入它交付的文件。
 
 也可以直接点击 **复制 Agent 开发指令**，无需先导出；指令包含完整指南。仓库中的 [AGENT_PLUGIN_DEVELOPMENT.md](AGENT_PLUGIN_DEVELOPMENT.md) 可直接交给 Agent 阅读，模板位于 [examples/plugin-template](../examples/plugin-template)。软件包 resources/docs 和 resources/examples 同样包含这些文件。
 

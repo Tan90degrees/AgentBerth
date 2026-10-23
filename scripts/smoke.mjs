@@ -14,6 +14,14 @@ const { Terminal: HeadlessTerminal } = headless;
 const { Unicode11Addon } = unicode11;
 const execute = promisify(execFile);
 const step = text => console.log(`Smoke: ${text}`);
+async function settingsCategory(page, category) {
+  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:category,exact:true}).click();
+}
+async function openSettings(page) {
+  await page.getByRole('button', {name:'设置',exact:true}).click();
+  await settingsCategory(page, '常用设置');
+}
+
 async function assertTerminalGutter(page) {
   await page.waitForFunction(() => {
     const screen = document.querySelector('.terminal-mount .xterm-screen'), bar = document.querySelector('.terminal-mount .scrollbar.vertical'), mount = document.querySelector('.terminal-mount');
@@ -212,7 +220,40 @@ try {
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
   await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'会话',exact:true}).click();
   step('save shell and default Agent settings');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  step('categorized settings search, empty results, cross-category drafts and hidden-field validation');
+  const settingsNav=page.getByRole('navigation',{name:'设置分类',exact:true});
+  const settingsSearch=page.getByRole('textbox',{name:'搜索设置',exact:true});
+  await settingsCategory(page,'文件预览');
+  await page.getByLabel('预览字号',{exact:true}).waitFor();
+  assert.equal(await page.getByLabel('默认终端',{exact:true}).isVisible(),false);
+  await page.keyboard.press('Control+f');
+  assert.equal(await settingsSearch.evaluate(element=>element===document.activeElement),true);
+  await settingsSearch.fill('SSH 会话上限');
+  await page.getByLabel('SSH 会话上限',{exact:true}).waitFor();
+  assert.equal(await page.locator('.settings-entry:visible').count(),1);
+  await settingsCategory(page,'终端');
+  await page.getByRole('heading',{name:'没有匹配的设置',exact:true}).waitFor();
+  await page.getByRole('button',{name:'查看全部设置',exact:true}).click();
+  const initialSettings=(await page.evaluate(()=>window.berth.rpc('state'))).settings;
+  await settingsCategory(page,'终端');
+  await page.getByLabel('终端字号',{exact:true}).fill('17');
+  await settingsCategory(page,'Agent');
+  assert.equal(await page.getByLabel('终端字号',{exact:true}).isVisible(),false);
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).settings.fontSize,initialSettings.fontSize);
+  await settingsCategory(page,'终端');
+  assert.equal(await page.getByLabel('终端字号',{exact:true}).inputValue(),'17');
+  await page.getByRole('button',{name:'重置终端字号',exact:true}).click();
+  assert.equal(await page.getByLabel('终端字号',{exact:true}).inputValue(),String(initialSettings.fontSize));
+  await page.getByLabel('终端字号',{exact:true}).fill('17');
+  await page.getByRole('button',{name:'取消修改',exact:true}).click();
+  await page.getByLabel('默认终端',{exact:true}).selectOption('custom');
+  await settingsCategory(page,'Agent');
+  await page.getByRole('button',{name:'保存设置',exact:true}).click();
+  await page.getByLabel('终端程序',{exact:true}).waitFor();
+  assert.equal(await settingsNav.getByRole('button',{name:'终端',exact:true}).getAttribute('aria-current'),'page');
+  await page.getByRole('button',{name:'取消修改',exact:true}).click();
+  await settingsCategory(page,'常用设置');
   step('appearance follows system, supports keyboard choice and explicit override');
   await page.getByRole('radio', { name: '跟随系统', exact: true }).click();
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -230,6 +271,7 @@ try {
   await page.getByRole('radio', { name: '浅色', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}settings-light.png` });
+  await settingsCategory(page, '关于与支持');
   step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
   const appInfo = await page.evaluate(() => window.berth.appInfo());
   assert.equal(appInfo.version, JSON.parse(await readFile('package.json','utf8')).version); assert.equal(appInfo.packaged, packaged);
@@ -249,11 +291,13 @@ try {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: false } }));
   await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).click();
   await page.getByText('完整开发指令已复制，可直接粘贴给 Agent', { exact: true }).waitFor();
   assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes('describe'));
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: true } }));
   await page.locator('.sidebar-bottom').getByText('后台已连接', { exact: true }).waitFor();
+  await settingsCategory(page, '常用设置');
   if (process.platform === 'win32') {
     step('auto-detect PowerShell 7 and launch its real executable');
     await page.getByLabel('默认终端', { exact: true }).selectOption('pwsh');
@@ -279,7 +323,7 @@ try {
     assert.equal(await page.locator('.terminal-mount').count(), 0);
     await menuAction(page, '删除会话', 'session');
     await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
-    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await openSettings(page);
   }
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'cmd' : 'bash');
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
@@ -752,7 +796,7 @@ try {
   };
   await page.evaluate(({sessionId,runId}) => window.berth.rpc('input',{sessionId,runId,data:'r'}), {sessionId:before.sessions[0].id,runId:original.id});
   await clickTui(); await findTerminalText(page, 'MOUSE_SGR_1');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.locator('.projects .project-item').click();
   await findTerminalText(page, 'TUI_RESIZE_READY');
   step('restored TUI accepts SGR clicks, modifier selection/copy and legacy mouse reports');
@@ -796,7 +840,7 @@ try {
   await application.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0].setBounds(bounds), bounds);
   await assertTerminalGutter(page);
   step('changing defaults preserves actual running shell identity');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'powershell' : 'auto');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
@@ -804,7 +848,7 @@ try {
   assert.ok((await page.locator('.terminal-footer').innerText()).includes(path.basename(original.shell)));
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   step('choose custom executable using native dialog while PTY keeps running');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认终端', { exact: true }).selectOption('custom');
   await application.evaluate(({ dialog }) => {
     const original = dialog.showOpenDialog;
@@ -1001,7 +1045,7 @@ try {
   await page.getByRole('heading', { name: '选择或创建一个会话', exact: true }).waitFor();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions.length, 0);
   step('default custom Agent command is editable, inherited by new sessions and independent of existing sessions');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('custom');
   await page.getByLabel('默认启动命令', { exact: true }).fill('echo DEFAULT_CUSTOM_READY');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
@@ -1016,7 +1060,7 @@ try {
   await waitRunState(page, true);
   const customSession = (await page.evaluate(() => window.berth.rpc('state'))).sessions[0];
   assert.equal(customSession.command, 'echo DEFAULT_CUSTOM_READY');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认启动命令', { exact: true }).fill('echo NEXT_CUSTOM_READY');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
@@ -1043,7 +1087,7 @@ try {
   assert.equal(await page.locator('.terminal-mount').count(), 0);
   await menuAction(page, '删除会话', 'session');
   await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
@@ -1106,7 +1150,8 @@ try {
   await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
   await page.getByRole('heading', { name: 'OpenCode 会话', exact: true }).waitFor();
   step('update backend without losing settings or conversations');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  await settingsCategory(page, '后台服务');
   await page.getByRole('button', { name: '更新后台', exact: true }).click();
   await page.getByRole('button', { name: '确认更新后台', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -1133,10 +1178,11 @@ try {
   const pluginData = path.join(folder, 'agent-session.json');
   const sample = { cwd: folder, nativeSessionId: 'native-plugin-123', messages: [{ role: 'user', text: '自定义历史你好🙂' }, { role: 'assistant', text: '独立插件已连接' }], warnings: [...Array(5).fill('Skipped an invalid or foreign-project session file.'),'Multiple conversations found; showing the most recent one. Use the session list to select a specific conversation.'] };
   await writeFile(pluginData, JSON.stringify(sample));
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   const alphaConfig = path.join(folder, 'alpha-agent.json');
   await writeFile(alphaConfig, JSON.stringify({ schemaVersion: 1, id: 'alpha-smoke', name: 'Alpha', command: 'echo ALPHA_READY' }));
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, alphaConfig);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByLabel('类型名称', { exact: true }).fill('Alpha CLI');
   assert.equal(await page.getByRole('dialog').locator('input').count(), 1);
@@ -1152,11 +1198,13 @@ try {
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   step('copy complete Agent instructions, export a kit and import a portable plugin without program or JSON fields');
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).click();
   await page.getByText('完整开发指令已复制，可直接粘贴给 Agent', { exact: true }).waitFor();
   const prompt = await application.evaluate(({ clipboard }) => clipboard.readText());
   assert.ok(prompt.includes('describe') && prompt.includes('history') && prompt.includes('resume') && prompt.includes('不要记录 TUI'));
   await application.evaluate(({ dialog }, directory) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [directory] }; }; }, folder);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导出开发套件', exact: true }).click();
   await page.getByText('开发套件已导出，给 Agent 的开发指令已复制', { exact: true }).waitFor();
   const kitFolder = await page.locator('.plugin-development>code').innerText();
@@ -1167,6 +1215,7 @@ try {
   assert.ok(checker.stdout.includes('describe、稳定 ID 和声明能力') && checker.stdout.includes('未检查：list/history/resume'));
   assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes(kitFolder));
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, pluginManifest);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   assert.equal(await page.getByLabel('类型名称', { exact: true }).inputValue(), 'Beta 插件');
@@ -1184,6 +1233,7 @@ try {
   const directScript = path.join(pluginBundle, 'standalone.cjs');
   await writeFile(directScript, 'setTimeout(()=>{\n' + source + '\n},600);');
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, directScript);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByRole('heading', { name: '更新 Agent 类型', exact: true }).waitFor();
   assert.equal(await page.getByLabel('类型名称', { exact: true }).inputValue(), 'Beta 插件');
@@ -1298,9 +1348,10 @@ try {
   step('hot update an imported Agent plugin while its terminal stays running');
   const hotScript=path.join(folder,'hot-plugin.cjs');
   await writeFile(hotScript,source.replaceAll('echo BETA_READY','echo HOT_UPDATED_READY').replace('process.stdout.write(JSON.stringify(result));', "if(request.method==='history')result.messages.push({role:'assistant',text:'HOT_PLUGIN_CODE_READY'});process.stdout.write(JSON.stringify(result));"));
-  await page.getByRole('button',{name:'设置',exact:true}).click();
+  await openSettings(page);
   const beforeHotAgent=(await page.evaluate(()=>window.berth.rpc('state'))).agents.find(a=>a.id===beta.id);
   await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},alphaConfig);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByText('插件 ID 与当前类型不一致，请选择同一类型的更新文件',{exact:true}).waitFor();
   assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).agents.find(a=>a.id===beta.id).plugin.executable,beforeHotAgent.plugin.executable);
@@ -1308,12 +1359,14 @@ try {
   await writeFile(wrongHotScript, source.replace("id:'beta-smoke'", "id:'different-agent'"));
   await writeFile(wrongHotManifest, JSON.stringify({schemaVersion:1,id:'beta-smoke',name:'Beta',command:'echo WRONG_ID_MUST_NOT_APPLY',runtime:'node',entry:'hot-wrong.cjs',capabilities:{history:true,resume:true,list:true}}));
   await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},wrongHotManifest);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'插件 ID 与配置不一致'}).waitFor();
   const wrongHotState = await page.evaluate(()=>window.berth.rpc('state'));
   assert.equal(wrongHotState.agents.find(a=>a.id===beta.id).plugin.executable,beforeHotAgent.plugin.executable);
   assert.equal(wrongHotState.sessions.find(s=>s.id===betaSession.id).latestRun.pid,pluginRun.pid);
   await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},hotScript);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByText('插件已热更新，后续读取使用新版本',{exact:true}).waitFor();
   assert.equal(await page.getByRole('dialog').count(),0,'Hot update unexpectedly required editing metadata');
@@ -1334,12 +1387,15 @@ try {
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '查看本次输出', exact: true }).count(), 0);
   await assert.rejects(stat(path.join(folder, 'data', 'logs', pluginRun.id + '.log')), /ENOENT/);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  await settingsCategory(page, 'Agent');
   assert.equal(await page.getByRole('button', { name: '删除 Agent Beta 插件', exact: true }).isEnabled(), false);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '编辑 Agent Beta 插件', exact: true }).click();
   await page.getByLabel('类型名称', { exact: true }).fill('Beta 已保存');
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  await settingsCategory(page, '后台服务');
   await page.getByRole('button', { name: '更新后台', exact: true }).click();
   await page.getByRole('button', { name: '确认更新后台', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -1360,18 +1416,20 @@ try {
   await page.getByLabel('筛选会话', { exact: true }).selectOption(alpha.id);
   assert.equal(await page.locator('.session-item').count(), 1);
   await page.getByLabel('筛选会话', { exact: true }).selectOption('all');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
   await page.locator('.projects .project-item').click();
   step('MCP configuration and remote session usability');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  await settingsCategory(page, 'MCP');
   await page.getByRole('button', { name: '复制 MCP 配置', exact: true }).click();
   const mcpConfiguration = JSON.parse(await application.evaluate(({ clipboard }) => clipboard.readText())).mcpServers.agentberth;
   assert.equal(mcpConfiguration.env.ELECTRON_RUN_AS_NODE, '1');
   assert.ok(path.isAbsolute(mcpConfiguration.command));
   await stat(mcpConfiguration.args[0]);
+  await settingsCategory(page, 'SSH 连接');
   step('saved SSH profile uses blank identity defaults and supports password editing/deletion');
   await page.getByRole('button',{name:'新建 SSH 连接',exact:true}).click();
   assert.equal(await page.getByLabel('SSH 地址',{exact:true}).inputValue(),'');
@@ -1533,8 +1591,10 @@ try {
   await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
   await dock.getByRole('button',{name:'收起 SSH 面板',exact:true}).click();
   await stat(exportPath); await stat(moved);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '删除 Agent Beta 已保存', exact: true }).click();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).agents.length, 0);
   console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: Git branch/status, fetch/pull/push/publication/switch with real bare remote, native dirty-file protection and live pull/switch/sync with unchanged PTY, project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, multi-ID saved history pagination/search, plugin list pagination, independent previews, runtime ID association/unlink with unchanged PTY, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, name-only JSON/script imports, stable-ID reimport and self-check, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
