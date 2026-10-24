@@ -69,5 +69,5 @@ test('0.4 settings gain an empty default command while preserving shell, font an
   db.prepare('INSERT INTO settings(id,value) VALUES(1,?)').run(JSON.stringify(old)); db.close();
   const store = new Store(folder);
   t.after(() => { store.close(); rmSync(folder, { recursive: true, force: true }); });
-  assert.deepEqual(store.settings(), { ...old, defaultCommand: '' });
+  assert.deepEqual(store.settings(), { ...DEFAULT_SETTINGS, ...old, defaultCommand: '' });
 });

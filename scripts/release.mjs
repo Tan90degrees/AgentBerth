@@ -14,7 +14,8 @@ export async function verifyRelease(root, directory, commit) {
   const productName = build?.productName ?? 'AgentBerth';
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Release requires a stable numeric version');
   const info = await json(path.join(directory, 'build-info.json'));
-  if (info.version !== version || info.commit !== commit || info.packagedSmoke !== 'success' || info.installerSmoke !== 'success' || info.ref !== 'main') throw new Error('Package version, commit, main ref, installer or packaged smoke does not match this release');
+  const failedSuite = info.packagedSuites !== undefined && (info.packagedSuites?.workbench !== 'success' || info.packagedSuites?.files !== 'success');
+  if (info.version !== version || info.commit !== commit || info.packagedSmoke !== 'success' || failedSuite || info.installerSmoke !== 'success' || info.ref !== 'main') throw new Error('Package version, commit, main ref, installer or packaged smoke does not match this release');
   const names = [`${productName}-${version}-windows-x64-setup.exe`, `${productName}-${version}-windows-x64.zip`];
   const checksums = new Map();
   for (const line of (await readFile(path.join(directory, 'SHA256SUMS.txt'), 'utf8')).replace(/^\uFEFF/, '').trim().split(/\r?\n/)) {

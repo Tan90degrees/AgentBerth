@@ -6,6 +6,7 @@ import './styles.css';
 import '@xterm/xterm/css/xterm.css';
 import './appearance.css';
 import './files.css';
+import './settings.css';
 
 initializeAppearance();
 

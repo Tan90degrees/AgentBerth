@@ -17,6 +17,6 @@ export function PreviewSettings() {
     <label>预览字号<div className="preview-size-control"><button type="button" aria-label="减小预览字号" disabled={value.size <= 10} onClick={() => setPreviewAppearance({ ...value, size: value.size - 1 })}>−</button><input aria-label="预览字号" type="number" min="10" max="28" value={sizeInput} onBlur={commitSize} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitSize(); } }} onChange={event => { setSizeInput(event.target.value); const size = Number(event.target.value); if (event.target.value && size >= 10 && size <= 28) setPreviewAppearance({ ...value, size }); }} /><span>px</span><button type="button" aria-label="增大预览字号" disabled={value.size >= 28} onClick={() => setPreviewAppearance({ ...value, size: value.size + 1 })}>＋</button></div></label>
     <p className="preview-font-sample" style={previewStyle(value)}>const ready = true; // 文件预览示例</p>
     <p className="form-hint">字体使用本机安装，未安装时自动回退。终端字号独立设置。</p>
-    <button type="button" className="subtle" onClick={() => setPreviewAppearance({ ...defaultPreviewAppearance })}>恢复默认预览字体</button>
+    <button type="button" className="subtle" disabled={value.font===defaultPreviewAppearance.font&&value.customFont===defaultPreviewAppearance.customFont&&value.size===defaultPreviewAppearance.size} onClick={() => setPreviewAppearance({ ...defaultPreviewAppearance })}>恢复默认预览字体</button>
   </section>;
 }

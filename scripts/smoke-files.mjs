@@ -147,6 +147,7 @@ try {
   step('preview typography persists across files and supports custom installed fonts');
   assert.equal(await page.getByRole('button', { name: '预览字体设置', exact: true }).count(), 0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:'文件预览',exact:true}).click();
   let fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByLabel('预览字号', { exact: true }).fill('18');
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('consolas');
@@ -164,6 +165,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.source-code code')?.dataset.language === 'plaintext');
   assert.equal(await page.locator('.source-code [class*="hljs-"]').count(), 0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:'文件预览',exact:true}).click();
   fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByRole('button', { name: '恢复默认预览字体', exact: true }).click();
   await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();

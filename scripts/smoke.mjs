@@ -14,6 +14,14 @@ const { Terminal: HeadlessTerminal } = headless;
 const { Unicode11Addon } = unicode11;
 const execute = promisify(execFile);
 const step = text => console.log(`Smoke: ${text}`);
+async function settingsCategory(page, category) {
+  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:category,exact:true}).click();
+}
+async function openSettings(page) {
+  await page.getByRole('button', {name:'设置',exact:true}).click();
+  await settingsCategory(page, '常用设置');
+}
+
 async function assertTerminalGutter(page) {
   await page.waitForFunction(() => {
     const screen = document.querySelector('.terminal-mount .xterm-screen'), bar = document.querySelector('.terminal-mount .scrollbar.vertical'), mount = document.querySelector('.terminal-mount');
@@ -212,7 +220,40 @@ try {
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
   await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'会话',exact:true}).click();
   step('save shell and default Agent settings');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  step('categorized settings search, empty results, cross-category drafts and hidden-field validation');
+  const settingsNav=page.getByRole('navigation',{name:'设置分类',exact:true});
+  const settingsSearch=page.getByRole('textbox',{name:'搜索设置',exact:true});
+  await settingsCategory(page,'文件预览');
+  await page.getByLabel('预览字号',{exact:true}).waitFor();
+  assert.equal(await page.getByLabel('默认终端',{exact:true}).isVisible(),false);
+  await page.keyboard.press('Control+f');
+  assert.equal(await settingsSearch.evaluate(element=>element===document.activeElement),true);
+  await settingsSearch.fill('SSH 会话上限');
+  await page.getByLabel('SSH 会话上限',{exact:true}).waitFor();
+  assert.equal(await page.locator('.settings-entry:visible').count(),1);
+  await settingsCategory(page,'终端');
+  await page.getByRole('heading',{name:'没有匹配的设置',exact:true}).waitFor();
+  await page.getByRole('button',{name:'查看全部设置',exact:true}).click();
+  const initialSettings=(await page.evaluate(()=>window.berth.rpc('state'))).settings;
+  await settingsCategory(page,'终端');
+  await page.getByLabel('终端字号',{exact:true}).fill('17');
+  await settingsCategory(page,'Agent');
+  assert.equal(await page.getByLabel('终端字号',{exact:true}).isVisible(),false);
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).settings.fontSize,initialSettings.fontSize);
+  await settingsCategory(page,'终端');
+  assert.equal(await page.getByLabel('终端字号',{exact:true}).inputValue(),'17');
+  await page.getByRole('button',{name:'重置终端字号',exact:true}).click();
+  assert.equal(await page.getByLabel('终端字号',{exact:true}).inputValue(),String(initialSettings.fontSize));
+  await page.getByLabel('终端字号',{exact:true}).fill('17');
+  await page.getByRole('button',{name:'取消修改',exact:true}).click();
+  await page.getByLabel('默认终端',{exact:true}).selectOption('custom');
+  await settingsCategory(page,'Agent');
+  await page.getByRole('button',{name:'保存设置',exact:true}).click();
+  await page.getByLabel('终端程序',{exact:true}).waitFor();
+  assert.equal(await settingsNav.getByRole('button',{name:'终端',exact:true}).getAttribute('aria-current'),'page');
+  await page.getByRole('button',{name:'取消修改',exact:true}).click();
+  await settingsCategory(page,'常用设置');
   step('appearance follows system, supports keyboard choice and explicit override');
   await page.getByRole('radio', { name: '跟随系统', exact: true }).click();
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -230,6 +271,7 @@ try {
   await page.getByRole('radio', { name: '浅色', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}settings-light.png` });
+  await settingsCategory(page, '关于与支持');
   step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
   const appInfo = await page.evaluate(() => window.berth.appInfo());
   assert.equal(appInfo.version, JSON.parse(await readFile('package.json','utf8')).version); assert.equal(appInfo.packaged, packaged);
@@ -241,19 +283,29 @@ try {
   assert.ok(!diagnostic.includes(folder) && !diagnostic.includes('AgentBerth 易用性'));
   const runtimeToken = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'),'utf8')).token;
   assert.ok(!diagnostic.includes(runtimeToken));
-  await application.evaluate(({ shell }) => { globalThis.smokeDataOriginal = shell.openPath; globalThis.smokeDataOpened = ''; shell.openPath = async folder => { globalThis.smokeDataOpened = folder; return ''; }; });
-  await page.getByRole('button', { name: '打开数据目录', exact: true }).click();
+  await application.evaluate(({ shell }) => { globalThis.smokeDataOriginal = shell.openPath; globalThis.smokeDataOpened = ''; globalThis.smokeDataCalls=0; shell.openPath = async folder => { globalThis.smokeDataCalls++;globalThis.smokeDataOpened = folder;await new Promise(resolve=>globalThis.smokeDataRelease=resolve);return ''; }; });
+  const dataAction=page.getByRole('button',{name:'打开数据目录',exact:true}),dataBox=await dataAction.boundingBox();
+  await page.mouse.move(dataBox.x+dataBox.width/2,dataBox.y+dataBox.height/2);await page.mouse.down();
+  assert.notEqual(await dataAction.evaluate(button=>getComputedStyle(button).filter),'none','Settings actions show a pressed state');
+  await page.mouse.up();
+  await page.waitForFunction(()=>document.querySelector('.about-actions button[aria-label="打开数据目录"]')?.getAttribute('aria-busy')==='true');
+  assert.equal(await dataAction.isEnabled(),false);await dataAction.dispatchEvent('click');
+  await eventually(async()=>(await application.evaluate(()=>globalThis.smokeDataCalls))===1,'Pending actions must not run twice');
+  await application.evaluate(()=>globalThis.smokeDataRelease());
+  await page.waitForFunction(()=>document.querySelector('.about-actions button[aria-label="打开数据目录"]')?.dataset.feedback==='success');
   await eventually(async () => (await application.evaluate(() => globalThis.smokeDataOpened)) === path.join(folder, 'data'), 'Data directory opener did not target application data');
   await application.evaluate(({ shell }) => { shell.openPath = globalThis.smokeDataOriginal; });
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-about' : 'about'}.png` });
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: false } }));
   await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).click();
   await page.getByText('完整开发指令已复制，可直接粘贴给 Agent', { exact: true }).waitFor();
   assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes('describe'));
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: true } }));
   await page.locator('.sidebar-bottom').getByText('后台已连接', { exact: true }).waitFor();
+  await settingsCategory(page, '常用设置');
   if (process.platform === 'win32') {
     step('auto-detect PowerShell 7 and launch its real executable');
     await page.getByLabel('默认终端', { exact: true }).selectOption('pwsh');
@@ -279,13 +331,17 @@ try {
     assert.equal(await page.locator('.terminal-mount').count(), 0);
     await menuAction(page, '删除会话', 'session');
     await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
-    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await openSettings(page);
   }
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'cmd' : 'bash');
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByLabel('终端字号', { exact: true }).fill('16');
+  await page.getByLabel('本机终端上限', { exact: true }).fill('24');
+  await page.getByLabel('SSH 会话上限', { exact: true }).fill('8');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
+  const limits=await page.evaluate(()=>window.berth.rpc('state'));
+  assert.equal(limits.maxActiveTerminals,24);assert.equal(limits.maxSshTerminals,8);
   await page.locator('.projects .project-item').click();
   await menuAction(page, '新建会话', 'project');
   assert.equal(await page.getByLabel('Agent 类型', { exact: true }).inputValue(), 'opencode');
@@ -608,6 +664,19 @@ try {
   await page.getByRole('button', { name: '保存会话', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   step('single sidebar collapses projects without recreating or stopping the terminal');
+  step('new-output labels remain distinct from running status and clear only when the terminal is viewed');
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+  await page.getByRole('tab', { name: '运行记录', exact: true }).click();
+  await page.evaluate(({sessionId,runId})=>window.berth.rpc('input',{sessionId,runId,data:'echo OUTPUT_BADGE_SMOKE\r'}),{sessionId:before.sessions[0].id,runId:original.id});
+  const outputReminder=page.locator(`.session-row[data-session-id="${before.sessions[0].id}"] .output-badge`);
+  await outputReminder.waitFor();
+  assert.equal(await outputReminder.innerText(),'新输出');
+  await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
+  await page.locator('.project-row.current-project .output-badge').waitFor();
+  await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).click();
+  await outputReminder.waitFor();
+  await page.getByRole('tab', { name: '终端', exact: true }).click();
+  await outputReminder.waitFor({state:'hidden'});
   assert.equal(await page.locator('.session-sidebar').count(), 0);
   await page.evaluate(() => { window.smokeTerminal = document.querySelector('.xterm'); });
   await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
@@ -735,7 +804,7 @@ try {
   };
   await page.evaluate(({sessionId,runId}) => window.berth.rpc('input',{sessionId,runId,data:'r'}), {sessionId:before.sessions[0].id,runId:original.id});
   await clickTui(); await findTerminalText(page, 'MOUSE_SGR_1');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.locator('.projects .project-item').click();
   await findTerminalText(page, 'TUI_RESIZE_READY');
   step('restored TUI accepts SGR clicks, modifier selection/copy and legacy mouse reports');
@@ -779,7 +848,7 @@ try {
   await application.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0].setBounds(bounds), bounds);
   await assertTerminalGutter(page);
   step('changing defaults preserves actual running shell identity');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'powershell' : 'auto');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
@@ -787,7 +856,7 @@ try {
   assert.ok((await page.locator('.terminal-footer').innerText()).includes(path.basename(original.shell)));
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   step('choose custom executable using native dialog while PTY keeps running');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认终端', { exact: true }).selectOption('custom');
   await application.evaluate(({ dialog }) => {
     const original = dialog.showOpenDialog;
@@ -796,6 +865,11 @@ try {
   await page.getByRole('button', { name: '选择程序', exact: true }).click();
   await page.getByRole('alert').filter({ hasText: '模拟文件选择失败' }).waitFor();
   assert.equal(await page.getByLabel('默认终端', { exact: true }).inputValue(), 'custom');
+  await page.waitForFunction(()=>document.querySelector('button[aria-label="选择程序"]')?.dataset.feedback==='error');
+  await application.evaluate(({dialog})=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return {canceled:true,filePaths:[]};};});
+  await page.getByRole('button',{name:'选择程序',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('button[aria-label="选择程序"]')?.dataset.feedback==='idle');
+  assert.equal(await page.getByLabel('终端程序',{exact:true}).inputValue(),'');
   await application.evaluate(({ dialog }, file) => {
     const original = dialog.showOpenDialog;
     dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; };
@@ -882,6 +956,8 @@ try {
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '19');
   await page.getByRole('button', { name: '取消修改', exact: true }).click();
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '16');
+  assert.equal(await page.getByLabel('本机终端上限', { exact: true }).inputValue(), '24');
+  assert.equal(await page.getByLabel('SSH 会话上限', { exact: true }).inputValue(), '8');
   await page.locator('.projects .project-item').click();
   const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), after.sessions[0].id);
   assert.match(snapshot.snapshot, /FLOW_DONE/);
@@ -982,7 +1058,7 @@ try {
   await page.getByRole('heading', { name: '选择或创建一个会话', exact: true }).waitFor();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions.length, 0);
   step('default custom Agent command is editable, inherited by new sessions and independent of existing sessions');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('custom');
   await page.getByLabel('默认启动命令', { exact: true }).fill('echo DEFAULT_CUSTOM_READY');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
@@ -997,7 +1073,7 @@ try {
   await waitRunState(page, true);
   const customSession = (await page.evaluate(() => window.berth.rpc('state'))).sessions[0];
   assert.equal(customSession.command, 'echo DEFAULT_CUSTOM_READY');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认启动命令', { exact: true }).fill('echo NEXT_CUSTOM_READY');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
@@ -1024,7 +1100,7 @@ try {
   assert.equal(await page.locator('.terminal-mount').count(), 0);
   await menuAction(page, '删除会话', 'session');
   await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
@@ -1087,7 +1163,8 @@ try {
   await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
   await page.getByRole('heading', { name: 'OpenCode 会话', exact: true }).waitFor();
   step('update backend without losing settings or conversations');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  await settingsCategory(page, '后台服务');
   await page.getByRole('button', { name: '更新后台', exact: true }).click();
   await page.getByRole('button', { name: '确认更新后台', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -1103,7 +1180,8 @@ try {
   const pluginScript = packaged ? path.join(path.dirname(executablePath), 'resources', 'examples', 'agent-plugin.cjs') : path.resolve('examples/agent-plugin.cjs');
   await stat(pluginScript);
   const pluginBundle = path.join(folder, 'plugin-bundle'); await mkdir(pluginBundle);
-  const source = (await readFile(pluginScript, 'utf8')).replace("id:'my-agent',name:'我的 Agent',command:'my-agent'", "id:'beta-smoke',name:'Beta 新名称',command:'echo BETA_READY'");
+  const source = (await readFile(pluginScript, 'utf8')).replace("id:'my-agent',name:'我的 Agent',command:'my-agent'", "id:'beta-smoke',name:'Beta 新名称',command:'echo BETA_READY'").replace("warnings:bytes>512*1024?['Only recent conversation text is shown.']:[]", "warnings:data.warnings??(bytes>512*1024?['Only recent conversation text is shown.']:[])");
+  assert.ok(source.includes('warnings:data.warnings??'), 'History warning fixture was not applied');
   await writeFile(path.join(pluginBundle, 'adapter.cjs'), source);
   await writeFile(path.join(pluginBundle, 'plugin.cjs'), "setTimeout(()=>require('./adapter.cjs'),600);");
   const pluginManifest = path.join(pluginBundle, 'agentberth-plugin.json');
@@ -1111,12 +1189,13 @@ try {
   if (packaged) await stat(path.join(path.dirname(executablePath), 'resources', 'docs', 'agent-plugins.md'));
 
   const pluginData = path.join(folder, 'agent-session.json');
-  const sample = { cwd: folder, nativeSessionId: 'native-plugin-123', messages: [{ role: 'user', text: '自定义历史你好🙂' }, { role: 'assistant', text: '独立插件已连接' }] };
+  const sample = { cwd: folder, nativeSessionId: 'native-plugin-123', messages: [{ role: 'user', text: '自定义历史你好🙂' }, { role: 'assistant', text: '独立插件已连接' }], warnings: [...Array(5).fill('Skipped an invalid or foreign-project session file.'),'Multiple conversations found; showing the most recent one. Use the session list to select a specific conversation.'] };
   await writeFile(pluginData, JSON.stringify(sample));
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   const alphaConfig = path.join(folder, 'alpha-agent.json');
   await writeFile(alphaConfig, JSON.stringify({ schemaVersion: 1, id: 'alpha-smoke', name: 'Alpha', command: 'echo ALPHA_READY' }));
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, alphaConfig);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByLabel('类型名称', { exact: true }).fill('Alpha CLI');
   assert.equal(await page.getByRole('dialog').locator('input').count(), 1);
@@ -1132,11 +1211,13 @@ try {
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   step('copy complete Agent instructions, export a kit and import a portable plugin without program or JSON fields');
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).click();
   await page.getByText('完整开发指令已复制，可直接粘贴给 Agent', { exact: true }).waitFor();
   const prompt = await application.evaluate(({ clipboard }) => clipboard.readText());
   assert.ok(prompt.includes('describe') && prompt.includes('history') && prompt.includes('resume') && prompt.includes('不要记录 TUI'));
   await application.evaluate(({ dialog }, directory) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [directory] }; }; }, folder);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导出开发套件', exact: true }).click();
   await page.getByText('开发套件已导出，给 Agent 的开发指令已复制', { exact: true }).waitFor();
   const kitFolder = await page.locator('.plugin-development>code').innerText();
@@ -1147,6 +1228,7 @@ try {
   assert.ok(checker.stdout.includes('describe、稳定 ID 和声明能力') && checker.stdout.includes('未检查：list/history/resume'));
   assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes(kitFolder));
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, pluginManifest);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   assert.equal(await page.getByLabel('类型名称', { exact: true }).inputValue(), 'Beta 插件');
@@ -1164,6 +1246,7 @@ try {
   const directScript = path.join(pluginBundle, 'standalone.cjs');
   await writeFile(directScript, 'setTimeout(()=>{\n' + source + '\n},600);');
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, directScript);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
   await page.getByRole('heading', { name: '更新 Agent 类型', exact: true }).waitFor();
   assert.equal(await page.getByLabel('类型名称', { exact: true }).inputValue(), 'Beta 插件');
@@ -1195,6 +1278,16 @@ try {
   await page.getByRole('button', { name: '读取对话', exact: true }).click();
   await page.getByText('独立插件已连接', { exact: true }).waitFor();
   assert.equal(await page.locator('.messages .message').count(), 2);
+  const diagnostics=page.locator('.history-diagnostics');
+  await diagnostics.waitFor();assert.equal(await diagnostics.getAttribute('open'),null);
+  assert.equal(await page.locator('.messages .history-warning').count(),0);
+  assert.equal(await diagnostics.locator('.history-diagnostic-path').isVisible(),false);
+  await diagnostics.locator('summary').click();
+  assert.equal(await diagnostics.locator('.history-diagnostics-content p').count(),2);
+  await diagnostics.getByText('（重复 5 次）',{exact:true}).waitFor();
+  assert.ok((await diagnostics.locator('.history-diagnostic-path code').innerText()).endsWith('agent-session.json'));
+  assert.equal(await page.getByText('Skipped an invalid or foreign-project session file.',{exact:true}).count(),0);
+  await diagnostics.locator('summary').click();
   step('switching sessions while a history plugin responds cannot replace another session history');
   await page.getByRole('button', { name: '刷新记录', exact: true }).click();
   await page.locator('.session-item').filter({ hasText: 'OpenCode 会话' }).click();
@@ -1268,9 +1361,10 @@ try {
   step('hot update an imported Agent plugin while its terminal stays running');
   const hotScript=path.join(folder,'hot-plugin.cjs');
   await writeFile(hotScript,source.replaceAll('echo BETA_READY','echo HOT_UPDATED_READY').replace('process.stdout.write(JSON.stringify(result));', "if(request.method==='history')result.messages.push({role:'assistant',text:'HOT_PLUGIN_CODE_READY'});process.stdout.write(JSON.stringify(result));"));
-  await page.getByRole('button',{name:'设置',exact:true}).click();
+  await openSettings(page);
   const beforeHotAgent=(await page.evaluate(()=>window.berth.rpc('state'))).agents.find(a=>a.id===beta.id);
   await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},alphaConfig);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByText('插件 ID 与当前类型不一致，请选择同一类型的更新文件',{exact:true}).waitFor();
   assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).agents.find(a=>a.id===beta.id).plugin.executable,beforeHotAgent.plugin.executable);
@@ -1278,12 +1372,14 @@ try {
   await writeFile(wrongHotScript, source.replace("id:'beta-smoke'", "id:'different-agent'"));
   await writeFile(wrongHotManifest, JSON.stringify({schemaVersion:1,id:'beta-smoke',name:'Beta',command:'echo WRONG_ID_MUST_NOT_APPLY',runtime:'node',entry:'hot-wrong.cjs',capabilities:{history:true,resume:true,list:true}}));
   await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},wrongHotManifest);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'插件 ID 与配置不一致'}).waitFor();
   const wrongHotState = await page.evaluate(()=>window.berth.rpc('state'));
   assert.equal(wrongHotState.agents.find(a=>a.id===beta.id).plugin.executable,beforeHotAgent.plugin.executable);
   assert.equal(wrongHotState.sessions.find(s=>s.id===betaSession.id).latestRun.pid,pluginRun.pid);
   await application.evaluate(({dialog},file)=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return{canceled:false,filePaths:[file]};};},hotScript);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button',{name:'更新插件 Beta 插件',exact:true}).click();
   await page.getByText('插件已热更新，后续读取使用新版本',{exact:true}).waitFor();
   assert.equal(await page.getByRole('dialog').count(),0,'Hot update unexpectedly required editing metadata');
@@ -1304,12 +1400,15 @@ try {
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '查看本次输出', exact: true }).count(), 0);
   await assert.rejects(stat(path.join(folder, 'data', 'logs', pluginRun.id + '.log')), /ENOENT/);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  await settingsCategory(page, 'Agent');
   assert.equal(await page.getByRole('button', { name: '删除 Agent Beta 插件', exact: true }).isEnabled(), false);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '编辑 Agent Beta 插件', exact: true }).click();
   await page.getByLabel('类型名称', { exact: true }).fill('Beta 已保存');
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  await settingsCategory(page, '后台服务');
   await page.getByRole('button', { name: '更新后台', exact: true }).click();
   await page.getByRole('button', { name: '确认更新后台', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -1330,11 +1429,170 @@ try {
   await page.getByLabel('筛选会话', { exact: true }).selectOption(alpha.id);
   assert.equal(await page.locator('.session-item').count(), 1);
   await page.getByLabel('筛选会话', { exact: true }).selectOption('all');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
   await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
   await page.locator('.projects .project-item').click();
+  step('MCP configuration and remote session usability');
+  await openSettings(page);
+  await settingsCategory(page, 'MCP');
+  await page.getByRole('button', { name: '复制 MCP 配置', exact: true }).click();
+  await page.waitForFunction(()=>document.querySelector('.mcp-actions button[aria-label="复制 MCP 配置"]')?.dataset.feedback==='success');
+  assert.equal(await page.getByRole('button',{name:'复制给 Agent 的说明',exact:true}).count(),0);
+  await page.getByText('无需复制额外提示词',{exact:false}).waitFor();
+  const mcpConfiguration = JSON.parse(await application.evaluate(({ clipboard }) => clipboard.readText())).mcpServers.agentberth;
+  assert.equal(mcpConfiguration.env.ELECTRON_RUN_AS_NODE, '1');
+  assert.ok(path.isAbsolute(mcpConfiguration.command));
+  await stat(mcpConfiguration.args[0]);
+  const beforeMcpMetrics=await page.evaluate(()=>window.berth.rpc('mcpMetrics'));
+  const metricEvents=[{callId:randomUUID(),tool:'terminal_execute',success:true},{callId:randomUUID(),tool:'terminal_read_output',success:false}];
+  await page.evaluate(async events=>{for(const event of [...events,events[0]])await window.berth.rpc('mcpRecordCall',event);},metricEvents);
+  await eventually(async()=>Number(await page.getByLabel('MCP 调用次数',{exact:true}).innerText())===beforeMcpMetrics.total+2,'MCP call counts update by event');
+  assert.equal(await page.getByLabel('MCP 调用失败次数',{exact:true}).innerText(),String(beforeMcpMetrics.failed+1));
+  assert.equal(await page.getByLabel('MCP 调用成功率',{exact:true}).innerText(),((beforeMcpMetrics.succeeded+1)/(beforeMcpMetrics.total+2)*100).toFixed(1)+'%');
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}mcp-call-stats.png`});
+
+  await settingsCategory(page, 'SSH 连接');
+  step('saved SSH profile uses blank identity defaults and supports password editing/deletion');
+  await page.getByRole('button',{name:'新建 SSH 连接',exact:true}).click();
+  assert.equal(await page.getByLabel('SSH 地址',{exact:true}).inputValue(),'');
+  assert.equal(await page.getByLabel('SSH 用户名',{exact:true}).inputValue(),'');
+  assert.equal(await page.getByLabel('SSH 密码',{exact:true}).inputValue(),'');
+  assert.equal(await page.getByLabel('SSH 端口',{exact:true}).inputValue(),'22');
+  await page.getByLabel('连接别名',{exact:true}).fill('smoke-server');
+  await page.getByLabel('SSH 地址',{exact:true}).fill('example.invalid');
+  await page.getByLabel('SSH 用户名',{exact:true}).fill('example-user');
+  await page.getByLabel('SSH 密码',{exact:true}).fill('fixture-display-password');
+  await page.getByRole('button',{name:'保存连接',exact:true}).click();
+  const profileRow=page.locator('.ssh-profile').filter({hasText:'smoke-server'});
+  await profileRow.getByRole('button',{name:'编辑',exact:true}).click();
+  assert.equal(await page.getByLabel('SSH 密码',{exact:true}).inputValue(),'');
+  await page.getByLabel('连接别名',{exact:true}).fill('smoke-server-edited');
+  await page.getByRole('button',{name:'保存连接',exact:true}).click();
+  await page.locator('.ssh-profile').filter({hasText:'smoke-server-edited'}).getByRole('button',{name:'删除',exact:true}).click();
+  await eventually(async()=> (await page.evaluate(()=>window.berth.rpc('sshConnections'))).length===0,'SSH profile was not deleted');
+  await page.locator('.projects .project-item').click();
+  await menuAction(page, '新建会话', 'project');
+  assert.equal(await page.getByLabel('运行位置',{exact:true}).count(),0,'Local session creation must not expose SSH');
+  assert.equal(await page.getByLabel('SSH 连接',{exact:true}).count(),0);
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.getByRole('button',{name:'SSH 面板',exact:true}).click();
+  const dock=page.getByRole('region',{name:'SSH 实时终端',exact:true});await dock.waitFor();
+  const heightHandle=dock.getByRole('separator',{name:'调整终端高度',exact:true});
+  await heightHandle.focus();await heightHandle.press('Home');
+  await eventually(async()=>Math.abs((await dock.boundingBox()).height-120)<2,'SSH minimum panel height did not apply');
+  await heightHandle.press('ArrowUp');
+  await eventually(async()=>Math.abs((await dock.boundingBox()).height-130)<2,'Keyboard terminal height adjustment did not apply');
+  const heightGrip=await heightHandle.boundingBox();
+  await page.mouse.move(heightGrip.x+heightGrip.width/2,heightGrip.y+3);await page.mouse.down();await page.mouse.move(heightGrip.x+heightGrip.width/2,heightGrip.y-77,{steps:8});await page.mouse.up();
+  await eventually(async()=>Math.abs((await dock.boundingBox()).height-210)<3,'Dragging terminal height did not apply');
+  assert.equal(await page.evaluate(()=>document.body.classList.contains('terminal-height-resizing')),false);
+  await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await dock.waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await dock.waitFor();
+  assert.ok(Math.abs((await dock.boundingBox()).height-210)<3,'Terminal height must survive collapsing the dock');
+  await heightHandle.dblclick();
+  assert.equal(await dock.getByRole('button',{name:'新建 SSH 会话',exact:true}).count(),0,'Normal SSH setup only asks for server information');
+  await dock.getByRole('button',{name:'服务器',exact:true}).click();
+  await page.getByRole('dialog',{name:'SSH 服务器',exact:true}).waitFor();
+  await page.getByRole('button',{name:'新建 SSH 连接',exact:true}).click();
+  assert.equal(await page.getByLabel('SSH 地址',{exact:true}).inputValue(),'');
+  assert.equal(await page.getByLabel('SSH 用户名',{exact:true}).inputValue(),'');
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}remote-session-config.png`});
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  // A stopped legacy session seeds the viewer on both platforms; Agent-driven
+  // saved-server create/update/close/delete and SFTP use real protocol tests.
+  const remoteSession=await page.evaluate(host=>window.berth.rpc('createRemoteSession',{title:'远程终端演示',remote:{host,directory:'/tmp'}}),process.env.AGENTBERTH_SSH_TEST_HOST||'dev-server');
+  await dock.getByLabel('SSH 终端',{exact:true}).selectOption(remoteSession.id);
+  await dock.getByRole('heading',{name:'远程终端演示',exact:true}).waitFor();
+  assert.equal(remoteSession.remote.directory, '/tmp');
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).projects.find(item=>item.id===remoteSession.projectId).remoteWorkspace,true,'SSH creation must use its independent workspace');
+  await dock.waitFor();
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();
+  assert.equal(await page.getByRole('menuitem',{name:'新建会话',exact:true}).count(),0,'SSH menu must not create a local session');
+  await page.getByRole('menuitem',{name:'新建 SSH 会话',exact:true}).click();
+  await page.getByRole('dialog',{name:'新建 SSH 会话',exact:true}).waitFor();
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();
+  await page.getByRole('menuitem',{name:'编辑会话',exact:true}).click();
+  await page.getByRole('dialog',{name:'编辑 SSH 会话',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('远端工作目录',{exact:true}).inputValue(),'/tmp');
+  assert.equal(await page.getByLabel('Agent 类型',{exact:true}).count(),0);
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal(await page.locator('.projects .session-item').filter({hasText:'远程终端演示'}).count(),0,'Remote sessions belong in the dock, not the sidebar');
+  const beforeSshToggle=await page.evaluate(()=>window.berth.rpc('state'));
+  for(let index=0;index<4;index++){
+    await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await dock.waitFor({state:'hidden'});
+    await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await dock.waitFor();
+    assert.equal(await page.locator('.ssh-dock').count(),1,'SSH toggles must not append a dock');
+  }
+  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).sessions.length,beforeSshToggle.sessions.length,'Opening the SSH view must not create sessions');
+  let localSshObserver;
+  if (process.env.AGENTBERTH_SSH_TEST_HOST) {
+    localSshObserver=await page.evaluate(async projectId=>{
+      const session=await window.berth.rpc('createSession',{projectId,title:'本机与 SSH 同时观察',agent:'shell',terminal:{profile:'bash',executable:'',args:[]}});
+      await window.berth.rpc('start',{sessionId:session.id,cols:100,rows:30});return session;
+    },beforeSshToggle.projects.find(project=>!project.remoteWorkspace).id);
+    await page.locator('.session-item').filter({hasText:'本机与 SSH 同时观察'}).click();
+    await page.locator('.workspace-host .xterm').waitFor();
+    await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'启动终端',exact:true}).click();
+    await page.getByRole('button', { name: '交给 Agent', exact: true }).waitFor();
+    await eventually(async()=> (await page.evaluate(id=>window.berth.rpc('remoteInfo',{sessionId:id}),remoteSession.id))?.phase === 'idle','Remote Bash did not become idle');
+    await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
+    const remoteTarget = {sessionId:remoteSession.id,runId:(await page.evaluate(()=>window.berth.rpc('state'))).sessions.find(item=>item.id===remoteSession.id).latestRun.id};
+    const remoteAction = await page.evaluate(target=>window.berth.rpc('remoteExecute',{...target,requestId:crypto.randomUUID(),command:'printf "REMOTE_UI_READY\\n"'}),remoteTarget);
+    const remoteResult=await page.evaluate(args=>window.berth.rpc('remoteWait',args),{...remoteTarget,actionId:remoteAction.id,timeoutMs:5000});
+    assert.equal(remoteResult.exitCode,0);
+    const cleanRemoteScreen=await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget);
+    assert.ok(!cleanRemoteScreen.text.includes('__ab_status'));assert.ok(!cleanRemoteScreen.text.includes(']777;AgentBerth;'));
+    // Renderer event fixture checks the compact progress view. Protocol tests
+    // exercise actual SFTP byte streams, cancellation and independent channels.
+    const transferView={id:randomUUID(),sessionId:remoteTarget.sessionId,runId:remoteTarget.runId,status:'running',bytes:512,totalBytes:1024,files:0,totalFiles:1,startedAt:new Date().toISOString(),endedAt:null,error:null,spec:{requestId:randomUUID(),source:{kind:'local',path:path.join(folder,'fixture.bin')},destination:{kind:'remote',...remoteTarget,path:'/tmp/fixture.bin'},recursive:false,resume:false,overwrite:false}};
+    await application.evaluate(({BrowserWindow},data)=>BrowserWindow.getAllWindows()[0].webContents.send('berth:event',{event:'remoteTransfer',data}),transferView);
+    await dock.getByLabel('文件传输',{exact:true}).getByText('传输中',{exact:true}).waitFor();
+    assert.equal(await dock.getByRole('progressbar',{name:'文件传输进度',exact:true}).getAttribute('value'),'512');
+    await dock.getByRole('button',{name:'取消传输',exact:true}).waitFor();
+    await application.evaluate(({BrowserWindow},data)=>BrowserWindow.getAllWindows()[0].webContents.send('berth:event',{event:'remoteTransfer',data}),{...transferView,status:'completed',bytes:1024,files:1,endedAt:new Date().toISOString()});
+    await dock.getByLabel('文件传输',{exact:true}).getByText('传输完成',{exact:true}).waitFor();
+
+    await eventually(async()=>(await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget)).text.includes('REMOTE_UI_READY'),'Remote terminal output did not reach renderer backing screen');
+    await findTerminalText(dock, 'REMOTE_UI_READY'); // Search stays available while Agent owns input.
+    await dock.getByRole('button', { name: '操作步骤', exact: false }).click();
+    await page.getByLabel('远程操作步骤', { exact: true }).getByText('退出 0', { exact: true }).waitFor();
+    assert.ok((await page.getByLabel('远程终端控制',{exact:true}).boundingBox()).height <= 52,'Remote controls should stay compact');
+    const secondSsh=await page.evaluate(async host=>{
+      const session=await window.berth.rpc('createRemoteSession',{title:'第二个 SSH 终端',remote:{host,directory:'/tmp'}});
+      await window.berth.rpc('start',{sessionId:session.id,cols:100,rows:30});return session;
+    },process.env.AGENTBERTH_SSH_TEST_HOST);
+    for(let index=0;index<6;index++){
+      await dock.getByLabel('SSH 终端',{exact:true}).selectOption(index%2?secondSsh.id:remoteSession.id);
+      assert.equal(await dock.locator('.remote-session').count(),1,'SSH switches must not accumulate status rows');
+      assert.equal(await dock.locator('.xterm').count(),1,'SSH switches must leave only the current terminal');
+    }
+    await dock.getByLabel('SSH 终端',{exact:true}).selectOption(remoteSession.id);
+    await page.evaluate(async id=>{await window.berth.rpc('stop',{sessionId:id});await window.berth.rpc('deleteSession',{sessionId:id});},secondSsh.id);
+    await page.evaluate(()=>{window.localBeforeSshToggle=document.querySelector('.workspace-host .xterm');window.remoteBeforeSshToggle=document.querySelector('.ssh-dock .xterm');});
+    for(let index=0;index<3;index++){await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await page.getByRole('button',{name:'SSH 面板',exact:true}).click();}
+    assert.equal(await page.evaluate(()=>window.localBeforeSshToggle===document.querySelector('.workspace-host .xterm')&&window.remoteBeforeSshToggle===document.querySelector('.ssh-dock .xterm')),true,'Toggling SSH must retain both terminal instances');
+    const localBounds=await page.locator('.workspace-host .terminal-mount').boundingBox(),remoteBounds=await dock.locator('.terminal-mount').boundingBox();
+    assert.ok(localBounds&&remoteBounds&&localBounds.height>40&&remoteBounds.height>40&&remoteBounds.y>=localBounds.y+localBounds.height,'Both local Agent and remote SSH must be visible, with SSH below');
+    await page.screenshot({animations:'disabled',path:'test-results/remote-terminal-agent.png'});
+    await page.getByRole('button', { name: '接管', exact: true }).click();
+    await page.getByRole('button', { name: '交给 Agent', exact: true }).waitFor();
+    await page.waitForFunction(() => { const input = document.querySelector('.ssh-dock .terminal-mount .xterm-helper-textarea'); return input && !input.readOnly; });
+    const remoteInput=dock.locator('.terminal-mount .xterm-helper-textarea');await remoteInput.focus();
+    await page.keyboard.type('echo USER_$((40+2))');await page.keyboard.press('Enter');
+    await eventually(async()=>(await page.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget)).text.includes('USER_42'),'Human takeover did not restore input');
+    await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'停止终端',exact:true}).click();await page.getByRole('button', { name: '停止终端', exact: true }).click();await eventually(async()=>(await page.evaluate(id=>window.berth.rpc('runs',{sessionId:id}),remoteSession.id))[0].status==='stopped','Remote dock stop did not complete');
+  }
+  await dock.getByRole('button',{name:'SSH 会话操作',exact:true}).click();await page.getByRole('menuitem',{name:'删除会话',exact:true}).click();await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
+  await page.getByRole('button',{name:'收起 SSH 面板',exact:true}).click();
+  if(localSshObserver){
+    await page.evaluate(id=>window.berth.rpc('stop',{sessionId:id}),localSshObserver.id);
+    await eventually(async()=>!['running','stopping'].includes((await page.evaluate(id=>window.berth.rpc('runs',{sessionId:id}),localSshObserver.id))[0].status),'Local observer cleanup must await the process exit');
+    await page.evaluate(id=>window.berth.rpc('deleteSession',{sessionId:id}),localSshObserver.id);
+  }
   step('an unlinked conversation preview is cleared when the project directory changes');
   await page.locator('.session-item').filter({hasText:'OpenCode 会话'}).click();
   await page.getByRole('tab',{name:'对话历史',exact:true}).click();
@@ -1353,10 +1611,27 @@ try {
   await menuAction(page, '删除项目', 'project');
   await page.getByRole('button', { name: '确认删除项目', exact: true }).click();
   await page.getByRole('button', { name: '添加第一个项目', exact: true }).waitFor();
-  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).projects.length, 0);
+  assert.equal((await page.evaluate(() => window.berth.rpc('state'))).projects.filter(project=>!project.remoteWorkspace).length, 0);
+  step('server configuration works without creating a local project or SSH session');
+  await page.getByRole('button',{name:'SSH 面板',exact:true}).click();
+  await dock.getByRole('button',{name:'服务器',exact:true}).click();
+  await page.getByRole('button',{name:'新建 SSH 连接',exact:true}).click();
+  await page.getByLabel('连接别名',{exact:true}).fill('standalone-fixture');
+  await page.getByLabel('SSH 地址',{exact:true}).fill('example.invalid');
+  await page.getByLabel('SSH 用户名',{exact:true}).fill('fixture-user');
+  await page.getByLabel('SSH 密码',{exact:true}).fill('fixture-display-password');
+  await page.getByRole('button',{name:'保存连接',exact:true}).click();
+  const standaloneState=await page.evaluate(()=>window.berth.rpc('state'));
+  assert.equal(standaloneState.sessions.length,0,'Saving server information must not open a connection');
+  assert.equal(standaloneState.projects.filter(project=>!project.remoteWorkspace).length,0);
+  await page.locator('.ssh-profile').filter({hasText:'standalone-fixture'}).getByRole('button',{name:'删除',exact:true}).click();
+  await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  await dock.getByRole('button',{name:'收起 SSH 面板',exact:true}).click();
   await stat(exportPath); await stat(moved);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettings(page);
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '删除 Agent Alpha CLI', exact: true }).click();
+  await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '删除 Agent Beta 已保存', exact: true }).click();
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).agents.length, 0);
   console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: Git branch/status, fetch/pull/push/publication/switch with real bare remote, native dirty-file protection and live pull/switch/sync with unchanged PTY, project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, multi-ID saved history pagination/search, plugin list pagination, independent previews, runtime ID association/unlink with unchanged PTY, PowerShell discovery, clean stopped/exited states, default custom commands, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, multiple saved Agent types, name-only JSON/script imports, stable-ID reimport and self-check, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
@@ -1364,6 +1639,7 @@ try {
   console.error(error);
   const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
   console.error('Failure process state',JSON.stringify({daemonPid,daemonAlive:daemonPid?alive(daemonPid):false,runtimePresent:await fileExists(path.join(folder,'data','runtime.json')),launcherPid:application?.process().pid,launcherAlive:application?alive(application.process().pid):false}));
+  try { console.error('Daemon failure log:', (await readFile(path.join(folder,'data','daemon.log'),'utf8')).slice(-6000)); } catch {}
   if (application) {
     try {
       const page = application.windows()[0];

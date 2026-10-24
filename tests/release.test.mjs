@@ -68,6 +68,20 @@ test('failed smoke, wrong commit/version/ref and non-stable versions cannot rele
   await assert.rejects(verifyRelease(f.root, f.directory, sha), /stable/);
 });
 
+test('split packaged suites must both pass even if the aggregate claims success', async t => {
+  const f = await fixture(t), file = path.join(f.directory, 'build-info.json');
+  await writeFile(file, JSON.stringify({ ...f.info, packagedSuites: { workbench: 'success', files: 'success' } }));
+  assert.equal((await verifyRelease(f.root, f.directory, sha)).info.packagedSmoke, 'success');
+  for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
+    for (const failed of ['workbench', 'files']) {
+      await writeFile(file, JSON.stringify({ ...f.info, packagedSuites: { workbench: 'success', files: 'success', [failed]: result } }));
+      await assert.rejects(verifyRelease(f.root, f.directory, sha), /does not match/);
+    }
+  }
+  await writeFile(file, JSON.stringify({ ...f.info, packagedSuites: null }));
+  await assert.rejects(verifyRelease(f.root, f.directory, sha), /does not match/);
+});
+
 test('missing, duplicate, traversal and tampered package checksums are rejected', async t => {
   const f = await fixture(t), file = path.join(f.directory, 'SHA256SUMS.txt'), original = await readFile(file, 'utf8');
   for (const text of [original.split('\r\n')[0], original + original, original.replace('AgentBerth-', '../AgentBerth-')]) {

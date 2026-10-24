@@ -2,8 +2,9 @@ import { z } from 'zod';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 19;
-export const MAX_ACTIVE_TERMINALS = 16;
+export const API_VERSION = 33;
+export const DEFAULT_TERMINAL_LIMIT = 16;
+export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
 export type Agent = z.infer<typeof agentSchema>;
@@ -20,9 +21,11 @@ export const settingsSchema = z.object({
   defaultAgent: agentSchema,
   defaultCommand: singleLine.default(''),
   fontSize: z.number().int().min(10).max(24),
+  maxActiveTerminals: z.number().int().min(1).max(TERMINAL_LIMIT_MAX).default(DEFAULT_TERMINAL_LIMIT),
+  maxSshTerminals: z.number().int().min(1).max(TERMINAL_LIMIT_MAX).default(DEFAULT_TERMINAL_LIMIT),
 }).strict();
 export type Settings = z.infer<typeof settingsSchema>;
-export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', defaultCommand: '', fontSize: 14 };
+export const DEFAULT_SETTINGS: Settings = { terminal: { profile: 'auto', executable: '', args: [] }, defaultAgent: 'codex', defaultCommand: '', fontSize: 14, maxActiveTerminals: DEFAULT_TERMINAL_LIMIT, maxSshTerminals: DEFAULT_TERMINAL_LIMIT };
 const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
@@ -36,7 +39,45 @@ export type AgentDefinitionConfig = z.infer<typeof agentDefinitionSchema>;
 export interface AgentDefinition extends AgentDefinitionConfig { id: string }
 export const isCustomAgent = (agent: string) => agent === 'custom' || agent.startsWith('agent:');
 const size = { cols: z.number().int().min(20).max(300), rows: z.number().int().min(5).max(100) };
-const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null) };
+export const sshConnectionSchema = z.object({
+  alias: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/, '别名只能包含字母、数字、点、横线和下划线'),
+  hostname: z.string().trim().min(1).max(254).refine(value => !/[\s\x00-\x1f]/.test(value), '请输入主机名或 IP'),
+  port: z.number().int().min(1).max(65535).default(22),
+  username: z.string().trim().min(1).max(256).refine(value => !/[\x00-\x1f]/.test(value)),
+  authentication: z.enum(['password', 'key', 'agent']),
+  privateKeyPath: singleLine.default(''),
+  allowAgent: z.boolean().default(true),
+}).strict().refine(value => value.authentication !== 'key' || !!value.privateKeyPath.trim(), '请选择私钥文件');
+export type SshConnectionConfig = z.infer<typeof sshConnectionSchema>;
+export interface SshConnection extends SshConnectionConfig { id: string }
+export const sshSecretSchema = z.object({ password: z.string().max(16384).optional(), passphrase: z.string().max(16384).optional() }).strict();
+export type SshSecret = z.infer<typeof sshSecretSchema>;
+export interface SshChallenge { id: string; connectionId: string; alias: string; kind: 'credentials' | 'hostKey'; fingerprint?: string; hostname?: string; port?: number }
+export const remoteSchema = z.object({
+  connectionId: z.uuid().optional(),
+  host: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,253}$/, '请选择 SSH 主机别名'),
+  directory: z.string().max(4096).refine(value => (!value || value.startsWith('/')) && !/[\r\n\x00]/.test(value), '请填写远端绝对目录或留空使用登录目录').default(''),
+}).strict();
+export type RemoteConfig = z.infer<typeof remoteSchema>;
+const remoteTarget = { sessionId: id, runId: id };
+const remoteCommandInput = { ...remoteTarget, command: z.string().min(1).max(16384).refine(value => !!value.trim() && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value), '命令不能为空或包含终端控制字符；支持换行和 Tab'), requestId: id, atPrompt: z.boolean().default(false) };
+export const outputSearchSchema=z.object({query:z.string().min(1).max(256).refine(value=>!/[\r\n\x00]/.test(value),'按行搜索，请使用单行文本'),caseSensitive:z.boolean().default(false),contextLines:z.number().int().min(0).max(5).default(2),limit:z.number().int().min(0).max(100).default(20),offset:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),endCursor:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),maxBytes:z.number().int().min(4096).max(65536).default(16384)}).strict();
+export type OutputSearch=z.infer<typeof outputSearchSchema>;
+const remoteOutputMode=z.enum(['summary','page']).default('summary');
+const remoteOutputInput = { search:outputSearchSchema.optional(), mode:remoteOutputMode, cursor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0), maxChars: z.number().int().min(256).max(65536).default(32768) };
+const transferPath=z.string().min(1).max(4096).refine(value=>!/[\x00\r\n]/.test(value));
+export const transferEndpointSchema=z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('local'),path:transferPath}).strict(),
+  z.object({kind:z.literal('remote'),...remoteTarget,path:transferPath.refine(value=>value.startsWith('/'),'远端请使用绝对路径')}).strict(),
+]);
+export const transferSpecSchema=z.object({requestId:id,source:transferEndpointSchema,destination:transferEndpointSchema,recursive:z.boolean().default(false),resume:z.boolean().default(false),overwrite:z.boolean().default(false)}).strict().refine(value=>value.source.kind==='remote'||value.destination.kind==='remote','至少一端必须是 SSH 服务器').refine(value=>!value.resume||!value.overwrite,'续传和覆盖不能同时选择');
+export type TransferEndpoint=z.infer<typeof transferEndpointSchema>;
+export type TransferSpec=z.infer<typeof transferSpecSchema>;
+export interface RemoteTransfer {id:string;spec:TransferSpec;sessionId:string;runId:string;status:'running'|'completed'|'failed'|'cancelled'|'unknown';bytes:number;totalBytes:number;files:number;totalFiles:number;startedAt:string;endedAt:string|null;error:string|null}
+export const remoteManageSchema=z.object({action:z.enum(['create','update','close','delete','reconnect']),alias:z.string().min(1).max(100).optional(),sessionId:id.optional(),runId:id.optional(),title:title.optional(),directory:remoteSchema.shape.directory.optional()}).strict().refine(value=>value.action==='create'?!!value.alias&&!!value.title:!!value.alias||!!value.sessionId,'请提供服务器别名或会话 ID').refine(value=>!(value.alias&&value.sessionId),'别名和会话 ID 二选一');
+export const remoteKeySchema = z.enum(['Enter', 'Tab', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Ctrl+C', 'Ctrl+D', 'Ctrl+Z', 'Backspace']);
+export type RemoteKey = z.infer<typeof remoteKeySchema>;
+const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null), remote: remoteSchema.nullable().default(null) };
 export const nativeSessionIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 export const historyQuerySchema = z.object({ cursor: z.string().max(2048).nullable().default(null), limit: z.number().int().min(1).max(50).default(10), query: z.string().trim().max(100).default('') }).strict();
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
@@ -53,6 +94,33 @@ export const gitDiffSchema = z.object({ projectId: id, path: z.string().min(1).m
 export type GitDiffRequest = z.infer<typeof gitDiffSchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
+  z.object({ id, method: z.literal('sshConnections'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('saveSshConnection'), params: z.object({ connectionId: id.optional(), config: sshConnectionSchema }).strict() }),
+  z.object({ id, method: z.literal('deleteSshConnection'), params: z.object({ connectionId: id }).strict() }),
+  z.object({ id, method: z.literal('registerSshProvider'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('sshChallengeReply'), params: z.object({ challengeId: id, secret: sshSecretSchema.optional(), accepted: z.boolean().optional() }).strict() }),
+  z.object({ id, method: z.literal('remoteAliases'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100), owner: z.enum(['user','agent']).default('agent') }).strict() }),
+  z.object({ id, method: z.literal('remoteResolve'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
+  z.object({ id, method: z.literal('remoteManage'), params: remoteManageSchema }),
+  z.object({ id, method: z.literal('remoteTransferStart'), params: transferSpecSchema }),
+  z.object({ id, method: z.literal('remoteTransferStatus'), params: z.object({requestId:id,timeoutMs:z.number().int().min(0).max(30000).default(0)}).strict() }),
+  z.object({ id, method: z.literal('remoteTransferCancel'), params: z.object({requestId:id,owner:z.enum(['user','agent']).default('agent')}).strict() }),
+  z.object({ id, method: z.literal('remoteTransfers'), params: z.object({sessionId:id}).strict() }),
+  z.object({ id, method: z.literal('sshHosts'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('createRemoteSession'), params: z.object({ title, remote: remoteSchema }).strict() }),
+  z.object({ id, method: z.literal('remoteInfo'), params: z.object({ sessionId: id }).strict() }),
+  z.object({ id, method: z.literal('remoteActions'), params: z.object({ sessionId: id, before: z.number().int().positive().optional() }).strict() }),
+  z.object({ id, method: z.literal('remoteControl'), params: z.object({ ...remoteTarget, owner: z.enum(['user', 'agent']) }).strict() }),
+  z.object({ id, method: z.literal('remoteReconnect'), params: z.object(remoteTarget).strict() }),
+  z.object({ id, method: z.literal('remoteExecute'), params: z.object(remoteCommandInput).strict() }),
+  z.object({ id, method: z.literal('remoteCommand'), params: z.object({ ...remoteCommandInput, search:outputSearchSchema.optional(), mode:remoteOutputMode, maxChars: remoteOutputInput.maxChars, waitMs: z.number().int().min(0).max(25000).default(5000) }).strict() }),
+  z.object({ id, method: z.literal('remoteReadOutput'), params: z.object({ ...remoteTarget, ...remoteOutputInput, actionId: id.optional(), timeoutMs: z.number().int().min(0).max(30000).default(25000), waitFor: z.enum(['output','completion']).default('output') }).strict().refine(value=>value.actionId!==undefined||value.cursor===0,'未指定 actionId 时 cursor 必须为 0；后续分页请使用 continuation 中的 actionId 和游标') }),
+  z.object({ id, method: z.literal('remoteKeys'), params: z.object({ ...remoteTarget, text: z.string().max(16384).refine(value => !/[\x00-\x1f\x7f]/.test(value)).optional(), key: remoteKeySchema.optional(), enter: z.boolean().default(true) }).strict().refine(value => (value.text !== undefined) !== (value.key !== undefined), '请选择文本或按键').refine(value => value.key === undefined || value.enter, 'enter 仅用于文本输入') }),
+  z.object({ id, method: z.literal('remoteWait'), params: z.object({ ...remoteTarget, actionId: id, timeoutMs: z.number().int().min(0).max(30000).default(25000) }).strict() }),
+  z.object({ id, method: z.literal('remoteScreen'), params: z.object(remoteTarget).strict() }),
+  z.object({id,method:z.literal('mcpMetrics'),params:z.object({}).strict()}),
+  z.object({id,method:z.literal('mcpRecordCall'),params:z.object({callId:id,tool:z.string().min(1).max(80),success:z.boolean()}).strict()}),
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id }).strict() }),
@@ -99,7 +167,7 @@ export const requestSchema = z.discriminatedUnion('method', [
 export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
-export interface Project { id: string; name: string; path: string; createdAt: string }
+export interface Project { remoteWorkspace?: boolean; id: string; name: string; path: string; createdAt: string }
 export interface ProjectFile { name: string; path: string; kind: 'directory' | 'file' | 'other'; ignored: boolean; symlink: boolean; unavailable?: boolean }
 export interface ProjectFilePage { path: string; entries: ProjectFile[]; nextOffset: number | null; total: number; truncated: boolean; gitAvailable: boolean; warning?: string }
 export interface FilePreview { path: string; name: string; size: number; modifiedAt: string; kind: 'text' | 'image' | 'binary'; content: string | null; truncated: boolean; encoding?: string; mime?: string; message?: string }
@@ -118,9 +186,9 @@ export interface GitStatus {
 export interface GitResult { status: GitStatus; message: string; output: string }
 export interface GitDiff { path: string; staged: boolean; patch: string; binary: boolean; truncated: boolean; message?: string }
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
-export interface Session { id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
+export interface Session { remote?: RemoteConfig | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
-export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }
@@ -129,15 +197,33 @@ export interface Attachment { run: Run | null; snapshot: string; seq: number; co
 export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
+export interface RemoteInfo { commandTracking?: 'posix' | 'none'; sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
+export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection' | 'transfer'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null; transfer?:RemoteTransfer }
+export interface OutputSearchResult {query:string;caseSensitive:boolean;contextLines:number;maxBytes:number;offset:number;limit:number;totalMatches:number;returnedMatches:number;nextOffset:number|null;startCursor:number;endCursor:number;lineNumbering:'range';omitted:boolean;groups:{startLine:number;cursor:number;text:string;matchLines:number[]}[]}
+export interface McpCallMetric {callId:string;tool:string;success:boolean}
+export interface McpMetrics {since:string;total:number;succeeded:number;failed:number;successRate:number|null;tools:{tool:string;total:number;succeeded:number;failed:number}[]}
+export interface RemoteCommandOutput { search?:OutputSearchResult; text: string; nextCursor: number; earliestCursor: number | null; truncated: boolean; hasMore: boolean; available: boolean; format: 'terminal'; mode?:'summary'|'page'; omitted?:boolean; cacheLost?:boolean; totalBytes?:number;totalLines?:number;returnedBytes?:number }
+export interface RemoteCommandResult extends RemoteAction { output: RemoteCommandOutput; info: RemoteInfo; elapsedMs: number; requestMs?: number }
 export type ServerEvent =
+  | {event:'mcpMetrics';data:McpMetrics}
+  | { event: 'terminalActivity'; data: { sessionId: string; runId: string; seq: number } }
+  | { event: 'sshChallenge'; data: SshChallenge }
+  | { event: 'remote'; data: RemoteInfo }
+  | { event: 'remoteAction'; data: RemoteAction }
+  | { event: 'remoteTransfer'; data: RemoteTransfer }
   | { event: 'state'; data: State }
   | TerminalEvent
   | { event: 'connection'; data: { connected: boolean; error?: string } };
-export interface Response { id: string; result?: unknown; error?: string }
+export interface Response { id: string; result?: unknown; error?: string; errorCode?: string; errorDetails?: import('./remote-errors').RemoteErrorDetails }
 export interface RuntimeInfo { version: number; pid: number; port: number; token: string }
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface DesktopApi {
+  openSshConnection(alias: string): Promise<{sessionId: string; runId: string; info: RemoteInfo}>;
+  saveSshConnection(config: SshConnectionConfig, connectionId?: string, secret?: SshSecret, remember?: boolean): Promise<SshConnection>;
+  deleteSshConnection(connectionId: string): Promise<void>;
+  chooseSshKey(): Promise<string | null>;
   appInfo(): Promise<AppInfo>;
+  mcpConfig(): Promise<string>;
   setAppearance(mode: AppearanceMode): Promise<void>;
   openDataDirectory(): Promise<void>;
   rpc<T = unknown>(method: Method, params?: Record<string, unknown>): Promise<T>;
