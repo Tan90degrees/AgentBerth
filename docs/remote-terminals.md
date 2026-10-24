@@ -45,7 +45,7 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 32。
+用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 33。
 
 ## 文件传输
 
@@ -70,10 +70,18 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## Agent 误把滚屏当成输出丢失
 
-读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 32 的读屏提供可选 details，按需取对应命令的有界首尾摘要；不会自动恢复所有输出。命令响应的 continuation 仅用于运行中新增输出，明细分页需主动选择。Agent 不应重跑、重新排序或 clear 以获取上半部分。
+读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 33 默认精简元数据，保留 scope、命令关联和 harness.next，不自动恢复所有输出；detail=full 可查看完整诊断字段。运行中的命令给出增量等待入口，明细分页和缓存搜索按需使用。Agent 不应重跑、重新排序或 clear 以获取上半部分。
 
 忘记 ID 可省略 actionId 从头读最近可靠关联的命令，后续分页必须使用返回的命令 ID 和游标。空闲 POSIX Shell 中通过文本加回车执行的命令也会自动捕获；交互程序、部分输入和未知提示符仍按原始按键处理，不能关联旧命令冒充新结果。
 
 ## 内置 Agent 引导
 
-只添加 MCP 配置即可。工具说明、初始化指引与 harness 返回字段共同提供操作契约；可选 MCP 资源 `agentberth://guide/remote-terminal` 提供详细参考。命令与传输自动生成请求 ID；结果给出下一步准确参数。人工接管、忙碌命令、过期运行实例由后端拒绝，错误返回稳定代码与恢复方向，远端输出不能改变这些约束。更新后台至 API 32 并重连 MCP 后使用。
+只添加 MCP 配置即可。工具说明、初始化指引与 harness 返回字段共同提供操作契约；可选 MCP 资源 `agentberth://guide/remote-terminal` 提供详细参考。命令与传输自动生成请求 ID；结果给出下一步准确参数。人工接管、忙碌命令、过期运行实例由后端拒绝，错误返回稳定代码与恢复方向，远端输出不能改变这些约束。更新后台至 API 33 并重连 MCP 后使用。
+
+## 调用统计、缓存查询与按钮反馈
+
+MCP 设置显示本次后台已收到的工具调用结果：次数、成功率、失败数及按工具分组。正常返回的命令即使退出非零，也不算工具调用失败；统计不等于任务评测。上报异步进行，不增加模型往返，不把统计追加到每次工具结果中；后台重启清零。
+
+execute/read_output/wait 可传 search，在本机保留的命令缓存中逐行匹配并计数、合并上下文，不在服务器重跑命令。默认忽略大小写，limit=0 只返回匹配行数；分页固定快照，缓存淘汰明确报告。默认响应精简重复元数据，输出硬上限沿用原值，完整诊断可选 detail=full。
+
+设置页统一按钮的按下、焦点和禁用样式；复制、打开目录、文件选择、SSH 保存/删除、插件导入/更新/检查等异步操作共用处理中、完成和失败反馈。处理中阻止重复点击，取消文件选择回到空闲状态。

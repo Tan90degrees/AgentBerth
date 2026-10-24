@@ -54,3 +54,23 @@
  .settings-savebar { padding:10px 16px; flex-wrap:wrap; gap:9px; }
  .settings-save-actions { margin-left:auto; }
 }
+
+/* Consistent tactile states for every settings action, including icon/text buttons. */
+.settings-workbench button { transition:background-color .12s,border-color .12s,box-shadow .12s,filter .12s; }
+.settings-workbench button:active:not(:disabled) { filter:brightness(.88); box-shadow:inset 0 0 0 1px var(--focus); }
+.settings-workbench button:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.settings-workbench button:disabled { cursor:not-allowed; opacity:.45; }
+button[data-feedback] { position:relative; padding-right:28px; }
+button[data-feedback]::after { position:absolute; right:9px; width:11px; height:11px; pointer-events:none; }
+button[data-feedback=pending]:disabled { cursor:progress; opacity:.75; }
+button[data-feedback=pending]::after { content:''; border:1.5px solid currentColor; border-right-color:transparent; border-radius:50%; animation:settings-button-spin .65s linear infinite; }
+button[data-feedback=success]::after { content:'✓'; font-size:12px; line-height:11px; }
+button[data-feedback=error]::after { content:'!'; font-weight:700; line-height:11px; color:var(--danger); }
+.button-announcement { position:absolute; width:1px; height:1px; padding:0; margin:-1px; clip-path:inset(50%); overflow:hidden; white-space:nowrap; }
+.mcp-metrics { display:flex; flex-wrap:wrap; align-items:center; gap:8px 20px; padding:10px 0; font-size:12px; color:var(--text-secondary); }
+.mcp-metrics strong { color:var(--text); font-variant-numeric:tabular-nums; font-weight:600; }
+.mcp-metric-details { font-size:11px; color:var(--text-secondary); margin:0 0 12px; }
+.mcp-metric-details table { width:100%; max-width:580px; margin-top:8px; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.mcp-metric-details th,.mcp-metric-details td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--border); }
+@keyframes settings-button-spin { to { transform:rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .settings-workbench button { transition:none; } button[data-feedback=pending]::after { animation:none; border-style:dashed; } }

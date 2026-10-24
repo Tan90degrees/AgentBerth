@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { AsyncButton } from './AsyncButton';
 import { SshConnectionEditor } from './SshConnections';
-import type { SshConnection, RemoteAction, RemoteConfig, RemoteInfo, RemoteTransfer } from '../shared/protocol';
+import type { McpMetrics, SshConnection, RemoteAction, RemoteConfig, RemoteInfo, RemoteTransfer } from '../shared/protocol';
 import './remote.css';
 
 export function RemoteFields({ value, onChange, disabled, onError }: { value: RemoteConfig; onChange: (value: RemoteConfig) => void; disabled: boolean; onError: (error: string) => void }) {
@@ -63,13 +64,24 @@ export function RemoteBar({ sessionId, runId, onControl, onError, transfersSuppo
   </div>;
 }
 
-export function McpSettings({ disabled, onError }: { disabled: boolean; onError: (error: string) => void }) {
-  const [copied,setCopied] = useState(false);
+export function McpSettings({ disabled, onError,metricsSupported=false }: { disabled: boolean; onError: (error: string) => void;metricsSupported?:boolean }) {
+  const [metrics,setMetrics]=useState<McpMetrics|null>(null);
+  useEffect(()=>{
+    if(!metricsSupported||disabled)return;
+    let alive=true,changed=false;
+    const off=window.berth.onEvent(event=>{if(event.event==='mcpMetrics'){changed=true;setMetrics(event.data);}});
+    void window.berth.rpc<McpMetrics>('mcpMetrics').then(value=>{if(alive&&!changed)setMetrics(value);}).catch(error=>{if(alive)onError(String(error));});
+    return ()=>{alive=false;off();};
+  },[metricsSupported,disabled]);
   return <section className="settings-card">
     <h2>Agent 远程终端 · MCP</h2>
     <p>保存 SSH 连接后，将 MCP 配置添加到 Agent 即可。无需复制额外提示词：工具自带用法、执行状态与下一步引导，Agent 可按别名执行命令、管理会话和传输文件。</p>
     <p className="form-hint">你只需描述任务，例如“检查 dev-server 的磁盘空间”。执行过程在 SSH 终端中实时可见，你可随时接管。</p>
-    <div className="mcp-actions"><button className="subtle" disabled={disabled} onClick={() => void window.berth.mcpConfig().then(value => window.berth.copyText(value)).then(() => setCopied(true)).catch(reason => onError(String(reason)))}>{copied ? 'MCP 配置已复制' : '复制 MCP 配置'}</button></div>
+    {metricsSupported?<div className="mcp-metrics" aria-label="MCP 调用统计" title="本次后台收到的 MCP 工具调用结果；不含内部 RPC。成功指工具正常返回，命令退出码非零不计为工具调用失败。">
+      <span>本次后台</span><span>调用 <strong aria-label="MCP 调用次数">{metrics?.total??0}</strong></span><span>成功率 <strong aria-label="MCP 调用成功率">{metrics?.successRate==null?'—':(metrics.successRate*100).toFixed(1)+'%'}</strong></span><span>失败 <strong aria-label="MCP 调用失败次数">{metrics?.failed??0}</strong></span>
+    </div>:<p className="form-hint">更新后台后可查看 MCP 调用统计。</p>}
+    {metrics&&metrics.tools.length>0&&<details className="mcp-metric-details"><summary>按工具查看</summary><table><thead><tr><th>工具</th><th>调用</th><th>成功</th><th>失败</th></tr></thead><tbody>{metrics.tools.map(row=><tr key={row.tool}><td>{row.tool}</td><td>{row.total}</td><td>{row.succeeded}</td><td>{row.failed}</td></tr>)}</tbody></table></details>}
+    <div className="mcp-actions"><AsyncButton className="subtle" disabled={disabled} onError={onError} onAction={async()=>window.berth.copyText(await window.berth.mcpConfig())}>复制 MCP 配置</AsyncButton></div>
     <p className="form-hint">配置不含 SSH 密钥。AgentBerth 需保持后台运行；主窗口关闭继续运行，托盘退出关闭 SSH。断线后重新连接会建立新的 Shell。</p>
   </section>;
 }

@@ -17,7 +17,7 @@ async function connect(): Promise<DaemonConnection> {
   })().catch(() => { throw new DaemonRpcError('AgentBerth 后台不可用，请打开应用并在设置中更新后台后重连 MCP。','BACKEND_UNAVAILABLE'); }).finally(() => { connecting = null; });
   return connecting;
 }
-const server = new TerminalMcp({ rpc: async (method,params) => (await connect()).rpc(method,params) });
+const server = new TerminalMcp({ rpc: async (method,params) => (await connect()).rpc(method,params) },event=>connect().then(client=>client.rpc('mcpRecordCall',event as unknown as Record<string,unknown>)));
 let buffer = '', pending = 0, ending = false;
 const controllers = new Map<string | number, AbortController>();
 const send = (value: unknown) => { if (!ending) process.stdout.write(JSON.stringify(value) + '\n'); };

@@ -1,11 +1,16 @@
-import type { RemoteCommandResult } from '../shared/protocol';
+import type { OutputSearch, RemoteCommandResult } from '../shared/protocol';
 
-type ReadCall = { tool: 'terminal_read_output'; arguments: { sessionId:string;runId:string;actionId:string;cursor:number;timeoutMs:number;mode:'summary'|'page';maxChars?:number } };
+type ReadCall = { tool: 'terminal_read_output'; arguments: { sessionId:string;runId:string;actionId:string;cursor:number;timeoutMs:number;mode:'summary'|'page';maxChars?:number;search?:OutputSearch } };
 const readCall=(sessionId:string,runId:string,actionId:string,cursor:number,timeoutMs:number,mode:'summary'|'page',maxChars?:number):ReadCall=>({tool:'terminal_read_output',arguments:{sessionId,runId,actionId,cursor,timeoutMs,mode,...(maxChars===undefined?{}:{maxChars})}});
 
 /** Capturing output locally never implies loading it all into model context. */
 export function commandReply(value:RemoteCommandResult,cursor=0,maxChars?:number) {
   const {output}=value,mode=output.mode??'page';
+  if(output.search){
+    const s=output.search,details=s.nextOffset===null?null:readCall(value.sessionId,value.runId,value.id,s.startCursor,0,'summary');
+    if(details)details.arguments.search={query:s.query,caseSensitive:s.caseSensitive,contextLines:s.contextLines,maxBytes:s.maxBytes,limit:s.limit,offset:s.nextOffset!,endCursor:s.endCursor};
+    return {...value,scope:'command' as const,fromCursor:cursor,allOutputInThisResponse:false,continuation:null,details,notice:output.cacheLost?'查询仅覆盖仍保留的缓存。':''};
+  }
   const lost=!output.available||(output.cacheLost??(output.truncated&&!output.omitted));
   const continuation=output.available&&value.status==='running'?readCall(value.sessionId,value.runId,value.id,output.nextCursor,output.hasMore?0:25000,mode,mode==='page'?maxChars:undefined):null;
   // An optional pointer is not an instruction to drain the local cache.

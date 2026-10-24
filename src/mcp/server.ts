@@ -1,20 +1,23 @@
 import { DaemonRpcError, type DaemonConnection } from '../main/connection';
-import { requestSchema, type State, type RemoteCommandResult } from '../shared/protocol';
+import { requestSchema, type State, type McpCallMetric, type RemoteCommandResult } from '../shared/protocol';
 import { randomUUID } from 'node:crypto';
 import { commandReply, screenReply } from './results';
+import { compactReply } from './compact';
 import { boundedToolText } from './result-limits';
 import { instructions, guide, guideUri, ToolArgumentError, errorReply, resultHarness } from './harness';
 
 const uuid = { type: 'string', format: 'uuid' };
 const target = { alias: { type: 'string', description: 'Saved SSH connection alias; use alias OR sessionId + runId.' }, sessionId: uuid, runId: uuid };
 const outputMode={type:'string',enum:['summary','page'],default:'summary',description:'Default summary keeps head/tail within 256 KiB and 4000 lines; tail budget 64 KiB. Use page only when specific details are needed, never to automatically load all output.'};
-const outputOptions = { mode:outputMode, cursor: {type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,default:0,description:'Opaque cursor from output.nextCursor; use with the same actionId and runId.'}, maxChars: {type:'integer',minimum:256,maximum:65536,default:32768,description:'Only applies to explicit mode=page; summary always uses ssh-skill byte/line/tail limits.'} };
+const detailOption={type:'string',enum:['compact','full'],default:'compact',description:'Compact metadata by default, preserving output and trusted harness state. Full includes legacy notices/continuations/timestamps.'};
+const searchOption={type:'object',description:'Literal search over captured output, never reruns the command. Case-insensitive by default; context is merged. limit=0 returns matching-line count only. Queries are snapshots, not stream polls.',properties:{query:{type:'string',minLength:1,maxLength:256},caseSensitive:{type:'boolean',default:false},contextLines:{type:'integer',minimum:0,maximum:5,default:2},limit:{type:'integer',minimum:0,maximum:100,default:20},offset:{type:'integer',minimum:0,default:0},endCursor:{type:'integer',minimum:0,description:'Frozen end from the previous search page; use returned details for pagination.'},maxBytes:{type:'integer',minimum:4096,maximum:65536,default:16384}},required:['query'],additionalProperties:false};
+const outputOptions = { detail:detailOption,search:searchOption,mode:outputMode, cursor: {type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,default:0,description:'Opaque cursor from output.nextCursor; use with the same actionId and runId.'}, maxChars: {type:'integer',minimum:256,maximum:65536,default:32768,description:'Only applies to explicit mode=page; summary always uses ssh-skill byte/line/tail limits.'} };
 const schema = (properties: Record<string,unknown>, required: string[]) => ({ type: 'object', properties, required, additionalProperties: false });
 const descriptions:Record<string,string>={
   terminal_list:'Discover saved SSH aliases and current sessions; call once when the target is unknown. Users configure servers in AgentBerth, not in tool arguments. Choose the intended alias or sessionId/runId; never guess when multiple targets match.',
   terminal_open:'Open/reuse a saved authorized SSH alias without running a command. Returns Shell/control state and harness.next. Existing user-controlled or disconnected sessions stay unchanged. Ordinary commands can use terminal_execute directly; transfers need an open connection.',
-  terminal_execute:'PRIMARY tool for ordinary SSH commands. Example: {"alias":"dev-server","command":"uname -a"}. Opens/reuses the saved terminal, preserving cwd/environment. Returns status, exitCode and bounded command output together. Follow harness.next for running work; completed needs no extra screen/wait. Never replay unknown outcomes. Omitted output does not require draining pages. For TUI use screen/keys; human takeover blocks input. requestId is optional/generated; explicit retries retain the same ID. Requires backend API 32.',
-  terminal_read_output:'Read NEW output or wait for completion using the exact harness.next arguments from a running command. Each event-driven call returns on new output/completion or timeout; never sleep or screen-poll. Default summary advances to the current end. Details/mode=page are opt-in, never drain automatically. Omit actionId only to discover the latest reliable command from cursor=0. Never rerun to recover output.',
+  terminal_execute:'PRIMARY tool for ordinary SSH commands. Example: {"alias":"dev-server","command":"uname -a"}. Opens/reuses the saved terminal, preserving cwd/environment. Returns status, exitCode and bounded command output together; optional search filters before returning text. Follow harness.next for running work; completed needs no extra screen/wait. Never replay unknown outcomes. Omitted output does not require draining pages. For TUI use screen/keys; human takeover blocks input. requestId is optional/generated; explicit retries retain the same ID. Requires backend API 33.',
+  terminal_read_output:'Read NEW output or wait for completion using the exact harness.next arguments from a running command. Each event-driven call returns on new output/completion or timeout; never sleep or screen-poll. Default summary advances to the current end. Use search={query:"error",contextLines:2} to query cached output and count matches without rerunning. Search snapshots return immediately; terminal_wait can wait before querying. Details/mode=page are opt-in, never drain automatically. Omit actionId only to discover the latest reliable command from cursor=0. Never rerun to recover output.',
   terminal_screen:'Observe the current TUI viewport before choosing interactive keys. This is not a full ordinary-command result: use execute/read_output for logs or lists. The result has no automatic follow-up screen call. Never clear/rerun to recover scrolled rows. Read-only; never resizes or claims input.',
   terminal_keys:'Send TUI/interactive input after screen inspection. Text includes Enter by default; enter=false opts out, named keys send once. Ordinary commands should use execute. Idle POSIX submitted text is also captured as a command. Backend enforces control ownership; never retry an uncertain keypress. Follow harness.next to observe the result.',
 };
@@ -27,9 +30,9 @@ export const tools = [
   {name:'terminal_transfer',description:'Stream a file/directory between two visible saved-server SSH connections through this machine with bounded memory, without disk staging or SSH agent forwarding. Both terminals must allow Agent control. Returns a background transfer ID; wait using terminal_transfer_status. Exact absolute POSIX sourcePath/destinationPath; opt in to recursive, resume or overwrite. requestId is optional/generated; reuse the returned ID on explicit retry, never replay unknown transfers.',inputSchema:schema({requestId:uuid,sourceAlias:{type:'string'},destinationAlias:{type:'string'},sourceSessionId:uuid,sourceRunId:uuid,destinationSessionId:uuid,destinationRunId:uuid,sourcePath:{type:'string',minLength:1,maxLength:4096},destinationPath:{type:'string',minLength:1,maxLength:4096},recursive:{type:'boolean',default:false},resume:{type:'boolean',default:false},overwrite:{type:'boolean',default:false}},['sourcePath','destinationPath'])},
   {name:'terminal_transfer_status',description:'Read transfer progress or wait up to 30 seconds for the same transfer requestId. Running transfers survive MCP timeout/disconnect; unknown outcomes are not automatically retried. Progress/results never include file contents.',inputSchema:schema({requestId:uuid,timeoutMs:{type:'integer',minimum:0,maximum:30000,default:25000}},['requestId'])},
   {name:'terminal_transfer_cancel',description:'Cancel an active transfer owned by Agent-controlled terminals. Partial files may remain; confirm their state before explicit resume. Does not close SSH or stop terminal programs.',inputSchema:schema({requestId:uuid},['requestId'])},
-  { name: 'terminal_execute', description: descriptions.terminal_execute, inputSchema: schema({ ...target, requestId: uuid, command: { type: 'string', minLength: 1, maxLength: 16384 }, mode:outputMode, maxChars: outputOptions.maxChars, atPrompt: { type: 'boolean', default: false, description: 'Set true only after reading the screen and confirming an idle prompt when phase is unknown (for example after human input).' }, waitMs: { type: 'integer', minimum: 0, maximum: 25000, default: 5000 } }, ['command']) },
-  { name: 'terminal_keys', description: descriptions.terminal_keys, inputSchema: schema({ ...target, text: { type: 'string', maxLength: 16384 }, enter: {type:'boolean',default:true,description:'For text only. Defaults to sending text plus Enter in one operation. Set false for partial typing or TUI shortcuts.'}, key: { type: 'string', enum: ['Enter','Tab','Escape','Up','Down','Left','Right','Ctrl+C','Ctrl+D','Ctrl+Z','Backspace'] } }, []) },
-  { name: 'terminal_screen', description: descriptions.terminal_screen, inputSchema: schema(target, []) },
+  { name: 'terminal_execute', description: descriptions.terminal_execute, inputSchema: schema({ ...target, detail:detailOption, search:searchOption, requestId: uuid, command: { type: 'string', minLength: 1, maxLength: 16384 }, mode:outputMode, maxChars: outputOptions.maxChars, atPrompt: { type: 'boolean', default: false, description: 'Set true only after reading the screen and confirming an idle prompt when phase is unknown (for example after human input).' }, waitMs: { type: 'integer', minimum: 0, maximum: 25000, default: 5000 } }, ['command']) },
+  { name: 'terminal_keys', description: descriptions.terminal_keys, inputSchema: schema({ ...target, detail:detailOption,text: { type: 'string', maxLength: 16384 }, enter: {type:'boolean',default:true,description:'For text only. Defaults to sending text plus Enter in one operation. Set false for partial typing or TUI shortcuts.'}, key: { type: 'string', enum: ['Enter','Tab','Escape','Up','Down','Left','Right','Ctrl+C','Ctrl+D','Ctrl+Z','Backspace'] } }, []) },
+  { name: 'terminal_screen', description: descriptions.terminal_screen, inputSchema: schema({...target,detail:detailOption}, []) },
   { name: 'terminal_read_output', description: descriptions.terminal_read_output, inputSchema: schema({ ...target, ...outputOptions, actionId:uuid, timeoutMs:{type:'integer',minimum:0,maximum:30000,default:25000}},[]) },
   { name: 'terminal_wait', description: 'Event-driven wait for command COMPLETION up to 30 seconds; also returns bounded command output and current Shell info. For streaming logs prefer terminal_read_output, which wakes on new output. Pass cursor=output.nextCursor to avoid repeated output. Timeout returns running; unknown is not failure and must not be replayed.', inputSchema: schema({ ...target, ...outputOptions, actionId: uuid, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000, default: 25000 } }, ['actionId']) },
   { name: 'terminal_actions', description: 'Read actual command/input/control/connection steps (newest first, 50 per page). Use before=last sequence for older steps. Does not contain Agent private reasoning or full terminal video.', inputSchema: schema({ ...target, before: { type: 'integer', minimum: 1 } }, []) },
@@ -37,7 +40,7 @@ export const tools = [
 
 export class McpError extends Error { constructor(readonly code: number, message: string) { super(message); } }
 export class TerminalMcp {
-  constructor(private connection: Pick<DaemonConnection, 'rpc'>) {}
+  constructor(private connection: Pick<DaemonConnection, 'rpc'>,private reportCall?:(event:McpCallMetric)=>void|Promise<unknown>) {}
   private validateOutput(method:'remoteCommand'|'remoteReadOutput'|'remoteKeys',params:Record<string,unknown>) {
     const checked=requestSchema.safeParse({id:randomUUID(),method,params});
     if(!checked.success)throw new ToolArgumentError('工具参数无效：'+checked.error.issues.map(issue=>`${issue.path.join('.')}: ${issue.message}`).join('; '));
@@ -48,17 +51,23 @@ export class TerminalMcp {
     const checked=this.validateOutput(method,params);
     try{return await this.connection.rpc(method,checked);}
     catch(error){
-      if(error instanceof DaemonRpcError&&error.code)throw error;
+      if(error instanceof DaemonRpcError&&error.code&&error.code!=='INVALID_ARGUMENTS')throw error;
       if(String(error).includes('请求参数无效')){
         const state=await this.connection.rpc<State>('state').catch(()=>null);
-        if(state&&state.apiVersion<32)throw new DaemonRpcError(`后台 API ${state.apiVersion}，此 MCP 需要 API 32。请在设置 → 后台服务更新后台，并重新连接 MCP。命令未自动重试。`,'BACKEND_UPGRADE_REQUIRED');
-        throw new Error(`后台拒绝 ${method} 参数${state?`（API ${state.apiVersion}）`:''}：${error instanceof Error?error.message:String(error)}；命令未自动重试。`);
+        if(state&&state.apiVersion<33)throw new DaemonRpcError(`后台 API ${state.apiVersion}，此 MCP 需要 API 33。请在设置 → 后台服务更新后台，并重新连接 MCP。命令未自动重试。`,'BACKEND_UPGRADE_REQUIRED');
+        throw new DaemonRpcError(`后台拒绝 ${method} 参数${state?`（API ${state.apiVersion}）`:''}：${error instanceof Error?error.message:String(error)}；命令未自动重试。`,'INVALID_ARGUMENTS');
       }
       if(method==='remoteCommand')throw new Error(`${error instanceof Error?error.message:String(error)}（requestId: ${params.requestId}；请保留此 ID，结果未知时不要使用新 ID 重发命令）`);
       throw error;
     }
   }
-  async request(method: string, params: unknown): Promise<unknown> {
+  async request(method:string,params:unknown):Promise<unknown> {
+    if(method!=='tools/call')return this.dispatch(method,params);
+    let success=false;
+    try {const result:any=await this.dispatch(method,params);success=!result.isError;return result;}
+    finally {const name=(params as {name?:unknown})?.name;try{void Promise.resolve(this.reportCall?.({callId:randomUUID(),tool:typeof name==='string'?name.slice(0,80)||'unknown':'unknown',success})).catch(()=>{});}catch{/* Telemetry cannot alter tool results. */}}
+  }
+  private async dispatch(method: string, params: unknown): Promise<unknown> {
     if (method === 'initialize') {
       const requested = (params as { protocolVersion?: string })?.protocolVersion;
       return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {}, resources:{} }, serverInfo: { name: 'agentberth-terminal', title:'AgentBerth shared SSH terminal', version: '0.14.0' }, instructions };
@@ -82,7 +91,8 @@ export class TerminalMcp {
     let inputArgs:Record<string,unknown>={...args},dispatched=false;
     try {
       if(unexpected.length)throw new ToolArgumentError('Unexpected argument: '+unexpected.join(', '));
-      if(['terminal_execute','terminal_upload','terminal_download','terminal_transfer'].includes(name!))args.requestId??=randomUUID();
+      const detail=args.detail??'compact';if(!['compact','full'].includes(detail as string))throw new ToolArgumentError('detail must be compact or full');delete args.detail;
+      if(['terminal_execute','terminal_upload','terminal_download','terminal_transfer'].includes(name!))if(args.requestId===undefined)args.requestId=randomUUID();
       inputArgs={...args};
       // Validate ordinary command/interaction input BEFORE opening any SSH connection.
       const outputMethod=name==='terminal_execute'?'remoteCommand':name==='terminal_keys'?'remoteKeys':['terminal_wait','terminal_read_output'].includes(name!)?'remoteReadOutput':null;
@@ -136,7 +146,9 @@ export class TerminalMcp {
       else if(['terminal_execute','terminal_read_output','terminal_wait','terminal_keys'].includes(name!)&&value&&typeof value==='object'&&'output' in value){
         value=commandReply(value as RemoteCommandResult,typeof args.cursor==='number'?args.cursor:0,typeof args.maxChars==='number'?args.maxChars:undefined);
       }
-      return { content: [{ type: 'text', text: boundedToolText(resultHarness(name!,value)) }] };
+      const reply=resultHarness(name!,value);
+      if(detail==='full')for(const next of [reply?.continuation,reply?.details,reply?.harness?.next])if(next&&['terminal_execute','terminal_read_output','terminal_wait','terminal_screen','terminal_keys'].includes(next.tool))next.arguments.detail='full';
+      return { content: [{ type: 'text', text: boundedToolText(detail==='full'?reply:compactReply(reply)) }] };
     } catch (error) { return { isError: true, content: [{ type: 'text', text: boundedToolText(errorReply(error,{name:name!,args,target:inputArgs,dispatched})) }] }; }
   }
 }

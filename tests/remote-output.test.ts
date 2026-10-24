@@ -45,7 +45,7 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   await ui.rpc('registerSshProvider');
   await ui.rpc('saveSshConnection',{config:{alias:'output-fixture',hostname:'127.0.0.1',port:address.port,username:'fixture',authentication:'password',privateKeyPath:'',allowAgent:true}});
   const mcp=new TerminalMcp(agent);
-  const call=async(name:string,args:Record<string,unknown>={})=>{const result:any=await mcp.request('tools/call',{name,arguments:{alias:'output-fixture',...args}});assert.ok(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);};
+  const call=async(name:string,args:Record<string,unknown>={})=>{const result:any=await mcp.request('tools/call',{name,arguments:{alias:'output-fixture',...(['terminal_execute','terminal_read_output','terminal_wait','terminal_screen','terminal_keys'].includes(name)?{detail:'full'}:{}),...args}});assert.ok(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);};
   await mcp.request('tools/list',{}); // No copied instructions or explicit open.
   const requestId=randomUUID(),command='export AB_STATE=42; cd /tmp; printf "DIRECT=%s\\n" "$AB_STATE"; false';
   const fast:RemoteCommandResult=await call('terminal_execute',{requestId,command,waitMs:5000});
@@ -64,11 +64,20 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   assert.equal(large.output.truncated,false);assert.equal(large.output.hasMore,true);
   while(largePage.output.hasMore){largePage=await call('terminal_read_output',{actionId:large.id,cursor:largePage.output.nextCursor,mode:'page'});assert.equal(largePage.output.truncated,false);largeText+=largePage.output.text;}
   assert.equal(largeText,' '.repeat(199999)+'X\r\n','Output exceeding the former 128K cap must remain readable independently of viewport height');
-  const budgetCommand='printf "BUDGET_HEAD\\n"; i=0; while [ "$i" -lt 6000 ]; do printf "row-%04d test output\\n" "$i"; i=$((i+1)); done; printf "BUDGET_TAIL\\n"';
+  const budgetCommand='AB_SEARCH_RUNS=$((${AB_SEARCH_RUNS:-0}+1)); printf "BUDGET_HEAD\\n"; i=0; while [ "$i" -lt 6000 ]; do printf "row-%04d test output\\n" "$i"; i=$((i+1)); done; printf "BUDGET_TAIL\\n"';
   let budget=await call('terminal_execute',{command:budgetCommand});
   if(budget.status==='running')budget=await call('terminal_wait',{actionId:budget.id,timeoutMs:5000});
   assert.equal(budget.output.mode,'summary');assert.equal(budget.output.omitted,true);assert.equal(budget.output.truncated,true);assert.equal(budget.output.cacheLost,false);assert.equal(budget.output.totalLines,6002);
   assert.ok(budget.output.text.startsWith('BUDGET_HEAD'));assert.ok(budget.output.text.endsWith('BUDGET_TAIL\r\n'));assert.ok(budget.output.text.split('\n').length<=4001);assert.equal(budget.output.hasMore,false);assert.equal(budget.continuation,null);assert.ok(budget.details);
+  const matched=await call('terminal_read_output',{actionId:budget.id,search:{query:'row-3000',contextLines:2}});
+  assert.equal(matched.output.search.totalMatches,1);assert.ok(matched.output.search.groups[0].text.includes('row-3000'));assert.ok(matched.output.search.groups[0].text.includes('row-2998'));assert.equal(matched.output.text,'');assert.equal(matched.harness.next,null);
+  const countRows=await call('terminal_read_output',{actionId:budget.id,search:{query:'row-',limit:0}});assert.equal(countRows.output.search.totalMatches,6000);assert.deepEqual(countRows.output.search.groups,[]);
+  const firstMatches=await call('terminal_read_output',{actionId:budget.id,search:{query:'row-',contextLines:0,limit:2}});assert.equal(firstMatches.output.search.returnedMatches,2);
+  const moreReply:any=await mcp.request('tools/call',{name:firstMatches.details.tool,arguments:firstMatches.details.arguments});assert.ok(!moreReply.isError);const more=JSON.parse(moreReply.content[0].text);assert.ok(more.output.search.groups[0].text.includes('row-0002'));assert.equal(more.output.search.totalMatches,6000);
+  const searchCount=await call('terminal_execute',{command:'printf "%s\\n" "$AB_SEARCH_RUNS"'});assert.equal(searchCount.output.text,'1\r\n');
+  let filtered=await call('terminal_execute',{command:'printf "progress\\nERROR decisive failure\\ncompleted\\n"',search:{query:'error',contextLines:0}});
+  if(filtered.status==='running')filtered=await call('terminal_wait',{actionId:filtered.id,search:{query:'error',contextLines:0},timeoutMs:5000});
+  assert.equal(filtered.output.search.totalMatches,1);assert.equal(filtered.output.search.groups[0].text,'ERROR decisive failure');
   const noRepeat=await call('terminal_read_output',{actionId:budget.id,cursor:budget.output.nextCursor,timeoutMs:0});assert.equal(noRepeat.output.text,'');assert.equal(noRepeat.output.omitted,false);
   // Text defaults to submitting in the same tool call. Explicit false leaves it pending.
   for(const enter of [true,false]){

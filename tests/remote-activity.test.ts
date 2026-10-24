@@ -276,7 +276,7 @@ test('an older backend gets upgrade guidance without a fallback execution or rep
   const calls:string[]=[];
   const server=new TerminalMcp({rpc:async<T>(method:Method)=>{calls.push(method);if(method==='state')return {apiVersion:25} as T;throw new Error('请求参数无效');}});
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:randomUUID(),command:'once'}});
-  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 25.*API 32/);assert.deepEqual(calls,['remoteCommand','state']);
+  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 25.*API 33/);assert.deepEqual(calls,['remoteCommand','state']);
 });
 
 test('incremental waits cancel without stopping commands; quiet tasks and interruptions never imply success',async t=>{

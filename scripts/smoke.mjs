@@ -283,8 +283,16 @@ try {
   assert.ok(!diagnostic.includes(folder) && !diagnostic.includes('AgentBerth 易用性'));
   const runtimeToken = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'),'utf8')).token;
   assert.ok(!diagnostic.includes(runtimeToken));
-  await application.evaluate(({ shell }) => { globalThis.smokeDataOriginal = shell.openPath; globalThis.smokeDataOpened = ''; shell.openPath = async folder => { globalThis.smokeDataOpened = folder; return ''; }; });
-  await page.getByRole('button', { name: '打开数据目录', exact: true }).click();
+  await application.evaluate(({ shell }) => { globalThis.smokeDataOriginal = shell.openPath; globalThis.smokeDataOpened = ''; globalThis.smokeDataCalls=0; shell.openPath = async folder => { globalThis.smokeDataCalls++;globalThis.smokeDataOpened = folder;await new Promise(resolve=>globalThis.smokeDataRelease=resolve);return ''; }; });
+  const dataAction=page.getByRole('button',{name:'打开数据目录',exact:true}),dataBox=await dataAction.boundingBox();
+  await page.mouse.move(dataBox.x+dataBox.width/2,dataBox.y+dataBox.height/2);await page.mouse.down();
+  assert.notEqual(await dataAction.evaluate(button=>getComputedStyle(button).filter),'none','Settings actions show a pressed state');
+  await page.mouse.up();
+  await page.waitForFunction(()=>document.querySelector('.about-actions button[aria-label="打开数据目录"]')?.getAttribute('aria-busy')==='true');
+  assert.equal(await dataAction.isEnabled(),false);await dataAction.dispatchEvent('click');
+  await eventually(async()=>(await application.evaluate(()=>globalThis.smokeDataCalls))===1,'Pending actions must not run twice');
+  await application.evaluate(()=>globalThis.smokeDataRelease());
+  await page.waitForFunction(()=>document.querySelector('.about-actions button[aria-label="打开数据目录"]')?.dataset.feedback==='success');
   await eventually(async () => (await application.evaluate(() => globalThis.smokeDataOpened)) === path.join(folder, 'data'), 'Data directory opener did not target application data');
   await application.evaluate(({ shell }) => { shell.openPath = globalThis.smokeDataOriginal; });
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-about' : 'about'}.png` });
@@ -857,6 +865,11 @@ try {
   await page.getByRole('button', { name: '选择程序', exact: true }).click();
   await page.getByRole('alert').filter({ hasText: '模拟文件选择失败' }).waitFor();
   assert.equal(await page.getByLabel('默认终端', { exact: true }).inputValue(), 'custom');
+  await page.waitForFunction(()=>document.querySelector('button[aria-label="选择程序"]')?.dataset.feedback==='error');
+  await application.evaluate(({dialog})=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return {canceled:true,filePaths:[]};};});
+  await page.getByRole('button',{name:'选择程序',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('button[aria-label="选择程序"]')?.dataset.feedback==='idle');
+  assert.equal(await page.getByLabel('终端程序',{exact:true}).inputValue(),'');
   await application.evaluate(({ dialog }, file) => {
     const original = dialog.showOpenDialog;
     dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; };
@@ -1425,12 +1438,21 @@ try {
   await openSettings(page);
   await settingsCategory(page, 'MCP');
   await page.getByRole('button', { name: '复制 MCP 配置', exact: true }).click();
+  await page.waitForFunction(()=>document.querySelector('.mcp-actions button[aria-label="复制 MCP 配置"]')?.dataset.feedback==='success');
   assert.equal(await page.getByRole('button',{name:'复制给 Agent 的说明',exact:true}).count(),0);
   await page.getByText('无需复制额外提示词',{exact:false}).waitFor();
   const mcpConfiguration = JSON.parse(await application.evaluate(({ clipboard }) => clipboard.readText())).mcpServers.agentberth;
   assert.equal(mcpConfiguration.env.ELECTRON_RUN_AS_NODE, '1');
   assert.ok(path.isAbsolute(mcpConfiguration.command));
   await stat(mcpConfiguration.args[0]);
+  const beforeMcpMetrics=await page.evaluate(()=>window.berth.rpc('mcpMetrics'));
+  const metricEvents=[{callId:randomUUID(),tool:'terminal_execute',success:true},{callId:randomUUID(),tool:'terminal_read_output',success:false}];
+  await page.evaluate(async events=>{for(const event of [...events,events[0]])await window.berth.rpc('mcpRecordCall',event);},metricEvents);
+  await eventually(async()=>Number(await page.getByLabel('MCP 调用次数',{exact:true}).innerText())===beforeMcpMetrics.total+2,'MCP call counts update by event');
+  assert.equal(await page.getByLabel('MCP 调用失败次数',{exact:true}).innerText(),String(beforeMcpMetrics.failed+1));
+  assert.equal(await page.getByLabel('MCP 调用成功率',{exact:true}).innerText(),((beforeMcpMetrics.succeeded+1)/(beforeMcpMetrics.total+2)*100).toFixed(1)+'%');
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}mcp-call-stats.png`});
+
   await settingsCategory(page, 'SSH 连接');
   step('saved SSH profile uses blank identity defaults and supports password editing/deletion');
   await page.getByRole('button',{name:'新建 SSH 连接',exact:true}).click();

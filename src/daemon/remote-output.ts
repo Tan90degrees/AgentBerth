@@ -1,4 +1,5 @@
-import type { RemoteCommandOutput } from '../shared/protocol';
+import type { OutputSearch, RemoteCommandOutput } from '../shared/protocol';
+import { searchOutput } from './output-search';
 import { BoundedText } from '../shared/bounded-text';
 import { openSync, closeSync, readSync, writeSync, unlinkSync } from 'node:fs';
 
@@ -63,6 +64,8 @@ export class CommandOutput {
     const preview=collected.preview();
     return {...first,...preview,truncated:first.truncated||preview.omitted,cacheLost:first.truncated,mode:'summary',nextCursor:this.end,hasMore:false};
   }
+
+  search(options:OutputSearch,cursor=0):RemoteCommandOutput { return searchOutput((from,size)=>this.read(from,size),this.end,cursor,options); }
 
   read(cursor: number, maxChars: number): RemoteCommandOutput {
     if (cursor > this.end) throw new Error('输出游标超出当前命令，请使用此 actionId 返回的 nextCursor');

@@ -16,6 +16,7 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
   settings: Settings; draft: Settings; onChange: (value: Settings) => void; onDiscard: () => void; conflict: boolean; onError: (error: string) => void; error: string;
   platform: string; disabled: boolean; busy: boolean; restartDisabled: boolean; onSave: (value: Settings) => Promise<boolean>; onRestart: () => void; running: number;
 }) {
+  const [saveState,setSaveState]=useState<'idle'|'pending'|'success'|'error'>('idle');
   const [saved, setSaved] = useState(false), [query, setQuery] = useState('');
   const [category, setCategory] = useState<SettingsCategory>(() => settingsCategories.find(item => item.id === readStored('berth.settingsCategory'))?.id ?? 'common');
   const search = useRef<HTMLInputElement>(null), content = useRef<HTMLDivElement>(null), form = useRef<HTMLFormElement>(null);
@@ -25,7 +26,7 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
   const modified = (entry: SettingsEntry) => entry.field && (JSON.stringify(draft[entry.field]) !== JSON.stringify(settings[entry.field]) || entry.id === 'default-agent' && draft.defaultCommand !== settings.defaultCommand);
   const pending = entries.filter(modified).length;
-  const change = (value: Settings) => { onChange(value); setSaved(false); };
+  const change = (value: Settings) => { onChange(value); setSaved(false);setSaveState('idle'); };
   useEffect(() => { saveStored('berth.settingsCategory', category); content.current?.scrollTo(0, 0); }, [category]);
   useEffect(() => { if (!categories.some(item => item.id === category)) setCategory('common'); }, [category, apiVersion]);
   useEffect(() => {
@@ -71,10 +72,11 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
           event.preventDefault();
           const invalid = Array.from(form.current?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea') ?? []).find(element => !element.disabled && !element.checkValidity());
           if (invalid) {
+            setSaveState('error');
             const entry = entries.find(value => value.id === invalid.closest<HTMLElement>('[data-setting-id]')?.dataset.settingId);
             setQuery(''); setCategory(entry?.category ?? 'common'); requestAnimationFrame(() => { invalid.focus(); invalid.reportValidity(); }); return;
           }
-          if (await onSave(draft)) setSaved(true);
+          setSaveState('pending');try{if(await onSave(draft)){setSaved(true);setSaveState('success');}else setSaveState('error');}catch(reason){setSaveState('error');onError(String(reason));}
         }}>
           {item('shell', <><TerminalFields value={draft.terminal} platform={platform} disabled={disabled} onError={onError} onChange={terminal => change({ ...draft, terminal: terminal! })} /><p className="form-hint">用于下一次启动，运行中的终端保持不变。单个会话可覆盖默认终端。</p></>)}
           {item('terminal-font', <><label>终端字号<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label><p className="form-hint">10–24 px。文件预览的字体和字号独立设置。</p></>)}
@@ -84,11 +86,11 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
         </form>
         {item('agent-types', <AgentManager hotUpdates={apiVersion >= 15} agents={agents} used={usedAgents} defaultAgent={settings.defaultAgent} disabled={disabled} busy={busy} error={error} onError={onError} onSave={onSaveAgent} onDelete={onDeleteAgent} />)}
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
-        {item('mcp', <McpSettings disabled={!connected} onError={onError} />)}
+        {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
         {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再更新后台。` : '安装新版本后，可更新后台以加载新功能。项目、会话和设置会保留。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>更新后台</button></section>)}
         {item('about', <AboutCard connected={connected} apiVersion={apiVersion} running={running} onError={onError} />)}
       </div>
     </div>
-    <footer className="settings-savebar"><div><strong role="status">{saved && !dirty ? '设置已保存' : dirty ? `${pending} 项启动或资源设置未保存` : '启动与资源设置'}</strong><small>{dirty ? '草稿已保留，切换分类不会丢失。' : '外观和文件预览自动保存，其他操作在各分类内完成。'}</small></div><div className="settings-save-actions">{dirty && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled} title="恢复终端、默认 Agent 及会话上限；保存后应用" onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button form="workspace-settings-form" className="primary" disabled={disabled || !dirty}>{busy ? '正在保存…' : '保存设置'}</button></div></footer>
+    <footer className="settings-savebar"><div><strong role="status">{saved && !dirty ? '设置已保存' : dirty ? `${pending} 项启动或资源设置未保存` : '启动与资源设置'}</strong><small>{dirty ? '草稿已保留，切换分类不会丢失。' : '外观和文件预览自动保存，其他操作在各分类内完成。'}</small></div><div className="settings-save-actions">{dirty && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false);setSaveState('idle'); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled || JSON.stringify(draft)===JSON.stringify(DEFAULT_SETTINGS)} title="恢复终端、默认 Agent 及会话上限；保存后应用" onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button form="workspace-settings-form" className="primary" aria-busy={saveState==='pending'} data-feedback={saveState} disabled={disabled || !dirty}>保存设置</button></div></footer>
   </section>;
 }

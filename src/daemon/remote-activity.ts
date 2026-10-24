@@ -1,7 +1,7 @@
 import { managedCommand } from './remote';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { RemoteAction, RemoteCommandResult, RemoteInfo, RemoteKey } from '../shared/protocol';
+import type { OutputSearch, RemoteAction, RemoteCommandResult, RemoteInfo, RemoteKey } from '../shared/protocol';
 import type { Store } from './store';
 import { CommandOutput, COMMAND_OUTPUT_CAPACITY } from './remote-output';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -103,12 +103,12 @@ export class RemoteActivity {
     const id=this.pending?.id??[...this.outputs.keys()].at(-1);
     return id?this.store.remoteAction(id):null;
   }
-  result(actionId:string,cursor=0,maxChars=32768,mode:'summary'|'page'='page'):RemoteCommandResult {
+  result(actionId:string,cursor=0,maxChars=32768,mode:'summary'|'page'='page',search?:OutputSearch):RemoteCommandResult {
     const action=this.store.remoteAction(actionId);
     if(!action||action.kind!=='command'||action.sessionId!==this.info.sessionId||action.runId!==this.info.runId)throw new Error('命令不属于当前运行实例');
     const cached=this.outputs.get(actionId);
-    const page=mode==='page'?cached?.read(cursor,maxChars):undefined;
-    const output=(mode==='summary'?cached?.summary(cursor):page?{...page,mode:'page' as const,cacheLost:page.truncated}:undefined)??{text:'',nextCursor:cursor,earliestCursor:null,truncated:true,hasMore:false,available:false,format:'terminal' as const};
+    const page=!search&&mode==='page'?cached?.read(cursor,maxChars):undefined;
+    const output=(search?cached?.search(search,cursor):mode==='summary'?cached?.summary(cursor):page?{...page,mode:'page' as const,cacheLost:page.truncated}:undefined)??{text:'',nextCursor:cursor,earliestCursor:null,truncated:true,hasMore:false,available:false,format:'terminal' as const};
     return {...action,output,info:{...this.info},elapsedMs:Math.max(0,Date.parse(action.endedAt??new Date().toISOString())-Date.parse(action.startedAt))};
   }
   async readOutput(actionId:string,cursor:number,maxChars:number,timeoutMs:number,waitFor:'output'|'completion',signal?:AbortSignal,mode:'summary'|'page'='page'):Promise<RemoteCommandResult> {

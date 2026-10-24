@@ -26,6 +26,7 @@ import { terminateTree } from './processes';
 import { trackMouseEncoding } from '../shared/terminal-modes';
 import { RemoteTerminal, sshHosts, type TerminalProcess } from './remote';
 import { RemoteActivity, remoteKeys } from './remote-activity';
+import { McpCallStats } from './mcp-metrics';
 import { RemoteOperationError } from '../shared/remote-errors';
 import { windowsPtyFor } from '../shared/desktop';
 
@@ -48,6 +49,8 @@ export class DaemonServer {
   private git = new GitWorkspace();
   private files = new ProjectFiles(this.git);
   private resources = new ResourceSampler();
+  private mcpStats=new McpCallStats();
+  private mcpStatsTimer:NodeJS.Timeout|null=null;
   private gitBusy = new Set<string>();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
   private ws = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
@@ -92,7 +95,7 @@ export class DaemonServer {
           return;
         }
         // Resource polling is cancelled by close() and must not block an idle restart.
-        const blocksIdleShutdown = result.data.method !== 'resources';
+        const blocksIdleShutdown = !['resources','mcpMetrics','mcpRecordCall'].includes(result.data.method);
         client.pending++;
         if (blocksIdleShutdown) this.pendingWork++;
         void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value })).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败', ...(error instanceof RemoteOperationError?{errorCode:error.code,errorDetails:error.details}:{}) })).finally(() => {
@@ -212,6 +215,12 @@ export class DaemonServer {
         const profile = this.store.saveSshConnection(request.params.config, request.params.connectionId); this.changed(); return profile;
       }
       case 'deleteSshConnection': this.store.deleteSshConnection(request.params.connectionId); return null;
+      case 'mcpMetrics': return this.mcpStats.snapshot();
+      case 'mcpRecordCall': {
+        this.mcpStats.record(request.params);
+        if(!this.mcpStatsTimer)this.mcpStatsTimer=setTimeout(()=>{this.mcpStatsTimer=null;this.broadcast({event:'mcpMetrics',data:this.mcpStats.snapshot()});},150);
+        return null;
+      }
       case 'remoteAliases': return this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent }));
       case 'remoteResolve': {
         const {session} = this.aliasTarget(request.params.alias);
@@ -318,7 +327,8 @@ export class DaemonServer {
         const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
         const actionId=p.actionId??remote.activity.latestCommand()?.id;
         if(!actionId)throw new Error('当前没有可关联的命令输出。按键或人工输入可能未记录命令边界，不能把终端画面当成完整结果，也不要自动重跑；普通命令请使用 terminal_execute。');
-        const value=await remote.activity.readOutput(actionId,p.cursor,p.maxChars,p.timeoutMs,p.waitFor,client.abort.signal,p.mode);
+        if(p.search&&p.waitFor==='completion')await remote.activity.wait(actionId,p.timeoutMs,client.abort.signal);
+        const value=p.search?remote.activity.result(actionId,p.cursor,p.maxChars,p.mode,p.search):await remote.activity.readOutput(actionId,p.cursor,p.maxChars,p.timeoutMs,p.waitFor,client.abort.signal,p.mode);
         return {...value,requestMs:performance.now()-started};
       }
       case 'remoteKeys': {
@@ -531,7 +541,7 @@ export class DaemonServer {
       const remaining=Math.max(0,p.waitMs-(performance.now()-started));
       if(remaining)await remote.activity.wait(p.requestId,Math.min(75,remaining),client.abort.signal);
     }
-    return {...remote.activity.result(p.requestId,0,p.maxChars,p.mode),requestMs:performance.now()-started};
+    return {...remote.activity.result(p.requestId,0,p.maxChars,p.mode,p.search),requestMs:performance.now()-started};
   }
 
   private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
@@ -818,6 +828,7 @@ export class DaemonServer {
     } catch (error) { this.closing = false; throw error; }
   }
   async close(): Promise<void> {
+    if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
     for (const socket of this.clients.keys()) socket.terminate();
     await new Promise<void>(resolve => this.ws.close(() => resolve()));
