@@ -783,7 +783,7 @@ export class DaemonServer {
       if (live.remote) { await live.remote.transport.stop(); await this.finish(sessionId,live,null); }
       else {
         await terminateTree(live.pty as pty.IPty, () => this.live.get(sessionId) === live && !live.closed);
-        // taskkill confirms termination of the Windows tree. ConPTY may not
+        // Tree termination includes an actual PID-exit check. ConPTY may not
         // deliver onExit when stopped before its first output; do not leave a
         // confirmed-dead process in "stopping" waiting for that notification.
         if (process.platform === 'win32') await this.finish(sessionId, live, null);
