@@ -24,6 +24,9 @@
 .workbench-split {display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden;}
 .workbench-split[hidden], .workspace-host[hidden], .ssh-dock-slot[hidden], .ssh-dock[hidden] {display:none!important;}
 .ssh-dock-slot {display:contents;}
+.ssh-window.app {display:flex;min-width:0;min-height:0;}
+.ssh-window .ssh-dock {flex:1;min-height:0;border-top:0;}
+.ssh-window .ssh-dock-header h2 {max-width:160px;}
 .ssh-dock {display:flex;position:relative;flex:0 0 var(--ssh-height,clamp(280px,42vh,480px));flex-direction:column;min-height:120px;min-width:0;border-top:1px solid var(--border);background:var(--terminal);overflow:hidden;}
 .ssh-dock.expanded {flex:2 1 0;}
 .ssh-dock.sole-terminal {flex:1;}

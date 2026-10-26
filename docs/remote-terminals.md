@@ -25,6 +25,12 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 对于 vim、top、其他非 POSIX 登录 Shell，使用 `terminal_screen` 与 `terminal_keys`。text 默认附带回车，显式 enter=false 才只输入不提交；命名 key 只发送一次。输入回到提示符后，phase 可能为 unknown；先读屏确认空闲提示符，POSIX Shell 下一次 execute 显式传 `atPrompt: true`。不要为了探测提示符擅自发送 Enter。Ctrl+C 明确中断前台任务，未能收到完成标记的命令保留 unknown。执行 exit、替换 Shell 或程序接管终端也可能无法获得退出码，不得自动重放。
 
+## 独立 SSH 窗口
+
+面板右上角点击 **在独立窗口打开**，即可将 SSH 视图拖到另一块屏幕或独立调整窗口大小。弹出和放回均使用原连接、Shell 和运行 ID，不会重复打开服务器。主窗口保留本机 Agent，SSH 的显示和输入转交给独立窗口，避免两个视口争抢终端尺寸。
+
+独立窗口可切换 SSH 会话、右键管理、配置服务器、查找与复制输出，并随时接管或交回 Agent。再次点击主窗口的 SSH 按钮会前往已有独立窗口，不会新增窗口。点击 **放回主窗口** 或窗口关闭按钮，面板回到主窗口；SSH 和远端命令继续运行。深浅色跟随全局外观设置。
+
 ## 连接生命周期
 
 - 关闭主窗口、收起终端、MCP 等待超时：本机后台保持同一条 SSH 连接。

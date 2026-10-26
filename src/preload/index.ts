@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopApi, ServerEvent } from '../shared/protocol';
+import type { DesktopApi, ServerEvent, SshWindowState } from '../shared/protocol';
 
 const api: DesktopApi = {
+  sshWindow: (action, sessionId) => ipcRenderer.invoke('berth:sshWindow', action, sessionId),
+  onSshWindow: listener => {
+    const callback = (_event: Electron.IpcRendererEvent, state: SshWindowState) => listener(state);
+    ipcRenderer.on('berth:sshWindowState', callback);
+    return () => ipcRenderer.removeListener('berth:sshWindowState', callback);
+  },
   openSshConnection: alias => ipcRenderer.invoke('berth:openSshConnection', alias),
   saveSshConnection: (config, id, secret = {}, remember = false) => ipcRenderer.invoke('berth:saveSshConnection', config, id, secret, remember),
   deleteSshConnection: id => ipcRenderer.invoke('berth:deleteSshConnection', id),

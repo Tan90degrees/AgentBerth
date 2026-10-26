@@ -1,6 +1,6 @@
 import appIcon from '../../assets/app.png';
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { API_VERSION, DEFAULT_SETTINGS, isCustomAgent, type Agent, type AgentDefinition, type History, type Method, type Project, type Run, type Session, type Settings, type State, type TerminalConfig } from '../shared/protocol';
+import { API_VERSION, DEFAULT_SETTINGS, isCustomAgent, type Agent, type AgentDefinition, type History, type Method, type Project, type Run, type Session, type Settings, type State, type TerminalConfig, type SshWindowState } from '../shared/protocol';
 import { SshDock } from './SshDock';
 import { OutputBadge, useTerminalActivity } from './useTerminalActivity';
 import { RemoteFields } from './RemoteTerminal';
@@ -34,7 +34,7 @@ function Icon({ kind }: { kind: 'folder' | 'terminal' | 'plus' | 'arrow' | 'hist
   const paths = { git: 'M6 8v8m0-4c9 0 12-2 12-5M6 4a2 2 0 1 0 0 .1M6 18a2 2 0 1 0 0 .1M18 3a2 2 0 1 0 0 .1', folder: 'M3 7V5h6l2 2h10v12H3V7Z', terminal: 'm5 7 4 4-4 4m7 0h6', plus: 'M12 5v14M5 12h14', arrow: 'M5 12h14m-5-5 5 5-5 5', history: 'M3 11a9 9 0 1 1 2 7M3 4v7h7m2-4v6l4 2', settings: 'M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-6 0v6' };
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[kind]} /></svg>;
 }
-export function App() {
+export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [state, setState] = useState<State>({ projects: [], sessions: [], maxActiveTerminals: DEFAULT_SETTINGS.maxActiveTerminals, maxSshTerminals: DEFAULT_SETTINGS.maxSshTerminals, platform: '', settings: structuredClone(DEFAULT_SETTINGS), apiVersion: API_VERSION });
   const workspaceProjects=useMemo(()=>state.projects.filter(project=>!project.remoteWorkspace),[state.projects]);
   const [projectId, setProjectId] = useState(() => readStored('berth.project') ?? '');
@@ -81,20 +81,32 @@ export function App() {
   const [command, setCommand] = useState('');
   const [terminal, setTerminal] = useState<TerminalConfig | null>(null);
   const [remote, setRemote] = useState<RemoteConfig | null>(null);
-  const [sshOpen,setSshOpen]=useState(()=>readStored('berth.sshOpen')==='true');
+  const [sshOpen,setSshOpen]=useState(()=>sshWindow||readStored('berth.sshOpen')==='true');
   const [sshSessionId,setSshSessionId]=useState(()=>readStored('berth.sshSession')??'');
-  const seenRemoteRuns=useRef(new Set<string>());
-  useEffect(()=>{saveStored('berth.sshOpen',String(sshOpen));},[sshOpen]);
+  const [sshWindowState,setSshWindowState]=useState<SshWindowState>({detached:sshWindow,sessionId:''});
+  const [sshWindowReady,setSshWindowReady]=useState(false);
+  const changeSshWindow=(action:'open'|'dock'|'select',id=sshSessionId)=>window.berth.sshWindow(action,id);
+  const selectSsh=(id:string)=>{setSshSessionId(id);if(sshWindow)void changeSshWindow('select',id).catch(reason=>setError(String(reason)));};
+  useEffect(()=>{
+    let alive=true,changed=false;
+    const apply=(value:SshWindowState,returned=false)=>{if(!alive)return;setSshWindowReady(true);setSshWindowState(value);if(value.sessionId||sshWindow)setSshSessionId(value.sessionId);if(returned&&!value.detached&&!sshWindow){setSshOpen(true);setPage('workspace');}};
+    const off=window.berth?.onSshWindow(value=>{changed=true;apply(value,true);});
+    void window.berth?.sshWindow('state').then(value=>{if(!changed)apply(value);}).catch(reason=>{if(alive){setSshWindowReady(true);setError(String(reason));}});
+    return ()=>{alive=false;off?.();};
+  },[]);
+  const seenRemoteRuns=useRef(new Set<string>()),remoteInitialized=useRef(false);
+  useEffect(()=>{if(!sshWindow)saveStored('berth.sshOpen',String(sshOpen));},[sshOpen]);
   useEffect(()=>{saveStored('berth.sshSession',sshSessionId);},[sshSessionId]);
   useEffect(()=>{
-    if(loading)return;
+    if(loading||!sshWindowReady)return;
     const remote=state.sessions.filter(session=>session.remote);
     const running=remote.filter(session=>session.latestRun?.status==='running');
     const added=running.filter(session=>!seenRemoteRuns.current.has(session.latestRun!.id));
-    seenRemoteRuns.current=new Set(running.map(session=>session.latestRun!.id));
-    if(added.length){setSshSessionId(added[0].id);setSshOpen(true);}
-    else if(sshSessionId&&!remote.some(session=>session.id===sshSessionId))setSshSessionId(running[0]?.id??remote[0]?.id??'');
-  },[state.sessions,loading,sshSessionId]);
+    const followNew=!sshWindow||remoteInitialized.current||!remote.some(session=>session.id===sshSessionId);
+    remoteInitialized.current=true;seenRemoteRuns.current=new Set(running.map(session=>session.latestRun!.id));
+    if(added.length&&followNew&&(!sshWindowState.detached||sshWindow)){selectSsh(added[0].id);setSshOpen(true);}
+    else if(sshSessionId&&!remote.some(session=>session.id===sshSessionId))selectSsh(running[0]?.id??remote[0]?.id??'');
+  },[state.sessions,loading,sshSessionId,sshWindowState.detached,sshWindowReady]);
   const [nativeId, setNativeId] = useState('');
   const [startNow, setStartNow] = useState(true);
   const [history, setHistory] = useState<History | null>(null);
@@ -109,9 +121,9 @@ export function App() {
   const projectSessions = useMemo(() => state.sessions.filter(item => item.projectId === projectId && !item.remote), [state.sessions, projectId]);
   const session = projectSessions.find(item => item.id === sessionId);
   const viewedTerminals = useMemo(() => page === 'workspace' ? [
-    ...(project && session && tab === 'terminal' && terminalVisible && connected ? [session.id] : []),
-    ...(sshOpen && connected ? [sshSessionId] : []),
-  ] : [], [page, project?.id, session?.id, session?.latestRun?.status, tab, terminalVisible, connected, sshOpen, sshSessionId]);
+    ...(!sshWindow && project && session && tab === 'terminal' && terminalVisible && connected ? [session.id] : []),
+    ...(sshOpen && (!sshWindowState.detached||sshWindow) && connected ? [sshSessionId] : []),
+  ] : [], [page, project?.id, session?.id, session?.latestRun?.status, tab, terminalVisible, connected, sshOpen, sshSessionId, sshWindowState.detached]);
   const unread = useTerminalActivity(state.sessions, viewedTerminals);
   const localUnread = sidebarSessions.some(value => unread.has(value.id));
   const sshUnread = state.sessions.some(value => value.remote && unread.has(value.id));
@@ -144,27 +156,27 @@ export function App() {
   }, []);
   useEffect(() => { if (!loading && !workspaceProjects.some(item => item.id === projectId)) setProjectId(workspaceProjects[0]?.id ?? ''); }, [workspaceProjects, projectId, loading]);
   useEffect(() => {
-    if (loading || projectSessions.some(item => item.id === sessionId)) return;
+    if (sshWindow || loading || projectSessions.some(item => item.id === sessionId)) return;
     const saved = remembered.current[projectId];
     setSessionId(projectSessions.find(item => item.id === saved)?.id ?? projectSessions[0]?.id ?? '');
   }, [state.sessions, projectId, sessionId, loading]);
   useEffect(() => {
-    if (loading) return;
+    if (sshWindow || loading) return;
     const valid = new Set(state.sessions.map(item => item.id));
     remembered.current = Object.fromEntries(Object.entries(remembered.current).filter(([id, selected]) => workspaceProjects.some(item => item.id === id) && valid.has(selected)));
     if (session) remembered.current[projectId] = session.id;
     saveStored('berth.selections', JSON.stringify(remembered.current));
   }, [workspaceProjects, state.sessions, projectId, sessionId, loading]);
-  useEffect(() => { saveStored('berth.headerCollapsed', String(headerCollapsed)); }, [headerCollapsed]);
-  useEffect(() => { saveStored('berth.sidebarView', sidebarView); saveStored('berth.filesOpen', null); if (sidebarView === 'files') setFilesActivated(true); }, [sidebarView]);
-  useEffect(() => { saveStored('berth.project', projectId); }, [projectId]);
-  useEffect(() => { saveStored('berth.session', sessionId); setTerminalVisible(true); setRunOutput(null); }, [sessionId]);
+  useEffect(() => { if(sshWindow)return;saveStored('berth.headerCollapsed', String(headerCollapsed)); }, [headerCollapsed]);
+  useEffect(() => { if(sshWindow)return;saveStored('berth.sidebarView', sidebarView); saveStored('berth.filesOpen', null); if (sidebarView === 'files') setFilesActivated(true); }, [sidebarView]);
+  useEffect(() => { if(sshWindow)return;saveStored('berth.project', projectId); }, [projectId]);
+  useEffect(() => { if(sshWindow)return;saveStored('berth.session', sessionId); setTerminalVisible(true); setRunOutput(null); }, [sessionId]);
   useEffect(() => { if (!error || modal || page === 'settings') return; const timer = setTimeout(() => setError(''), 12000); return () => clearTimeout(timer); }, [error, modal, page]);
   useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 2500); return () => clearTimeout(timer); }, [message]);
-  useEffect(() => { if (!loading) saveStored('berth.settingsDraft', draftDirty ? JSON.stringify(settingsDraft) : null); }, [settingsDraft, state.settings, loading]);
+  useEffect(() => { if (!sshWindow&&!loading) saveStored('berth.settingsDraft', draftDirty ? JSON.stringify(settingsDraft) : null); }, [settingsDraft, state.settings, loading]);
   useEffect(() => { if (!loading && settingsDraft && !draftDirty) setSettingsDraft(null); }, [settingsDraft, draftDirty, loading]);
   useEffect(() => {
-    if (!session || !connected) return;
+    if (sshWindow || !session || !connected) return;
     let canceled = false;
     setHistory(null); setRuns([]); setRunOutput(null);
     if (tab === 'history') void window.berth.rpc<History>('history', { sessionId }).then(value => { if (!canceled) setHistory(value); }).catch(reason => { if (!canceled) setError(String(reason)); });
@@ -188,9 +200,9 @@ export function App() {
   }
   const expandProject = useCallback((id: string) => setCollapsed(previous => previous.includes(id) ? previous.filter(item => item !== id) : previous), []);
   const selectProject = useCallback((id: string) => { setProjectId(id); setSearch(''); setFilter('all'); setPage('workspace'); setError(''); expandProject(id); }, [expandProject]);
-  const selectSession = useCallback((projectId: string, sessionId: string) => { if(state.sessions.find(item=>item.id===sessionId)?.remote){setSshSessionId(sessionId);setSshOpen(true);setPage('workspace');return;} setProjectId(projectId); setSessionId(sessionId); setPage('workspace'); setTab('terminal'); setError(''); expandProject(projectId); }, [expandProject,state.sessions]);
+  const selectSession = useCallback((projectId: string, sessionId: string) => { if(state.sessions.find(item=>item.id===sessionId)?.remote){selectSsh(sessionId);setSshOpen(true);setPage('workspace');return;} setProjectId(projectId); setSessionId(sessionId); setPage('workspace'); setTab('terminal'); setError(''); expandProject(projectId); }, [expandProject,state.sessions]);
   const toggleProject = useCallback((id: string) => setCollapsed(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]), []);
-  useEffect(() => { if (!loading) saveStored('berth.collapsedProjects', JSON.stringify(collapsed.filter(id => workspaceProjects.some(project => project.id === id)))); }, [collapsed, workspaceProjects, loading]);
+  useEffect(() => { if (!sshWindow&&!loading) saveStored('berth.collapsedProjects', JSON.stringify(collapsed.filter(id => workspaceProjects.some(project => project.id === id)))); }, [collapsed, workspaceProjects, loading]);
   function openModal(value: Modal, target: { projectId: string; sessionId?: string } | null = null) { setModalTarget(target); if (!quickOpen) opener.current = document.activeElement as HTMLElement | null; setError(''); setModal(value); }
   function clearFilter() { setSearch(''); setFilter('all'); }
   function newProject() { setFolder(''); setName(''); initialForm.current = JSON.stringify({ name: '', folder: '' }); openModal('project'); }
@@ -225,6 +237,7 @@ export function App() {
   shortcuts.current = { modal, busy, quickOpen, manageDisabled, project, page, newProject, newSession, openQuick, cycleSession };
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
+      if(sshWindow)return;
       const current = shortcuts.current;
       if (event.isComposing || event.getModifierState('AltGraph') || current.modal || document.querySelector('[role="dialog"], [role="menu"]') || current.busy || !(event.ctrlKey || event.metaKey)) return;
       const value = event.key.toLowerCase();
@@ -251,7 +264,7 @@ export function App() {
     const result = await perform<Session>(editing ? 'updateSession' : remote ? 'createRemoteSession' : 'createSession', remote && !editing
       ? {title:sessionTitle, remote}
       : { ...(editing ? {sessionId:actionSession!.id} : {projectId:actionProject!.id}), title:sessionTitle, agent:remote?'shell':agent, command:remote?'':isCustomAgent(agent)?command:'', terminal:remote?null:terminal, remote });
-    if (result) { if (!editing) { if(result.remote){setSshSessionId(result.id);setSshOpen(true);}else selectSession(result.projectId, result.id); setSearch(''); setFilter('all'); } setModal(null); if (!editing && startNow) await perform('start', { sessionId: result.id, resume: false, cols: 100, rows: 30 }); }
+    if (result) { if (!editing) { if(result.remote){selectSsh(result.id);setSshOpen(true);}else selectSession(result.projectId, result.id); setSearch(''); setFilter('all'); } setModal(null); if (!editing && startNow) await perform('start', { sessionId: result.id, resume: false, cols: 100, rows: 30 }); }
   }
   async function importHistory() {
     try { const target = sessionId; const file = await window.berth.chooseTranscript(); if (!file) return; const result = await perform<History>('importHistory', { sessionId: target, path: file }); if (result && currentSessionId.current === target) { setHistory(result); setTab('history'); } }
@@ -302,8 +315,8 @@ export function App() {
   const closeModal = () => { setModal(null); setError(''); };
   const cancelButton = <button type="button" data-dismiss="dialog" className="subtle" disabled={busy} onClick={closeModal}>取消</button>;
 
-  return <div className="app">
-    <ResourceMonitor enabled={connected && state.apiVersion >= 14} />
+  return <div className={sshWindow?"ssh-window app":"app"}>
+    {!sshWindow&&<><ResourceMonitor enabled={connected && state.apiVersion >= 14} />
     <ResizableSidebar>
       <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>
       <button className="quick-link" onClick={openQuick} title="Ctrl+Shift+P">快速切换<kbd>Ctrl+Shift+P</kbd></button>
@@ -326,7 +339,7 @@ export function App() {
       <div className="sidebar-bottom"><span className={`dot ${connected ? 'live' : ''}`} /><span>{connected ? '后台已连接' : '后台未连接'}</span><button className="text-button" disabled={busy} onClick={() => void window.berth?.reconnect().catch(reason => setError(String(reason)))}>重连</button></div>
     </ResizableSidebar>
     <main className={`main ${headerCollapsed && page === 'workspace' ? 'header-collapsed' : ''}`}>
-      <header className="topbar"><div><span className="eyebrow">{page === 'settings' ? 'SETTINGS' : 'WORKSPACE'}</span><span className="crumb"> / {page === 'settings' ? '应用设置' : project?.name ?? '欢迎来到泊栈'}</span></div><div className="topbar-status">{state.apiVersion>=21&&<button type="button" className={`subtle ssh-toggle${sshOpen&&page==='workspace'?' selected':''}`} aria-label="SSH 面板" aria-expanded={sshOpen&&page==='workspace'} aria-controls="ssh-workspace-dock" onClick={()=>{setSshOpen(previous=>page!=='workspace'||!previous);setPage('workspace');}}>SSH{sshUnread&&<OutputBadge />}{(state.apiVersion>=27||sshRunning>0)&&<span className="ssh-count">{sshRunning}{state.apiVersion>=27?`/${state.maxSshTerminals}`:''}</span>}</button>}{page === 'workspace' && project && <GitBranch key={`${project.id}:${project.path}`} project={project} enabled={connected && state.apiVersion >= 13} onOpen={() => openGit(project)} />}{page === 'workspace' && project && <button className="text-button header-toggle" aria-expanded={!headerCollapsed} aria-controls="project-details" onClick={() => setHeaderCollapsed(value => !value)}>{headerCollapsed ? '展开顶部信息' : '折叠顶部信息'}</button>}<span className={`dot ${connected ? 'live' : ''}`} />{state.apiVersion>=27?`本机 ${running-sshRunning}`:`${running} 个终端后台运行`} <span className="quiet">/ {state.maxActiveTerminals}</span></div></header>
+      <header className="topbar"><div><span className="eyebrow">{page === 'settings' ? 'SETTINGS' : 'WORKSPACE'}</span><span className="crumb"> / {page === 'settings' ? '应用设置' : project?.name ?? '欢迎来到泊栈'}</span></div><div className="topbar-status">{state.apiVersion>=21&&<button type="button" className={`subtle ssh-toggle${!sshWindowState.detached&&sshOpen&&page==='workspace'?' selected':''}`} aria-label="SSH 面板" aria-expanded={!sshWindowState.detached&&sshOpen&&page==='workspace'} aria-controls="ssh-workspace-dock" onClick={()=>{if(sshWindowState.detached){void changeSshWindow('open').catch(reason=>setError(String(reason)));return;}setSshOpen(previous=>page!=='workspace'||!previous);setPage('workspace');}} title={sshWindowState.detached?'SSH 已在独立窗口中，点击前往':undefined}>SSH{sshUnread&&<OutputBadge />}{(state.apiVersion>=27||sshRunning>0)&&<span className="ssh-count">{sshRunning}{state.apiVersion>=27?`/${state.maxSshTerminals}`:''}</span>}</button>}{page === 'workspace' && project && <GitBranch key={`${project.id}:${project.path}`} project={project} enabled={connected && state.apiVersion >= 13} onOpen={() => openGit(project)} />}{page === 'workspace' && project && <button className="text-button header-toggle" aria-expanded={!headerCollapsed} aria-controls="project-details" onClick={() => setHeaderCollapsed(value => !value)}>{headerCollapsed ? '展开顶部信息' : '折叠顶部信息'}</button>}<span className={`dot ${connected ? 'live' : ''}`} />{state.apiVersion>=27?`本机 ${running-sshRunning}`:`${running} 个终端后台运行`} <span className="quiet">/ {state.maxActiveTerminals}</span></div></header>
       {legacy && <div className="upgrade-notice" role="status"><span>旧版后台仍在运行。停止全部终端后更新后台，即可启用当前版本的全部功能。</span><button className="subtle" disabled={!connected || busy || running > 0} onClick={() => openModal('restart')}>更新后台</button></div>}
       {loading ? <div className="empty-page"><div className="loader" /><h2>正在连接你的工作空间</h2></div> : <><div className="settings-host" hidden={page !== 'settings'}>{page === 'settings' && <SettingsPage connected={connected} apiVersion={state.apiVersion} agents={state.agents ?? []} usedAgents={state.sessions.map(item => item.agent)} onSaveAgent={(value, id) => perform<AgentDefinition>(id ? 'updateAgent' : 'createAgent', { ...value, ...(id ? { agentId: id } : {}) })} onDeleteAgent={id => perform('deleteAgent', { agentId: id })} settings={state.settings} draft={draftDirty ? settingsDraft!.value : state.settings} onChange={value => setSettingsDraft(JSON.stringify(value) === JSON.stringify(state.settings) ? null : { base: state.settings, value })} onDiscard={() => { setSettingsDraft(null); setError(''); }} conflict={draftConflict} onError={setError} error={error} platform={state.platform} busy={busy} disabled={manageDisabled || legacy} restartDisabled={busy || !connected} running={running} onSave={async (value: Settings) => { const result = await perform<Settings>('saveSettings', { ...value }); if (result !== undefined) { setSettingsDraft(null); return true; } return false; }} onRestart={() => openModal('restart')} />}</div><div className="workbench-split" hidden={page !== 'workspace'}><div className="workspace-host" hidden={!project&&sshOpen}>{!project ? <div className="empty-page welcome"><div className="welcome-symbol"><Icon kind="terminal" /></div><span className="eyebrow">YOUR PROJECTS, IN ONE PLACE</span><h1>把开发现场，留在这里。</h1><p>目录、终端和对话记录，放在同一个工作台。<br />关掉窗口，再回来继续。</p><button className="primary" onClick={newProject} disabled={manageDisabled}><Icon kind="plus" />添加第一个项目</button><div className="welcome-features"><span><Icon kind="folder" />按目录组织</span><span><Icon kind="terminal" />多会话后台运行</span><span><Icon kind="history" />原生对话关联</span></div></div> : <>
         <section className="project-header" id="project-details" hidden={headerCollapsed}><div><span className="eyebrow">PROJECT SPACE</span><h1 title={project.name}>{project.name}</h1><code className="project-path" title={project.path}>{project.path}</code></div></section>
@@ -358,9 +371,10 @@ export function App() {
             <div className="workspace-panel preview-panel" role="tabpanel" aria-label="预览" hidden={tab !== 'preview'} ref={setFilePreviewHost}>{gitPreview?.projectId === projectId && <Suspense fallback={<p>正在准备差异预览…</p>}><GitDiffPreview request={gitPreview} connected={connected} onChange={staged => setGitPreview(value => value ? { ...value, staged } : null)} onBack={() => setGitPreview(null)} /></Suspense>}</div>
           </div>
         </section>
-      </>}</div><div id="ssh-workspace-dock" className="ssh-dock-slot" hidden={!sshOpen}><SshDock unread={unread} state={state} visible={sshOpen&&page==='workspace'} connected={connected} sessionId={sshSessionId} onSelect={setSshSessionId} onClose={()=>setSshOpen(false)} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} hasLocal={!!project} /></div></div></>}
-    </main>
-    {project && state.apiVersion >= 16 && filesActivated && <Suspense fallback={null}><FileBrowser key={`${project.id}:${project.path}`} project={project} connected={connected} treeHost={fileTreeHost} previewHost={gitPreview?.projectId === projectId ? null : filePreviewHost} onDiff={state.apiVersion >= 18 ? openDiff : undefined} onPreview={openPreview} navigationSupported={state.apiVersion >= 17} target={fileTarget?.projectId === projectId ? fileTarget : null} /></Suspense>}
+      </>}</div><div id="ssh-workspace-dock" className="ssh-dock-slot" hidden={!sshOpen}>{sshWindowReady&&!sshWindowState.detached&&<SshDock onWindow={()=>changeSshWindow('open')} unread={unread} state={state} visible={sshOpen&&page==='workspace'} connected={connected} sessionId={sshSessionId} onSelect={setSshSessionId} onClose={()=>setSshOpen(false)} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} hasLocal={!!project} />}</div></div></>}
+    </main></>}
+    {sshWindow&&sshWindowReady&&<SshDock unread={unread} state={state} visible connected={connected} sessionId={sshSessionId} onSelect={selectSsh} onClose={()=>void changeSshWindow('dock').catch(reason=>setError(String(reason)))} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} hasLocal={false} detached onWindow={()=>changeSshWindow('dock')} />}
+    {!sshWindow && project && state.apiVersion >= 16 && filesActivated && <Suspense fallback={null}><FileBrowser key={`${project.id}:${project.path}`} project={project} connected={connected} treeHost={fileTreeHost} previewHost={gitPreview?.projectId === projectId ? null : filePreviewHost} onDiff={state.apiVersion >= 18 ? openDiff : undefined} onPreview={openPreview} navigationSupported={state.apiVersion >= 17} target={fileTarget?.projectId === projectId ? fileTarget : null} /></Suspense>}
     {treeMenu && menuItems.length > 0 && <ContextMenu target={treeMenu} items={menuItems} onClose={closeTreeMenu} />}
     {(modal === 'renameSession' || modal === 'renameProject') && <Dialog title={modal === 'renameSession' ? '重命名会话' : '重命名项目'} dirty={dirtyForm} busy={busy} error={error} returnFocus={opener.current} onClose={closeModal}><form onSubmit={async event => {
       event.preventDefault(); const result = modal === 'renameSession' ? await perform('renameSession', { sessionId: actionSession!.id, title }) : await perform('updateProject', { projectId: actionProject!.id, name, path: actionProject!.path });

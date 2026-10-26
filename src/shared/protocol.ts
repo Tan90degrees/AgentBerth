@@ -217,7 +217,10 @@ export type ServerEvent =
 export interface Response { id: string; result?: unknown; error?: string; errorCode?: string; errorDetails?: import('./remote-errors').RemoteErrorDetails }
 export interface RuntimeInfo { version: number; pid: number; port: number; token: string }
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
+export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
+  sshWindow(action: 'state' | 'open' | 'dock' | 'select', sessionId?: string): Promise<SshWindowState>;
+  onSshWindow(listener: (state: SshWindowState) => void): () => void;
   openSshConnection(alias: string): Promise<{sessionId: string; runId: string; info: RemoteInfo}>;
   saveSshConnection(config: SshConnectionConfig, connectionId?: string, secret?: SshSecret, remember?: boolean): Promise<SshConnection>;
   deleteSshConnection(connectionId: string): Promise<void>;

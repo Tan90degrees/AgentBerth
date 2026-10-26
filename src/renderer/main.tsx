@@ -10,4 +10,4 @@ import './settings.css';
 
 initializeAppearance();
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(<App sshWindow={new URLSearchParams(window.location.search).get('view')==='ssh'} />);
