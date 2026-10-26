@@ -235,7 +235,7 @@ test('MCP executes with output in one daemon request and exposes incremental wai
   const calls:{method:string;params:unknown}[]=[];const id=randomUUID();
   const server=new TerminalMcp({rpc:async<T>(method: Method,params?: Record<string,unknown>)=>{calls.push({method,params});return (method==='state'?{apiVersion:25}:{id,status:'running'}) as T;}});
   const initialized:any=await server.request('initialize',{protocolVersion:'2025-11-25'});assert.equal(initialized.protocolVersion,'2025-11-25');
-  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,18);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
+  const list:any=await server.request('tools/list',{});assert.equal(list.tools.length,4);assert.ok(!list.tools.some((tool:any)=>/control|shutdown/.test(tool.name)));
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:id,command:'sleep 100',waitMs:10}});
   assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteCommand']);
   assert.equal((calls[0].params as any).waitMs,10);
@@ -276,7 +276,7 @@ test('an older backend gets upgrade guidance without a fallback execution or rep
   const calls:string[]=[];
   const server=new TerminalMcp({rpc:async<T>(method:Method)=>{calls.push(method);if(method==='state')return {apiVersion:25} as T;throw new Error('请求参数无效');}});
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:randomUUID(),command:'once'}});
-  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 25.*API 33/);assert.deepEqual(calls,['remoteCommand','state']);
+  assert.equal(result.isError,true);assert.match(result.content[0].text,/API 25.*API 34/);assert.deepEqual(calls,['remoteCommand','state']);
 });
 
 test('incremental waits cancel without stopping commands; quiet tasks and interruptions never imply success',async t=>{
@@ -326,10 +326,10 @@ test('MCP accepts minimal execute, validates UUID fields before sending and neve
   const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteOpen'?{sessionId:'f165a277-fbfa-4363-9c80-f2840d756b47',runId:'c4955082-2c98-49ae-b493-195693763fb9'}:{id:params?.requestId}) as T;}});
   const command='echo "===== OS RELEASE ====="; cat /etc/os-release 2>/dev/null; echo "===== KERNEL ====="; uname -a; echo "===== HOSTNAME ====="; hostname; echo "===== UPTIME ====="; uptime';
   const result:any=await server.request('tools/call',{name:'terminal_execute',arguments:{alias:'dev-server',command}});
-  assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteOpen','remoteCommand']);assert.match(calls[1].params.requestId,/^[a-f0-9-]{36}$/);assert.equal(calls[1].params.command,command);assert.equal(calls[1].params.waitMs,5000);assert.equal(calls[1].params.maxChars,32768);
+  assert.ok(!result.isError);assert.deepEqual(calls.map(c=>c.method),['remoteOpen','remoteCommand']);assert.match(calls[1].params.requestId,/^[a-f0-9-]{36}$/);assert.equal(calls[1].params.command,command);assert.equal(calls[1].params.waitMs,25000);assert.equal(calls[1].params.maxChars,32768);
   const invalid:any=await server.request('tools/call',{name:'terminal_execute',arguments:{sessionId:randomUUID(),runId:randomUUID(),requestId:'not-a-uuid',command:'uname -a'}});
   assert.ok(invalid.isError);assert.match(invalid.content[0].text,/params.requestId/);assert.doesNotMatch(invalid.content[0].text,/更新后台/);assert.equal(calls.length,2);
-  const keys=(await server.request('tools/list',{}) as any).tools.find((tool:any)=>tool.name==='terminal_keys');assert.equal(keys.inputSchema.properties.enter.default,true);
+  const keys=(await server.request('tools/list',{}) as any).tools.find((tool:any)=>tool.name==='terminal_interact');assert.equal(keys.inputSchema.properties.enter.default,true);
   for(const args of [{text:'yes'},{text:'partial',enter:false},{key:'Enter'},{key:'Tab'}]){
     const response:any=await server.request('tools/call',{name:'terminal_keys',arguments:{sessionId:randomUUID(),runId:randomUUID(),...args}});assert.ok(!response.isError);assert.equal(calls.at(-1)!.params.enter,'enter' in args?false:true);
   }

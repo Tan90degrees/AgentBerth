@@ -1633,7 +1633,7 @@ try {
     await livePopup.getByRole('button',{name:'交给 Agent',exact:true}).click();
     const streamAction=await livePopup.evaluate(target=>window.berth.rpc('remoteExecute',{...target,requestId:crypto.randomUUID(),atPrompt:true,command:'i=1; while [ "$i" -le 30 ]; do echo POPOUT_STREAM_$i; i=$((i+1)); /bin/sleep 0.05; done; echo POPOUT_VALUE_$AB_POPOUT_TEST'}),remoteTarget);
     for(const size of [[640,360],[1100,700]])await application.evaluate(({BrowserWindow},size)=>BrowserWindow.getAllWindows().find(value=>value.webContents.getURL().includes('view=ssh')).setSize(...size),size);
-    const streamResult=await livePopup.evaluate(args=>window.berth.rpc('remoteWait',args),{...remoteTarget,actionId:streamAction.id,timeoutMs:5000});
+    const streamResult=await livePopup.evaluate(args=>window.berth.rpc('remoteReadOutput',args),{...remoteTarget,actionId:streamAction.id,waitFor:'completion',timeoutMs:5000});
     assert.equal(streamResult.exitCode,0);assert.ok(streamResult.output.text.includes('POPOUT_STREAM_30'));assert.ok(streamResult.output.text.includes('POPOUT_VALUE_42'),'Popup must use the original Shell');
     await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(value=>!value.webContents.getURL().includes('view=ssh')).close());
     const hiddenAction=await livePopup.evaluate(target=>window.berth.rpc('remoteExecute',{...target,requestId:crypto.randomUUID(),command:'echo MAIN_HIDDEN_$AB_POPOUT_TEST'}),remoteTarget);

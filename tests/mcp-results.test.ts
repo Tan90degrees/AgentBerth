@@ -25,10 +25,10 @@ test('viewport results never claim complete command output and recover from the 
 });
 
 
-test('latest-command discovery starts at zero and later cursors require an explicit command ID',()=>{
+test('latest-command discovery accepts a cursor while explicit IDs can pin older commands',()=>{
   const target={sessionId:randomUUID(),runId:randomUUID()},request=(extra:object)=>({id:randomUUID(),method:'remoteReadOutput',params:{...target,...extra}});
   assert.equal(requestSchema.safeParse(request({})).success,true);
-  assert.equal(requestSchema.safeParse(request({cursor:42})).success,false);
+  assert.equal(requestSchema.safeParse(request({cursor:42})).success,true);
   assert.equal(requestSchema.safeParse(request({cursor:42,actionId:randomUUID()})).success,true);
 });
 

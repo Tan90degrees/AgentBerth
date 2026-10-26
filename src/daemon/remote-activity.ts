@@ -103,6 +103,12 @@ export class RemoteActivity {
     const id=this.pending?.id??[...this.outputs.keys()].at(-1);
     return id?this.store.remoteAction(id):null;
   }
+  latestOutputCommand():RemoteAction|null {
+    // Reading an explicitly labelled previous command remains valid after raw
+    // input. This does not associate that input/viewport with the old command.
+    const id=this.pending?.id??[...this.outputs.keys()].at(-1);
+    return id?this.store.remoteAction(id):null;
+  }
   result(actionId:string,cursor=0,maxChars=32768,mode:'summary'|'page'='page',search?:OutputSearch):RemoteCommandResult {
     const action=this.store.remoteAction(actionId);
     if(!action||action.kind!=='command'||action.sessionId!==this.info.sessionId||action.runId!==this.info.runId)throw new Error('命令不属于当前运行实例');

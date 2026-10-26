@@ -16,10 +16,10 @@ const invoke=async(server:TerminalMcp,name:string,args:Record<string,unknown>={}
 test('tool discovery alone supplies usage and annotations; the built-in guide works without a daemon',async()=>{
   let calls=0;const server=new TerminalMcp({rpc:async()=>{calls++;throw new Error('must not connect');}});
   const listed:any=await server.request('tools/list',{});
-  assert.equal(listed.tools.length,18);
-  const execute=listed.tools.find((x:any)=>x.name==='terminal_execute');assert.match(execute.description,/harness.next/);assert.match(execute.description,/Opens\/reuses/);assert.equal(execute.annotations.readOnlyHint,false);
-  assert.equal(listed.tools.find((x:any)=>x.name==='terminal_read_output').annotations.readOnlyHint,true);
-  assert.ok(!listed.tools.find((x:any)=>x.name==='terminal_upload').inputSchema.required.includes('requestId'));
+  assert.equal(listed.tools.length,4);
+  const execute=listed.tools.find((x:any)=>x.name==='terminal_execute');assert.match(execute.description,/SAME tool/);assert.match(execute.description,/Opens\/reuses/);assert.equal(execute.annotations.readOnlyHint,false);
+  assert.deepEqual(listed.tools.map((x:any)=>x.name),['terminal_execute','terminal_interact','terminal_session','terminal_transfer']);
+  assert.ok(!listed.tools.find((x:any)=>x.name==='terminal_execute').inputSchema.required.includes('requestId'));
   const initialized:any=await server.request('initialize',{protocolVersion:'2025-11-25'});assert.ok(initialized.capabilities.resources);assert.ok(initialized.instructions.length<1800);
   const resources:any=await server.request('resources/list',{});const guide:any=await server.request('resources/read',{uri:resources.resources[0].uri});assert.match(guide.contents[0].text,/COMMAND_RUNNING/);
   await assert.rejects(server.request('resources/read',{uri:'file:///private'}),McpError);assert.equal(calls,0);
@@ -29,7 +29,7 @@ test('no copied prompt or initialization is needed for auto-open execute and exa
   const calls:{method:string;params:any}[]=[],value=result('running');
   const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteOpen'?{sessionId,runId,info}:method==='remoteReadOutput'?{...value,status:'completed',exitCode:0,output:{...value.output,text:'DONE\n',nextCursor:8}}:value) as T;}});
   const running=await invoke(server,'terminal_execute',{alias:'fixture',command:'printf OK'});assert.ok(!running.reply.isError);assert.deepEqual(calls.map(x=>x.method),['remoteOpen','remoteCommand']);assert.match(calls[1].params.requestId,/^[a-f0-9-]{36}$/);
-  const next=running.value.harness.next;assert.equal(next.tool,'terminal_read_output');assert.equal(next.arguments.actionId,value.id);assert.equal(next.arguments.cursor,3);
+  const next=running.value.harness.next;assert.equal(next.tool,'terminal_execute');assert.equal(next.arguments.actionId,value.id);assert.equal(next.arguments.cursor,3);
   const completed=await invoke(server,next.tool,next.arguments);assert.equal(completed.value.harness.state,'completed');assert.equal(completed.value.harness.next,null);assert.equal(calls.filter(x=>x.method==='remoteCommand').length,1);
   const invalid=await invoke(server,'terminal_execute',{alias:'fixture',command:'bad\u0001'});assert.equal(invalid.value.error.code,'INVALID_ARGUMENTS');assert.equal(invalid.value.error.execution,'not_started');assert.equal(calls.length,3,'Invalid input cannot open SSH or transmit commands');
 });
@@ -40,15 +40,15 @@ test('typed failures prescribe safe recovery without guessing remote output or r
   const requestId=randomUUID(),args={alias:'fixture',requestId,command:'side effect'};
   const user=await invoke(server,'terminal_execute',args);assert.equal(user.value.error.code,'USER_CONTROLLED');assert.equal(user.value.error.execution,'not_started');assert.equal(user.value.harness.next,null);assert.match(user.value.harness.userAction,/交给 Agent/);
   const pending=randomUUID();fault=new DaemonRpcError('not a prompt','COMMAND_RUNNING',{sessionId,runId,actionId:pending});const busy=await invoke(server,'terminal_execute',args);assert.equal(busy.value.harness.next.arguments.actionId,pending);
-  fault=new DaemonRpcError('anything','PROMPT_REQUIRED',{sessionId,runId});assert.equal((await invoke(server,'terminal_execute',args)).value.harness.next.tool,'terminal_screen');
-  fault=new DaemonRpcError('anything','STALE_RUN',{sessionId,runId});assert.equal((await invoke(server,'terminal_execute',args)).value.harness.next.tool,'terminal_list');
-  fault=new DaemonRpcError('connection lost after write','OUTCOME_UNKNOWN',{sessionId,runId,actionId:requestId});const unknown=await invoke(server,'terminal_execute',args);assert.equal(unknown.value.error.execution,'unknown');assert.equal(unknown.value.error.requestId,requestId);assert.equal(unknown.value.harness.next.tool,'terminal_read_output');assert.equal(unknown.value.harness.replayAllowed,false);
+  fault=new DaemonRpcError('anything','PROMPT_REQUIRED',{sessionId,runId});assert.equal((await invoke(server,'terminal_execute',args)).value.harness.next.tool,'terminal_interact');
+  fault=new DaemonRpcError('anything','STALE_RUN',{sessionId,runId});assert.equal((await invoke(server,'terminal_execute',args)).value.harness.next.tool,'terminal_session');
+  fault=new DaemonRpcError('connection lost after write','OUTCOME_UNKNOWN',{sessionId,runId,actionId:requestId});const unknown=await invoke(server,'terminal_execute',args);assert.equal(unknown.value.error.execution,'unknown');assert.equal(unknown.value.error.requestId,requestId);assert.equal(unknown.value.harness.next.tool,'terminal_execute');assert.equal(unknown.value.harness.replayAllowed,false);
 });
 
 test('transfers generate IDs, return exact waits and preserve identity on unknown outcomes',async()=>{
   let fail=false;const calls:{method:string;params:any}[]=[];
   const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{calls.push({method,params});if(fail)throw new Error('transport lost');return (method==='remoteTransferStart'?{id:params!.requestId,status:'running',spec:params}:null) as T;}});
-  const args={sessionId,runId,localPath:'/tmp/local',remotePath:'/tmp/remote'};const started=await invoke(server,'terminal_upload',args);assert.ok(!started.reply.isError);assert.equal(started.value.harness.next.tool,'terminal_transfer_status');assert.equal(started.value.harness.next.arguments.requestId,started.value.id);
+  const args={sessionId,runId,localPath:'/tmp/local',remotePath:'/tmp/remote'};const started=await invoke(server,'terminal_upload',args);assert.ok(!started.reply.isError);assert.equal(started.value.harness.next.tool,'terminal_transfer');assert.equal(started.value.harness.next.arguments.requestId,started.value.id);
   fail=true;const failed=await invoke(server,'terminal_upload',args);assert.equal(failed.value.error.execution,'unknown');assert.equal(failed.value.harness.next.arguments.requestId,calls.at(-1)!.params.requestId);
 });
 

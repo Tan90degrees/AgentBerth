@@ -8,8 +8,8 @@ AgentBerth 让 Agent 操作用户正在观看的同一个真实 SSH 终端。目
 2. 密码和私钥口令默认只保留在本次应用运行期间；勾选“记住密码或口令”才使用操作系统加密存储。系统没有安全密钥存储时不能记住，可继续临时使用。密码不进入连接配置、SQLite、MCP 配置、命令行或操作记录。重启应用后，未记住的密码需在连接设置中重新输入。编辑时留空保留现有凭据；取消记住并保存可移除持久化副本。
 3. 远端只需 SSH 服务和已有登录 Shell。无需安装 tmux、Bash、Python、Node、额外脚本或常驻代理。受限账号需要允许 Shell 和 PTY。首次连接时在桌面核对并信任主机指纹；已信任指纹发生变化会拒绝连接，需核实服务器身份后重新创建连接。
 4. 打开 **设置 → MCP → 复制 MCP 配置**，加入 Agent 客户端的 MCP 配置。这是本机 stdio MCP：command 是 AgentBerth 自带的本机程序，args 指向随软件打包的 MCP 入口，env 中的 `ELECTRON_RUN_AS_NODE=1` 必须保留。不需要另装 Node.js；SSH 的地址和登录信息在上一步填写，不填在 MCP 传输配置中。
-5. 不需要复制长提示词。MCP 自带工具说明和按状态返回的下一步引导；告诉 Agent 使用连接别名（例如 `dev-server`）。普通命令可直接调用 `terminal_execute({"alias":"dev-server","command":"uname -a"})`；MCP 打开或复用已授权连接。也可调用 `terminal_open({"alias":"dev-server"})` 只打开连接，自动展示工作区底部的 SSH 实时终端，本机 Agent 终端保留在上方，两边可以同时观察。SSH 会话不再混在左侧本机会话列表。后续读屏、执行、按键和等待都可传同一 alias，无需用户复制会话 UUID。重复 open 会复用现有会话，不会抢回人工控制权，也不会自动重连已断开的 SSH。
-6. 用户可滚动、选中、复制、查找，点击 **接管** 收回输入权，任务继续运行。点击 **交给 Agent** 再次允许输入。如果同一连接有多个正在运行的会话，Agent 需从 terminal_list 选择 sessionId/runId，以免操作错会话。
+5. 不需要复制长提示词。MCP 自带工具说明和按状态返回的下一步引导；告诉 Agent 使用连接别名（例如 `dev-server`）。普通命令可直接调用 `terminal_execute({"alias":"dev-server","command":"uname -a"})`；MCP 打开或复用已授权连接。也可调用 `terminal_session({"action":"open","alias":"dev-server"})` 只打开连接，自动展示工作区底部的 SSH 实时终端，本机 Agent 终端保留在上方，两边可以同时观察。SSH 会话不再混在左侧本机会话列表。后续读屏、执行、按键和等待都可传同一 alias，无需用户复制会话 UUID。重复 open 会复用现有会话，不会抢回人工控制权，也不会自动重连已断开的 SSH。
+6. 用户可滚动、选中、复制、查找，点击 **接管** 收回输入权，任务继续运行。点击 **交给 Agent** 再次允许输入。如果同一连接有多个正在运行的会话，Agent 需从 terminal_session(action=list) 选择 sessionId/runId，以免操作错会话。
 
 点击顶部 **SSH → 服务器** 也可直接填写服务器信息；保存信息不会建立连接。会话由 Agent 通过 MCP 打开或管理。反复点击 SSH 只开关同一个面板，不创建连接或重复显示行。拖动 SSH 面板上边缘可调整本机与远端的高度分配，方向键微调、双击恢复默认；高度在本机保存。面板收起后连接继续运行，再次展开接回同一终端；选择器可切换多个 SSH 会话，旁边的 **⋯** 或右键可启动、停止、编辑和删除。最近命令、执行状态与人工接管按钮显示在远端画面旁；完整步骤仍可展开查看。
 
@@ -19,17 +19,21 @@ SSH 会话独立管理。第一版文件树、预览、Git 和资源统计用于
 
 ## 命令、长任务和交互程序
 
-POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；内部包装的已确认回显替换成原始命令，不显示 UUID 和转义串；实际程序输出保持原样。遇到无法确认的重绘或交错输出会保留原始数据，避免误删日志。目录和 export 保持有效。普通调用只需别名和 command，requestId 可省略，工具自动生成并返回 id；显式去重重试须复用原 UUID，避免重复执行。命令支持换行、Tab 和多行脚本。一次返回状态、退出码、Shell 信息及有界 output，不必再读屏取普通命令结果。长任务用 `terminal_read_output` 按 actionId=id 与 cursor=output.nextCursor 获取新增内容，有输出或完成立即唤醒；`terminal_wait` 仅用于等待最终完成。completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
+POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Shell。标记只用 Shell 内建的 printf、eval 等，不上传文件或依赖提示符钩子；内部包装的已确认回显替换成原始命令，不显示 UUID 和转义串；实际程序输出保持原样。遇到无法确认的重绘或交错输出会保留原始数据，避免误删日志。目录和 export 保持有效。普通调用只需别名和 command，requestId 可省略，工具自动生成并返回 id；显式去重重试须复用原 UUID，避免重复执行。命令支持换行、Tab 和多行脚本。一次返回状态、退出码、Shell 信息及有界 output，不必再读屏取普通命令结果。长任务继续调用 `terminal_execute`，不传 command，原样使用返回的 actionId/cursor。默认等最终完成；明确需要首段流式日志时传 waitFor=output，有新增输出或完成即唤醒。completed 才有已确认的退出码。不能根据安静的画面或超时推断成功。
 
-后台按事件等待，单次最长 30 秒。工具返回 running 后，按相同 actionId 和返回游标继续获取新增输出，不重新启动命令。部分 MCP 客户端不能由后台事件自动唤醒模型，仍需后续有界等待；任务不会因一次等待超时而中断。
+MCP 后台按事件等待，单次最长 25 秒，完成即返回。工具返回 running 后，按相同 actionId 和返回游标继续获取新增输出，不重新启动命令。部分 MCP 客户端不能由后台事件自动唤醒模型，仍需后续有界等待；任务不会因一次等待超时而中断。
 
-对于 vim、top、其他非 POSIX 登录 Shell，使用 `terminal_screen` 与 `terminal_keys`。text 默认附带回车，显式 enter=false 才只输入不提交；命名 key 只发送一次。输入回到提示符后，phase 可能为 unknown；先读屏确认空闲提示符，POSIX Shell 下一次 execute 显式传 `atPrompt: true`。不要为了探测提示符擅自发送 Enter。Ctrl+C 明确中断前台任务，未能收到完成标记的命令保留 unknown。执行 exit、替换 Shell 或程序接管终端也可能无法获得退出码，不得自动重放。
+对于 vim、top、其他非 POSIX 登录 Shell，使用 `terminal_interact`：view=screen 观察视口，再发送 text/key。text 默认附带回车，显式 enter=false 才只输入不提交；命名 key 只发送一次。输入回到提示符后，phase 可能为 unknown；先读屏确认空闲提示符，POSIX Shell 下一次 execute 显式传 `atPrompt: true`。不要为了探测提示符擅自发送 Enter。Ctrl+C 明确中断前台任务，未能收到完成标记的命令保留 unknown。执行 exit、替换 Shell 或程序接管终端也可能无法获得退出码，不得自动重放。
 
 ## 独立 SSH 窗口
 
 面板右上角点击 **在独立窗口打开**，即可将 SSH 视图拖到另一块屏幕或独立调整窗口大小。弹出和放回均使用原连接、Shell 和运行 ID，不会重复打开服务器。主窗口保留本机 Agent，SSH 的显示和输入转交给独立窗口，避免两个视口争抢终端尺寸。
 
 独立窗口可切换 SSH 会话、右键管理、配置服务器、查找与复制输出，并随时接管或交回 Agent。再次点击主窗口的 SSH 按钮会前往已有独立窗口，不会新增窗口。点击 **放回主窗口** 或窗口关闭按钮，面板回到主窗口；SSH 和远端命令继续运行。深浅色跟随全局外观设置。
+
+## 四个 MCP 工具
+
+普通命令默认在同次 terminal_execute 调用中等完成并返回结果（最长 25 秒），不再在第一段输出后提前结束。续取或重新查看上一条结果仍调用 terminal_execute，不传 command；已用过目标时也可省略 alias。terminal_interact 负责 TUI，terminal_session 负责会话，terminal_transfer 负责文件。具体参数和示例见 [内置契约参考](remote-terminal-agent.md)，不需要把这篇说明复制给 Agent。
 
 ## 连接生命周期
 
@@ -47,23 +51,23 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 这不是模型内部推理或完整 TUI 录像。文件传输通过同一 SSH 连接的独立 SFTP 通道执行，进度和结果显示在面板；步骤不会拆解脚本内部的每个动作。
 
-提供给 Agent 的说明：[remote-terminal-agent.md](remote-terminal-agent.md)。
+内置契约参考（无需复制给 Agent）：[remote-terminal-agent.md](remote-terminal-agent.md)。
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 调用 terminal_open、terminal_create、terminal_update、terminal_close、terminal_delete、terminal_reconnect 管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 33。
+用户只填写服务器信息，Agent 通过 terminal_session 的 open/create/update/close/delete/reconnect 操作管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 34。
 
 ## 文件传输
 
-支持 terminal_upload、terminal_download、terminal_transfer，覆盖文件和显式 recursive 目录传输。SFTP 复用保存服务器信息后建立的 SSH 连接，Shell 和 TUI 继续运行。SSH 服务需启用标准 SFTP 子系统，无需另装 Python、Node、rsync 或代理；系统 SSH 配置兼容会话暂不支持文件接口。
+terminal_transfer 的 action=upload/download/copy 覆盖文件和显式 recursive 目录传输。SFTP 复用保存服务器信息后建立的 SSH 连接，Shell 和 TUI 继续运行。SSH 服务需启用标准 SFTP 子系统，无需另装 Python、Node、rsync 或代理；系统 SSH 配置兼容会话暂不支持文件接口。
 
-传输是后台任务，terminal_transfer_status 可读取进度或事件式等待，terminal_transfer_cancel 可取消。进度在 SSH 面板显示，重试同一 requestId 不重复传输；MCP 超时和退出不取消已提交传输。默认不覆盖；显式 resume 会先核对已有文件前缀，失败或取消可能留下部分文件。服务器间通过本机有界流转发，不落地中转文件，不转发 SSH Agent。
+传输是后台任务，terminal_transfer 的 action=status 可读取进度或事件式等待，action=cancel 可取消。进度在 SSH 面板显示，重试同一 requestId 不重复传输；MCP 超时和退出不取消已提交传输。默认不覆盖；显式 resume 会先核对已有文件前缀，失败或取消可能留下部分文件。服务器间通过本机有界流转发，不落地中转文件，不转发 SSH Agent。
 
 接口能力参考 [ssh-skill 的文件传输契约](https://github.com/badseal/ssh-skill/blob/main/references/commands.md)，实现使用应用自带的 SSH/SFTP 客户端，无需安装该 Skill 的 Python 依赖。
 
 ## 输出与响应速度
 
-普通命令由一次 MCP 调用完成提交、等待及输出读取，不需要每条命令再读屏。完成即返回，默认的 5 秒是等待上限，不是固定延迟；首段输出后最多合并等待 75 ms 以接收短命令退出码，流式命令会先返回首段。长任务可按游标等待新增日志；TUI 保留按需读屏，读屏不再额外序列化历史。返回 requestMs/elapsedMs 可区分后台请求与命令持续时间；模型推理及客户端调度需在客户端另外测量。
+普通命令由一次 MCP 调用完成提交、等待及输出读取，不需要每条命令再读屏。默认等完成，25 秒是上限而非固定延迟；首段输出不再提前结束普通调用。只有显式 waitFor=output 才优先返回首段流式输出。长任务可按游标等待新增日志；TUI 保留按需读屏，读屏不再额外序列化历史。返回 requestMs/elapsedMs 可区分后台请求与命令持续时间；模型推理及客户端调度需在客户端另外测量。
 
 默认输出限长对齐 [ssh-skill 的固定版本](https://github.com/badseal/ssh-skill/tree/c6c8a184a7d8c8b217860a015f5860418647d8ea)：256 KiB、4000 行，字节预算中保留 64 KiB 尾部。超限保留首尾并报告原始总字节数、总行数与省略标记；完整工具结果 JSON 另有 256 KiB 总上限，包含转义和元数据，进一步裁剪会报告 resultLimit。不会引导 Agent 自动读完所有分页。运行中只取游标后的新增有界输出；完成后仅在任务需要时显式 mode=page 读取明细，每页默认 32768 字符，可选 256..65536。
 
@@ -76,18 +80,18 @@ POSIX Shell 的 `terminal_execute` 将命令及完成标记直接送入当前 Sh
 
 ## Agent 误把滚屏当成输出丢失
 
-读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 33 默认精简元数据，保留 scope、命令关联和 harness.next，不自动恢复所有输出；detail=full 可查看完整诊断字段。运行中的命令给出增量等待入口，明细分页和缓存搜索按需使用。Agent 不应重跑、重新排序或 clear 以获取上半部分。
+读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 34 默认等待完成并精简元数据，保留 scope、命令关联和 harness.next，不自动恢复所有输出；detail=full 可查看完整诊断字段。运行中的命令给出增量等待入口，明细分页和缓存搜索按需使用。Agent 不应重跑、重新排序或 clear 以获取上半部分。
 
-忘记 ID 可省略 actionId 从头读最近可靠关联的命令，后续分页必须使用返回的命令 ID 和游标。空闲 POSIX Shell 中通过文本加回车执行的命令也会自动捕获；交互程序、部分输入和未知提示符仍按原始按键处理，不能关联旧命令冒充新结果。
+忘记 ID 可省略 actionId 从头读最近可靠关联的命令，后续分页建议原样使用返回指针固定命令 ID 和游标，避免把另一个命令的游标混用。空闲 POSIX Shell 中通过文本加回车执行的命令也会自动捕获；交互程序、部分输入和未知提示符仍按原始按键处理，不能关联旧命令冒充新结果。
 
 ## 内置 Agent 引导
 
-只添加 MCP 配置即可。工具说明、初始化指引与 harness 返回字段共同提供操作契约；可选 MCP 资源 `agentberth://guide/remote-terminal` 提供详细参考。命令与传输自动生成请求 ID；结果给出下一步准确参数。人工接管、忙碌命令、过期运行实例由后端拒绝，错误返回稳定代码与恢复方向，远端输出不能改变这些约束。更新后台至 API 33 并重连 MCP 后使用。
+只添加 MCP 配置即可。工具说明、初始化指引与 harness 返回字段共同提供操作契约；可选 MCP 资源 `agentberth://guide/remote-terminal` 提供详细参考。命令与传输自动生成请求 ID；结果给出下一步准确参数。人工接管、忙碌命令、过期运行实例由后端拒绝，错误返回稳定代码与恢复方向，远端输出不能改变这些约束。更新后台至 API 34 并重连 MCP 后使用。
 
 ## 调用统计、缓存查询与按钮反馈
 
 MCP 设置显示本次后台已收到的工具调用结果：次数、成功率、失败数及按工具分组。正常返回的命令即使退出非零，也不算工具调用失败；统计不等于任务评测。上报异步进行，不增加模型往返，不把统计追加到每次工具结果中；后台重启清零。
 
-execute/read_output/wait 可传 search，在本机保留的命令缓存中逐行匹配并计数、合并上下文，不在服务器重跑命令。默认忽略大小写，limit=0 只返回匹配行数；分页固定快照，缓存淘汰明确报告。默认响应精简重复元数据，输出硬上限沿用原值，完整诊断可选 detail=full。
+terminal_execute 在执行或续取时均可传 search，在本机保留的命令缓存中逐行匹配并计数、合并上下文，不在服务器重跑命令。默认忽略大小写，limit=0 只返回匹配行数；分页固定快照，缓存淘汰明确报告。默认响应精简重复元数据，输出硬上限沿用原值，完整诊断可选 detail=full。
 
 设置页统一按钮的按下、焦点和禁用样式；复制、打开目录、文件选择、SSH 保存/删除、插件导入/更新/检查等异步操作共用处理中、完成和失败反馈。处理中阻止重复点击，取消文件选择回到空闲状态。

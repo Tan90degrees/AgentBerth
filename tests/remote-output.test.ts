@@ -57,6 +57,10 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   // The user's OS inspection accepts alias+command only; no manually generated ID.
   const os=await call('terminal_execute',{command:'echo "===== OS RELEASE ====="; /bin/cat /etc/os-release 2>/dev/null; echo "===== KERNEL ====="; /bin/uname -a; echo "===== HOSTNAME ====="; /bin/hostname; echo "===== UPTIME ====="; /usr/bin/uptime'});
   assert.equal(os.status,'completed');assert.ok(os.output.text.includes('===== KERNEL ====='));assert.ok(!os.output.text.includes('DIRECT=42'),'Only this command output is returned');
+  const delayed=await call('terminal_execute',{command:'AB_DELAY_RUNS=$((${AB_DELAY_RUNS:-0}+1)); printf \"DELAY_FIRST\\n\"; /bin/sleep 0.3; printf \"DELAY_LAST=%s\\n\" \"$AB_DELAY_RUNS\"'});
+  assert.equal(delayed.status,'completed');assert.ok(delayed.output.text.includes('DELAY_LAST=1'));
+  const previousAgain=await call('terminal_execute',{waitMs:0});assert.equal(previousAgain.id,delayed.id);assert.equal(previousAgain.output.text,delayed.output.text);
+  const noIds:any=await mcp.request('tools/call',{name:'terminal_execute',arguments:{waitMs:0}});assert.ok(!noIds.isError);assert.equal(JSON.parse(noIds.content[0].text).output.text,delayed.output.text);
   const multiline=await call('terminal_execute',{command:'printf "LINE_ONE\\n"\nprintf\t"LINE_TWO\\n"\n'});
   assert.equal(multiline.output.text,'LINE_ONE\r\nLINE_TWO\r\n');
   const large=await call('terminal_execute',{command:'printf "%200000s\\n" X',mode:'page',waitMs:5000});
@@ -86,7 +90,7 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
     if(!enter){const pending=await call('terminal_read_output',{actionId:reading.id,cursor:0,timeoutMs:20});assert.equal(pending.status,'running');await call('terminal_keys',{key:'Enter'});}
     const done=await call('terminal_wait',{actionId:reading.id,timeoutMs:5000});assert.equal(done.status,'completed');assert.ok(done.output.text.includes('INPUT='+(enter?'submitted':'partial')));
   }
-  const early=await call('terminal_execute',{command:'printf "EARLY_STREAM\\n"; read AB_EARLY'});
+  const early=await call('terminal_execute',{command:'printf "EARLY_STREAM\\n"; read AB_EARLY',waitFor:'output'});
   assert.equal(early.status,'running');assert.ok(early.output.text.includes('EARLY_STREAM'));assert.ok(early.requestMs<2000,'First streaming output must not wait for the default 5-second cap');
   const busy:any=await mcp.request('tools/call',{name:'terminal_execute',arguments:{alias:'output-fixture',command:'printf SHOULD_NOT_EXECUTE'}});const blocked=JSON.parse(busy.content[0].text);assert.equal(blocked.error.code,'COMMAND_RUNNING');assert.equal(blocked.harness.next.arguments.actionId,early.id);
   await call('terminal_keys',{text:'done'});assert.equal((await call('terminal_wait',{actionId:early.id,timeoutMs:5000})).status,'completed');
@@ -110,6 +114,7 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   if(listed.status==='running')listed=await call('terminal_wait',{actionId:listed.id,timeoutMs:5000});
   const expectedList=Array.from({length:120},(_,i)=>`image-${String(i).padStart(3,'0')} created-order-${String(i).padStart(3,'0')}\r\n`).join('');
   assert.equal(listed.output.text,expectedList);assert.equal(listed.allOutputInThisResponse,true);
+  const recoveredAuto=await call('terminal_interact');assert.equal(recoveredAuto.scope,'command');assert.equal(recoveredAuto.output.text,expectedList);assert.equal(recoveredAuto.id,listed.id);
   const bottom=await call('terminal_screen');assert.equal(bottom.scope,'viewport');assert.equal(bottom.allOutputInThisResponse,false);assert.ok(bottom.scrollbackLines>0);assert.ok(!bottom.text.includes('image-000'));assert.ok(bottom.text.includes('image-119'));
   const follow=async(next:any)=>{const response:any=await mcp.request('tools/call',{name:next.tool,arguments:next.arguments});assert.ok(!response.isError,JSON.stringify(response));return JSON.parse(response.content[0].text);};
   const recovered=await follow(bottom.details);assert.equal(recovered.output.text,expectedList);assert.equal(recovered.allOutputInThisResponse,true);
@@ -121,7 +126,7 @@ test('one SSH login and real POSIX Shell return command output directly, page sc
   // Partial typing and input to a running program must remain literal. Unknown
   // prompt state cannot silently reuse the previous command's output.
   const partial=await call('terminal_keys',{text:'AB_PARTIAL=literal',enter:false});assert.equal(partial.inputKind,'interactive');assert.equal((await call('terminal_screen')).command,null);
-  const noCommand:any=await mcp.request('tools/call',{name:'terminal_read_output',arguments:{alias:'output-fixture',timeoutMs:0}});assert.ok(noCommand.isError);assert.match(JSON.parse(noCommand.content[0].text).error.message,/没有可关联/);
+  const previous=await call('terminal_execute',{waitMs:0});assert.equal(previous.id,count.id);assert.equal(previous.output.text,'1\r\n','Untracked partial input must not hide the previous captured command result');
   await call('terminal_keys',{key:'Enter'});
   const restored=await call('terminal_execute',{command:'printf "%s\\n" "$AB_PARTIAL"',atPrompt:true});assert.equal(restored.output.text,'literal\r\n');
   const quiet=await call('terminal_execute',{requestId:randomUUID(),command:'read AB_STOP',waitMs:0});

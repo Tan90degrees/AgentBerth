@@ -35,7 +35,7 @@ export function boundedToolText(value:unknown):string {
         // Keep running-command waits at their NEW-output cursor. Detailed recovery
         // is opt-in and starts at the original range, since nextCursor has advanced.
         if(candidate.status!=='running')candidate.continuation=null;
-        if(['sessionId','runId','id'].every(key=>typeof candidate[key]==='string')&&Number.isSafeInteger(candidate.fromCursor))candidate.details={tool:'terminal_read_output',arguments:{sessionId:candidate.sessionId,runId:candidate.runId,actionId:candidate.id,cursor:candidate.fromCursor,timeoutMs:0,mode:'page',maxChars:4096}};
+        if(['sessionId','runId','id'].every(key=>typeof candidate[key]==='string')&&Number.isSafeInteger(candidate.fromCursor))candidate.details={tool:'terminal_execute',arguments:{sessionId:candidate.sessionId,runId:candidate.runId,actionId:candidate.id,cursor:candidate.fromCursor,waitMs:0,mode:'page',maxChars:4096}};
         candidate.notice='JSON 结果超出总预算，已保留首尾并省略部分内容；不自动读取全部分页或重跑命令。运行中仍可用 continuation 等待新增输出；仅任务确需细节时才用 details 小范围读取。';
       }
     }
