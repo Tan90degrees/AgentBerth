@@ -1624,11 +1624,14 @@ try {
     await findTerminalText(livePopup,'USER_42');
     assert.equal(await page.evaluate(()=>window.localBeforePopout===document.querySelector('.workspace-host .xterm')),true,'Detaching SSH must preserve the local terminal instance');
     const popupInput=livePopup.locator('.terminal-mount .xterm-helper-textarea');await popupInput.focus();
-    await livePopup.keyboard.type('AB_POPOUT_TEST=42; echo POPOUT_SET');await livePopup.keyboard.press('Enter');
-    await findTerminalText(livePopup,'POPOUT_SET');
-    await eventually(async()=>(await livePopup.evaluate(target=>window.berth.rpc('remoteInfo',target),{sessionId:remoteTarget.sessionId}))?.phase==='idle','Popup human input did not return to prompt');
+    await livePopup.keyboard.type('AB_POPOUT_TEST=42; echo POPOUT_SET_$((6*7))');await livePopup.keyboard.press('Enter');
+    await findTerminalText(livePopup,'POPOUT_SET_42');
+    // Human input has no managed completion marker. Confirm the actual prompt
+    // and acknowledge it explicitly, exactly as the MCP contract requires.
+    await eventually(async()=>{const screen=await livePopup.evaluate(target=>window.berth.rpc('remoteScreen',target),remoteTarget);return screen.text.includes('POPOUT_SET_42')&&/[$#]\s*$/.test(screen.text);},'Popup input output/prompt did not reach the visible terminal');
+    assert.equal((await livePopup.evaluate(target=>window.berth.rpc('remoteInfo',target),{sessionId:remoteTarget.sessionId})).phase,'unknown');
     await livePopup.getByRole('button',{name:'交给 Agent',exact:true}).click();
-    const streamAction=await livePopup.evaluate(target=>window.berth.rpc('remoteExecute',{...target,requestId:crypto.randomUUID(),command:'for i in $(seq 1 30); do echo POPOUT_STREAM_$i; sleep 0.05; done; echo POPOUT_VALUE_$AB_POPOUT_TEST'}),remoteTarget);
+    const streamAction=await livePopup.evaluate(target=>window.berth.rpc('remoteExecute',{...target,requestId:crypto.randomUUID(),atPrompt:true,command:'i=1; while [ "$i" -le 30 ]; do echo POPOUT_STREAM_$i; i=$((i+1)); /bin/sleep 0.05; done; echo POPOUT_VALUE_$AB_POPOUT_TEST'}),remoteTarget);
     for(const size of [[640,360],[1100,700]])await application.evaluate(({BrowserWindow},size)=>BrowserWindow.getAllWindows().find(value=>value.webContents.getURL().includes('view=ssh')).setSize(...size),size);
     const streamResult=await livePopup.evaluate(args=>window.berth.rpc('remoteWait',args),{...remoteTarget,actionId:streamAction.id,timeoutMs:5000});
     assert.equal(streamResult.exitCode,0);assert.ok(streamResult.output.text.includes('POPOUT_STREAM_30'));assert.ok(streamResult.output.text.includes('POPOUT_VALUE_42'),'Popup must use the original Shell');
