@@ -15,7 +15,7 @@ export function matchesSession(session: Session, project: Project, query: string
 
 // Preview width in CSS once per frame. The React tree and terminal are kept
 // intact while dragging; persist only when the drag ends.
-export function ResizableSidebar({ children }: { children: ReactNode }) {
+export function ResizableSidebar({ children, collapsed = false }: { children: ReactNode; collapsed?: boolean }) {
   const [width, setWidth] = useState(() => clampSidebarWidth(loadSidebarWidth(), window.innerWidth));
   const [viewport, setViewport] = useState(window.innerWidth);
   const host = useRef<HTMLElement>(null);
@@ -36,13 +36,20 @@ export function ResizableSidebar({ children }: { children: ReactNode }) {
     window.addEventListener('resize', resized);
     return () => { window.removeEventListener('resize', resized); if (frame.current) cancelAnimationFrame(frame.current); document.body.classList.remove('sidebar-resizing'); };
   }, []);
+  useEffect(() => {
+    if (!collapsed) return;
+    if (frame.current) cancelAnimationFrame(frame.current);
+    frame.current = 0; drag.current = null;
+    host.current?.style.setProperty('--sidebar-width', `${width}px`);
+    document.body.classList.remove('sidebar-resizing');
+  }, [collapsed]);
   const finish = (event: PointerEvent) => {
     if (event.pointerId !== drag.current?.id) return;
     drag.current = null; document.body.classList.remove('sidebar-resizing'); commit(preview.current);
   };
-  return <aside ref={host} className="sidebar" style={{ '--sidebar-width': `${width}px` } as CSSProperties}>
+  return <aside ref={host} className={`sidebar${collapsed ? ' sidebar-collapsed' : ''}`} style={{ '--sidebar-width': `${width}px` } as CSSProperties}>
     {children}
-    <div className="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabIndex={0}
+    <div hidden={collapsed} className="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabIndex={0}
       aria-valuemin={216} aria-valuemax={clampSidebarWidth(480, viewport)} aria-valuenow={width}
       title="拖动调整宽度，双击恢复默认；方向键微调"
       onDoubleClick={() => commit(DEFAULT_SIDEBAR_WIDTH)}

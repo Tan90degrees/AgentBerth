@@ -711,6 +711,25 @@ try {
   await separator.focus(); await page.keyboard.press('ArrowRight');
   sidebarWidth = 290;
   assert.equal(await page.evaluate(() => localStorage.getItem('berth.sidebarWidth')), String(sidebarWidth));
+  step('collapse the sidebar to a rail without replacing the terminal, then restore its saved width');
+  await page.getByRole('button',{name:'收起侧栏',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'展开侧栏',exact:true}).getAttribute('aria-expanded'),'false');
+  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),48);
+  assert.equal(await separator.isVisible(),false);
+  assert.equal(await page.locator('#sidebar-content').isVisible(),false);
+  assert.equal(await page.evaluate(()=>window.smokeTerminal===document.querySelector('.xterm')),true);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('berth.sidebarWidth')),String(sidebarWidth));
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}sidebar-collapsed.png`});
+  await page.getByRole('navigation',{name:'侧栏快捷切换',exact:true}).getByRole('button',{name:'文件',exact:true}).click();
+  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),sidebarWidth);
+  assert.equal(await page.getByRole('tab',{name:'文件',exact:true}).getAttribute('aria-selected'),'true');
+  await page.getByRole('tab',{name:'会话',exact:true}).click();
+  await page.getByRole('button',{name:'收起侧栏',exact:true}).focus();await page.keyboard.press('ControlOrMeta+b');
+  await page.getByRole('button',{name:'展开侧栏',exact:true}).waitFor();
+  await page.keyboard.press('ControlOrMeta+b');await separator.waitFor();
+  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),sidebarWidth);
+  assert.equal(await page.evaluate(()=>window.smokeTerminal===document.querySelector('.xterm')),true);
+
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('驻留');
   await page.locator('.session-list .session-item').waitFor();
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('');
@@ -922,6 +941,7 @@ try {
   await page.getByRole('button', { name: '切换为深色模式', exact: true }).click();
   step('tray quit path stops all terminals and the detached daemon');
   await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
+  await page.getByRole('button',{name:'收起侧栏',exact:true}).click();
   const quittingDaemon = daemonPid;
   await closeApplication(application); application = null;
   assert.throws(() => process.kill(quittingDaemon, 0), /ESRCH/);
@@ -942,6 +962,9 @@ try {
   assert.equal(after.sessions[0].latestRun.status, 'stopped');
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   assert.notEqual(daemonPid, quittingDaemon);
+  await page.getByRole('button',{name:'展开侧栏',exact:true}).waitFor();
+  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),48,'Collapsed state must survive restart');
+  await page.getByRole('button',{name:'展开侧栏',exact:true}).click();
   assert.equal(Number(await page.getByRole('separator').getAttribute('aria-valuenow')), sidebarWidth);
   assert.equal(await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).getAttribute('aria-expanded'), 'false');
   await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).click();

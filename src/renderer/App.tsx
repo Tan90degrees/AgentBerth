@@ -40,6 +40,8 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [projectId, setProjectId] = useState(() => readStored('berth.project') ?? '');
   const [sessionId, setSessionId] = useState(() => readStored('berth.session') ?? '');
   const [headerCollapsed, setHeaderCollapsed] = useState(() => readStored('berth.headerCollapsed') === 'true');
+  const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>readStored('berth.sidebarCollapsed')==='true');
+  useEffect(()=>{if(!sshWindow)saveStored('berth.sidebarCollapsed',String(sidebarCollapsed));},[sidebarCollapsed]);
   const [sidebarView, setSidebarView] = useState<'sessions' | 'files' | 'git'>(() => readStored('berth.sidebarView') === 'git' ? 'git' : readStored('berth.sidebarView') === 'files' || readStored('berth.filesOpen') === 'true' ? 'files' : 'sessions');
   const [fileTreeHost, setFileTreeHost] = useState<HTMLDivElement | null>(null);
   const [filePreviewHost, setFilePreviewHost] = useState<HTMLDivElement | null>(null);
@@ -48,9 +50,9 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [gitPreview, setGitPreview] = useState<GitDiffRequest | null>(null);
   const openPreview = useCallback(() => { setGitPreview(null); setTab('preview'); }, []);
   const openDiff = useCallback((path: string, staged: boolean, projectPath = false) => { setPage('workspace'); setFilesActivated(true); setTab('preview'); setGitPreview({ projectId, path, staged, projectPath }); }, [projectId]);
-  const openGit = (value: Project) => { setProjectId(value.id); setSidebarView('git'); setPage('workspace'); };
+  const openGit = (value: Project) => { setSidebarCollapsed(false);setProjectId(value.id); setSidebarView('git'); setPage('workspace'); };
   useEffect(() => { setGitPreview(null); }, [projectId]);
-  const openPath = useCallback((query: string) => { setPage('workspace'); setSidebarView('files'); setFilesActivated(true); setFileTarget({ projectId, query, nonce: Date.now() }); }, [projectId]);
+  const openPath = useCallback((query: string) => { setSidebarCollapsed(false);setPage('workspace'); setSidebarView('files'); setFilesActivated(true); setFileTarget({ projectId, query, nonce: Date.now() }); }, [projectId]);
   const currentSessionId = useRef(sessionId); currentSessionId.current = sessionId;
   const [page, setPage] = useState<'workspace' | 'settings'>('workspace');
   const [connected, setConnected] = useState(false);
@@ -241,9 +243,10 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       const current = shortcuts.current;
       if (event.isComposing || event.getModifierState('AltGraph') || current.modal || document.querySelector('[role="dialog"], [role="menu"]') || current.busy || !(event.ctrlKey || event.metaKey)) return;
       const value = event.key.toLowerCase();
-      if (value === 'p' && event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); if (current.quickOpen) setQuickOpen(false); else current.openQuick(); }
-      else if (value === 'e' && event.shiftKey && !event.altKey && current.project) { event.preventDefault(); event.stopPropagation(); setPage('workspace'); setSidebarView(value => value === 'files' ? 'sessions' : 'files'); }
-      else if (value === 'g' && event.shiftKey && !event.altKey && current.project) { event.preventDefault(); event.stopPropagation(); setPage('workspace'); setSidebarView('git'); }
+      if(value==='b'&&!event.shiftKey&&!event.altKey){if((event.target as HTMLElement)?.closest?.('.terminal-surface'))return;event.preventDefault();event.stopPropagation();document.querySelector<HTMLButtonElement>('.sidebar-collapse')?.focus();setSidebarCollapsed(value=>!value);}
+      else if (value === 'p' && event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); if (current.quickOpen) setQuickOpen(false); else current.openQuick(); }
+      else if (value === 'e' && event.shiftKey && !event.altKey && current.project) { event.preventDefault(); event.stopPropagation(); setSidebarCollapsed(false);setPage('workspace'); setSidebarView(value => value === 'files' ? 'sessions' : 'files'); }
+      else if (value === 'g' && event.shiftKey && !event.altKey && current.project) { event.preventDefault(); event.stopPropagation(); setSidebarCollapsed(false);setPage('workspace'); setSidebarView('git'); }
       else if (value === ',' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); setQuickOpen(false); setPage('settings'); setError(''); }
       else if ((value === 'n' || value === 'o') && event.shiftKey && !event.altKey && !current.manageDisabled && !current.quickOpen) { event.preventDefault(); event.stopPropagation(); if (value === 'o') current.newProject(); else if (current.project) current.newSession(); else setMessage('请先添加一个项目'); }
       else if (value === 'tab' && !event.altKey && !current.quickOpen && current.page === 'workspace') { event.preventDefault(); event.stopPropagation(); current.cycleSession(event.shiftKey); }
@@ -317,7 +320,17 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
 
   return <div className={sshWindow?"ssh-window app":"app"}>
     {!sshWindow&&<><ResourceMonitor enabled={connected && state.apiVersion >= 14} />
-    <ResizableSidebar>
+    <ResizableSidebar collapsed={sidebarCollapsed}>
+      <button type="button" className="sidebar-collapse icon-button" aria-label={sidebarCollapsed?'展开侧栏':'收起侧栏'} aria-expanded={!sidebarCollapsed} aria-controls="sidebar-content" aria-keyshortcuts="Control+B Meta+B" title={`${sidebarCollapsed?'展开':'收起'}侧栏 · Ctrl+B（终端外）`} onClick={()=>setSidebarCollapsed(value=>!value)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d={sidebarCollapsed?'m13 9 3 3-3 3':'m16 9-3 3 3 3'}/></svg></button>
+      <div className="sidebar-rail" hidden={!sidebarCollapsed}>
+        <nav aria-label="侧栏快捷切换">
+          <button type="button" className="icon-button" aria-label="会话" title="会话" aria-pressed={page==='workspace'&&sidebarView==='sessions'} onClick={()=>{setSidebarView('sessions');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="terminal" />{localUnread&&<span className="rail-unread" aria-label="有新输出" />}</button>
+          <button type="button" className="icon-button" aria-label="文件" title="文件 · Ctrl+Shift+E" disabled={!project||state.apiVersion<16} aria-pressed={page==='workspace'&&sidebarView==='files'} onClick={()=>{setSidebarView('files');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="folder" /></button>
+          <button type="button" className="icon-button" aria-label="Git" title="Git · Ctrl+Shift+G" disabled={!project} aria-pressed={page==='workspace'&&sidebarView==='git'} onClick={()=>{setSidebarView('git');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="git" /></button>
+        </nav>
+        <div className="sidebar-rail-bottom"><button type="button" className="icon-button" aria-label="设置" title="设置 · Ctrl+," aria-pressed={page==='settings'} onClick={()=>{setPage('settings');setError('');}}><Icon kind="settings" /></button><AppearanceToggle /></div>
+      </div>
+      <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
       <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>
       <button className="quick-link" onClick={openQuick} title="Ctrl+Shift+P">快速切换<kbd>Ctrl+Shift+P</kbd></button>
       <div className="sidebar-tabs" role="tablist" aria-label="侧栏视图"><button role="tab" aria-label="会话" aria-selected={sidebarView === 'sessions'} onClick={() => { setSidebarView('sessions'); setPage('workspace'); }}><Icon kind="terminal" />会话{localUnread && sidebarView !== 'sessions' && <OutputBadge />}</button><button role="tab" aria-selected={sidebarView === 'files'} disabled={!project || state.apiVersion < 16} title="项目文件 · Ctrl+Shift+E" onClick={() => { setSidebarView('files'); setPage('workspace'); }}><Icon kind="folder" />文件</button><button role="tab" aria-selected={sidebarView === 'git'} disabled={!project} title="源代码管理 · Ctrl+Shift+G" onClick={() => { setSidebarView('git'); setPage('workspace'); }}><Icon kind="git" />Git</button></div>
@@ -337,6 +350,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       <div className="sidebar-settings"><button className={`settings-link ${page === 'settings' ? 'selected' : ''}`} onClick={() => { setPage('settings'); setError(''); }} title="Ctrl+," aria-label="设置"><Icon kind="settings" />设置{draftDirty && <span className="draft-dot" title="有未保存的设置草稿" />}</button><AppearanceToggle /></div>
       <div className="workspace-resources"><span>工作台</span><ResourceBadge scope="workspace" full /></div>
       <div className="sidebar-bottom"><span className={`dot ${connected ? 'live' : ''}`} /><span>{connected ? '后台已连接' : '后台未连接'}</span><button className="text-button" disabled={busy} onClick={() => void window.berth?.reconnect().catch(reason => setError(String(reason)))}>重连</button></div>
+      </div>
     </ResizableSidebar>
     <main className={`main ${headerCollapsed && page === 'workspace' ? 'header-collapsed' : ''}`}>
       <header className="topbar"><div><span className="eyebrow">{page === 'settings' ? 'SETTINGS' : 'WORKSPACE'}</span><span className="crumb"> / {page === 'settings' ? '应用设置' : project?.name ?? '欢迎来到泊栈'}</span></div><div className="topbar-status">{state.apiVersion>=21&&<button type="button" className={`subtle ssh-toggle${!sshWindowState.detached&&sshOpen&&page==='workspace'?' selected':''}`} aria-label="SSH 面板" aria-expanded={!sshWindowState.detached&&sshOpen&&page==='workspace'} aria-controls="ssh-workspace-dock" onClick={()=>{if(sshWindowState.detached){void changeSshWindow('open').catch(reason=>setError(String(reason)));return;}setSshOpen(previous=>page!=='workspace'||!previous);setPage('workspace');}} title={sshWindowState.detached?'SSH 已在独立窗口中，点击前往':undefined}>SSH{sshUnread&&<OutputBadge />}{(state.apiVersion>=27||sshRunning>0)&&<span className="ssh-count">{sshRunning}{state.apiVersion>=27?`/${state.maxSshTerminals}`:''}</span>}</button>}{page === 'workspace' && project && <GitBranch key={`${project.id}:${project.path}`} project={project} enabled={connected && state.apiVersion >= 13} onOpen={() => openGit(project)} />}{page === 'workspace' && project && <button className="text-button header-toggle" aria-expanded={!headerCollapsed} aria-controls="project-details" onClick={() => setHeaderCollapsed(value => !value)}>{headerCollapsed ? '展开顶部信息' : '折叠顶部信息'}</button>}<span className={`dot ${connected ? 'live' : ''}`} />{state.apiVersion>=27?`本机 ${running-sshRunning}`:`${running} 个终端后台运行`} <span className="quiet">/ {state.maxActiveTerminals}</span></div></header>
