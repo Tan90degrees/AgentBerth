@@ -65,13 +65,17 @@ export function errorReply(error:unknown,context:{name:string;args:Record<string
   const sessionId=details.sessionId??target.sessionId,runId=details.runId??target.runId;
   const endpoint=typeof sessionId==='string'&&typeof runId==='string'?{sessionId,runId}:null;
   const requestId=typeof args.requestId==='string'?args.requestId:undefined;
-  const actionId=details.actionId??requestId;
+  const actionId=details.actionId??(typeof args.actionId==='string'?args.actionId:undefined)??requestId;
   let next:ToolCall|null=null;
   if(code==='COMMAND_RUNNING'&&endpoint&&actionId)next=call('terminal_read_output',{...endpoint,actionId,cursor:0,timeoutMs:25000});
   else if(['PROMPT_REQUIRED','SHELL_UNSUPPORTED','NO_COMMAND_OUTPUT'].includes(code)&&endpoint)next=call('terminal_screen',endpoint);
   else if(['STALE_RUN','ALIAS_AMBIGUOUS','ALIAS_NOT_FOUND','SESSION_NOT_OPEN'].includes(code))next=call('terminal_list');
   else if(code==='OUTCOME_UNKNOWN'&&name==='terminal_execute'&&endpoint&&actionId)next=call('terminal_read_output',{...endpoint,actionId,cursor:0,timeoutMs:25000});
   else if(code==='OUTCOME_UNKNOWN'&&['terminal_upload','terminal_download','terminal_transfer'].includes(name)&&requestId)next=call('terminal_transfer_status',{requestId,timeoutMs:25000});
+  else if(code==='READ_FAILED'&&!fault&&endpoint&&actionId&&['terminal_read_output','terminal_wait'].includes(name))next=call('terminal_read_output',{
+    ...endpoint,actionId,cursor:typeof args.cursor==='number'?args.cursor:0,timeoutMs:25000,
+    ...Object.fromEntries(['mode','maxChars','search','detail'].filter(key=>args[key]!==undefined).map(key=>[key,args[key]])),
+  });
   const userAction=code==='USER_CONTROLLED'?'请由用户在 AgentBerth 点击“交给 Agent”。':code==='AGENT_BUSY'?'等待现有 Agent 结束或由用户接管，不创建其他会话绕过控制。':code==='DISCONNECTED'?'原任务结果可能未知；仅在任务明确需要新 Shell 时使用 terminal_session(action=reconnect)，不重放旧任务。':code==='ALIAS_NOT_FOUND'?'请在 AgentBerth 保存服务器信息。':['PREPARATION_FAILED','BACKEND_UNAVAILABLE','BACKEND_UPGRADE_REQUIRED'].includes(code)?'请在 AgentBerth 检查后台及连接配置后继续。':null;
   const execution=code==='INVALID_ARGUMENTS'||(fault?.code&&code!=='OUTCOME_UNKNOWN')||!dispatched?'not_started':mutating?'unknown':'not_applicable';
   return {error:{code,message:error instanceof Error?error.message:String(error),execution,...(code==='CACHE_RANGE_LOST'?{cacheLost:true}:{}),...(requestId?{requestId}:{})},harness:{state:'blocked',inputAllowed:false,next,userAction,replayAllowed:false}};

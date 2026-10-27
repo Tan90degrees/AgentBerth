@@ -54,3 +54,69 @@ test('running results and cache/parameter errors retain identity without offerin
   fault=new DaemonRpcError('Invalid arguments: cursor','INVALID_ARGUMENTS');const invalid=await invoke(server,'terminal_execute',{waitMs:0});assert.equal(invalid.value.error.code,'INVALID_ARGUMENTS');assert.equal(invalid.value.error.execution,'not_started');
   fault=new DaemonRpcError('lost','OUTCOME_UNKNOWN',{sessionId,runId,actionId:id});const unknown=await invoke(server,'terminal_execute',{sessionId,runId,command:'side effect',requestId:id});assert.equal(unknown.value.harness.next.tool,'terminal_execute');assert.equal(unknown.value.harness.next.arguments.actionId,id);assert.equal(unknown.value.harness.replayAllowed,false);
 });
+
+test('streaming continuation stays incremental across repeated next calls and safe read retries',async()=>{
+  const calls:{method:string;params:any}[]=[];let readFailure:Error|null=null;
+  const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{
+    calls.push({method,params});
+    if(method==='remoteReadOutput'&&readFailure)throw readFailure;
+    return command('running') as T;
+  }});
+  const first=await invoke(server,'terminal_execute',{sessionId,runId,command:'stream',waitFor:'output',detail:'full'});
+  for(const next of [first.value.continuation,first.value.harness.next]){
+    assert.equal(next.tool,'terminal_execute');assert.equal(next.arguments.waitFor,'output');assert.equal(next.arguments.actionId,id);assert.equal(next.arguments.cursor,11);assert.equal(next.arguments.detail,'full');assert.ok(!('command'in next.arguments));
+  }
+  const second=await invoke(server,first.value.harness.next.tool,first.value.harness.next.arguments);
+  assert.equal(calls.at(-1)?.params.waitFor,'output');assert.equal(second.value.harness.next.arguments.waitFor,'output');
+  readFailure=new Error('temporary read transport failure');
+  const failed=await invoke(server,'terminal_execute',{sessionId,runId,actionId:id,cursor:11,waitFor:'output',mode:'page',maxChars:512,detail:'full'});
+  assert.equal(failed.value.error.code,'READ_FAILED');
+  const retry=failed.value.harness.next;
+  assert.equal(retry.tool,'terminal_execute');assert.equal(retry.arguments.waitFor,'output');assert.equal(retry.arguments.actionId,id);assert.equal(retry.arguments.cursor,11);assert.equal(retry.arguments.maxChars,512);assert.equal(retry.arguments.mode,'page');assert.equal(retry.arguments.detail,'full');assert.ok(!('command'in retry.arguments));
+  readFailure=null;await invoke(server,retry.tool,retry.arguments);
+  readFailure=new DaemonRpcError('cursor is beyond this command');
+  const semantic=await invoke(server,'terminal_execute',{sessionId,runId,actionId:id,cursor:999,waitFor:'output'});
+  assert.equal(semantic.value.harness.next,null,'A semantic daemon rejection must not loop the same invalid cursor');
+  assert.equal(calls.filter(call=>call.method==='remoteCommand').length,1);
+});
+
+test('incomplete or stale explicit targets are never overwritten by the remembered session',async()=>{
+  const calls:{method:string;params:any}[]=[];
+  const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{
+    calls.push({method,params});
+    if(method==='remoteCommand'&&params?.runId!==runId)throw new DaemonRpcError('stale run','STALE_RUN',{sessionId,runId});
+    return command() as T;
+  }});
+  await invoke(server,'terminal_execute',{sessionId,runId,command:'initial'});
+  const staleRun=randomUUID();
+  for(const [name,args] of [
+    ['terminal_execute',{runId:staleRun,command:'must not run'}],
+    ['terminal_execute',{sessionId,command:'missing run'}],
+    ['terminal_transfer',{action:'upload',runId:staleRun,localPath:'/tmp/local',remotePath:'/tmp/remote'}],
+    ['terminal_session',{action:'close',runId:staleRun}],
+  ] as const){
+    const invalid=await invoke(server,name,args);assert.equal(invalid.value.error.code,'INVALID_ARGUMENTS');assert.equal(invalid.value.error.execution,'not_started');
+  }
+  assert.equal(calls.length,1,'Partial targets must fail before any RPC');
+  const stale=await invoke(server,'terminal_execute',{sessionId,runId:staleRun,command:'explicit stale target'});
+  assert.equal(stale.value.error.code,'STALE_RUN');assert.equal(calls.at(-1)?.params.runId,staleRun);
+});
+
+test('current-session uploads/downloads and session management omit target bookkeeping without changing it',async()=>{
+  const calls:{method:string;params:any}[]=[];
+  const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{
+    calls.push({method,params});
+    return (method==='remoteTransferStart'?{id:params!.requestId,status:'completed',spec:params}:command()) as T;
+  }});
+  await invoke(server,'terminal_execute',{sessionId,runId,command:'initial'});
+  for(const action of ['upload','download']){
+    const sent=await invoke(server,'terminal_transfer',{action,localPath:'/tmp/local',remotePath:'/tmp/remote'});assert.ok(!sent.reply.isError);
+    const remote=calls.at(-1)?.params[action==='upload'?'destination':'source'];assert.equal(remote.sessionId,sessionId);assert.equal(remote.runId,runId);
+  }
+  const renamed=await invoke(server,'terminal_session',{action:'update',title:'renamed'});assert.ok(!renamed.reply.isError);assert.equal(calls.at(-1)?.params.sessionId,sessionId);assert.equal(calls.at(-1)?.params.runId,runId);
+  const before=calls.length;
+  for(const [action,args] of [['status',{requestId:'invalid'}],['cancel',{requestId:'invalid'}],['upload',{localPath:'/tmp/local',remotePath:'relative'}],['upload',{localPath:'/tmp/local',remotePath:'/tmp/remote',resume:true,overwrite:true}]] as const){
+    const invalid=await invoke(server,'terminal_transfer',{action,...args});assert.equal(invalid.value.error.code,'INVALID_ARGUMENTS');assert.equal(invalid.value.error.execution,'not_started');
+  }
+  assert.equal(calls.length,before,'Bad transfer inputs never reach the backend');
+});

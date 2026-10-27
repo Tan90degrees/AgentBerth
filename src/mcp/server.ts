@@ -1,5 +1,5 @@
 import { DaemonRpcError, type DaemonConnection } from '../main/connection';
-import { API_VERSION, requestSchema, type State, type McpCallMetric, type RemoteCommandResult } from '../shared/protocol';
+import { API_VERSION, requestSchema, type Method, type State, type McpCallMetric, type RemoteCommandResult } from '../shared/protocol';
 import { randomUUID } from 'node:crypto';
 import { commandReply, screenReply } from './results';
 import { compactReply } from './compact';
@@ -44,14 +44,14 @@ export class McpError extends Error { constructor(readonly code: number, message
 export class TerminalMcp {
   private lastTarget:{sessionId:string;runId:string}|null=null;
   constructor(private connection: Pick<DaemonConnection, 'rpc'>,private reportCall?:(event:McpCallMetric)=>void|Promise<unknown>) {}
-  private validateOutput(method:'remoteCommand'|'remoteReadOutput'|'remoteKeys',params:Record<string,unknown>) {
+  private validateParams(method:Method,params:Record<string,unknown>) {
     const checked=requestSchema.safeParse({id:randomUUID(),method,params});
     if(!checked.success)throw new ToolArgumentError('工具参数无效：'+checked.error.issues.map(issue=>`${issue.path.join('.')}: ${issue.message}`).join('; '));
     return checked.data.params;
   }
   private async outputRpc(method:'remoteCommand'|'remoteReadOutput'|'remoteKeys',params:Record<string,unknown>):Promise<unknown> {
     // Validate before transmission. Never substitute another execution path.
-    const checked=this.validateOutput(method,params);
+    const checked=this.validateParams(method,params);
     try{return await this.connection.rpc(method,checked);}
     catch(error){
       if(error instanceof DaemonRpcError&&error.code&&error.code!=='INVALID_ARGUMENTS')throw error;
@@ -96,7 +96,14 @@ export class TerminalMcp {
       try{const route=routeTool(name!,args);name=route.name;args=route.args;}catch(error){throw new ToolArgumentError(String(error));}
       const allowed=Object.keys(legacyTools.find(tool=>tool.name===name)!.inputSchema.properties);
       const unexpected=Object.keys(args).filter(key=>!allowed.includes(key));if(unexpected.length)throw new ToolArgumentError('Unexpected argument: '+unexpected.join(', '));
-      if(['terminal_execute','terminal_read_output','terminal_keys','terminal_screen','terminal_actions'].includes(name!)&&args.alias===undefined&&args.sessionId===undefined&&this.lastTarget)Object.assign(args,this.lastTarget);
+      const canReuseTarget=['terminal_execute','terminal_read_output','terminal_keys','terminal_screen','terminal_actions','terminal_upload','terminal_download','terminal_update','terminal_close','terminal_delete','terminal_reconnect'].includes(name!);
+      // Reuse only a wholly omitted target. A partial explicit target must be
+      // validated as given, especially a stale runId; never overwrite it.
+      if(canReuseTarget&&args.alias===undefined&&args.sessionId===undefined&&args.runId===undefined&&this.lastTarget)Object.assign(args,this.lastTarget);
+      if(canReuseTarget){
+        if(args.alias===undefined&&args.sessionId===undefined)throw new ToolArgumentError('Provide an alias or sessionId; omit the entire target to reuse the last session. A runId alone cannot select a session.');
+        if(args.alias!==undefined&&(typeof args.alias!=='string'||!args.alias.trim()||args.sessionId!==undefined||args.runId!==undefined))throw new ToolArgumentError('Use a nonempty alias OR sessionId/runId');
+      }
       inputArgs={...args};
       const detail=args.detail??'compact';if(!['compact','full'].includes(detail as string))throw new ToolArgumentError('detail must be compact or full');delete args.detail;
       if(['terminal_execute','terminal_upload','terminal_download','terminal_transfer'].includes(name!))if(args.requestId===undefined)args.requestId=randomUUID();
@@ -107,7 +114,7 @@ export class TerminalMcp {
         const {alias,...rest}=args;
         if(alias!==undefined&&(typeof alias!=='string'||!alias.trim()||args.sessionId!==undefined||args.runId!==undefined))throw new ToolArgumentError('Use a nonempty alias OR sessionId/runId');
         const params={...rest,...(alias!==undefined?{sessionId:randomUUID(),runId:randomUUID()}:{}),...(outputMethod==='remoteReadOutput'?{waitFor:args.waitFor??(name==='terminal_wait'?'completion':'output')}:{})};
-        this.validateOutput(outputMethod,params);
+        this.validateParams(outputMethod,params);
       }
       let value: unknown;
       if (['terminal_execute','terminal_keys','terminal_screen','terminal_wait','terminal_read_output','terminal_actions','terminal_upload','terminal_download'].includes(name!) && args.alias !== undefined) {
@@ -122,19 +129,19 @@ export class TerminalMcp {
       };
       dispatched=true;
       switch (name) {
-        case 'terminal_open': value = await this.connection.rpc('remoteOpen', args); break;
+        case 'terminal_open': value = await this.connection.rpc('remoteOpen', this.validateParams('remoteOpen',args)); break;
         case 'terminal_create': case 'terminal_update': case 'terminal_close': case 'terminal_delete': case 'terminal_reconnect':
-          value=await this.connection.rpc('remoteManage',{...args,action:name.slice(9)});break;
+          value=await this.connection.rpc('remoteManage',this.validateParams('remoteManage',{...args,action:name.slice(9)}));break;
         case 'terminal_upload': case 'terminal_download': {
           const remote={kind:'remote',sessionId:inputArgs.sessionId,runId:inputArgs.runId,path:args.remotePath},local={kind:'local',path:args.localPath};
-          value=await this.connection.rpc('remoteTransferStart',{requestId:args.requestId,source:name==='terminal_upload'?local:remote,destination:name==='terminal_upload'?remote:local,...Object.fromEntries(['recursive','resume','overwrite'].filter(key=>args[key]!==undefined).map(key=>[key,args[key]]))});break;
+          value=await this.connection.rpc('remoteTransferStart',this.validateParams('remoteTransferStart',{requestId:args.requestId,source:name==='terminal_upload'?local:remote,destination:name==='terminal_upload'?remote:local,...Object.fromEntries(['recursive','resume','overwrite'].filter(key=>args[key]!==undefined).map(key=>[key,args[key]]))}));break;
         }
         case 'terminal_transfer': {
           const [source,destination]=await Promise.all([endpoint(args.sourceAlias,args.sourceSessionId,args.sourceRunId,args.sourcePath),endpoint(args.destinationAlias,args.destinationSessionId,args.destinationRunId,args.destinationPath)]);
-          value=await this.connection.rpc('remoteTransferStart',{requestId:args.requestId,source,destination,...Object.fromEntries(['recursive','resume','overwrite'].filter(key=>args[key]!==undefined).map(key=>[key,args[key]]))});break;
+          value=await this.connection.rpc('remoteTransferStart',this.validateParams('remoteTransferStart',{requestId:args.requestId,source,destination,...Object.fromEntries(['recursive','resume','overwrite'].filter(key=>args[key]!==undefined).map(key=>[key,args[key]]))}));break;
         }
-        case 'terminal_transfer_status':value=await this.connection.rpc('remoteTransferStatus',{...args,timeoutMs:args.timeoutMs??25000});break;
-        case 'terminal_transfer_cancel':value=await this.connection.rpc('remoteTransferCancel',args);break;
+        case 'terminal_transfer_status':value=await this.connection.rpc('remoteTransferStatus',this.validateParams('remoteTransferStatus',{...args,timeoutMs:args.timeoutMs??25000}));break;
+        case 'terminal_transfer_cancel':value=await this.connection.rpc('remoteTransferCancel',this.validateParams('remoteTransferCancel',args));break;
         case 'terminal_list': {
           const state = await this.connection.rpc<State>('state');
           if (state.apiVersion < 21) throw new Error('请在 AgentBerth 设置中更新后台');
@@ -168,7 +175,7 @@ export class TerminalMcp {
       else if(name==='terminal_screen'||publicName==='terminal_interact')value=screenReply(value as Record<string,any>);
       const reply=resultHarness(publicName==='terminal_interact'&&(value as any)?.scope==='viewport'?'terminal_screen':name!,value);
       if(detail==='full')for(const next of [reply?.continuation,reply?.details,reply?.harness?.next])if(next&&['terminal_execute','terminal_read_output','terminal_wait','terminal_screen','terminal_keys'].includes(next.tool))next.arguments.detail='full';
-      return { content: [{ type: 'text', text: boundedToolText(publicReply(detail==='full'?reply:compactReply(reply))) }] };
-    } catch (error) { return { isError: true, content: [{ type: 'text', text: boundedToolText(publicReply(errorReply(error,{name:name!,args,target:inputArgs,dispatched}))) }] }; }
+      return { content: [{ type: 'text', text: boundedToolText(publicReply(detail==='full'?reply:compactReply(reply),inputArgs.waitFor==='output'?'output':'completion')) }] };
+    } catch (error) { return { isError: true, content: [{ type: 'text', text: boundedToolText(publicReply(errorReply(error,{name:name!,args:{...args,...(provided.detail==='full'?{detail:'full'}:{})},target:inputArgs,dispatched}),inputArgs.waitFor==='output'?'output':'completion')) }] }; }
   }
 }

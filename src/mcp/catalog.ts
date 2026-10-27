@@ -43,12 +43,12 @@ export function routeTool(name:string,args:Record<string,unknown>):{name:string;
 }
 
 /** Rewrite only trusted tool pointers, never arbitrary terminal output text. */
-export function publicReply(value:any):any {
+export function publicReply(value:any,waitFor:'completion'|'output'='completion'):any {
   if(!value||typeof value!=='object')return value;
   const pointer=(next:any)=>{
     if(!next?.tool)return next;
     const args={...next.arguments};let tool=next.tool;
-    if(['terminal_read_output','terminal_wait'].includes(tool)){args.waitMs=Math.min(25000,args.timeoutMs??25000);args.waitFor='completion';delete args.timeoutMs;tool='terminal_execute';}
+    if(['terminal_read_output','terminal_wait'].includes(tool)){args.waitMs=Math.min(25000,args.timeoutMs??25000);args.waitFor=tool==='terminal_wait'?'completion':waitFor;delete args.timeoutMs;tool='terminal_execute';}
     else if(['terminal_screen','terminal_keys'].includes(tool)){if(tool==='terminal_screen')args.view='screen';tool='terminal_interact';}
     else if(['terminal_list','terminal_open','terminal_create','terminal_update','terminal_close','terminal_delete','terminal_reconnect','terminal_actions'].includes(tool)){args.action=tool.slice(9);tool='terminal_session';}
     else if(['terminal_upload','terminal_download','terminal_transfer_status','terminal_transfer_cancel'].includes(tool)){args.action=tool.replace('terminal_','').replace('transfer_','');tool='terminal_transfer';}
