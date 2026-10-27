@@ -175,6 +175,21 @@ h2 {
   background: var(--success-soft);
   box-shadow: 0 0 8px var(--shadow-color)
 }
+.output-badge,.project-item .output-badge {
+  display: inline-block;
+  flex: 0 0 auto;
+  overflow: visible;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--selected);
+  align-self: center;
+}
 .main {
   min-width: 0;
   flex: 1;
@@ -2148,6 +2163,32 @@ textarea:focus-visible {
 .history-panel .history-warning {
   overflow-wrap: anywhere
 }
+.history-diagnostics {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px
+}
+.history-diagnostics>summary {
+  padding: 7px 18px;
+  cursor: pointer;
+  color: var(--text-secondary)
+}
+.history-diagnostics>summary>span {
+  margin-left: 10px;
+  color: var(--text-muted);
+  font-size: 10px
+}
+.history-diagnostics-content {
+  max-height: min(30vh, 200px);
+  overflow: auto;
+  padding: 0 18px 8px;
+  line-height: 1.7;
+  overflow-wrap: anywhere
+}
+.history-diagnostics-content p {margin: 6px 0;white-space: pre-wrap;}
+.history-diagnostics-content small {font-size: inherit;}
+.history-diagnostic-path>code {display: block;white-space: pre-wrap;}
 .git-branch {
   gap: 5px;
   max-width: 260px;
@@ -2336,3 +2377,17 @@ textarea:focus-visible {
 .session-header .badge {
   flex-shrink: 0
 }
+
+/* Keep the workspace and its portals mounted while collapsing navigation. */
+.sidebar-content {display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;}
+.sidebar-content[hidden],.sidebar-rail[hidden],.sidebar-resizer[hidden] {display:none!important;}
+.sidebar .brand {padding-right:32px;}
+.sidebar-collapse {position:absolute;top:19px;right:10px;z-index:2;width:30px;height:30px;border-radius:7px;color:var(--text-muted);}
+.sidebar.sidebar-collapsed {width:48px;padding:14px 6px 12px;}
+.sidebar-collapsed .sidebar-collapse {top:14px;right:8px;}
+.sidebar-rail {display:flex;flex-direction:column;flex:1;min-height:0;padding-top:44px;}
+.sidebar-rail nav,.sidebar-rail-bottom {display:flex;flex-direction:column;align-items:center;gap:7px;}
+.sidebar-rail-bottom {margin-top:auto;}
+.sidebar-rail button {position:relative;width:34px;height:34px;padding:7px;border-radius:7px;color:var(--text-muted);}
+.sidebar-rail button[aria-pressed="true"] {background:var(--hover);color:var(--text);}
+.rail-unread {position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--text-secondary);}

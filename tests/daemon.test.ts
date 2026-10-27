@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocket } from 'ws';
+import * as pty from 'node-pty';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import type { Attachment, Project, Run, Session, State } from '../src/shared/protocol';
@@ -90,4 +91,44 @@ test('stopping a terminal terminates its foreground process and descendants', { 
       return false;
     } catch { return true; }
   });
+});
+
+test('Windows stop completes after confirmed tree termination even when ConPTY drops its exit event', { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-missing-pty-exit-'));
+  const children: pty.IPty[] = [];
+  const withoutExit: typeof pty.spawn = (file, args, options) => {
+    const child = pty.spawn(file, args, options); children.push(child);
+    return new Proxy(child, { get(target, key) {
+      if (key === 'onExit') return () => ({ dispose() {} });
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+  };
+  const server = new DaemonServer(path.join(folder, 'data'), () => {}, withoutExit);
+  const connection = await DaemonConnection.open(await server.listen(), () => {});
+  t.after(async () => { connection.close(); await server.close(); for (const child of children) { try { child.kill(); } catch {} } rmSync(folder, { recursive: true, force: true, maxRetries: 5 }); });
+  const project = await connection.rpc<Project>('createProject', { name: 'race', path: folder });
+  const session = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'no exit event', agent: 'shell', terminal: { profile: 'cmd', executable: '', args: [] } });
+  const run = await connection.rpc<Run>('start', { sessionId: session.id, cols: 80, rows: 24 });
+  await eventually(async () => (await connection.rpc<Attachment>('attach', { sessionId: session.id })).snapshot.length > 0);
+  await connection.rpc('stop', { sessionId: session.id });
+  const stopped = (await connection.rpc<State>('state')).sessions[0].latestRun!;
+  assert.equal(stopped.status, 'stopped'); assert.equal(stopped.exitCode, null);
+  assert.throws(() => process.kill(run.pid!, 0));
+  assert.equal((await connection.rpc<Attachment>('attach', { sessionId: session.id })).run!.status, 'stopped');
+});
+
+test('Windows PowerShell can be stopped immediately and restarted without waiting for prompt output', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-early-stop-'));
+  const server = new DaemonServer(path.join(folder, 'data'));
+  const connection = await DaemonConnection.open(await server.listen(), () => {});
+  t.after(async () => { connection.close(); await server.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5 }); });
+  const project = await connection.rpc<Project>('createProject', { name: 'race', path: folder });
+  const session = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'early stop', agent: 'shell' });
+  for (let index = 0; index < 3; index++) {
+    const run = await connection.rpc<Run>('start', { sessionId: session.id, cols: 80, rows: 24 });
+    await connection.rpc('stop', { sessionId: session.id });
+    await eventually(async () => (await connection.rpc<State>('state')).sessions[0].latestRun!.status === 'stopped');
+    assert.throws(() => process.kill(run.pid!, 0));
+  }
 });

@@ -13,33 +13,72 @@ jobs:
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-dependencies
+      - name: Cache Linux CJK test font
+        if: runner.os == 'Linux'
+        id: cjk-font
+        uses: actions/cache@v4
         with:
-          node-version: '24'
-          cache: npm
-      - run: npm ci
-      - run: npm run check
-        timeout-minutes: 5
-      - name: Install CJK fonts for readable Linux screenshots
+          path: ~/.local/share/fonts/agentberth-ci
+          key: ${{ runner.os }}-agentberth-wqy-microhei-v1
+      - name: Prepare Linux CJK test font
+        if: runner.os == 'Linux' && steps.cjk-font.outputs.cache-hit != 'true'
+        run: |
+          font_package_dir="$(mktemp -d)"
+          trap 'rm -rf "$font_package_dir"' EXIT
+          cd "$font_package_dir"
+          if ! apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 download fonts-wqy-microhei; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update -qq
+            apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 download fonts-wqy-microhei
+          fi
+          dpkg-deb --extract ./fonts-wqy-microhei_*.deb extracted
+          install -Dm644 extracted/usr/share/fonts/truetype/wqy/wqy-microhei.ttc "$HOME/.local/share/fonts/agentberth-ci/wqy-microhei.ttc"
+        timeout-minutes: 3
+      - name: Refresh Linux CJK font cache
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+        run: fc-cache -f "$HOME/.local/share/fonts/agentberth-ci"
         timeout-minutes: 2
-      - name: Desktop smoke (Linux)
+      - name: Prepare dependency-free SSH integration (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a npm run test:desktop
+        run: |
+          if [ ! -x /usr/sbin/sshd ]; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update -qq
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-upgrade --no-install-recommends openssh-server
+          fi
+          bash scripts/setup-ssh-test.sh
+        timeout-minutes: 5
+      - run: npm run check
+        timeout-minutes: 8
+      - name: Workbench smoke (Linux)
+        id: desktop-linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/smoke.mjs
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
-      - name: Desktop smoke (Windows)
+      - name: File preview smoke (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        run: xvfb-run -a node scripts/smoke-files.mjs
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:browser
+      - name: Workbench smoke (Windows)
+        id: desktop-windows
         if: runner.os == 'Windows'
-        run: npm run test:desktop
+        run: node scripts/smoke.mjs
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:browser
+      - name: File preview smoke (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        run: node scripts/smoke-files.mjs
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
@@ -55,24 +94,25 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install Electron and native dependencies
-        run: npm ci
+      - uses: ./.github/actions/setup-dependencies
         timeout-minutes: 10
+      - name: Cache Windows packaging tools
+        uses: actions/cache@v4
+        with:
+          path: .cache/electron-builder
+          key: windows-builder-v1-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
       - name: Check types and setup scripts
         run: npm run typecheck && npm run test:scripts
       - name: Build installer and unpack-and-run ZIP
         id: package
-        run: npm run dist:win
+        run: npm run dist:win -- --config.electronDist=node_modules/electron/dist
         timeout-minutes: 10
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
       - name: Test installer progress, cancellation and upgrade
         id: installer-smoke
         run: ./scripts/test-installer.ps1
@@ -80,7 +120,14 @@ jobs:
         timeout-minutes: 6
       - name: Test packaged application with real terminal
         id: packaged-smoke
-        run: npm run test:packaged
+        run: node scripts/smoke.mjs --packaged
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:browser
+      - name: Test packaged file preview and Git
+        id: packaged-files-smoke
+        if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
+        run: node scripts/smoke-files.mjs --packaged
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
@@ -88,7 +135,8 @@ jobs:
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         env:
-          PACKAGED_SMOKE_RESULT: ${{ steps.packaged-smoke.outcome }}
+          PACKAGED_WORKBENCH_RESULT: ${{ steps.packaged-smoke.outcome }}
+          PACKAGED_FILES_RESULT: ${{ steps.packaged-files-smoke.outcome }}
           INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
         run: |
           $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.zip' }
@@ -99,7 +147,8 @@ jobs:
           }
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $env:PACKAGED_SMOKE_RESULT; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success') { 'success' } else { 'failure' }
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}

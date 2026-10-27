@@ -127,3 +127,45 @@ test('setup installs before rebuilding for pinned ABI and skips the installer on
   assert.equal(second.status, 0, second.stderr);
   assert.equal(readFileSync(trace, 'utf8'), 'install\nrebuild\nrebuild\n');
 });
+
+function nativeProbeFixture(t) {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-native-probe-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const preload = path.join(folder, 'native.cjs');
+  writeFileSync(preload, `
+    Object.defineProperty(process.versions, 'electron', { value: '44.7.0' });
+    const Module = require('node:module'), load = Module._load;
+    Module._load = function(name, ...args) {
+      if (name !== 'node-pty') return load.call(this, name, ...args);
+      return { spawn() {
+        // Model a native worker that remains live after onExit, even after kill.
+        setInterval(() => {}, 1000);
+        return {
+          kill() {},
+          onData(callback) { setImmediate(() => callback(process.env.PROBE_CASE === 'output' ? 'wrong output' : 'AGENTBERTH_NATIVE_READY')); },
+          onExit(callback) { setTimeout(() => callback({ exitCode: process.env.PROBE_CASE === 'exit' ? 1 : 0 }), 20); },
+        };
+      } };
+    };
+  `);
+  return (value = '', version = '44.7.0') => spawnSync(process.execPath,
+    ['--require', preload, path.resolve('scripts/native-probe.cjs'), version],
+    { encoding: 'utf8', timeout: 10000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PROBE_CASE: value } });
+}
+
+test('native dependency probe flushes success and exits despite a lingering ConPTY worker', t => {
+  const result = nativeProbeFixture(t)();
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Verified Electron 44\.7\.0, native ABI \d+ and PTY output\n/);
+});
+
+test('native dependency probe still rejects wrong Electron versions, missing output and failed commands', t => {
+  const run = nativeProbeFixture(t);
+  for (const [value, version] of [['output', '44.7.0'], ['exit', '44.7.0'], ['', '44.7.1']]) {
+    const result = run(value, version);
+    assert.equal(result.error, undefined, result.error?.message);
+    assert.equal(result.status, 1, result.stderr);
+    assert.doesNotMatch(result.stdout, /Verified Electron/);
+  }
+});

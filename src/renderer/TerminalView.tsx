@@ -1,3 +1,4 @@
+import { isTerminalReply } from '../shared/terminal-replies';
 import { memo, useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -40,7 +41,8 @@ function fitTerminal(terminal: Terminal, fit: FitAddon) {
   return dimensions;
 }
 
-export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError, onOpenPath }: { sessionId: string; onOpenPath?: (path: string) => void; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
+export const TerminalView = memo(function TerminalView({ sessionId, remoteSession = false, inputEnabled = true, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError, onOpenPath }: { sessionId: string; remoteSession?: boolean; inputEnabled?: boolean; onOpenPath?: (path: string) => void; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
+  const allowedInput = useRef(inputEnabled); allowedInput.current = inputEnabled;
   const host = useRef<HTMLDivElement>(null);
   const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
   useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
@@ -49,16 +51,23 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
   const pathHandler = useRef(onOpenPath); pathHandler.current = onOpenPath;
   useEffect(() => { if (autoFocus && host.current?.clientWidth) instance.current?.focus(); }, [autoFocus]);
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
-  const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty);
   useEffect(() => {
-    const terminal = new Terminal({ ...options, theme: palette.current, fontSize, windowsPty });
+    const terminal = instance.current;
+    if (!terminal) return;
+    terminal.options.disableStdin = !inputEnabled;
+    const element = document.activeElement;
+    if (inputEnabled && mayFocus.current && host.current?.clientWidth && (!element || element === document.body || host.current.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
+  }, [inputEnabled]);
+  const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty, inputEnabled);
+  useEffect(() => {
+    const terminal = new Terminal({ ...options, disableStdin: !allowedInput.current, theme: palette.current, fontSize, windowsPty });
     instance.current=terminal;
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     loadWebLinks(terminal, error => errorHandler.current(error));
     terminal.open(host.current!);
-    const disposePaths = bindTerminalPaths(terminal, path => pathHandler.current?.(path));
+    const disposePaths = onOpenPath ? bindTerminalPaths(terminal, path => pathHandler.current?.(path)) : () => {};
     const sizeChanged = terminal.onResize(({ cols, rows }) => {
       if (host.current) { host.current.dataset.cols = String(cols); host.current.dataset.rows = String(rows); }
     });
@@ -66,7 +75,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     let ready = false;
     let runId: string | null = null;
     let running = false;
-    const unbind = bind(terminal, () => ready && running && !!runId);
+    const unbind = bind(terminal, () => ready && running && !!runId && allowedInput.current);
     let seq = 0;
     let pending: TerminalEvent[] = [];
     let pendingBytes = 0;
@@ -89,11 +98,12 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
     });
     let inputChain = Promise.resolve(), inputGeneration = 0;
     const sendInput = (data: string, binary = false) => {
-      if (!ready || !running || !runId) return;
+      if (remoteSession && !binary && isTerminalReply(data)) return; // The daemon headless terminal owns query responses, including with no UI.
+      if (!allowedInput.current || !ready || !running || !runId) return;
       const targetRun = runId, generation = inputGeneration;
       for (const chunk of inputChunks(data)) {
         inputChain = inputChain.then(async () => {
-          if (disposed || !ready || !running || targetRun !== runId || generation !== inputGeneration) return;
+          if (!allowedInput.current || disposed || !ready || !running || targetRun !== runId || generation !== inputGeneration) return;
           await window.berth.rpc('input', { sessionId, runId: targetRun, data: chunk, ...(binary ? { binary: true } : {}) });
         }).catch(reason => { inputGeneration++; if (!disposed) errorHandler.current(String(reason)); });
       }
@@ -157,7 +167,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, fontSize = 1
       instance.current=null;disposed = true; resize.dispose(); metricsChanged.dispose(); observer.disconnect(); window.removeEventListener('resize', requestResize); disposeRenderer(); disposePaths(); sizeChanged.dispose(); input.dispose(); binaryInput.dispose(); off(); unbind(); terminal.dispose();
       void window.berth.rpc('detach', { sessionId }).catch(() => {});
     };
-  }, [sessionId, fontSize, windowsPty, orderedResize, binaryMouse, bind, setReady]);
+  }, [sessionId, remoteSession, fontSize, windowsPty, orderedResize, binaryMouse, bind, setReady]);
   return <div className="terminal-surface">{controls}<div className="terminal-host" data-testid="terminal"><div className="terminal-mount" ref={host} /></div></div>;
 });
 
