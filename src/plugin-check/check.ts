@@ -33,6 +33,7 @@ export async function checkPlugin(args: string[], report: (line: string) => void
   try {
     const config = agentDefinitionSchema.parse(await installAgentFile(path.resolve(file), temporary, plugins));
     const agent: AgentDefinition = { id: 'agent:' + randomUUID(), ...config };
+    if (agent.skills) pass('Skill 目录声明格式（未修改真实技能目录）');
     if (!agent.plugin) {
       pass('JSON 启动配置与恢复模板');
       report('配置检查完成（无插件接口）。');

@@ -188,3 +188,15 @@
 .scm-branch-tabs button[aria-selected="true"] { background:var(--surface-muted); color:var(--text); }
 .scm-network label>input { width:100%; min-width:0; padding:6px; font-size:11px; }
 .scm-network label>span { display:block; margin-top:4px; }
+
+.preview-tabbar { display:flex; flex:none; min-width:0; border-bottom:1px solid var(--border); }
+.preview-tabs { display:flex; flex:1; min-width:0; overflow-x:auto; scrollbar-width:thin; }
+.preview-tab { display:flex; flex:none; align-items:center; max-width:280px; border-right:1px solid var(--border); border-top:2px solid transparent; }
+.preview-tab.selected { background:var(--selected); border-top-color:var(--accent); }
+.preview-tab [role="tab"] { display:flex; gap:8px; align-items:baseline; min-width:0; border:0; border-radius:0; background:transparent; padding:8px 10px; white-space:nowrap; }
+.preview-tab small { max-width:100px; overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:11px; }
+.preview-tab .preview-tab-close { border:0; padding:2px 6px; margin-right:4px; background:transparent; }
+.preview-close-all { flex:none; border:0; border-radius:0; font-size:11px; background:transparent; }
+.preview-document { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
+.preview-document[hidden] { display:none; }
+.file-preview-pane[hidden] { display:none; }

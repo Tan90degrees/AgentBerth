@@ -5,11 +5,13 @@ import type { FilePreview, Project, ProjectFile, ProjectFilePage } from '../shar
 import { readStored, saveStored } from './storage';
 
 const Preview = lazy(() => import('./FilePreview'));
+type PreviewTab = { path: string; file?: FilePreview; loading?: boolean; error?: string; markdown: boolean; position?: { path: string; line: number; column: number; nonce: number } | null };
+const MAX_PREVIEW_TABS = 20;
 type Directory = { page?: ProjectFilePage; loading: boolean; error?: string };
 function EntryIcon({ directory, expanded }: { directory: boolean; expanded?: boolean }) {
   return <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true"><path d={directory ? expanded ? 'M2 7V4h6l2 2h8v2M2 8h17l-3 8H3L2 8Z' : 'M2 6V4h6l2 2h8v10H2V6Z' : 'M5 2h7l4 4v12H5V2Zm7 0v5h4'} /></svg>;
 }
-export default memo(function FileBrowser({ project, connected, treeHost, previewHost, onPreview, target, navigationSupported, onDiff }: { project: Project; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; onPreview: () => void; onDiff?: (path: string, staged: boolean, projectPath: boolean) => void; navigationSupported: boolean; target: { query: string; nonce: number } | null }) {
+export default memo(function FileBrowser({ project, connected, treeHost, previewHost, previewHidden = false, onPreview, target, navigationSupported, onDiff }: { project: Project; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; previewHidden?: boolean; onPreview: () => void; onDiff?: (path: string, staged: boolean, projectPath: boolean) => void; navigationSupported: boolean; target: { query: string; nonce: number } | null }) {
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
   const directoriesRef = useRef(directories); directoriesRef.current = directories;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -18,9 +20,17 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
   const [markdown, setMarkdown] = useState(() => readStored('berth.markdownPreview') !== 'source');
   const [selected, setSelected] = useState('');
   const selectedRef = useRef('');
-  const [file, setFile] = useState<FilePreview | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const storageKey = `berth.previewTabs.${project.id}`;
+  const [tabs, setTabs] = useState<PreviewTab[]>(() => {
+    try { const saved = JSON.parse(readStored(storageKey) || '[]'); return Array.isArray(saved) ? saved.filter((p): p is string => typeof p === 'string' && p.length > 0 && p.length <= 4096).slice(0, MAX_PREVIEW_TABS).map(path => ({ path, markdown })) : []; } catch { return []; }
+  });
+  const tabsRef = useRef(tabs); tabsRef.current = tabs;
+  const [activeFile, setActiveFile] = useState(() => { const saved = readStored(storageKey + '.active'); return tabs.some(tab => tab.path === saved) ? saved! : tabs[0]?.path ?? ''; });
+  const [tabNotice, setTabNotice] = useState('');
+  useEffect(() => { saveStored(storageKey, JSON.stringify(tabs.map(tab => tab.path))); }, [storageKey, tabs]);
+  useEffect(() => { saveStored(storageKey + '.active', activeFile); }, [storageKey, activeFile]);
+  const fileRequests = useRef(new Map<string, number>());
+  const updateTab = useCallback((path: string, patch: Partial<PreviewTab>) => setTabs(previous => previous.map(tab => tab.path === path ? { ...tab, ...patch } : tab)), []);
   const [refreshing, setRefreshing] = useState(false);
   const refreshingRef = useRef(false);
   const alive = useRef(true);
@@ -55,30 +65,46 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
       if (alive.current && sequence.current.get(path) === token) setDirectories(previous => ({ ...previous, [path]: { loading: false, error: String(reason).replace(/^Error: /, '') } }));
     }
   }, [project.id]);
-  const openFile = useCallback(async (path: string, anchor = '', activate = true) => {
+  const openFile = useCallback(async (path: string, anchor = '', activate = true, force = false) => {
     if (activate) onPreview();
-    if (selectedRef.current === path && anchor) {
-      host.current?.querySelector<HTMLElement>(`.markdown-document [id="${CSS.escape(anchor)}"]`)?.scrollIntoView({ block: 'start' });
+    const existing = tabsRef.current.find(tab => tab.path === path);
+    if (!existing && tabsRef.current.length >= MAX_PREVIEW_TABS) { setTabNotice('最多打开 20 个文件，请先关闭不需要的标签。'); return; }
+    setTabNotice(''); selectedRef.current = path; setSelected(path); setActiveFile(path);
+    if (!existing) {
+      const next = { path, markdown: readStored('berth.markdownPreview') !== 'source', position: position?.path === path ? position : null };
+      tabsRef.current = [...tabsRef.current, next]; setTabs(tabsRef.current);
+    }
+    if (existing?.file && !force) {
+      if (position?.path === path) updateTab(path, { position });
+      if (anchor) requestAnimationFrame(() => host.current?.querySelector<HTMLElement>(`.preview-document:not([hidden]) .markdown-document [id="${CSS.escape(anchor)}"]`)?.scrollIntoView({ block: 'start' }));
       return;
     }
     const token = ++previewSequence.current;
-    const same = selectedRef.current === path;
-    selectedRef.current = path; setSelected(path); setError(''); setLoading(true);
-    if (!same) setFile(null);
+    fileRequests.current.set(path, token); updateTab(path, { loading: true, error: '' });
     const previous = previewTail.current;
     let release!: () => void;
     previewTail.current = new Promise<void>(resolve => { release = resolve; });
     await previous;
     try {
-      if (!alive.current || token !== previewSequence.current) return;
+      if (!alive.current || fileRequests.current.get(path) !== token) return;
       const result = await window.berth.rpc<FilePreview>('previewFile', { projectId: project.id, path });
-      if (!alive.current || token !== previewSequence.current) return;
-      setFile(result);
-      if (anchor) requestAnimationFrame(() => host.current?.querySelector<HTMLElement>(`.markdown-document [id="${CSS.escape(anchor)}"]`)?.scrollIntoView({ block: 'start' }));
+      if (!alive.current || fileRequests.current.get(path) !== token) return;
+      updateTab(path, { file: result, loading: false });
+      if (anchor) requestAnimationFrame(() => host.current?.querySelector<HTMLElement>(`.preview-document:not([hidden]) .markdown-document [id="${CSS.escape(anchor)}"]`)?.scrollIntoView({ block: 'start' }));
     } catch (reason) {
-      if (alive.current && token === previewSequence.current) { setFile(null); setError(String(reason).replace(/^Error: /, '')); }
-    } finally { release(); if (alive.current && token === previewSequence.current) setLoading(false); }
-  }, [project.id, onPreview]);
+      if (alive.current && fileRequests.current.get(path) === token) updateTab(path, { loading: false, error: String(reason).replace(/^Error: /, '') });
+    } finally { release(); }
+  }, [project.id, onPreview, position, updateTab]);
+  function closeTab(path: string) {
+    fileRequests.current.delete(path);
+    const old = tabsRef.current, index = old.findIndex(tab => tab.path === path);
+    const next = old.filter(tab => tab.path !== path); tabsRef.current = next; setTabs(next);
+    if (selectedRef.current === path) {
+      const replacement = next[Math.max(0, index - 1)]?.path ?? '';
+      selectedRef.current = replacement; setActiveFile(replacement); setSelected(replacement);
+      if (replacement && !next.find(tab => tab.path === replacement)?.file) void openFile(replacement, '', false);
+    }
+  }
   const navigateFile = useCallback((path: string, anchor?: string) => { void openFile(path, anchor); }, [openFile]);
   const refresh = useCallback(async () => {
     if (refreshingRef.current || !connected) return;
@@ -86,7 +112,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     const paths = ['', ...expandedRef.current].filter(path => !path || path.split('/').slice(0, -1).every((_, index, parts) => expandedRef.current.has(parts.slice(0, index + 1).join('/'))));
     let index = 0;
     const tasks = Array.from({ length: 2 }, async () => { while (index < paths.length && alive.current) await loadDirectory(paths[index++]); });
-    if (selectedRef.current) tasks.push(openFile(selectedRef.current, '', false));
+    if (selectedRef.current) tasks.push(openFile(selectedRef.current, '', false, true));
     try { await Promise.all(tasks); }
     finally { refreshingRef.current = false; if (alive.current) setRefreshing(false); }
   }, [connected, loadDirectory, openFile]);
@@ -95,6 +121,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     if (connected) void loadDirectory('');
     return () => { alive.current = false; previewSequence.current++; sequence.current.forEach((value, key) => sequence.current.set(key, value + 1)); };
   }, [loadDirectory, connected]);
+  useEffect(() => { if (connected && activeFile && !tabsRef.current.find(tab => tab.path === activeFile)?.file) void openFile(activeFile, '', false); }, [connected, activeFile, openFile]);
   useEffect(() => {
     const focus = () => { if (document.visibilityState === 'visible') void refresh(); };
     window.addEventListener('focus', focus);
@@ -116,7 +143,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
       while (alive.current && page?.nextOffset !== null && page?.nextOffset !== undefined && child && !page.entries.some(item => item.name === child)) page = await loadDirectory(parent, page.nextOffset);
     } }));
     if (!alive.current) return;
-    if (entry.kind === 'file') { setPosition(line ? { path: entry.path, line, column: column ?? 1, nonce: Date.now() } : null); if (line) setMarkdown(false); await openFile(entry.path); }
+    if (entry.kind === 'file') { setPosition(line ? { path: entry.path, line, column: column ?? 1, nonce: Date.now() } : null); if (line) setMarkdown(false); await openFile(entry.path); updateTab(entry.path, { position: line ? { path: entry.path, line, column: column ?? 1, nonce: Date.now() } : null, ...(line ? { markdown: false } : {}) }); }
     else { setSelected(entry.path); }
     requestAnimationFrame(() => tree.current?.querySelector<HTMLElement>(`[data-file-path="${CSS.escape(entry.path)}"]`)?.scrollIntoView({ block: 'nearest' }));
   }, [loadDirectory, openFile]);
@@ -190,9 +217,21 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
       <nav ref={tree} className="file-tree" aria-label="项目目录树"><ul role="tree" aria-label={project.name} onKeyDown={treeKeys}>{renderDirectory('', 0)}</ul></nav>
       <p className="file-tree-legend">{connected ? '灰色表示 Git 忽略 · 单击文件预览' : '后台已断开'}</p>
     </div>, treeHost)}
-    {previewHost && createPortal(<section ref={host} className="file-preview-pane" aria-label="文件预览" aria-busy={loading}>
-      {error && <div className="file-preview-error" role="alert"><p>{error}</p>{selected && <button disabled={!connected} onClick={() => void openFile(selected)}>重试</button>}</div>}
-      {file ? <Suspense fallback={<div className="file-preview-empty">正在准备预览…</div>}><Preview onDiff={onDiff ? staged => onDiff(file.path, staged, true) : undefined} position={position} file={file} projectId={project.id} markdown={markdown} onMarkdown={value => { setMarkdown(value); saveStored('berth.markdownPreview', value ? 'rendered' : 'source'); }} onNavigate={navigateFile} onRefresh={() => void openFile(selected)} onError={setError} /></Suspense> : !error && <div className="file-preview-empty"><EntryIcon directory={false} /><strong>{loading ? '正在读取文件…' : '选择文件预览'}</strong><p>从左侧“文件”选择文档或代码，<br />在这里查看源码、图片和 Markdown。</p></div>}
+    {previewHost && createPortal(<section ref={host} className="file-preview-pane" hidden={previewHidden} aria-label="文件预览">
+      {!!tabs.length && <div className="preview-tabbar"><div className="preview-tabs" role="tablist" aria-label="打开的文件" onKeyDown={event => {
+        const current = tabs.findIndex(tab => tab.path === activeFile);
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w') { event.preventDefault(); event.stopPropagation(); closeTab(activeFile); }
+        else if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; void openFile(tabs[index].path); requestAnimationFrame(() => host.current?.querySelector<HTMLButtonElement>('.preview-tab.selected [role="tab"]')?.focus()); }
+      }}>{tabs.map(tab => <div className={`preview-tab ${activeFile === tab.path ? 'selected' : ''}`} key={tab.path} title={tab.path}>
+        <button role="tab" aria-selected={activeFile === tab.path} tabIndex={activeFile === tab.path ? 0 : -1} onClick={() => void openFile(tab.path)}>{tab.path.split('/').at(-1)}<small>{tab.path.includes('/') ? tab.path.slice(0, tab.path.lastIndexOf('/')) : ''}</small></button>
+        <button className="preview-tab-close" aria-label={`关闭预览 ${tab.path}`} onClick={() => closeTab(tab.path)}>×</button>
+      </div>)}</div><button className="preview-close-all" title="关闭所有文件预览" onClick={() => { fileRequests.current.clear(); tabsRef.current = []; setTabs([]); selectedRef.current = ''; setActiveFile(''); setSelected(''); }}>关闭全部</button></div>}
+      {tabNotice && <p className="file-preview-notice" role="status">{tabNotice}</p>}
+      {tabs.map(tab => <div className="preview-document" key={tab.path} hidden={activeFile !== tab.path} aria-busy={tab.loading}>
+        {tab.error && <div className="file-preview-error" role="alert"><p>{tab.error}</p><button disabled={!connected} onClick={() => void openFile(tab.path, '', true, true)}>重试</button></div>}
+        {tab.file ? <Suspense fallback={<div className="file-preview-empty">正在准备预览…</div>}><Preview onDiff={onDiff ? staged => onDiff(tab.path, staged, true) : undefined} position={tab.position} file={tab.file} projectId={project.id} markdown={tab.markdown} onMarkdown={value => { updateTab(tab.path, { markdown: value }); saveStored('berth.markdownPreview', value ? 'rendered' : 'source'); }} onNavigate={navigateFile} onRefresh={() => void openFile(tab.path, '', true, true)} onError={error => updateTab(tab.path, { error })} /></Suspense> : !tab.error && <div className="file-preview-empty">正在读取文件…</div>}
+      </div>)}
+      {!tabs.length && <div className="file-preview-empty"><EntryIcon directory={false} /><strong>选择文件预览</strong><p>单击文件打开标签，可切换和关闭多个文件。</p></div>}
     </section>, previewHost)}
   </>;
 });

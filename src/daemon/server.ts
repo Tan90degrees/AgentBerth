@@ -20,6 +20,7 @@ import { ProjectFiles } from './files';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
 import { sameDirectory } from './history';
+import { NativeDiscovery, unambiguousNewHistory, type NativeCandidate } from './native-discovery';
 import { RunLog } from './logs';
 import { readHistory } from './history';
 import { terminateTree } from './processes';
@@ -60,12 +61,17 @@ export class DaemonServer {
   private token = randomBytes(32).toString('hex');
   private closing = false;
   private logs: string;
+  private nativeDiscovery = new NativeDiscovery();
+  private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean }>();
+  private nativeTimer: NodeJS.Timeout | null = null;
+  private nativeScanning: Promise<void> | null = null;
   private historyBusy = new Set<string>();
   private historyWrites = new Set<string>();
   private starting = new Set<string>();
   private editingProjects = new Set<string>();
 
-  constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn) {
+  constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery) {
+    if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
     this.store = new Store(dataDirectory);
     this.transfers=new RemoteTransfers(this.store,async endpoint=>endpoint.kind==='local'?localTransferFs():sftpTransferFs(await this.remote(endpoint.sessionId,endpoint.runId).transport.sftp()),data=>this.broadcast({event:'remoteTransfer',data}),data=>this.broadcast({event:'remoteAction',data}),endpoint=>{
       if(endpoint.kind==='local')return 'local';
@@ -455,6 +461,7 @@ export class DaemonServer {
       case 'checkAgentPlugin': return this.plugins.check(this.store.agent(request.params.agentId));
       case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.agentVersions.delete(request.params.agentId); this.changed(); return null;
       case 'linkNativeSession': {
+        this.nativeTracking.delete(request.params.sessionId);
         const session = this.store.session(request.params.sessionId);
         this.requireHistoryAvailable(session.id);
         if (!['codex', 'claude', 'opencode'].includes(session.agent) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
@@ -462,6 +469,7 @@ export class DaemonServer {
         this.store.saveHistory(session.id, history); this.changed(); return history;
       }
       case 'unlinkNativeSession': {
+        this.nativeTracking.delete(request.params.sessionId);
         const id = request.params.sessionId; this.requireHistoryAvailable(id);
         const history = { messages: [], warnings: [], path: null, nativeSessionId: null };
         this.store.saveHistory(id, history); this.changed(); return history;
@@ -552,6 +560,7 @@ export class DaemonServer {
 
   private async importHistory(sessionId: string, file: string | null): Promise<unknown> {
     this.reserveHistory(sessionId);
+    this.nativeTracking.delete(sessionId);
     this.historyWrites.add(sessionId);
     try {
       const session = this.store.session(sessionId);
@@ -579,6 +588,19 @@ export class DaemonServer {
   private async discoverHistories(sessionId: string, pagination: HistoryQuery) {
     this.requireHistoryAvailable(sessionId);
     const session = this.store.session(sessionId);
+    if (session.agent === 'codex' || session.agent === 'claude') {
+      this.reserveHistory(sessionId);
+      try {
+        const items = await this.nativeDiscovery.list(session.agent, this.store.project(session.projectId).path);
+        const query = pagination.query.toLowerCase();
+        const filtered = items.filter(item => item.nativeSessionId.toLowerCase().includes(query));
+        const offset = pagination.cursor ? Number(pagination.cursor) : 0;
+        if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('分页已失效，请刷新');
+        const page = filtered.slice(offset, offset + pagination.limit);
+        for (const item of page) if (!this.store.nativeHistory(sessionId, item.nativeSessionId)) this.store.saveHistoryEntry(sessionId, { messages: [], warnings: [], path: item.path, nativeSessionId: item.nativeSessionId });
+        return { items: page, nextCursor: offset + page.length < filtered.length ? String(offset + page.length) : null, warnings: ['发现本机原生记录；多个候选请选中后关联。扫描最多 4000 个目录项、最近 500 个文件。'] };
+      } finally { this.historyBusy.delete(sessionId); }
+    }
     if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return { items: [], nextCursor: null, warnings: ['此类型未提供会话发现；可导入多个原生记录文件或手动关联 ID'] };
     this.reserveHistory(sessionId);
     try {
@@ -592,7 +614,7 @@ export class DaemonServer {
   private async previewHistory(sessionId: string, nativeSessionId: string, refresh: boolean): Promise<History> {
     this.requireHistoryAvailable(sessionId);
     const cached = this.store.nativeHistory(sessionId, nativeSessionId);
-    if (cached && !refresh) return cached;
+    if (cached && !refresh && (cached.messages.length || !cached.path)) return cached;
     const session = this.store.session(sessionId);
     const agent = session.agent.startsWith('agent:') ? this.store.agent(session.agent) : null;
     if (!agent && !cached?.path) throw new Error('此记录尚未导入，请先选择原生记录文件');
@@ -652,6 +674,9 @@ export class DaemonServer {
     }
     if (this.closing) throw new Error('后台无法再启动终端');
     if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
+    const trackNative = !resume && !session.remote && (['codex', 'claude'].includes(session.agent) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
+    let baseline: NativeCandidate[] | null = [];
+    if (trackNative) { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: session.remote ? undefined : windowsPtyFor(process.platform, release()) });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
@@ -687,6 +712,14 @@ export class DaemonServer {
     const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
+    if (trackNative) {
+      // A fresh launch must never retain the previous conversation's recovery ID.
+      this.store.saveHistory(sessionId, { messages: [], warnings: [], path: null, nativeSessionId: null });
+      const peers = [...this.nativeTracking.keys()].filter(id => { const peer = this.store.session(id); return peer.projectId === session.projectId && peer.agent === session.agent; });
+      peers.forEach(id => { this.nativeTracking.get(id)!.ambiguous = true; });
+      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: peers.length > 0 || baseline === null });
+      this.scheduleNativeScan();
+    }
     this.changed(); // Make connection startup visible and cancellable in the sidebar.
     this.pruneLogs();
     child.onData(text => {
@@ -714,6 +747,43 @@ export class DaemonServer {
     if (startupExit !== null) await this.finish(sessionId, live, startupExit);
     this.changed();
     return live.run;
+  }
+
+  private async nativeCandidates(sessionId: string): Promise<NativeCandidate[] | null> {
+    const session = this.store.session(sessionId), project = this.store.project(session.projectId).path;
+    if (!session.agent.startsWith('agent:')) return this.nativeDiscovery.list(session.agent, project);
+    const version = this.agentVersion(session.agent);
+    const page = await this.plugins.list(this.store.agent(session.agent), session, project, { cursor: null, limit: 50, query: '' });
+    this.assertAgentVersion(session.agent, version);
+    // Incomplete discovery cannot establish a safe before/after baseline.
+    if (page.nextCursor || page.warnings.length) return null;
+    return page.items.map(item => ({ ...item, modified: item.updatedAt ? Date.parse(item.updatedAt) : 0 }));
+  }
+  private scheduleNativeScan(): void {
+    if (this.nativeTimer || this.closing || !this.nativeTracking.size) return;
+    this.nativeTimer = setTimeout(() => {
+      this.nativeTimer = null;
+      this.nativeScanning = (async () => { for (const id of this.nativeTracking.keys()) await this.scanNativeHistory(id); })().catch(error => this.logError(error)).finally(() => { this.nativeScanning = null; this.scheduleNativeScan(); });
+    }, 2000);
+    this.nativeTimer.unref();
+  }
+  private async scanNativeHistory(sessionId: string): Promise<void> {
+    const tracking = this.nativeTracking.get(sessionId);
+    if (!tracking || tracking.ambiguous || this.historyBusy.has(sessionId) || this.historyWrites.has(sessionId)) return;
+    try {
+      const session = this.store.session(sessionId);
+      if (session.latestRun?.id !== tracking.runId || session.nativeSessionId) { this.nativeTracking.delete(sessionId); return; }
+      const items = await this.nativeCandidates(sessionId);
+      if (!items) return;
+      const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.agent === session.agent).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
+      const candidate = unambiguousNewHistory(items, tracking.baseline, tracking.started, claimed);
+      if (!candidate) return;
+      // Recheck after I/O so manual association, unlink, or a new run wins.
+      const current = this.store.session(sessionId);
+      if (this.nativeTracking.get(sessionId) !== tracking || current.latestRun?.id !== tracking.runId || current.nativeSessionId || this.historyBusy.has(sessionId)) return;
+      this.store.saveHistory(sessionId, { messages: [], warnings: [], path: candidate.path, nativeSessionId: candidate.nativeSessionId });
+      this.nativeTracking.delete(sessionId); this.changed();
+    } catch (error) { this.logError(error); }
   }
 
   private requireProjectAvailable(id: string): void {
@@ -761,6 +831,26 @@ export class DaemonServer {
     // Publish one completion promise before cleanup can trigger another exit.
     live.finishing = Promise.resolve().then(async () => {
       live.remote?.activity.finish();
+      if (this.nativeTracking.has(sessionId)) {
+        if (this.nativeScanning) await this.nativeScanning;
+        await this.scanNativeHistory(sessionId);
+        if (this.nativeTracking.get(sessionId) && !this.nativeTracking.get(sessionId)!.ambiguous && !this.closing) {
+          await new Promise(resolve => setTimeout(resolve, 150));
+          await this.scanNativeHistory(sessionId);
+        }
+        this.nativeTracking.delete(sessionId);
+      }
+      const session = this.store.session(sessionId);
+      if (!session.remote && session.nativeSessionId && !this.historyBusy.has(sessionId)) {
+        try {
+          const version = this.agentVersion(session.agent);
+          const history = session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history && !this.closing
+            ? await this.plugins.history(this.store.agent(session.agent), session, this.store.project(session.projectId).path, session.transcriptPath)
+            : ['codex', 'claude'].includes(session.agent) && session.transcriptPath ? await readHistory(session.transcriptPath, session.agent, this.store.project(session.projectId).path) : null;
+          this.assertAgentVersion(session.agent, version);
+          if (history && history.nativeSessionId === session.nativeSessionId && this.store.session(sessionId).nativeSessionId === session.nativeSessionId && !this.historyBusy.has(sessionId)) this.store.saveHistory(sessionId, history);
+        } catch (error) { this.logError(error); } // Keep a valid recovery ID if the transcript cannot be read.
+      }
       // Dispose ConPTY's output worker as well as the terminated process.
       if (process.platform === 'win32') {
         try { live.pty.kill(); } catch (error) { this.logError(error); }
@@ -829,6 +919,8 @@ export class DaemonServer {
     } catch (error) { this.closing = false; throw error; }
   }
   async close(): Promise<void> {
+    if (this.nativeTimer) clearTimeout(this.nativeTimer);
+    this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
     for (const socket of this.clients.keys()) socket.terminate();

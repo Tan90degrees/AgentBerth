@@ -1,5 +1,5 @@
 import { DaemonRpcError, type DaemonConnection } from '../main/connection';
-import { API_VERSION, requestSchema, type Method, type State, type McpCallMetric, type RemoteCommandResult } from '../shared/protocol';
+import { requestSchema, type Method, type State, type McpCallMetric, type RemoteCommandResult } from '../shared/protocol';
 import { randomUUID } from 'node:crypto';
 import { commandReply, screenReply } from './results';
 import { compactReply } from './compact';
@@ -41,6 +41,8 @@ const legacyTools = [
 ].map(tool => ({...tool, inputSchema: {...tool.inputSchema, ...(['terminal_list','terminal_open','terminal_create','terminal_transfer_status','terminal_transfer_cancel'].includes(tool.name) ? {} : tool.name==='terminal_transfer' ? {allOf:[{anyOf:[{required:['sourceAlias']},{required:['sourceSessionId','sourceRunId']}]},{anyOf:[{required:['destinationAlias']},{required:['destinationSessionId','destinationRunId']}]}]} : { anyOf: [{required:['alias']},{required:['terminal_actions','terminal_update','terminal_close','terminal_delete','terminal_reconnect'].includes(tool.name) ? ['sessionId'] : ['sessionId','runId']}] })}})).map(tool=>({...tool,title:tool.name.replace('terminal_','SSH · '),annotations:{readOnlyHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status'].includes(tool.name),destructiveHint:!['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create'].includes(tool.name),idempotentHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create','terminal_close'].includes(tool.name),openWorldHint:true}}));
 
 export class McpError extends Error { constructor(readonly code: number, message: string) { super(message); } }
+// MCP wire behavior remains compatible with API 34; workspace features use API 35.
+const MCP_API_VERSION = 34;
 export class TerminalMcp {
   private lastTarget:{sessionId:string;runId:string}|null=null;
   constructor(private connection: Pick<DaemonConnection, 'rpc'>,private reportCall?:(event:McpCallMetric)=>void|Promise<unknown>) {}
@@ -57,7 +59,7 @@ export class TerminalMcp {
       if(error instanceof DaemonRpcError&&error.code&&error.code!=='INVALID_ARGUMENTS')throw error;
       if(error instanceof DaemonRpcError&&error.code==='INVALID_ARGUMENTS'||String(error).includes('请求参数无效')){
         const state=await this.connection.rpc<State>('state').catch(()=>null);
-        if(state&&state.apiVersion<API_VERSION)throw new DaemonRpcError(`后台 API ${state.apiVersion}，此 MCP 需要 API ${API_VERSION}。请在设置 → 后台服务更新后台，并重新连接 MCP。命令未自动重试。`,'BACKEND_UPGRADE_REQUIRED');
+        if(state&&state.apiVersion<MCP_API_VERSION)throw new DaemonRpcError(`后台 API ${state.apiVersion}，此 MCP 需要 API ${MCP_API_VERSION}。请在设置 → 后台服务更新后台，并重新连接 MCP。命令未自动重试。`,'BACKEND_UPGRADE_REQUIRED');
         throw new DaemonRpcError(`后台拒绝 ${method} 参数${state?`（API ${state.apiVersion}）`:''}：${error instanceof Error?error.message:String(error)}；命令未自动重试。`,'INVALID_ARGUMENTS');
       }
       if(method==='remoteCommand')throw new Error(`${error instanceof Error?error.message:String(error)}（requestId: ${params.requestId}；请保留此 ID，结果未知时不要使用新 ID 重发命令）`);

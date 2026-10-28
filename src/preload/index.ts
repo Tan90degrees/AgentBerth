@@ -22,6 +22,7 @@ const api: DesktopApi = {
     ipcRenderer.on('berth:event', callback);
     return () => ipcRenderer.removeListener('berth:event', callback);
   },
+  skills: request => ipcRenderer.invoke('berth:skills', request),
   chooseDirectory: () => ipcRenderer.invoke('berth:directory'),
   chooseTranscript: () => ipcRenderer.invoke('berth:transcript'),
   importAgentPlugin: () => ipcRenderer.invoke('berth:importPlugin'),

@@ -1,3 +1,5 @@
+import { SkillManager, skillRoot } from './skills';
+import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
@@ -244,6 +246,23 @@ ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = a
 ipcMain.handle('berth:appearance',(event,mode:unknown)=>{trusted(event);if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
 nativeTheme.on('updated',()=>{for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
 ipcMain.handle('berth:mcpConfig', event => { trusted(event); return JSON.stringify({ mcpServers: { agentberth: { command: process.execPath, args: [app.isPackaged ? path.join(process.resourcesPath, 'mcp', 'mcp.cjs') : path.join(__dirname, 'mcp.cjs'), dataDirectory], env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2); });
+const skillManager = new SkillManager();
+ipcMain.handle('berth:skills', async (event, input: unknown) => {
+  trusted(event);
+  const request = skillRequestSchema.parse(input);
+  let projectPath: string | undefined;
+  let skills = builtinSkillProviders.find(agent => agent.id === request.location.agentId)?.skills;
+  if (request.location.projectId || !skills) {
+    if (connecting) await connecting;
+    if (!connection) await reconnect();
+    const state = await connection!.rpc<import('../shared/protocol').State>('state');
+    skills ??= (state.agents ?? []).find(agent => agent.id === request.location.agentId)?.skills;
+    projectPath = request.location.projectId ? state.projects.find(project => project.id === request.location.projectId)?.path : undefined;
+    if (request.location.projectId && !projectPath) throw new Error('项目不存在，请重新选择');
+  }
+  if (!skills) throw new Error('此 Agent 尚未通过插件声明 Skill 管理能力，请更新同一个 Agent 配置或脚本');
+  return skillManager.run(skillRoot(skills, projectPath), request);
+});
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:transcript', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl', 'json'] }] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:executable', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: '终端程序', extensions: ['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });

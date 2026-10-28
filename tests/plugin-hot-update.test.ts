@@ -28,6 +28,8 @@ test('live Agent hot update validates before activation, preserves PID/identity/
   const original=await adapter(folder,'old');const agent=await c.rpc<AgentDefinition>('createAgent',original);
   const session=await c.rpc<Session>('createSession',{projectId:project.id,title:'Live',agent:agent.id,command:''});
   await c.rpc('refreshHistory',{sessionId:session.id});await c.rpc('start',{sessionId:session.id,cols:80,rows:24});
+  // A fresh launch clears the old recovery ID; explicitly relink before testing hot-update preservation.
+  await c.rpc('refreshHistory',{sessionId:session.id});
   const run=(await c.rpc<State>('state')).sessions[0].latestRun!;
   const invalid=await adapter(folder,'invalid',undefined,false);
   await assert.rejects(c.rpc('updateAgent',{agentId:agent.id,...invalid}),/声明不一致/);

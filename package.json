@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
   "description": "A project workspace for persistent terminals, agents, files and history",
@@ -40,7 +40,8 @@
     "remark-gfm": "4.0.1",
     "ssh2": "1.17.0",
     "ws": "8.22.0",
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "js-yaml": "4.3.2"
   },
   "devDependencies": {
     "@electron/rebuild": "4.2.1",
