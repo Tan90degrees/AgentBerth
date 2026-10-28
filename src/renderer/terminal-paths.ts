@@ -35,7 +35,7 @@ export function bindTerminalPaths(terminal: Terminal, open: (path: string) => vo
   const layer = document.createElement('div'); layer.className = 'terminal-path-hints'; screen.appendChild(layer);
   const mac = /Mac/.test(navigator.platform);
   const modifier = (event: MouseEvent | KeyboardEvent) => (event.ctrlKey || mac && event.metaKey) && !event.altKey;
-  let point: { x: number; y: number } | null = null, enabled = false, hovered: PathLink | undefined, pressed: string | undefined;
+  let point: { x: number; y: number } | null = null, enabled = false, modifierHeld = false, hovered: PathLink | undefined, pressed: string | undefined;
   const clear = () => { hovered = undefined; layer.replaceChildren(); screen.classList.remove('terminal-path-active'); };
   const update = () => {
     clear();
@@ -53,10 +53,18 @@ export function bindTerminalPaths(terminal: Terminal, open: (path: string) => vo
       Object.assign(hint.style, { left: `${(start - 1) * cw}px`, top: `${(y - terminal.buffer.active.viewportY) * ch - 1}px`, width: `${(end - start + 1) * cw}px` }); layer.appendChild(hint);
     }
   };
-  const move = (event: MouseEvent) => { point = { x: event.clientX, y: event.clientY }; enabled = modifier(event); update(); if (hovered && event.type === 'mousemove') event.stopPropagation(); };
-  const key = (event: KeyboardEvent) => { const next = modifier(event); if (next !== enabled) { enabled = next; update(); } };
+  const move = (event: MouseEvent) => { point = { x: event.clientX, y: event.clientY }; enabled = modifierHeld && modifier(event); update(); if (hovered && event.type === 'mousemove') event.stopPropagation(); };
+  const key = (event: KeyboardEvent) => {
+    // Mouse modifier flags can survive a missed key-up across native focus changes.
+    // Activation requires a modifier press observed in this focused window too.
+    const physicalModifier = event.ctrlKey || mac && event.metaKey;
+    if (event.type === 'keydown' && (event.key === 'Control' || mac && event.key === 'Meta')) modifierHeld = physicalModifier;
+    else if (!physicalModifier) modifierHeld = false;
+    const next = modifierHeld && modifier(event);
+    if (next !== enabled) { enabled = next; update(); }
+  };
   const leave = () => { point = null; pressed = undefined; clear(); };
-  const blur = () => { enabled = false; leave(); };
+  const blur = () => { modifierHeld = false; enabled = false; leave(); };
   const down = (event: MouseEvent) => { move(event); pressed = hovered?.text; if (event.button === 0 && hovered) { event.preventDefault(); event.stopPropagation(); } };
   const up = (event: MouseEvent) => {
     move(event);
