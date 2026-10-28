@@ -52,6 +52,19 @@ function githubFixture() {
 }
 const publishes = state => state.calls.filter(([name, args]) => name === 'updateRelease' && args.draft === false);
 
+test('current repository version has matching lock metadata, release notes and changelog before packaging', async () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
+  assert.equal(lock.version, pkg.version);
+  assert.equal(lock.packages[''].version, pkg.version);
+  const notes = await readFile(path.join(root, 'docs', 'releases', `v${pkg.version}.md`), 'utf8');
+  assert.equal(notes.split(/\r?\n/)[0].trim(), `# ${pkg.build.productName} v${pkg.version}`);
+  assert.ok(notes.trim().split(/\r?\n/).length > 1, 'release notes must include a description');
+  const changelog = await readFile(path.join(root, 'CHANGELOG.md'), 'utf8');
+  assert.ok(changelog.split(/\r?\n/).some(line => line.trim() === `## v${pkg.version}`), 'current version needs a changelog entry');
+});
+
 test('release verifies exact package names, BOM checksums, provenance and notes', async t => {
   const f = await fixture(t), bundle = await verifyRelease(f.root, f.directory, sha);
   assert.equal(bundle.tag, 'v0.8.0'); assert.equal(bundle.files.length, 4);
