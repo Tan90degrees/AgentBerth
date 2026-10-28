@@ -82,4 +82,11 @@ test('a private TUI reuses its list/history/resume plugin for automatic binding 
   exits[2]({ exitCode: 0 }); exits[3]({ exitCode: 0 });
   await until(async () => (await current(a.id)).latestRun?.status === 'exited' && (await current(b.id)).latestRun?.status === 'exited');
   assert.equal((await current(a.id)).nativeSessionId, null); assert.equal((await current(b.id)).nativeSessionId, null);
+  const manualAgent: any = await connection.rpc('createAgent', { name: 'Manual', command: 'fixture-manual', resumeCommand: 'fixture-manual --resume {sessionId}' });
+  const manual = await connection.rpc<Session>('createSession', { projectId: project.id, title: 'Manual', agent: manualAgent.id });
+  await connection.rpc('linkNativeSession', { sessionId: manual.id, nativeSessionId: 'old-manual' });
+  await connection.rpc('start', { sessionId: manual.id, cols: 80, rows: 24 });
+  assert.equal((await current(manual.id)).nativeSessionId, null);
+  assert.equal((await connection.rpc<NativeHistoryPage>('nativeHistories', { sessionId: manual.id })).total, 1);
+  exits[4]({ exitCode: 0 }); await until(async () => (await current(manual.id)).latestRun?.status === 'exited');
 });

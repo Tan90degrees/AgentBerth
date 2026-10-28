@@ -461,16 +461,16 @@ export class DaemonServer {
       case 'checkAgentPlugin': return this.plugins.check(this.store.agent(request.params.agentId));
       case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.agentVersions.delete(request.params.agentId); this.changed(); return null;
       case 'linkNativeSession': {
-        this.nativeTracking.delete(request.params.sessionId);
         const session = this.store.session(request.params.sessionId);
         this.requireHistoryAvailable(session.id);
         if (!['codex', 'claude', 'opencode'].includes(session.agent) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
         const history = this.store.nativeHistory(session.id, request.params.nativeSessionId) ?? { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
+        this.nativeTracking.delete(session.id);
         this.store.saveHistory(session.id, history); this.changed(); return history;
       }
       case 'unlinkNativeSession': {
-        this.nativeTracking.delete(request.params.sessionId);
         const id = request.params.sessionId; this.requireHistoryAvailable(id);
+        this.nativeTracking.delete(id);
         const history = { messages: [], warnings: [], path: null, nativeSessionId: null };
         this.store.saveHistory(id, history); this.changed(); return history;
       }
@@ -560,7 +560,6 @@ export class DaemonServer {
 
   private async importHistory(sessionId: string, file: string | null): Promise<unknown> {
     this.reserveHistory(sessionId);
-    this.nativeTracking.delete(sessionId);
     this.historyWrites.add(sessionId);
     try {
       const session = this.store.session(sessionId);
@@ -571,6 +570,7 @@ export class DaemonServer {
         : await readHistory(file!, session.agent, projectPath);
       if (this.closing) throw new Error('后台正在退出');
       this.assertAgentVersion(session.agent, version);
+      this.nativeTracking.delete(sessionId);
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); this.historyWrites.delete(sessionId); }
   }
@@ -712,9 +712,9 @@ export class DaemonServer {
     const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
+    // Fresh TUI launches never inherit an old recovery ID, even without discovery support.
+    if (!resume && !session.remote && session.agent !== 'shell') this.store.saveHistory(sessionId, { messages: [], warnings: [], path: null, nativeSessionId: null });
     if (trackNative) {
-      // A fresh launch must never retain the previous conversation's recovery ID.
-      this.store.saveHistory(sessionId, { messages: [], warnings: [], path: null, nativeSessionId: null });
       const peers = [...this.nativeTracking.keys()].filter(id => { const peer = this.store.session(id); return peer.projectId === session.projectId && peer.agent === session.agent; });
       peers.forEach(id => { this.nativeTracking.get(id)!.ambiguous = true; });
       this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: peers.length > 0 || baseline === null });
@@ -760,7 +760,7 @@ export class DaemonServer {
     return page.items.map(item => ({ ...item, modified: item.updatedAt ? Date.parse(item.updatedAt) : 0 }));
   }
   private scheduleNativeScan(): void {
-    if (this.nativeTimer || this.closing || !this.nativeTracking.size) return;
+    if (this.nativeTimer || this.closing || ![...this.nativeTracking.values()].some(item => !item.ambiguous)) return;
     this.nativeTimer = setTimeout(() => {
       this.nativeTimer = null;
       this.nativeScanning = (async () => { for (const id of this.nativeTracking.keys()) await this.scanNativeHistory(id); })().catch(error => this.logError(error)).finally(() => { this.nativeScanning = null; this.scheduleNativeScan(); });
@@ -775,7 +775,7 @@ export class DaemonServer {
       if (session.latestRun?.id !== tracking.runId || session.nativeSessionId) { this.nativeTracking.delete(sessionId); return; }
       const items = await this.nativeCandidates(sessionId);
       if (!items) return;
-      const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.agent === session.agent).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
+      const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.projectId === session.projectId && item.agent === session.agent).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
       const candidate = unambiguousNewHistory(items, tracking.baseline, tracking.started, claimed);
       if (!candidate) return;
       // Recheck after I/O so manual association, unlink, or a new run wins.
