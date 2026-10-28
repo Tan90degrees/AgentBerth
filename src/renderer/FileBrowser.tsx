@@ -228,7 +228,9 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
         const current = tabs.findIndex(tab => tab.path === activeFile);
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w') { event.preventDefault(); event.stopPropagation(); closeTab(activeFile); }
         else if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; void openFile(tabs[index].path); requestAnimationFrame(() => host.current?.querySelector<HTMLButtonElement>('.preview-tab.selected [role="tab"]')?.focus()); }
-      }}>{tabs.map(tab => <div className={`preview-tab ${activeFile === tab.path ? 'selected' : ''}`} key={tab.path} title={tab.path}>
+      }}>{tabs.map(tab => <div className={`preview-tab ${activeFile === tab.path ? 'selected' : ''}`} key={tab.path} title={tab.path}
+        onMouseDown={event => { if (event.button === 1) event.preventDefault(); }}
+        onAuxClick={event => { if (event.button === 1) { event.preventDefault(); closeTab(tab.path); } }}>
         <button role="tab" aria-selected={activeFile === tab.path} tabIndex={activeFile === tab.path ? 0 : -1} onClick={() => void openFile(tab.path)}><span className="preview-tab-name">{tab.path.split('/').at(-1)}</span><small>{tab.path.includes('/') ? tab.path.slice(0, tab.path.lastIndexOf('/')) : ''}</small></button>
         <button className="preview-tab-close" aria-label={`关闭预览 ${tab.path}`} onClick={() => closeTab(tab.path)}>×</button>
       </div>)}</div><button className="preview-close-all" title="关闭所有文件预览" onClick={() => { fileRequests.current.clear(); tabsRef.current = []; setTabs([]); selectedRef.current = ''; setActiveFile(''); setSelected(''); }}>关闭全部</button></div>}
