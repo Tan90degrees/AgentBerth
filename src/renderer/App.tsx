@@ -47,12 +47,15 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [filePreviewHost, setFilePreviewHost] = useState<HTMLDivElement | null>(null);
   const [filesActivated, setFilesActivated] = useState(false);
   const [fileTarget, setFileTarget] = useState<{ projectId: string; query: string; nonce: number } | null>(null);
+  const fileTargetSequence = useRef(0);
+  const consumeFileTarget = useCallback((nonce: number) => setFileTarget(current => current?.nonce === nonce ? null : current), []);
+  useEffect(() => { setFileTarget(current => current?.projectId === projectId ? current : null); }, [projectId, fileTarget?.projectId]);
   const [gitPreview, setGitPreview] = useState<GitDiffRequest | null>(null);
   const openPreview = useCallback(() => { setGitPreview(null); setTab('preview'); }, []);
   const openDiff = useCallback((path: string, staged: boolean, projectPath = false) => { setPage('workspace'); setFilesActivated(true); setTab('preview'); setGitPreview({ projectId, path, staged, projectPath }); }, [projectId]);
   const openGit = (value: Project) => { setSidebarCollapsed(false);setProjectId(value.id); setSidebarView('git'); setPage('workspace'); };
   useEffect(() => { setGitPreview(null); }, [projectId]);
-  const openPath = useCallback((query: string) => { setSidebarCollapsed(false);setPage('workspace'); setSidebarView('files'); setFilesActivated(true); setFileTarget({ projectId, query, nonce: Date.now() }); }, [projectId]);
+  const openPath = useCallback((query: string) => { setSidebarCollapsed(false);setPage('workspace'); setSidebarView('files'); setFilesActivated(true); setFileTarget({ projectId, query, nonce: ++fileTargetSequence.current }); }, [projectId]);
   const currentSessionId = useRef(sessionId); currentSessionId.current = sessionId;
   const [page, setPage] = useState<'workspace' | 'settings'>('workspace');
   const [connected, setConnected] = useState(false);
@@ -388,7 +391,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       </>}</div><div id="ssh-workspace-dock" className="ssh-dock-slot" hidden={!sshOpen}>{sshWindowReady&&!sshWindowState.detached&&<SshDock onWindow={()=>changeSshWindow('open')} unread={unread} state={state} visible={sshOpen&&page==='workspace'} connected={connected} sessionId={sshSessionId} onSelect={setSshSessionId} onClose={()=>setSshOpen(false)} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} hasLocal={!!project} />}</div></div></>}
     </main></>}
     {sshWindow&&sshWindowReady&&<SshDock unread={unread} state={state} visible connected={connected} sessionId={sshSessionId} onSelect={selectSsh} onClose={()=>void changeSshWindow('dock').catch(reason=>setError(String(reason)))} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} hasLocal={false} detached onWindow={()=>changeSshWindow('dock')} />}
-    {!sshWindow && project && state.apiVersion >= 16 && filesActivated && <Suspense fallback={null}><FileBrowser key={`${project.id}:${project.path}`} project={project} connected={connected} treeHost={fileTreeHost} previewHost={filePreviewHost} previewHidden={gitPreview?.projectId === projectId} onDiff={state.apiVersion >= 18 ? openDiff : undefined} onPreview={openPreview} navigationSupported={state.apiVersion >= 17} target={fileTarget?.projectId === projectId ? fileTarget : null} /></Suspense>}
+    {!sshWindow && project && state.apiVersion >= 16 && filesActivated && <Suspense fallback={null}><FileBrowser key={`${project.id}:${project.path}`} project={project} connected={connected} treeHost={fileTreeHost} previewHost={filePreviewHost} previewHidden={gitPreview?.projectId === projectId} onDiff={state.apiVersion >= 18 ? openDiff : undefined} onPreview={openPreview} navigationSupported={state.apiVersion >= 17} onTargetConsumed={consumeFileTarget} target={fileTarget?.projectId === projectId ? fileTarget : null} /></Suspense>}
     {treeMenu && menuItems.length > 0 && <ContextMenu target={treeMenu} items={menuItems} onClose={closeTreeMenu} />}
     {(modal === 'renameSession' || modal === 'renameProject') && <Dialog title={modal === 'renameSession' ? '重命名会话' : '重命名项目'} dirty={dirtyForm} busy={busy} error={error} returnFocus={opener.current} onClose={closeModal}><form onSubmit={async event => {
       event.preventDefault(); const result = modal === 'renameSession' ? await perform('renameSession', { sessionId: actionSession!.id, title }) : await perform('updateProject', { projectId: actionProject!.id, name, path: actionProject!.path });
