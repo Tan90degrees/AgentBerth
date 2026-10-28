@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
 import { agentLabels } from './labels';
+import { SkillManager } from './SkillManager';
 import { AgentManager } from './AgentManager';
 import { TerminalFields } from './TerminalFields';
 import { AppearanceControls } from './AppearanceControls';
@@ -11,7 +12,8 @@ import { SshConnections } from './SshConnections';
 import { filterSettings, settingsCatalog, settingsCategories, type SettingsCategory, type SettingsEntry } from './settings-catalog';
 import { readStored, saveStored } from './storage';
 
-export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSaveAgent, onDeleteAgent, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
+export function SettingsPage({ projects, currentProjectId, connected, apiVersion, agents, usedAgents, onSaveAgent, onDeleteAgent, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
+  projects: import('../shared/protocol').Project[]; currentProjectId?: string;
   connected: boolean; apiVersion: number; agents: AgentDefinition[]; usedAgents: string[]; onSaveAgent: (value: AgentDefinitionConfig, id?: string) => Promise<AgentDefinition | undefined>; onDeleteAgent: (id: string) => Promise<unknown>;
   settings: Settings; draft: Settings; onChange: (value: Settings) => void; onDiscard: () => void; conflict: boolean; onError: (error: string) => void; error: string;
   platform: string; disabled: boolean; busy: boolean; restartDisabled: boolean; onSave: (value: Settings) => Promise<boolean>; onRestart: () => void; running: number;
@@ -85,6 +87,7 @@ export function SettingsPage({ connected, apiVersion, agents, usedAgents, onSave
           {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event => change({ ...draft, maxSshTerminals: Number(event.target.value) })} /></label><p className="form-hint">与本机终端独立计数，支持 1–{TERMINAL_LIMIT_MAX}。保存立即应用，降低上限不停止已有会话。</p></>)}
         </form>
         {item('agent-types', <AgentManager hotUpdates={apiVersion >= 15} agents={agents} used={usedAgents} defaultAgent={settings.defaultAgent} disabled={disabled} busy={busy} error={error} onError={onError} onSave={onSaveAgent} onDelete={onDeleteAgent} />)}
+        {item('skills', <SkillManager agents={agents} projects={projects} currentProjectId={currentProjectId} />)}
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
         {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
         {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再更新后台。` : '安装新版本后，可更新后台以加载新功能。项目、会话和设置会保留。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>更新后台</button></section>)}

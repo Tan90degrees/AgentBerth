@@ -8,6 +8,7 @@ export const agentConfigFileSchema = z.object({
   name: agentDefinitionSchema.shape.name,
   command: agentDefinitionSchema.shape.command,
   resumeCommand: agentDefinitionSchema.shape.resumeCommand,
+  skills: agentDefinitionSchema.shape.skills,
 }).strict();
 export const pluginManifestSchema = agentConfigFileSchema.extend({
   runtime: z.enum(['node', 'executable']),
@@ -25,5 +26,6 @@ export const pluginDescriptionSchema = z.object({
   name: agentDefinitionSchema.shape.name,
   command: agentDefinitionSchema.shape.command.optional(),
   resumeCommand: agentDefinitionSchema.shape.resumeCommand.optional(),
+  skills: agentDefinitionSchema.shape.skills,
   capabilities: z.object({ history: z.boolean(), resume: z.boolean(), list: z.boolean().optional() }).strict(),
 }).strict();

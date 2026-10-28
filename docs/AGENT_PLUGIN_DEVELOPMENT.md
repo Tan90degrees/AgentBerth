@@ -198,3 +198,26 @@ node check-plugin.cjs ./plugin.cjs --project "测试项目目录" --file "完整
 附带 plugin.cjs 是可运行的标准 JSON 示例，读取项目 `agent-session.json` 和 `agent-sessions/*.json`（cwd/nativeSessionId/messages，可选 title），示例恢复使用 `--resume ID`。它不是任何真实 CLI 的适配器；必须按目标 CLI 格式替换读入与恢复逻辑，不能谎称已适配。模板实现 describe/list/history/resume：list 以更新时间和 ID 分页，不按当前关联 ID 过滤；history 按所选 ID 读取，多会话时不会任意取最新一条。示例发现最多检查 1000 文件和合计 64 MiB，不足时返回 warnings；实际 CLI 优先使用原生索引。describe 包含完整元数据，可立即直接导入脚本并检查运行环境。只需启动的适配应交付 agent.json，不要引入多余历史接口。
 
 报告应包括：最终可导入文件的完整路径、支持的 CLI 版本/能力、自动发现规则、通过的测试、实际测试与模拟测试的边界。给用户的使用步骤限制在“导入配置或脚本 → 设置名称 → 保存”，然后按需创建会话、读取对话；不得要求用户编辑工作台源码或 JSON 参数。
+
+## Skill 管理：与 Agent 类型共用一份插件（API 35）
+
+不需要新插件、不需要单独启用扩展。在 `agent.json`、清单或单脚本 `describe` 的顶层增加可选 `skills`：
+
+```json
+{
+  "skills": {
+    "project": ".my-agent/skills",
+    "user": "~/.my-agent/skills"
+  }
+}
+```
+
+`project` 是项目内相对目录（不允许 `..`），`user` 是 `~/` 开头或绝对目录；至少提供一个。只声明 CLI 实际会读取的路径，不要假设私有 TUI 支持 Skills。无此字段的旧插件仍照常启动、查看历史和恢复。更新原有稳定 ID 的插件即可加入／调整能力；配置与 describe 的字段格式相同，工作台复用类型名称、导入、校验和热更新。
+
+工作台按 `根目录/<技能文件夹>/SKILL.md` 列出、导入和编辑文件，导入完整复制 scripts/references/assets，不执行其中脚本。停用把整个文件夹移到加载根目录同级的 `<根目录>.agentberth-disabled`，启用移回；移除保留在 `<根目录>.agentberth-trash`，避免误删来源。加载目录中的符号链接只展示，需在来源位置管理。不要把同级停用／回收目录也加入 CLI 搜索范围。Agent 是否即时重载，由目标 CLI 决定，界面不会宣称文件存在就已加载。
+
+仅需要启动和 Skill 管理时，一份 JSON 足够；不需要空的 history/resume 实现。若 CLI 不使用 SKILL.md 格式，不要声明此能力；当前管理器不转换私有 Skill 数据库。
+
+## 新运行的原生会话自动关联
+
+带 `list` 的自定义 Agent 可参与自动关联。工作台启动前获取一次基线，运行期间和终端退出时检查新增 ID；`list` 必须返回准确的 `updatedAt`、当前项目归属以及完整列表，不能只列当前关联 ID。自动关联仅处理单页不超过 50 条、无 nextCursor、无警告的完整发现结果；更大的列表、缺少时间、多候选和同项目同类型并发均交给「发现会话」手动选择，不会猜最新一条。`history` 如存在，会在退出时刷新已关联的记录；恢复仍调用既有 `resume` 或 `resumeCommand`。

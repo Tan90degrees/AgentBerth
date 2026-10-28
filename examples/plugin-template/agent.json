@@ -2,5 +2,9 @@
   "schemaVersion": 1,
   "id": "my-agent",
   "name": "我的 Agent",
-  "command": "my-agent"
+  "command": "my-agent",
+  "skills": {
+    "project": ".my-agent/skills",
+    "user": "~/.my-agent/skills"
+  }
 }

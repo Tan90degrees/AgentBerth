@@ -44,7 +44,7 @@ process.stdin.on('end', async () => {
     if (request.version !== 1) throw new Error('Unsupported protocol version');
     let result;
     if (request.method === 'describe') {
-      result = {version:1,id:'my-agent',name:'我的 Agent',command:'my-agent',capabilities:{history:true,resume:true,list:true}};
+      result = {version:1,id:'my-agent',name:'我的 Agent',command:'my-agent',skills:{project:'.my-agent/skills',user:'~/.my-agent/skills'},capabilities:{history:true,resume:true,list:true}};
     } else if (request.method === 'list') {
       const {cursor,limit,query} = request.pagination;
       if (!Number.isInteger(limit) || limit < 1 || limit > 50 || typeof query !== 'string') throw new Error('Invalid pagination');
