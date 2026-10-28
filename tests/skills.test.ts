@@ -33,12 +33,13 @@ test('Skill directory import, edit, disable, re-enable and removal preserve reso
 });
 
 test('Skill capabilities use the same JSON/script Agent import, persistence and hot replacement shape', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'berth-skill-plugin-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'berth-skill-plugin-'));
+  let store: Store | undefined; t.after(async () => { store?.close(); await rm(dir, { recursive: true, force: true }); });
   const data = path.join(dir, 'data'), file = path.join(dir, 'agent.json');
   const skills = { project: '.private-agent/skills', user: '~/.private-agent/skills' };
   await writeFile(file, JSON.stringify({ schemaVersion: 1, id: 'private-agent', name: 'Private Agent', command: 'private-agent', skills }));
   const config = await installAgentFile(file, data); assert.deepEqual(config.skills, skills);
-  const store = new Store(data); t.after(() => store.close()); const saved = store.saveAgent(config);
+  store = new Store(data); const saved = store.saveAgent(config);
   assert.deepEqual(store.agent(saved.id).skills, skills);
   const script = path.join(dir, 'agent.cjs');
   await writeFile(script, `process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify(${JSON.stringify({ version: 1, id: 'private-agent', name: 'Private', command: 'private-agent', skills, capabilities: { history: false, resume: false } })})));`);

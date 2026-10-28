@@ -35,7 +35,7 @@ export function SkillManager({ agents, projects, currentProjectId }: { agents: A
     } finally { setBusy(false); }
   }
   const items = page?.items.filter(item => `${item.name} ${item.description} ${item.folder}`.toLowerCase().includes(query.toLowerCase())) ?? [];
-  return <section className="settings-card skill-manager"><h2>Skill 管理</h2><p className="form-hint">复用 Agent 类型插件声明的 Skill 目录。私有 TUI 在原配置或脚本中增加 skills 即可，无需再次接入。实际加载和热更新由 Agent 决定。</p>
+  return <section className="settings-card skill-manager"><h2>Skill 管理</h2><p className="form-hint">选择 Agent 类型和作用范围，管理已接入的 Skills。新增能力可更新原 Agent 插件，实际加载和热更新由 Agent 决定。</p>
     <div className="skill-filters"><label>Agent 类型<select aria-label="Skill Agent 类型" value={provider.id} disabled={busy || !!editor} onChange={event => setAgentId(event.target.value)}>{providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label>作用范围<select aria-label="Skill 作用范围" value={location.projectId || ''} disabled={busy || !!editor} onChange={event => setProjectId(event.target.value)}><option value="" disabled={!provider.skills.user}>用户级 · 所有项目</option>{provider.skills.project && projects.map(project => <option key={project.id} value={project.id}>项目 · {project.name}</option>)}</select></label>
     </div>

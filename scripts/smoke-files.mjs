@@ -288,6 +288,7 @@ try {
   await page.getByLabel('Skill Agent 类型', { exact: true }).selectOption(skillAgent.id);
   const skillRow = page.locator('.skill-row').filter({ has: page.getByText('smoke-skill', { exact: true }) });
   await skillRow.getByRole('button', { name: '查看 / 编辑', exact: true }).waitFor();
+  assert.equal(await page.locator('.skill-manager').evaluate(element => element.scrollWidth <= element.clientWidth + 1), true);
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}files-skills-dark.png` });
   await skillRow.getByRole('button', { name: '查看 / 编辑', exact: true }).click();
   const editor = page.getByRole('dialog', { name: '编辑 Skill · smoke-skill', exact: true });
