@@ -13,6 +13,11 @@ const api: DesktopApi = {
     ipcRenderer.on('berth:petSession', callback);
     return () => ipcRenderer.removeListener('berth:petSession', callback);
   },
+  onPetSettings: listener => {
+    const callback = () => listener();
+    ipcRenderer.on('berth:petSettings', callback);
+    return () => ipcRenderer.removeListener('berth:petSettings', callback);
+  },
   sshWindow: (action, sessionId) => ipcRenderer.invoke('berth:sshWindow', action, sessionId),
   onSshWindow: listener => {
     const callback = (_event: Electron.IpcRendererEvent, state: SshWindowState) => listener(state);

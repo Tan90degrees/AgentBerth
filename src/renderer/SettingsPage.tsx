@@ -31,6 +31,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
   const pending = entries.filter(modified).length;
   const change = (value: Settings) => { onChange(value); setSaved(false);setSaveState('idle'); };
   useEffect(() => { saveStored('berth.settingsCategory', category); content.current?.scrollTo(0, 0); }, [category]);
+  useEffect(() => window.berth.onPetSettings(() => { setQuery(''); setCategory('pet'); content.current?.scrollTo(0, 0); }), []);
   useEffect(() => { if (!categories.some(item => item.id === category)) setCategory('common'); }, [category, apiVersion]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {

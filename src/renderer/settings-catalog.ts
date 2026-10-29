@@ -11,7 +11,7 @@ export type SettingsCategory = typeof settingsCategories[number]['id'];
 export type SettingsEntry = { id: string; category: SettingsCategory; title: string; keywords: string; common?: boolean; field?: keyof Settings };
 export function settingsCatalog(agents: AgentDefinition[], apiVersion: number): SettingsEntry[] {
   return [
-    { id: 'pet', category: 'pet', title: '桌宠', keywords: 'desktop pet mascot agent hook 执行 状态 动画 gif 自定义 形象 多会话 切换 置顶 大小 缩放 隐藏 自动 配置 教程 复制 指南' },
+    { id: 'pet', category: 'pet', title: '桌宠', keywords: 'desktop pet mascot agent hook 执行 状态 动画 gif 自定义 形象 多会话 切换 置顶 大小 缩放 隐藏 自动 配置 教程 复制 指南 右键 菜单 拖动' },
     { id: 'theme', category: 'appearance', title: '外观主题', keywords: 'theme color 深色 浅色 跟随系统 配色', common: true },
     { id: 'preview', category: 'preview', title: '文件预览', keywords: 'font 字体 字号 字体大小 大小 size Markdown md JSON YAML 代码 高亮 Git diff 自定义 字体名称' },
     { id: 'shell', category: 'terminal', title: '默认终端', keywords: 'shell profile powershell pwsh cmd bash zsh 程序 路径 启动参数 运行环境', common: true, field: 'terminal' },

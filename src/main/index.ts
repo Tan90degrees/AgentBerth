@@ -1,4 +1,5 @@
 import { PetState } from './pet-state';
+import { petMenuTemplate } from './pet-menu';
 import { PetHooks } from './pet-hooks';
 import { petRequestSchema, petStatuses, petWindowSize } from '../shared/pet';
 import { statSync, writeFileSync } from 'node:fs';
@@ -26,6 +27,7 @@ nativeTheme.themeSource = 'dark';
 let window: BrowserWindow | null = null;
 let sshWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
+let petDrag: { x: number; y: number } | null = null;
 let pet: PetState;
 let petHooks: PetHooks;
 let petPublishTimer: NodeJS.Timeout | null = null;
@@ -200,7 +202,7 @@ async function openPetWindow() {
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   target.webContents.on('will-navigate', event => event.preventDefault());
   target.once('ready-to-show', () => { if (!quitting && pet.preferences.enabled) target.showInactive(); });
-  target.on('closed', () => { if (petWindow === target) petWindow = null; });
+  target.on('closed', () => { if (petWindow === target) { petWindow = null; petDrag = null; } });
   try {
     if (process.env.AGENTBERTH_DEV_URL === 'http://127.0.0.1:5173') await target.loadURL(process.env.AGENTBERTH_DEV_URL + '?view=pet');
     else await target.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { view: 'pet' } });
@@ -210,26 +212,62 @@ function petHookConfig(): string {
   const script = app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs');
   return JSON.stringify(petHookConfiguration(process.execPath, script, dataDirectory), null, 2);
 }
+function petGuide(): string {
+  const script = app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs');
+  return petHookSetupGuide(process.execPath, script, dataDirectory);
+}
+async function savePetPreferences(preferences: unknown) {
+  pet.save(preferences);
+  if (pet.preferences.enabled) {
+    await openPetWindow(); petWindow?.setAlwaysOnTop(pet.preferences.alwaysOnTop);
+    petWindow?.setSize(Math.round(petWindowSize.width * pet.preferences.scale), Math.round(petWindowSize.height * pet.preferences.scale));
+    if (petWindow) { const bounds = petWindow.getBounds(), area = screen.getDisplayMatching(bounds).workArea; petWindow.setPosition(Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width)), Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height))); }
+  } else petWindow?.close();
+  return pet.snapshot();
+}
+function petNavigate(channel: 'berth:petSession' | 'berth:petSettings', id?: string) {
+  showWindow();
+  const send = () => window?.webContents.send(channel, id);
+  if (window?.webContents.isLoadingMainFrame()) window.webContents.once('did-finish-load', send); else send();
+}
+function showPetSession() {
+  const { sessions, preferences } = pet.snapshot();
+  const id = sessions.find(session => session.sessionId === preferences.selectedSessionId)?.sessionId ?? sessions[0]?.sessionId;
+  if (id) petNavigate('berth:petSession', id);
+}
+function openPetMenu() {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  petDrag = null;
+  const run = (action: () => unknown) => { void Promise.resolve().then(action).catch(error => dialog.showMessageBox({ type: 'error', title: '桌宠操作未完成', message: error instanceof Error ? error.message : String(error) })); };
+  const change = (value: Partial<import('../shared/pet').PetPreferences>) => run(() => savePetPreferences({ ...pet.preferences, ...value }));
+  Menu.buildFromTemplate(petMenuTemplate(pet.snapshot(), {
+    select: selectedSessionId => change({ selectedSessionId }), scale: scale => change({ scale }),
+    alwaysOnTop: alwaysOnTop => change({ alwaysOnTop }), autoSwitch: autoSwitch => change({ autoSwitch }),
+    open: () => showPetSession(), settings: () => petNavigate('berth:petSettings'),
+    copyGuide: () => clipboard.writeText(petGuide()), hide: () => change({ enabled: false }),
+  })).popup({ window: petWindow });
+}
 ipcMain.handle('berth:pet', async (event, raw: unknown) => {
   if (![window, sshWindow, petWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问桌宠');
   if (quitting || !pet) throw new Error('应用尚未就绪');
   const request = petRequestSchema.parse(raw);
+  if (['menu', 'dragStart', 'dragMove', 'dragEnd'].includes(request.action) && event.sender !== petWindow?.webContents) throw new Error('此操作仅供桌宠图像使用');
   switch (request.action) {
     case 'state': return pet.snapshot();
-    case 'save': {
-      pet.save(request.preferences);
-      if (pet.preferences.enabled) {
-        await openPetWindow(); petWindow?.setAlwaysOnTop(pet.preferences.alwaysOnTop);
-        petWindow?.setSize(Math.round(petWindowSize.width * pet.preferences.scale), Math.round(petWindowSize.height * pet.preferences.scale));
-        if (petWindow) { const bounds = petWindow.getBounds(), area = screen.getDisplayMatching(bounds).workArea; petWindow.setPosition(Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width)), Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height))); }
-      } else petWindow?.close();
-      return pet.snapshot();
-    }
+    case 'save': return savePetPreferences(request.preferences);
     case 'hookConfig': return petHookConfig();
-    case 'hookGuide': {
-      const script = app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs');
-      return petHookSetupGuide(process.execPath, script, dataDirectory);
+    case 'hookGuide': return petGuide();
+    case 'menu': openPetMenu(); return;
+    case 'dragStart': {
+      const cursor = screen.getCursorScreenPoint(), bounds = petWindow!.getBounds();
+      petDrag = { x: cursor.x - bounds.x, y: cursor.y - bounds.y }; return;
     }
+    case 'dragMove': {
+      if (!petDrag) return;
+      const cursor = screen.getCursorScreenPoint(), area = screen.getDisplayNearestPoint(cursor).workArea, bounds = petWindow!.getBounds();
+      petWindow!.setPosition(Math.round(Math.max(area.x, Math.min(cursor.x - petDrag.x, area.x + area.width - bounds.width))), Math.round(Math.max(area.y, Math.min(cursor.y - petDrag.y, area.y + area.height - bounds.height)))); return;
+    }
+    case 'dragEnd': petDrag = null; return;
     case 'image': return pet.image(request.status);
     case 'resetImage': pet.resetImage(request.status); return pet.snapshot();
     case 'importImage': {
@@ -239,15 +277,7 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
       if (statSync(file).size > 8 * 1024 * 1024) throw new Error('GIF 不能超过 8 MiB');
       pet.importImage(request.status, readFileSync(file), file); return pet.snapshot();
     }
-    case 'showSession': {
-      const sessions = pet.snapshot().sessions;
-      const id = sessions.find(session => session.sessionId === pet.preferences.selectedSessionId)?.sessionId ?? sessions[0]?.sessionId;
-      if (!id) return;
-      showWindow();
-      const send = () => window?.webContents.send('berth:petSession', id);
-      if (window?.webContents.isLoadingMainFrame()) window.webContents.once('did-finish-load', send); else send();
-      return;
-    }
+    case 'showSession': showPetSession(); return;
   }
 });
 function sshWindowState(): SshWindowState { return { detached: !!sshWindow && !sshWindow.isDestroyed(), sessionId: sshWindowSession }; }

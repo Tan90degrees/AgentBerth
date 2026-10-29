@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { PetState, gifData } from '../src/main/pet-state';
 import { PetHooks } from '../src/main/pet-hooks';
+import { petMenuTemplate, type PetMenuActions } from '../src/main/pet-menu';
 import { hookStatus, petRequestSchema } from '../src/shared/pet';
 import type { State, Session } from '../src/shared/protocol';
 
@@ -179,4 +180,25 @@ test('pet size settings persist the full supported range and reject invalid dime
     assert.equal(new PetState(path.join(folder, 'pet')).preferences.scale, scale);
   }
   for (const scale of [0, 0.49, 2.01, Infinity, NaN]) assert.throws(() => pet.save({ ...pet.preferences, scale }));
+});
+
+test('image context menu exposes Agent operations, checked preferences and empty-state settings', t => {
+  const { pet, a, b } = fixture(t), calls: unknown[] = [];
+  const actions: PetMenuActions = { select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), copyGuide: () => calls.push('copy'), hide: () => calls.push('hide') };
+  const items = petMenuTemplate(pet.snapshot(), actions);
+  const choose = (label: string) => { const item = items.find(item => item.label === label)!; assert.ok(item); return item; };
+  const sessions = choose('切换 Agent 会话').submenu as Electron.MenuItemConstructorOptions[];
+  assert.deepEqual(sessions.map(item => item.id), [a.id, b.id]);
+  assert.equal(sessions[0].checked, true);
+  const click = (item: Electron.MenuItemConstructorOptions) => item.click!({ checked: false } as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
+  click(sessions[1]);
+  const scales = choose('桌宠大小').submenu as Electron.MenuItemConstructorOptions[];
+  assert.equal(scales.find(item => item.label === '100%')?.checked, true);
+  click(scales.find(item => item.label === '200%')!);
+  for (const label of ['保持置顶', '自动关注待处理会话', '打开当前会话', '桌宠设置…', '复制 hook 自动配置教程', '隐藏桌宠']) click(choose(label));
+  assert.deepEqual(calls, [b.id, 2, false, false, 'open', 'settings', 'copy', 'hide']);
+  const empty = petMenuTemplate({ ...pet.snapshot(), sessions: [] }, actions);
+  assert.equal(empty.find(item => item.label === '打开当前会话')?.enabled, false);
+  assert.equal(empty.find(item => item.label === '切换 Agent 会话')?.enabled, false);
+  assert.ok(empty.find(item => item.label === '桌宠设置…')?.click);
 });

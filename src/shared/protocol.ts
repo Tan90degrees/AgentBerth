@@ -229,6 +229,7 @@ export interface DesktopApi {
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;
   onPet(listener: (state: import('./pet').PetSnapshot) => void): () => void;
   onPetSession(listener: (sessionId: string) => void): () => void;
+  onPetSettings(listener: () => void): () => void;
   sshWindow(action: 'state' | 'open' | 'dock' | 'select', sessionId?: string): Promise<SshWindowState>;
   onSshWindow(listener: (state: SshWindowState) => void): () => void;
   openSshConnection(alias: string): Promise<{sessionId: string; runId: string; info: RemoteInfo}>;

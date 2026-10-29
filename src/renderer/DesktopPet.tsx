@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { defaultPetPreferences, petLabels, petStatuses, petScales, petWindowSize, type PetPreferences, type PetSnapshot, type PetStatus } from '../shared/pet';
 import { AsyncButton } from './AsyncButton';
 import './pet.css';
@@ -70,29 +70,41 @@ function PetScale({ value, disabled, onChange }: { value: number; disabled: bool
 }
 
 export function DesktopPet() {
-  const { snapshot, error, setError, save } = usePet();
-  const [busy, setBusy] = useState(false);
-  const sessions = snapshot.sessions, preferences = snapshot.preferences;
-  const selected = sessions.find(session => session.sessionId === preferences.selectedSessionId) ?? sessions[0];
+  const { snapshot, error, setError } = usePet();
+  const dragging = useRef(false), frame = useRef(0);
+  const selected = snapshot.sessions.find(session => session.sessionId === snapshot.preferences.selectedSessionId) ?? snapshot.sessions[0];
   const status = selected?.status ?? 'idle';
-  const pending = sessions.filter(session => ['waiting', 'error'].includes(session.status)).length;
-  const apply = async (change: Partial<PetPreferences>) => {
-    if (busy) return; setBusy(true); setError('');
-    try { await save(change); } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+  const request = (action: 'menu' | 'dragStart' | 'dragMove' | 'dragEnd') => {
+    void window.berth.pet({ action }).catch(reason => setError(String(reason)));
   };
-  const cycle = (direction: number) => {
-    if (!sessions.length) return;
-    const index = sessions.findIndex(session => session.sessionId === selected?.sessionId);
-    void apply({ selectedSessionId: sessions[(index + direction + sessions.length) % sessions.length].sessionId });
+  const endDrag = () => {
+    if (frame.current) { cancelAnimationFrame(frame.current); frame.current = 0; }
+    if (dragging.current) { dragging.current = false; request('dragEnd'); }
   };
-  return <main className="desktop-pet" style={{ zoom: preferences.scale, ...petWindowSize }}>
-    <div className="pet-stage" title="拖动角色移动桌宠"><PetImage status={status} custom={snapshot.images[status]} revision={String(snapshot.imageVersion)} /></div>
-    <section className="pet-card" aria-label="Agent 状态">
-      <div className="pet-card-head" title="拖动状态栏移动桌宠"><div className={`pet-state pet-state-${status}`} role="status"><span>{selected ? petLabels[status] : '暂无 Agent 会话'}</span>{pending > 0 && <small aria-label={`${pending} 个 Agent 会话待处理`} title={`${pending} 个 Agent 会话待处理`}>{pending}</small>}</div><div className="pet-card-actions"><PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /><button className="pet-hide" aria-label="隐藏桌宠" title="隐藏桌宠" disabled={busy} onClick={() => void apply({ enabled: false })}>×</button></div></div>
-      <div className="pet-session-picker"><button aria-label="上一个桌宠会话" disabled={busy || sessions.length < 2} onClick={() => cycle(-1)}>‹</button><select aria-label="桌宠展示的会话" disabled={busy || !sessions.length} value={selected?.sessionId ?? ''} onChange={event => void apply({ selectedSessionId: event.target.value })}>{!sessions.length && <option value="">从工作台启动 Agent 会话</option>}{sessions.map(session => <option key={session.sessionId} value={session.sessionId}>{session.project} / {session.title} · {petLabels[session.status]}</option>)}</select><button aria-label="下一个桌宠会话" disabled={busy || sessions.length < 2} onClick={() => cycle(1)}>›</button></div>
-      <p title={selected?.label}>{error || selected?.label || (selected?.hooked ? 'Agent hook 已接入' : '仅显示 Agent 会话 · 拖动角色可移动')}</p>
-      <AsyncButton className="pet-open" disabled={!selected} onError={setError} onAction={() => window.berth.pet({ action: 'showSession' })}>打开当前会话</AsyncButton>
-    </section>
+  useEffect(() => () => {
+    if (frame.current) cancelAnimationFrame(frame.current);
+    if (dragging.current) void window.berth.pet({ action: 'dragEnd' }).catch(() => {});
+  }, []);
+  const menu = () => { endDrag(); request('menu'); };
+  return <main className={`desktop-pet pet-state-${status}`} data-session-id={selected?.sessionId ?? ''} style={{ zoom: snapshot.preferences.scale, ...petWindowSize }}>
+    <button type="button" className="pet-stage" aria-label={`桌宠：${selected?.title ?? '暂无 Agent 会话'}，${petLabels[status]}；右键打开菜单`}
+      title={error || '按住图像拖动；右键打开操作菜单'}
+      onContextMenu={event => { event.preventDefault(); menu(); }}
+      onKeyDown={event => { if (['ContextMenu', 'Enter', ' '].includes(event.key) || event.shiftKey && event.key === 'F10') { event.preventDefault(); menu(); } }}
+      onPointerDown={event => {
+        if (event.button !== 0) return;
+        event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
+        dragging.current = true; request('dragStart');
+      }}
+      onPointerMove={event => {
+        if (!dragging.current) return;
+        if (!(event.buttons & 1)) { endDrag(); return; }
+        if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; if (dragging.current) request('dragMove'); });
+      }}
+      onPointerUp={event => { endDrag(); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+      onPointerCancel={endDrag} onLostPointerCapture={endDrag}>
+      <PetImage status={status} custom={snapshot.images[status]} revision={String(snapshot.imageVersion)} />
+    </button>
   </main>;
 }
 
@@ -108,11 +120,11 @@ export function PetSettings() {
   const apply = async (change: Partial<PetPreferences>) => {
     setBusy(true); setError(''); try { await save(change); } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
-  return <section className="settings-card pet-settings"><h2>桌宠</h2><p>仅展示 Codex、Claude、OpenCode 和自定义 Agent 会话，普通终端与 SSH 不展示。拖动角色或状态栏移动桌宠。</p>
+  return <section className="settings-card pet-settings"><h2>桌宠</h2><p>仅展示 Codex、Claude、OpenCode 和自定义 Agent 会话，普通终端与 SSH 不展示。按住桌宠图像拖动，右键图像打开会话与设置菜单。</p>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.enabled} disabled={busy} onChange={event => void apply({ enabled: event.target.checked })} />显示桌宠</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.alwaysOnTop} disabled={busy} onChange={event => void apply({ alwaysOnTop: event.target.checked })} />保持在其他窗口上方</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.autoSwitch} disabled={busy} onChange={event => void apply({ autoSwitch: event.target.checked })} />等待处理或失败时，自动切换到对应会话</label>
-    <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label><p className="form-hint">支持 50%–200%，也可在桌宠状态栏直接调节，自动保存。</p>
+    <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label><p className="form-hint">支持 50%–200%，也可右键桌宠图像，在“桌宠大小”中调节，自动保存。</p>
     <h3>Agent hook 自动配置</h3><p>把说明复制给正在使用的 Agent，让它自动识别配置、合并 hook 并验证。说明已包含本机安装路径和可执行命令。</p>
     <ol className="pet-hook-steps"><li>在 AgentBerth 中启动一个 Agent 类型会话。</li><li>点击“复制给 Agent 自动配置”，粘贴给该 Agent 执行。</li><li>配置完成后重新启动该 Agent 会话，检查执行、等待和完成状态。</li></ol>
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const text = await window.berth.pet<string>({ action: 'hookGuide' }); setGuide(text); await window.berth.copyText(text); }}>复制给 Agent 自动配置</AsyncButton>

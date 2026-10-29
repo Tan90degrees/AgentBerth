@@ -1,26 +1,10 @@
 html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { background: transparent !important; min-width: 0; min-height: 0; width: 100%; height: 100%; overflow: hidden; }
 .desktop-pet { padding: 8px 12px 12px; box-sizing: border-box; user-select: none; color: #ecf5f3; font: 12px/1.4 system-ui, sans-serif; }
-.pet-stage { -webkit-app-region:drag; height:160px; display:grid; place-items:center; cursor:move; }
+.pet-stage { display:grid; place-items:center; width:100%; height:160px; border:0; padding:0; margin:0; background:transparent; border-radius:12px; cursor:grab; touch-action:none; }
+.pet-stage:active { cursor:grabbing; }
+.desktop-pet .pet-stage:hover:not(:disabled), .desktop-pet .pet-stage:active { background:transparent; box-shadow:none; border-color:transparent; }
+.pet-stage:focus-visible { outline:2px solid #8cdec4; outline-offset:0; }
 .pet-character { width:192px; height:160px; object-fit:contain; pointer-events:none; }
-.pet-card { background:#14262cf5; border:1px solid #47716a; border-radius:14px; padding:9px 10px; box-shadow:0 4px 12px #0003; }
-.pet-card-head { -webkit-app-region:drag; display:flex; align-items:center; gap:6px; height:22px; cursor:move; }
-.pet-state { display:flex; align-items:center; gap:5px; min-width:0; flex:1; color:#9ae6cc; font-weight:600; }
-.pet-state>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pet-state small { flex-shrink:0; padding:0 4px; border-radius:5px; background:#54472d; font-weight:400; font-size:10px; color:#f4d390; }
-.pet-card-actions { -webkit-app-region:no-drag; display:flex; align-items:center; gap:3px; }
-.pet-card-actions select { border:0; background:transparent; color:#b2c7c8; width:57px; height:22px; padding:0 2px; font:inherit; font-size:10px; cursor:pointer; border-radius:5px; }
-.pet-card-actions select option { background:#203c40; color:#ecf5f3; }
-.pet-card-actions .pet-hide { border:0; background:transparent; color:#99adad; width:20px; height:22px; padding:0; font:inherit; font-size:16px; border-radius:5px; cursor:pointer; }
-.pet-card-actions :is(select,.pet-hide):hover { background:#2b4c50; color:#ecf5f3; }
-.desktop-pet :is(button,select):focus-visible { outline:2px solid #8cdec4; outline-offset:1px; }
-.pet-state-waiting { color:#f8cd77; }.pet-state-error {color:#ff9b9b;}.pet-state-unknown { color:#bec6d0; }
-.pet-session-picker { display:flex; align-items:center; gap:2px; margin-top:5px; }
-.pet-session-picker select { min-width:0; flex:1; border:0; background:#203c40; color:#ecf5f3; font:inherit; border-radius:6px; height:24px; padding:0 4px; }
-.pet-session-picker button { border:0; background:transparent; color:#bde2dc; width:20px; padding:0; height:24px; font-size:20px; cursor:pointer; }
-.pet-session-picker button:disabled { opacity:.3; cursor:default; }
-.pet-card p { margin:5px 0; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; font-size:10px; color:#b2c7c8; }
-.pet-card .pet-open { display:block; width:100%; padding:2px 4px; height:22px; font:inherit; font-size:11px; border:0; color:#d5f4eb; background:#2b514b; border-radius:6px; cursor:pointer; }
-.pet-card .pet-open:hover { background:#386b60; }
 .pet-settings .pet-toggle { display:flex; align-items:center; gap:8px; margin:12px 0; }
 .pet-settings .pet-toggle input { width:auto; margin:0; }
 .pet-settings h3 { margin-top:22px; }
