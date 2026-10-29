@@ -106,18 +106,24 @@ def render():
             fitted = ImageOps.contain(source.convert('RGBA'), canvas, Image.Resampling.LANCZOS)
         frame = Image.new('RGBA', canvas, (0, 0, 0, 0))
         frame.alpha_composite(fitted, ((canvas[0] - fitted.width) // 2, canvas[1] - fitted.height))
+        # Source matting leaves alpha=1 noise in otherwise empty canvas corners.
+        # Remove only imperceptible alpha noise, preserving soft character edges.
+        cutoff = config['encoder']['alphaCutoff']
+        frame.putalpha(frame.getchannel('A').point(lambda value: 0 if value <= cutoff else value))
         return frame
 
     report = {'version': 1, 'format': 'animated-webp', 'importRepository': config['repository'], 'importCommit': config['commit'],
-              'originalSource': manifest['assetSource'], 'sourceFps': config['fps'], 'canvas': config['canvas'], 'states': {}}
+              'originalSource': manifest['assetSource'], 'sourceFps': config['fps'], 'canvas': config['canvas'], 'encoder': config['encoder'], 'states': {}}
     for status, selection in config['states'].items():
         clip = manifest['clips'][selection['clip']]
         frames = [rgba_frame(relative) for relative in clip['frames']]
         durations = [round((n + 1) * 1000 / 24) - round(n * 1000 / 24) for n in range(len(frames))]
+        encoder = config['encoder']
         # Animated WebP keeps soft alpha edges and full colour, with a much smaller payload than GIF.
         frames[0].save(DEST / (status + '.webp'), format='WEBP', save_all=True, append_images=frames[1:],
                        duration=durations, loop=0 if selection['loop'] else 1,
-                       quality=85, method=4, minimize_size=False, allow_mixed=False, background=(0, 0, 0, 0))
+                       quality=encoder['quality'], method=encoder['method'], minimize_size=encoder['minimizeSize'],
+                       allow_mixed=encoder['allowMixed'], background=tuple(encoder['background']))
         frames[len(frames) // 3].save(DEST / (status + '.png'), optimize=True)
         data = (DEST / (status + '.webp')).read_bytes()
         assert len(data) <= 4 * 1024 * 1024, status + ' exceeds animation budget'
