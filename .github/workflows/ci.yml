@@ -121,6 +121,8 @@ jobs:
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         run: node scripts/smoke-updates.mjs
         timeout-minutes: 5
+        env:
+          DEBUG: pw:browser
       - name: Test installer progress, cancellation and upgrade
         id: installer-smoke
         run: ./scripts/test-installer.ps1

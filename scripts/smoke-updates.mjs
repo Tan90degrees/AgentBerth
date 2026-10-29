@@ -115,6 +115,13 @@ try{
  assert.match((await page.evaluate(()=>window.berth.updates('state'))).message,/恢复/);
  const rollbackQuit=new Promise(resolve=>application.process().once('exit',resolve));await application.evaluate(({app})=>app.quit());await rollbackQuit;application=null;
  step('passed: code bundle, native extraction, window restoration, live PTY/SSH/MCP, idle backend replacement and rollback');
+}catch(error){
+ console.error('Update regression failed:',error);
+ if(page&&!page.isClosed()){
+  console.error('Update state:',await page.evaluate(()=>window.berth.updates('state')).catch(()=>null));
+  await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/packaged-software-update-failure.png'}).catch(()=>{});
+ }
+ throw error;
 }finally{
  mcp?.close();mcp2?.close();if(application)await application.close().catch(()=>{});
  for(const client of clients)client.end();await new Promise(resolve=>ssh.close(resolve));
