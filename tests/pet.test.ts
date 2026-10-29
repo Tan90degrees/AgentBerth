@@ -93,12 +93,12 @@ test('hook endpoint is authenticated, bounded, local and refuses stale/foreign e
 test('bundled hook reads Agent stdin without forwarding prompts and fails open when app is absent', async t => {
   const { folder, pet, a } = fixture(t), hooks = new PetHooks(folder, event => pet.accept(event));
   await hooks.start(); t.after(() => hooks.close());
-  const invoke = (payload: unknown, extra: string[] = []) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [path.resolve('dist/pet-hook.cjs'), ...extra], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AGENTBERTH_DATA_DIR: folder, AGENTBERTH_SESSION_ID: a.id, AGENTBERTH_RUN_ID: a.latestRun!.id }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const invoke = (payload: unknown, extra: string[] = [], extraEnv: Record<string, string> = {}) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, [path.resolve('dist/pet-hook.cjs'), ...extra], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AGENTBERTH_DATA_DIR: folder, AGENTBERTH_SESSION_ID: a.id, AGENTBERTH_RUN_ID: a.latestRun!.id, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = ''; child.stdout.on('data', data => output += data); child.stderr.on('data', data => output += data);
     child.once('error', reject); child.once('close', code => resolve({ code, output })); child.stdin.end(JSON.stringify(payload));
   });
-  assert.deepEqual(await invoke({ hook_event_name: 'UserPromptSubmit', prompt: 'PRIVATE_SENTINEL' }), { code: 0, output: '' });
+  assert.deepEqual(await invoke({ hook_event_name: 'UserPromptSubmit', prompt: 'PRIVATE_SENTINEL' }, [], { NODE_USE_ENV_PROXY: '1', HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '' }), { code: 0, output: '' });
   assert.equal(pet.snapshot().sessions[0].status, 'working');
   assert.deepEqual(await invoke({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' }), { code: 0, output: '' });
   assert.equal(pet.snapshot().sessions[0].status, 'waiting');

@@ -76,8 +76,12 @@ try {
   await animation.getByRole('button', { name: '恢复默认', exact: true }).click();
   await pet.waitForFunction(() => !document.querySelector('.pet-character').src.startsWith('data:'));
   const closed = pet.waitForEvent('close');
-  await pet.getByRole('button', { name: '隐藏桌宠', exact: true }).click();
+  await pet.getByRole('button', { name: '隐藏桌宠', exact: true }).click().catch(error => {
+    // The native window can disappear before Playwright acknowledges mouse-up.
+    if (!pet.isClosed() || !String(error).includes('Target page, context or browser has been closed')) throw error;
+  });
   await closed;
+  assert.equal((await page.evaluate(() => window.berth.pet({ action: 'state' }))).preferences.enabled, false);
   assert.equal((await rpc('state', {})).sessions.find(session => session.id === a.id).latestRun.status, 'running');
   assert.deepEqual(errors, []);
   await rpc('stop', { sessionId: a.id }); await rpc('stop', { sessionId: b.id });
