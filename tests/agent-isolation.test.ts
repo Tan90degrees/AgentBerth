@@ -81,10 +81,13 @@ test('one bundled MCP process isolates concurrent named subagents and disposes o
 });
 
 test('disconnected Agent can continue its exact session without new authorization; human takeover remains binding', {timeout:20000},async t=>{
- const f=await fixture(t);let client=await f.connect();const a=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>client.rpc<T>(method,params)});
+ const f=await fixture(t);let client=await f.connect();let a=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>client.rpc<T>(method,params)});
  const target=await call(a,'terminal_session',{action:'open',alias:'fixture'});await call(a,'terminal_interact',{text:'SET=RETAINED'});
  client.close(true);await delay(30);client=await f.connect();
  const output=await call(a,'terminal_interact',{alias:'fixture',text:'GET'});assert.match(output.text,/TOKEN=RETAINED/);assert.equal(f.shells(),1);
+ client.close(true);await delay(30);client=await f.connect();a=new TerminalMcp(client);
+ assert.match((await call(a,'terminal_interact',{sessionId:target.sessionId,runId:target.runId,view:'screen'})).text,/TOKEN=RETAINED/);
+ assert.deepEqual((await call(a,'terminal_session')).sessions.map((s:any)=>s.sessionId),[target.sessionId],'A fresh MCP process recovers only its explicitly retained target, including cleanup ownership');
  await f.ui.rpc('remoteControl',{sessionId:target.sessionId,runId:target.runId,owner:'user'});
  const denied:any=await a.request('tools/call',{name:'terminal_session',arguments:{action:'dispose'}});assert.equal(denied.isError,true);assert.equal(JSON.parse(denied.content[0].text).error.code,'USER_CONTROLLED');
  assert.equal((await f.ui.rpc<RemoteInfo>('remoteInfo',{sessionId:target.sessionId})).owner,'user');

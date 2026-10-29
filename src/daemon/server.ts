@@ -198,6 +198,11 @@ export class DaemonServer {
     if (active.length > 1) throw new RemoteOperationError('ALIAS_AMBIGUOUS','当前 Agent 在此服务器有多个会话，请使用自己的 sessionId 和 runId',{alias});
     return { profile, session: active[0] ?? sessions[0] };
   }
+  private recoverReadTarget(sessionId: string, client: Client): void {
+    // An explicitly retained session/run can be recovered by a fresh MCP
+    // process. Desktop observation must never acquire an Agent's connection.
+    if(client !== this.sshProvider && this.agentOwners.get(sessionId)?.abort.signal.aborted)this.agentOwners.set(sessionId,client);
+  }
   private assertOwnSession(sessionId: string, client: Client): void {
     const previous = this.agentOwners.get(sessionId);
     if (previous && previous !== client && !previous.abort.signal.aborted) {
@@ -383,6 +388,7 @@ export class DaemonServer {
       case 'remoteCommand': return this.runRemoteCommand(client,request.params);
       case 'remoteReadOutput': {
         const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
+        this.recoverReadTarget(p.sessionId,client);
         const actionId=p.actionId??remote.activity.latestOutputCommand()?.id;
         if(!actionId)throw new RemoteOperationError('NO_COMMAND_OUTPUT','当前没有已捕获的命令结果；普通命令使用 terminal_execute，交互程序使用 terminal_interact。不要重跑此前结果未知的输入。',{sessionId:p.sessionId,runId:p.runId});
         if(p.search&&p.waitFor==='completion')await remote.activity.wait(actionId,p.timeoutMs,client.abort.signal);
@@ -397,10 +403,14 @@ export class DaemonServer {
         }
         remote.activity.keys(client, key ? remoteKeys[key] : text! + (enter ? '\r' : ''), key ? `按键 ${key}` : `输入文本（${text!.length} 字符${enter?'，回车':''}）`, data => remote.transport.write(data)); return {inputKind:'interactive',info:{...remote.activity.info}};
       }
-      case 'remoteWait': return this.remote(request.params.sessionId, request.params.runId).activity.wait(request.params.actionId, request.params.timeoutMs, client.abort.signal);
+      case 'remoteWait': {
+        const remote=this.remote(request.params.sessionId,request.params.runId);this.recoverReadTarget(request.params.sessionId,client);
+        return remote.activity.wait(request.params.actionId,request.params.timeoutMs,client.abort.signal);
+      }
       case 'remoteScreen': {
         const live = this.terminal(request.params.sessionId, request.params.runId);
         if (!live.remote) throw new Error('此会话不是远程终端');
+        this.recoverReadTarget(request.params.sessionId,client);
         const screen = await this.screen(live,false);
         const buffer = live.terminal.buffer.active, lines: string[] = [];
         for (let row = buffer.baseY; row < buffer.baseY + live.terminal.rows; row++) lines.push(buffer.getLine(row)?.translateToString(true) ?? '');

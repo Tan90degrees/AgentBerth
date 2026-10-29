@@ -26,7 +26,7 @@
 ## 普通命令：执行即返回本轮结果
 
 ```json
-{"alias":"dev-server","command":"uname -a"}
+{"agentId":"inspect-a","alias":"dev-server","command":"uname -a"}
 ```
 
 调用 `terminal_execute` 即可打开或复用当前 Agent 自己的独立连接，保持当前目录和环境。默认等完成标记，最多 25 秒；第一段日志不会提前结束调用。读取 `status`、`exitCode`、`output.text` 即可，完成后不需要再读屏验证，也不需要单独敲 Enter。
@@ -36,7 +36,7 @@
 读取上一条命令也使用 `terminal_execute`：
 
 ```json
-{"alias":"dev-server"}
+{"agentId":"inspect-a","alias":"dev-server"}
 ```
 
 同一个 Agent 上下文成功使用过目标后，可以连 alias 都省略，复用原 sessionId/runId。省略 actionId 时定位最近已捕获的命令；省略 cursor 从该命令开头取有界结果。显式 actionId 可固定另一条历史命令。人工输入不会把上一条已捕获结果隐藏，也不会被冒充为上一条命令的结果。只在 alias/sessionId/runId 整个目标均省略时复用；显式传入的部分目标或旧 runId 会原样校验，不会被当前会话覆盖。已知命令的临时读取失败会给出固定 actionId、游标和筛选条件的续取入口，不包含重新执行命令。
@@ -45,14 +45,14 @@
 
 普通命令是 `scope:"command"`，终端即使只有 5 行，120 行列表仍可在首次执行结果中完整返回。`terminal_interact` 的默认 `view:"auto"` 在可靠命令状态下也优先取命令缓存，避免模型误用屏幕后只拿到末尾。
 
-TUI 才显式使用 `terminal_interact({"alias":"dev-server","view":"screen"})`。它返回 `scope:"viewport"`，只描述当前可见画面，不能当作完整列表或日志。按键或 text 输入也在同次调用返回视口；text 默认附带 Enter，只有 `enter:false` 才不提交。不要为探测提示符随意发送 Enter，不能自动重试结果未知的按键。
+TUI 才显式使用 `terminal_interact({"agentId":"inspect-a","alias":"dev-server","view":"screen"})`。它返回 `scope:"viewport"`，只描述当前可见画面，不能当作完整列表或日志。按键或 text 输入也在同次调用返回视口；text 默认附带 Enter，只有 `enter:false` 才不提交。不要为探测提示符随意发送 Enter，不能自动重试结果未知的按键。
 
 结果边界保持与 [ssh-skill](https://github.com/badseal/ssh-skill/tree/c6c8a184a7d8c8b217860a015f5860418647d8ea) 一致：**256 KiB / 4000 行 / 64 KiB 尾部**，完整编码 JSON 另有 **256 KiB** 上限。短输出完整返回；超大输出保留首尾并标记 `omitted` 和总量，不让模型自动读完所有分页。`cacheLost` 才表示真实淘汰，`available:false` 表示缓存不可用；结果未知不能宣称成功。
 
 需要有关明细时，仍调用同一个工具查询缓存，不重新执行：
 
 ```json
-{"alias":"dev-server","search":{"query":"error","contextLines":2}}
+{"agentId":"inspect-a","alias":"dev-server","search":{"query":"error","contextLines":2}}
 ```
 
 这是字面匹配，不执行远端 grep；`limit:0` 只计匹配行。查询默认 16 KiB，合并重叠上下文；分页 details 固定快照 endCursor。`mode:"page"` 用于明确需要的原文细节，不能为了“完整性”自动倾倒全部缓存。每会话最近 8 条命令各保留最近 8M 个 UTF-16 单元，停止或重启后台会清除。
