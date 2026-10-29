@@ -29,7 +29,7 @@ const api: DesktopApi = {
   deleteSshConnection: id => ipcRenderer.invoke('berth:deleteSshConnection', id),
   chooseSshKey: () => ipcRenderer.invoke('berth:sshKey'),
   setAppearance: mode => ipcRenderer.invoke('berth:appearance', mode),
-  mcpConfig: () => ipcRenderer.invoke('berth:mcpConfig'),
+  mcpConfig: provider => ipcRenderer.invoke('berth:mcpConfig', provider),
   appInfo: () => ipcRenderer.invoke('berth:appInfo'),
   openDataDirectory: () => ipcRenderer.invoke('berth:dataDirectory'),
   rpc: (method, params = {}) => ipcRenderer.invoke('berth:rpc', method, params),

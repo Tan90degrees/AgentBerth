@@ -81,7 +81,7 @@ export function McpSettings({ disabled, onError,metricsSupported=false }: { disa
       <span>本次后台</span><span>调用 <strong aria-label="MCP 调用次数">{metrics?.total??0}</strong></span><span>成功率 <strong aria-label="MCP 调用成功率">{metrics?.successRate==null?'—':(metrics.successRate*100).toFixed(1)+'%'}</strong></span><span>失败 <strong aria-label="MCP 调用失败次数">{metrics?.failed??0}</strong></span>
     </div>:<p className="form-hint">更新后台后可查看 MCP 调用统计。</p>}
     {metrics&&metrics.tools.length>0&&<details className="mcp-metric-details"><summary>按工具查看</summary><table><thead><tr><th>工具</th><th>调用</th><th>成功</th><th>失败</th></tr></thead><tbody>{metrics.tools.map(row=><tr key={row.tool}><td>{row.tool}</td><td>{row.total}</td><td>{row.succeeded}</td><td>{row.failed}</td></tr>)}</tbody></table></details>}
-    <div className="mcp-actions"><AsyncButton className="subtle" disabled={disabled} onError={onError} onAction={async()=>window.berth.copyText(await window.berth.mcpConfig())}>复制 MCP 配置</AsyncButton></div>
+    <div className="mcp-actions"><AsyncButton className="subtle" disabled={disabled} onError={onError} onAction={async()=>window.berth.copyText(await window.berth.mcpConfig())}>复制 MCP 配置</AsyncButton><AsyncButton className="subtle" disabled={disabled} onError={onError} onAction={async()=>window.berth.copyText(await window.berth.mcpConfig('opencode'))}>复制 OpenCode MCP 配置</AsyncButton></div>
     <p className="form-hint">配置不含 SSH 密钥。AgentBerth 需保持后台运行；主窗口关闭继续运行，托盘退出关闭 SSH。断线后重新连接会建立新的 Shell。</p>
   </section>;
 }

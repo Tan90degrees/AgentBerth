@@ -8,6 +8,10 @@
 
 ## 优先交付单个文件
 
+适配已有 Claude Code / OpenCode 或它们的命令配置时，优先复用内置能力：在 JSON、清单或脚本 describe 中声明 `integration: "claude"` 或 `"opencode"`。它继承原生历史发现/读取、桌宠身份和默认 Skill 目录，不需要重新实现私有格式读取。参考 `examples/claude-profile.json`、`examples/opencode-profile.json`。`skills`、`plugin.history`、`plugin.list` 的显式配置分别覆盖继承的对应能力。恢复命令仍须提供实际的 `resumeCommand` 或 `plugin.resume`，不要假设包装命令接受与原 CLI 相同的参数。名称和 integration 在重命名、导入更新后保留。
+
+AgentBerth 不安装 Agent 本体、模型、依赖或账号。CLI 必须已安装；OpenCode 历史通过 PATH 中的官方 `opencode` 读取，不执行自定义包装命令。桌宠适配在设置 → 桌宠安装/更新，有独立可复制教程。OpenCode 2.x 标准命令自动附加 `--standalone` 以隔离服务；自定义包装脚本自行转发，不能把共享服务中的所有事件归给一个终端。
+
 只需要启动 CLI 时，交付一个 JSON 配置（最多 64 KiB），无需任何插件程序：
 
 ```json

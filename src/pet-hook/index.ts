@@ -8,6 +8,9 @@ import { hookStatus, petHookSchema } from '../shared/pet';
 async function main() {
   const args = process.argv.slice(2);
   const option = (name: string) => { const index = args.indexOf('--' + name); return index < 0 ? undefined : args[index + 1]; };
+  const provider = option('provider');
+  if (provider && provider !== 'claude') return;
+  if (provider && process.env.AGENTBERTH_AGENT && process.env.AGENTBERTH_AGENT !== provider) return;
   let payload: Record<string, unknown> = {};
   if (!process.stdin.isTTY) {
     let size = 0; const chunks: Buffer[] = [];
@@ -23,7 +26,11 @@ async function main() {
   if (!status) return;
   const directory = option('data-dir') ?? process.env.AGENTBERTH_DATA_DIR;
   if (!directory || !path.isAbsolute(directory)) throw new Error('AGENTBERTH_DATA_DIR is missing');
-  const event = petHookSchema.parse({ sessionId: option('session-id') ?? process.env.AGENTBERTH_SESSION_ID, runId: option('run-id') ?? process.env.AGENTBERTH_RUN_ID, status });
+  // Subagent events cannot finish or bind their parent's terminal.
+  if (provider === 'claude' && (payload.agent_id || payload.is_sidechain)) return;
+  const native = provider === 'claude' && typeof payload.session_id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(payload.session_id) && typeof payload.cwd === 'string' && path.isAbsolute(payload.cwd)
+    ? { provider, nativeSessionId: payload.session_id, cwd: payload.cwd } : {};
+  const event = petHookSchema.parse({ sessionId: option('session-id') ?? process.env.AGENTBERTH_SESSION_ID, runId: option('run-id') ?? process.env.AGENTBERTH_RUN_ID, status, ...native });
   const descriptor = JSON.parse(readFileSync(path.join(directory, 'pet-hook.json'), 'utf8'));
   if (!Number.isInteger(descriptor.port) || descriptor.port < 1 || descriptor.port > 65535 || !/^[a-f0-9]{64}$/.test(descriptor.token)) throw new Error('Hook endpoint unavailable');
   const body = JSON.stringify(event);

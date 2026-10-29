@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "opencode-profile",
+  "name": "OpenCode profile",
+  "integration": "opencode",
+  "command": "opencode",
+  "resumeCommand": "opencode --session {sessionId}"
+}

@@ -1,5 +1,13 @@
 # 更新记录
 
+## v0.16.0
+
+- 聚焦用户已有 Claude Code 与 OpenCode：新增项目/用户级桌宠适配安装、备份与去重，不内置 Agent 引擎或模型配置。
+- OpenCode 1.x / 2.x 分别提供无外部依赖的事件插件；支持工作、授权等待、完成和失败，过滤子会话完成，2.x 使用独立服务继承会话身份。
+- Hook 精确绑定当前运行的原生会话 ID；手动关联/解除优先。OpenCode 原生历史可按需发现、搜索、分页、预览、刷新和恢复，兼容两代官方 CLI 导出。
+- 自定义 Agent 文件可声明 integration 继承 Claude/OpenCode 历史和 Skills，保留原有导入、重命名与热更新；MCP 提供 OpenCode 专用配置。
+- 工作台后台 API 38；四工具 MCP 最低仍为 API 36。
+
 ## v0.15.2
 
 - 桌宠只展示本机 Agent 会话，排除普通 Shell 和 SSH；被排除的 hook 不会抢占关注，旧选中项自动回退到有效 Agent。

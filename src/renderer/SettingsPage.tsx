@@ -70,7 +70,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {conflict && <p className="draft-notice" role="status">后台设置已更新，草稿已保留。保存将应用此处的值；取消修改可加载后台设置。</p>}
         {error && <div className="form-error" role="alert">{error.replace(/^Error: /, '')}</div>}
         {!visible.size && <div className="settings-no-results"><h3>没有匹配的设置</h3><p>试试“终端”“字体”或“SSH”，也可以查看全部设置。</p><button type="button" className="subtle" onClick={() => { setQuery(''); setCategory('all'); search.current?.focus(); }}>查看全部设置</button></div>}
-        {item('pet', visible.has('pet') ? <PetSettings /> : null)}
+        {item('pet', visible.has('pet') ? <PetSettings projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion} /> : null)}
         {item('theme', <AppearanceControls />)}
         {item('preview', <PreviewSettings />)}
         <form id="workspace-settings-form" className="settings-values" ref={form} noValidate onSubmit={async event => {

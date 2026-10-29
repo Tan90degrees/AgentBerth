@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { openCodeLaunch } from './opencode-launch';
 import { SshTerminal } from './ssh-terminal';
 import type { SshChallenge, SshSecret, TransferEndpoint } from '../shared/protocol';
 import { localTransferFs, RemoteTransfers, sftpTransferFs } from './remote-transfer';
@@ -19,7 +20,7 @@ import { GitWorkspace } from './git';
 import { ProjectFiles } from './files';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
-import { sameDirectory } from './history';
+import { sameDirectory, matchesProject } from './history';
 import { NativeDiscovery, unambiguousNewHistory, type NativeCandidate } from './native-discovery';
 import { RunLog } from './logs';
 import { readHistory } from './history';
@@ -63,7 +64,7 @@ export class DaemonServer {
   private closing = false;
   private logs: string;
   private nativeDiscovery = new NativeDiscovery();
-  private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean }>();
+  private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string }>();
   private nativeTimer: NodeJS.Timeout | null = null;
   private nativeScanning: Promise<void> | null = null;
   private historyBusy = new Set<string>();
@@ -526,7 +527,7 @@ export class DaemonServer {
       case 'linkNativeSession': {
         const session = this.store.session(request.params.sessionId);
         this.requireHistoryAvailable(session.id);
-        if (!['codex', 'claude', 'opencode'].includes(session.agent) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
+        if (!['codex', 'claude', 'opencode'].includes(this.integration(session)) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
         const history = this.store.nativeHistory(session.id, request.params.nativeSessionId) ?? { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
         this.nativeTracking.delete(session.id);
         this.store.saveHistory(session.id, history); this.changed(); return history;
@@ -536,6 +537,17 @@ export class DaemonServer {
         this.nativeTracking.delete(id);
         const history = { messages: [], warnings: [], path: null, nativeSessionId: null };
         this.store.saveHistory(id, history); this.changed(); return history;
+      }
+      case 'nativeSessionDetected': {
+        const p = request.params, session = this.store.session(p.sessionId), tracking = this.nativeTracking.get(session.id);
+        if (this.integration(session) !== p.provider || session.remote || session.latestRun?.id !== p.runId || !this.live.has(session.id) || this.live.get(session.id)?.closed || tracking?.runId !== p.runId || session.nativeSessionId && session.nativeSessionId !== tracking.hookNativeId || this.historyBusy.has(session.id) || !await matchesProject(p.cwd, this.store.project(session.projectId).path)) return { linked: false };
+        if (session.nativeSessionId === p.nativeSessionId) return { linked: true };
+        const transcript = p.provider === 'claude' ? (await this.nativeDiscovery.list('claude', this.store.project(session.projectId).path)).find(item => item.nativeSessionId === p.nativeSessionId)?.path : null;
+        if (p.provider === 'claude' && !transcript) return { linked: false };
+        // Recheck after path I/O: manual association/unlink always wins.
+        if (this.nativeTracking.get(session.id) !== tracking || this.store.session(session.id).nativeSessionId !== session.nativeSessionId) return { linked: false };
+        this.store.saveHistory(session.id, { messages: [], warnings: [], path: transcript ?? null, nativeSessionId: p.nativeSessionId });
+        tracking.ambiguous = true; tracking.hookNativeId = p.nativeSessionId; this.changed(); return { linked: true };
       }
       case 'nativeHistories': return this.store.nativeHistories(request.params.sessionId, request.params);
       case 'discoverNativeHistories': return this.discoverHistories(request.params.sessionId, request.params);
@@ -597,7 +609,7 @@ export class DaemonServer {
       case 'importHistory': return this.importHistory(request.params.sessionId, request.params.path);
       case 'refreshHistory': {
         const session = this.store.session(request.params.sessionId);
-        if (!session.transcriptPath && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
+        if (!session.transcriptPath && !(['claude', 'opencode'].includes(this.integration(session)) && session.nativeSessionId) && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
         return this.importHistory(request.params.sessionId, session.transcriptPath);
       }
     }
@@ -618,6 +630,16 @@ export class DaemonServer {
   }
 
   private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
+  private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:') ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
+  private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
+    const project = this.store.project(session.projectId).path;
+    if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file);
+    const provider = this.integration(session);
+    if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project);
+    if (!file && provider === 'claude' && session.nativeSessionId) file = (await this.nativeDiscovery.list('claude', project)).find(item => item.nativeSessionId === session.nativeSessionId)?.path ?? null;
+    if (!file) throw new Error('请先关联原生记录文件');
+    return readHistory(file, provider, project);
+  }
   private assertAgentVersion(id: string, version: number): void {
     if (this.agentVersion(id) !== version) throw new Error('Agent 插件已更新，请重新读取或重试');
   }
@@ -627,14 +649,11 @@ export class DaemonServer {
     this.historyWrites.add(sessionId);
     try {
       const session = this.store.session(sessionId);
-      const projectPath = this.store.project(session.projectId).path;
       const version = this.agentVersion(session.agent);
-      const history = session.agent.startsWith('agent:')
-        ? await this.plugins.history(this.store.agent(session.agent), session, projectPath, file)
-        : await readHistory(file!, session.agent, projectPath);
+      const history = await this.integratedHistory(session, file);
       if (this.closing) throw new Error('后台正在退出');
       this.assertAgentVersion(session.agent, version);
-      this.nativeTracking.delete(sessionId);
+      if (this.nativeTracking.get(sessionId)?.hookNativeId !== history.nativeSessionId) this.nativeTracking.delete(sessionId);
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); this.historyWrites.delete(sessionId); }
   }
@@ -652,17 +671,20 @@ export class DaemonServer {
   private async discoverHistories(sessionId: string, pagination: HistoryQuery) {
     this.requireHistoryAvailable(sessionId);
     const session = this.store.session(sessionId);
-    if (session.agent === 'codex' || session.agent === 'claude') {
+    if (['codex', 'claude', 'opencode'].includes(this.integration(session)) && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.list)) {
       this.reserveHistory(sessionId);
       try {
-        const items = await this.nativeDiscovery.list(session.agent, this.store.project(session.projectId).path);
+        const version = this.agentVersion(session.agent);
+        const items = await this.nativeDiscovery.list(this.integration(session), this.store.project(session.projectId).path);
+        if (this.closing) throw new Error('后台正在退出');
+        this.assertAgentVersion(session.agent, version);
         const query = pagination.query.toLowerCase();
-        const filtered = items.filter(item => item.nativeSessionId.toLowerCase().includes(query));
+        const filtered = items.filter(item => `${item.nativeSessionId} ${item.title}`.toLowerCase().includes(query));
         const offset = pagination.cursor ? Number(pagination.cursor) : 0;
         if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('分页已失效，请刷新');
         const page = filtered.slice(offset, offset + pagination.limit);
         for (const item of page) if (!this.store.nativeHistory(sessionId, item.nativeSessionId)) this.store.saveHistoryEntry(sessionId, { messages: [], warnings: [], path: item.path, nativeSessionId: item.nativeSessionId });
-        return { items: page, nextCursor: offset + page.length < filtered.length ? String(offset + page.length) : null, warnings: ['发现本机原生记录；多个候选请选中后关联。扫描最多 4000 个目录项、最近 500 个文件。'] };
+        return { items: page, nextCursor: offset + page.length < filtered.length ? String(offset + page.length) : null, warnings: [] };
       } finally { this.historyBusy.delete(sessionId); }
     }
     if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return { items: [], nextCursor: null, warnings: ['此类型未提供会话发现；可导入多个原生记录文件或手动关联 ID'] };
@@ -678,16 +700,14 @@ export class DaemonServer {
   private async previewHistory(sessionId: string, nativeSessionId: string, refresh: boolean): Promise<History> {
     this.requireHistoryAvailable(sessionId);
     const cached = this.store.nativeHistory(sessionId, nativeSessionId);
-    if (cached && !refresh && (cached.messages.length || !cached.path)) return cached;
+    if (cached && !refresh && (cached.messages.length || !cached.path && !['claude', 'opencode'].includes(this.integration(this.store.session(sessionId))))) return cached;
     const session = this.store.session(sessionId);
     const agent = session.agent.startsWith('agent:') ? this.store.agent(session.agent) : null;
-    if (!agent && !cached?.path) throw new Error('此记录尚未导入，请先选择原生记录文件');
+    if (!agent && !cached?.path && !['claude', 'opencode'].includes(this.integration(session))) throw new Error('此记录尚未导入，请先选择原生记录文件');
     this.reserveHistory(sessionId);
     try {
       const version = this.agentVersion(session.agent);
-      const history = !agent ? await readHistory(cached!.path!, session.agent, this.store.project(session.projectId).path) : agent.plugin?.history
-        ? await this.plugins.history(agent, { ...session, nativeSessionId, transcriptPath: cached?.path ?? null }, this.store.project(session.projectId).path, cached?.path ?? null)
-        : { messages: [], warnings: ['此类型仅提供会话列表，没有文本读取能力'], path: null, nativeSessionId };
+      const history = agent && !agent.integration && !agent.plugin?.history ? { messages: [], warnings: ['此类型仅提供会话列表，没有文本读取能力'], path: null, nativeSessionId } : await this.integratedHistory({ ...session, nativeSessionId }, cached?.path ?? null);
       if (history.nativeSessionId !== nativeSessionId) throw new Error('插件返回的会话 ID 与选中会话不一致');
       if (this.closing) throw new Error('后台正在退出');
       this.assertAgentVersion(session.agent, version);
@@ -720,9 +740,10 @@ export class DaemonServer {
     const session = this.store.session(sessionId);
     const projectPath = this.store.project(session.projectId).path;
     const version = this.agentVersion(session.agent);
-    const command = resume && session.agent.startsWith('agent:')
+    let command = resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
       : launchCommand(session, resume);
+    if (this.integration(session) === 'opencode') command = await openCodeLaunch(command, projectPath);
     const config = session.terminal ?? this.store.settings().terminal;
     let cwd: string;
     let selected: { file: string; args: string[] };
@@ -739,9 +760,12 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台无法再启动终端');
     if (this.agentOwners.get(sessionId)?.disposing) throw new Error('SSH 连接已取消，Agent 正在清理自己的连接');
     if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
-    const trackNative = !resume && !session.remote && (['codex', 'claude'].includes(session.agent) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
+    const provider = this.integration(session);
+    const trackNative = !resume && !session.remote && (['codex', 'claude', 'opencode'].includes(provider) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
     let baseline: NativeCandidate[] | null = [];
-    if (trackNative) { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
+    // OpenCode hooks carry the exact native ID. Do not start another OpenCode
+    // process or poll its database just to launch an existing TUI.
+    if (trackNative && provider !== 'opencode') { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: session.remote ? undefined : windowsPtyFor(process.platform, release()) });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
@@ -767,7 +791,7 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id } });
+      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
     }
     catch (error) {
       terminal.dispose();
@@ -780,9 +804,9 @@ export class DaemonServer {
     // Fresh TUI launches never inherit an old recovery ID, even without discovery support.
     if (!resume && !session.remote && session.agent !== 'shell') this.store.saveHistory(sessionId, { messages: [], warnings: [], path: null, nativeSessionId: null });
     if (trackNative) {
-      const peers = [...this.nativeTracking.keys()].filter(id => { const peer = this.store.session(id); return peer.projectId === session.projectId && peer.agent === session.agent; });
+      const peers = [...this.nativeTracking.keys()].filter(id => { const peer = this.store.session(id); return peer.projectId === session.projectId && this.integration(peer) === provider; });
       peers.forEach(id => { this.nativeTracking.get(id)!.ambiguous = true; });
-      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: peers.length > 0 || baseline === null });
+      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: provider === 'opencode' || peers.length > 0 || baseline === null });
       this.scheduleNativeScan();
     }
     this.changed(); // Make connection startup visible and cancellable in the sidebar.
@@ -816,7 +840,7 @@ export class DaemonServer {
 
   private async nativeCandidates(sessionId: string): Promise<NativeCandidate[] | null> {
     const session = this.store.session(sessionId), project = this.store.project(session.projectId).path;
-    if (!session.agent.startsWith('agent:')) return this.nativeDiscovery.list(session.agent, project);
+    if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return this.nativeDiscovery.list(this.integration(session), project);
     const version = this.agentVersion(session.agent);
     const page = await this.plugins.list(this.store.agent(session.agent), session, project, { cursor: null, limit: 50, query: '' });
     this.assertAgentVersion(session.agent, version);
@@ -840,7 +864,7 @@ export class DaemonServer {
       if (session.latestRun?.id !== tracking.runId || session.nativeSessionId) { this.nativeTracking.delete(sessionId); return; }
       const items = await this.nativeCandidates(sessionId);
       if (!items) return;
-      const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.projectId === session.projectId && item.agent === session.agent).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
+      const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.projectId === session.projectId && this.integration(item) === this.integration(session)).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
       const candidate = unambiguousNewHistory(items, tracking.baseline, tracking.started, claimed);
       if (!candidate) return;
       // Recheck after I/O so manual association, unlink, or a new run wins.
@@ -909,9 +933,7 @@ export class DaemonServer {
       if (!session.remote && session.nativeSessionId && !this.historyBusy.has(sessionId)) {
         try {
           const version = this.agentVersion(session.agent);
-          const history = session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history && !this.closing
-            ? await this.plugins.history(this.store.agent(session.agent), session, this.store.project(session.projectId).path, session.transcriptPath)
-            : ['codex', 'claude'].includes(session.agent) && session.transcriptPath ? await readHistory(session.transcriptPath, session.agent, this.store.project(session.projectId).path) : null;
+          const history = !this.closing && (session.transcriptPath || this.integration(session) === 'opencode' || session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) ? await this.integratedHistory(session, session.transcriptPath) : null;
           this.assertAgentVersion(session.agent, version);
           if (history && history.nativeSessionId === session.nativeSessionId && this.store.session(sessionId).nativeSessionId === session.nativeSessionId && !this.historyBusy.has(sessionId)) this.store.saveHistory(sessionId, history);
         } catch (error) { this.logError(error); } // Keep a valid recovery ID if the transcript cannot be read.
@@ -976,6 +998,7 @@ export class DaemonServer {
       await this.transfers.close();
       await this.git.close();
       await this.plugins.close();
+      await this.nativeDiscovery.opencode.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));
       for (const result of results) if (result.status === 'rejected') this.logError(result.reason);
       const deadline = Date.now() + 5000;

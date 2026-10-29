@@ -1,5 +1,5 @@
 import { _electron as electron } from 'playwright';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
@@ -10,7 +10,12 @@ const dataDirectory = path.join(folder, 'data');
 const executablePath = packaged ? path.resolve('release/win-unpacked/AgentBerth.exe') : undefined;
 const args = [...(packaged ? [] : [path.resolve('.')]), '--user-data-dir=' + path.join(folder, 'profile')];
 if (process.platform === 'linux' && process.getuid?.() === 0) args.push('--no-sandbox');
-const env = { ...process.env, AGENTBERTH_DATA_DIR: dataDirectory }; delete env.ELECTRON_RUN_AS_NODE;
+const fixtureBin = path.join(folder, 'bin'); await mkdir(fixtureBin);
+const exported = JSON.stringify({ info: { id: 'smoke-native', directory: folder }, messages: [] });
+await writeFile(path.join(fixtureBin, process.platform === 'win32' ? 'opencode.cmd' : 'opencode'), process.platform === 'win32'
+  ? '@echo off\r\nif "%~1"=="--version" (echo 1.14.33) else (echo ' + exported + ')\r\n'
+  : '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.14.33; else printf \'%s\\n\' \'' + exported.replaceAll("'", "'\\''") + "'; fi\n", { mode: 0o755 });
+const env = { ...process.env, PATH: fixtureBin + path.delimiter + process.env.PATH, AGENTBERTH_DATA_DIR: dataDirectory, CLAUDE_CONFIG_DIR: path.join(folder, 'claude-home'), XDG_CONFIG_HOME: path.join(folder, 'config-home') }; delete env.ELECTRON_RUN_AS_NODE;
 let application;
 try {
   application = await electron.launch({ executablePath, args, env, timeout: 20000 });
@@ -133,6 +138,34 @@ try {
   assert.equal(await page.evaluate(() => window.berth.readClipboard()), guide);
   await page.getByText('查看完整自动配置教程', { exact: true }).click();
   assert.equal((await page.locator('.pet-hook-guide pre').innerText()).trimEnd(), guide.trimEnd());
+  console.log('Pet smoke: install/update both provider adapters, preserve hooks and expose OpenCode MCP');
+  await mkdir(path.join(folder, '.claude'), { recursive: true });
+  await writeFile(path.join(folder, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Read'] } }));
+  await page.getByLabel('桌宠适配范围', { exact: true }).selectOption(project.id);
+  await page.getByRole('button', { name: '安装/更新适配', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.pet-settings [role="status"]')?.textContent?.includes('适配已安装') || document.querySelector('.pet-settings')?.textContent?.includes('适配已安装'));
+  const merged = JSON.parse(await readFile(path.join(folder, '.claude', 'settings.local.json'), 'utf8'));
+  assert.deepEqual(merged.permissions, { allow: ['Read'] }); assert.equal(merged.hooks.Stop.length, 1);
+  await page.getByLabel('桌宠适配 Agent', { exact: true }).selectOption('opencode');
+  await page.getByRole('button', { name: '安装/更新适配', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.pet-settings')?.textContent?.includes('适配已安装'));
+  const installedPlugin = path.join(folder, '.opencode', 'plugins', 'agentberth-pet.mjs');
+  assert.match(await readFile(installedPlugin, 'utf8'), /OpenCode major: 1/);
+  await page.evaluate(projectId => window.berth.pet({ action: 'installHook', provider: 'opencode', projectId, opencodeVersion: '2' }), project.id);
+  assert.match(await readFile(installedPlugin, 'utf8'), /OpenCode major: 2/);
+  const openCodeMcp = JSON.parse(await page.evaluate(() => window.berth.mcpConfig('opencode')));
+  assert.equal(openCodeMcp.mcp.agentberth.type, 'local'); assert.equal(openCodeMcp.mcp.agentberth.environment.ELECTRON_RUN_AS_NODE, '1');
+  assert.ok(!openCodeMcp.mcpServers);
+  const integrated = await rpc('createAgent', { name: 'OpenCode fixture', integration: 'opencode', command: 'opencode', resumeCommand: 'opencode --session {sessionId}' });
+  const skills = await page.evaluate(location => window.berth.skills({ action: 'list', location }), { agentId: integrated.id, projectId: project.id });
+  assert.equal(skills.root, path.join(folder, '.opencode', 'skills'));
+  const oc = await rpc('createSession', { projectId: project.id, title: 'OpenCode fixture', agent: integrated.id });
+  const ocRun = await rpc('start', { sessionId: oc.id, cols: 80, rows: 24 }); assert.match(ocRun.command, /--standalone/);
+  const detected = await fetch(`http://127.0.0.1:${descriptor.port}/hook`, { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.token }, body: JSON.stringify({ sessionId: oc.id, runId: ocRun.id, provider: 'opencode', nativeSessionId: 'smoke-native', cwd: folder, status: 'waiting' }) });
+  assert.equal(detected.status, 200);
+  await pet.waitForFunction(id => document.querySelector('.desktop-pet').dataset.sessionId === id && document.querySelector('.pet-state-waiting'), oc.id);
+  await page.waitForFunction(async id => (await window.berth.rpc('state', {})).sessions.find(session => session.id === id)?.nativeSessionId === 'smoke-native', oc.id);
+  await rpc('stop', { sessionId: oc.id }); await chooseMenu('切换 Agent 会话', b.id);
   console.log('Pet smoke: context-menu scale control, synchronized settings and image-only layout');
   for (const scale of [0.5, 2, 1.5]) {
     await chooseMenu('桌宠大小', Math.round(scale * 100) + '%');

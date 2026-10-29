@@ -52,8 +52,8 @@
 
 | 文件 | 使用方式 |
 |---|---|
-| `AgentBerth-0.15.2-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `AgentBerth-0.15.2-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `AgentBerth-0.16.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.16.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
@@ -296,3 +296,18 @@ MCP 设置可查看本次后台的调用次数和成功率；工具支持在已�
 ### 桌宠
 
 在 **设置 → 桌宠** 开启独立桌面角色，仅展示本机 Agent 会话，普通终端和 SSH 不展示。查看执行、等待、完成和失败状态，切换多个 Agent 并返回对应会话。平时只显示角色图像；左键按住图像拖动，右键图像切换会话、打开会话、调节 50%–200% 大小、置顶、配置或隐藏。内置 dsh-pet 的完整 Q 版动作，也可导入自定义 GIF。应用内提供可复制给 Agent 执行的 hook 自动配置教程，包含本机路径、合并和验证步骤；未接入 hook 时显示“状态待确认”。[使用与 hook 接入](docs/desktop-pet.md)。
+
+### 已有 Agent 适配
+
+优先支持用户已安装的 Claude Code 和 OpenCode，不捆绑 Agent 运行时、不代配模型或账号。桌宠在 **设置 → 桌宠 → 安装/更新适配** 选择 Agent 和项目/用户范围，自动保留并备份已有配置。OpenCode 自动匹配 1.x / 2.x；安装后重新启动对应 Agent 会话。详见[桌宠与 hook](docs/desktop-pet.md)。
+
+| 能力 | Claude Code | OpenCode |
+| --- | --- | --- |
+| 启动、原生恢复、项目/会话管理 | 支持 | 支持 |
+| 桌宠真实事件、原生 ID 关联 | 内置 hook 配置 | 内置 1.x / 2.x 本地插件 |
+| 原生历史发现、搜索、分页、预览 | 本机 JSONL | 按需调用官方 CLI list/export |
+| Skill 导入、编辑、启停、移除 | 项目/用户目录 | 项目/用户目录 |
+| 复制本机 MCP 配置 | mcpServers 格式 | mcp / local 格式 |
+| 自定义配置继承和插件覆盖 | integration: claude | integration: opencode |
+
+OpenCode 2.x 桌宠适配使用 `--standalone` 独立服务，保证多会话身份隔离；包装命令需自行转发该参数，共享 `--server` 不参与绑定。CLI 缺失或读取失败会明确提示，仍可手动导入导出文件。普通 Shell 和 SSH 不在桌宠展示。

@@ -3,7 +3,7 @@ import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 37;
+export const API_VERSION = 38;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -31,6 +31,7 @@ const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
   name: title,
+  integration: z.enum(['claude', 'opencode']).optional(),
   skills: agentSkillsSchema.optional(),
   sourceId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
   command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
@@ -150,6 +151,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('shutdown'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: nativeSessionIdSchema }).strict() }),
   z.object({ id, method: z.literal('unlinkNativeSession'), params: z.object({ sessionId: id }).strict() }),
+  z.object({ id, method: z.literal('nativeSessionDetected'), params: z.object({ sessionId: id, runId: id, nativeSessionId: nativeSessionIdSchema, provider: z.enum(['claude', 'opencode']), cwd: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('nativeHistories'), params: historyQuerySchema.extend({ sessionId: id }) }),
   z.object({ id, method: z.literal('discoverNativeHistories'), params: historyQuerySchema.extend({ sessionId: id }) }),
   z.object({ id, method: z.literal('nativeHistory'), params: z.object({ sessionId: id, nativeSessionId: nativeSessionIdSchema, refresh: z.boolean().default(false) }).strict() }),
@@ -237,7 +239,7 @@ export interface DesktopApi {
   deleteSshConnection(connectionId: string): Promise<void>;
   chooseSshKey(): Promise<string | null>;
   appInfo(): Promise<AppInfo>;
-  mcpConfig(): Promise<string>;
+  mcpConfig(provider?: 'claude' | 'opencode'): Promise<string>;
   setAppearance(mode: AppearanceMode): Promise<void>;
   openDataDirectory(): Promise<void>;
   rpc<T = unknown>(method: Method, params?: Record<string, unknown>): Promise<T>;

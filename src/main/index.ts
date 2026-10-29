@@ -4,6 +4,7 @@ import { PetHooks } from './pet-hooks';
 import { petRequestSchema, petStatuses, petWindowSize } from '../shared/pet';
 import { statSync, writeFileSync } from 'node:fs';
 import { petHookConfiguration, petHookSetupGuide } from './pet-config';
+import { installAgentHook, integrationRoot } from './agent-integration';
 import { SkillManager, skillRoot } from './skills';
 import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
@@ -64,7 +65,13 @@ else {
     if (process.platform === 'win32') app.setAppUserModelId('dev.agentberth.desktop');
     pet = new PetState(path.join(dataDirectory, 'pet'), publishPet);
     pet.loadImages(petStatuses);
-    petHooks = new PetHooks(dataDirectory, hook => pet.accept(hook));
+    petHooks = new PetHooks(dataDirectory, hook => {
+      const accepted = pet.accept(hook);
+      if (accepted && hook.provider && hook.nativeSessionId && hook.cwd && connection?.connected) {
+        void connection.rpc('nativeSessionDetected', { sessionId: hook.sessionId, runId: hook.runId, provider: hook.provider, nativeSessionId: hook.nativeSessionId, cwd: hook.cwd }).catch(() => { /* History remains manually recoverable. */ });
+      }
+      return accepted;
+    });
     try { await petHooks.start(); } catch (error) { console.error('桌宠 hook 启动失败', error); }
     createWindow();
     if (pet.preferences.enabled) void openPetWindow();
@@ -214,7 +221,7 @@ function petHookConfig(): string {
 }
 function petGuide(): string {
   const script = app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs');
-  return petHookSetupGuide(process.execPath, script, dataDirectory);
+  return petHookSetupGuide(process.execPath, script, dataDirectory, process.platform, app.isPackaged ? path.join(resourceRoot, 'pet') : __dirname);
 }
 async function savePetPreferences(preferences: unknown) {
   pet.save(preferences);
@@ -257,6 +264,20 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
     case 'save': return savePetPreferences(request.preferences);
     case 'hookConfig': return petHookConfig();
     case 'hookGuide': return petGuide();
+    case 'installHook': {
+      trusted(event);
+      let project: string | undefined;
+      if (request.projectId) {
+        if (connecting) await connecting;
+        if (!connection) await reconnect();
+        const state = await connection!.rpc<import('../shared/protocol').State>('state');
+        project = state.projects.find(item => item.id === request.projectId)?.path;
+        if (!project) throw new Error('项目不存在，请重新选择');
+      }
+      return installAgentHook({ provider: request.provider, project, version: request.opencodeVersion,
+        executable: process.execPath, script: app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs'),
+        dataDirectory, pluginDirectory: app.isPackaged ? path.join(resourceRoot, 'pet') : __dirname });
+    }
     case 'menu': openPetMenu(); return;
     case 'dragStart': {
       const cursor = screen.getCursorScreenPoint(), bounds = petWindow!.getBounds();
@@ -319,7 +340,7 @@ ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unkn
 });
 ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string, unknown>) => {
   trusted(event);
-  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
+  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;
@@ -369,22 +390,30 @@ ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown)
 ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:appearance',(event,mode:unknown)=>{trusted(event);if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
 nativeTheme.on('updated',()=>{for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
-ipcMain.handle('berth:mcpConfig', event => { trusted(event); return JSON.stringify({ mcpServers: { agentberth: { command: process.execPath, args: [app.isPackaged ? path.join(process.resourcesPath, 'mcp', 'mcp.cjs') : path.join(__dirname, 'mcp.cjs'), dataDirectory], env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2); });
+ipcMain.handle('berth:mcpConfig', (event, provider: unknown = 'claude') => {
+  trusted(event); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');
+  const args = [app.isPackaged ? path.join(process.resourcesPath, 'mcp', 'mcp.cjs') : path.join(__dirname, 'mcp.cjs'), dataDirectory];
+  return JSON.stringify(provider === 'opencode' ? { mcp: { agentberth: { type: 'local', command: [process.execPath, ...args], environment: { ELECTRON_RUN_AS_NODE: '1' }, enabled: true } } } : { mcpServers: { agentberth: { command: process.execPath, args, env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2);
+});
 const skillManager = new SkillManager();
 ipcMain.handle('berth:skills', async (event, input: unknown) => {
   trusted(event);
   const request = skillRequestSchema.parse(input);
   let projectPath: string | undefined;
+  let integration = ['claude', 'opencode'].includes(request.location.agentId) ? request.location.agentId as 'claude' | 'opencode' : undefined;
   let skills = builtinSkillProviders.find(agent => agent.id === request.location.agentId)?.skills;
   if (request.location.projectId || !skills) {
     if (connecting) await connecting;
     if (!connection) await reconnect();
     const state = await connection!.rpc<import('../shared/protocol').State>('state');
-    skills ??= (state.agents ?? []).find(agent => agent.id === request.location.agentId)?.skills;
+    const definition = (state.agents ?? []).find(agent => agent.id === request.location.agentId);
+    if (!definition?.skills) integration ??= definition?.integration;
+    skills ??= definition?.skills ?? builtinSkillProviders.find(agent => agent.id === definition?.integration)?.skills;
     projectPath = request.location.projectId ? state.projects.find(project => project.id === request.location.projectId)?.path : undefined;
     if (request.location.projectId && !projectPath) throw new Error('项目不存在，请重新选择');
   }
   if (!skills) throw new Error('此 Agent 尚未通过插件声明 Skill 管理能力，请更新同一个 Agent 配置或脚本');
+  if (integration) skills = { ...skills, user: path.join(integrationRoot(integration), 'skills') };
   return skillManager.run(skillRoot(skills, projectPath), request);
 });
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });

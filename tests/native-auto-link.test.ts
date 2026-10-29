@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, writeFile, appendFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { NativeDiscovery, unambiguousNewHistory, type NativeCandidate } from '../src/daemon/native-discovery';
+import { OpenCodeHistory } from '../src/daemon/opencode-history';
+import { randomUUID } from 'node:crypto';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import type { History, NativeHistoryPage, Project, Session, State } from '../src/shared/protocol';
@@ -11,6 +13,58 @@ import type { History, NativeHistoryPage, Project, Session, State } from '../src
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check: () => Promise<boolean>) { const end = Date.now() + 7000; while (Date.now() < end) { if (await check()) return; await wait(40); } throw new Error('Auto-link did not complete'); }
 const record = (id: string, cwd: string) => JSON.stringify({ type: 'session_meta', payload: { id, cwd } }) + '\n';
+
+test('exact provider hooks isolate concurrent runs, follow new conversations and yield to manual association', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'berth-exact-hooks-')), claude = path.join(dir, 'claude'); await mkdir(claude);
+  const commands: string[][] = [], environments: NodeJS.ProcessEnv[] = [], writes: string[] = [];
+  const fakeCli = { async run(args: string[]) {
+    commands.push(args);
+    if (args[1] === 'list') return JSON.stringify([{ id: 'discovered', directory: dir, updated: Date.now(), title: 'Named conversation' }]);
+    return JSON.stringify({ info: { id: args.at(-1), directory: dir }, messages: [{ info: { role: 'assistant' }, parts: [{ type: 'text', text: 'FINAL_NATIVE_TEXT' }] }] });
+  }, async close() {} };
+  const spawn = (_file: string, _args: string[], options: any) => {
+    environments.push(options.env); let exit: ((event: { exitCode: number }) => void) | undefined;
+    return { pid: 987654321, write(text: string) { writes.push(text); }, resize() {}, pause() {}, resume() {}, kill() { exit?.({ exitCode: 0 }); }, onData() {}, onExit(fn: any) { exit = fn; } };
+  };
+  const discovery = new NativeDiscovery({ codex: path.join(dir, 'codex'), claude }, new OpenCodeHistory(fakeCli as any));
+  const server = new DaemonServer(path.join(dir, 'data'), () => {}, spawn as any, discovery), c = await DaemonConnection.open(await server.listen(), () => {});
+  t.after(async () => { c.close(); await server.close(); await rm(dir, { recursive: true, force: true, maxRetries: 5 }); });
+  const project = await c.rpc<Project>('createProject', { name: 'Hook project', path: dir });
+  const definition: any = await c.rpc('createAgent', { name: 'OpenCode profile', integration: 'opencode', command: 'opencode --model fixture', resumeCommand: 'opencode --session {sessionId}' });
+  const a = await c.rpc<Session>('createSession', { projectId: project.id, title: 'A', agent: 'opencode' });
+  const b = await c.rpc<Session>('createSession', { projectId: project.id, title: 'B', agent: definition.id });
+  const ra: any = await c.rpc('start', { sessionId: a.id, cols: 80, rows: 24 }), rb: any = await c.rpc('start', { sessionId: b.id, cols: 80, rows: 24 });
+  assert.equal(commands.length, 0, 'Launching TUI must not execute history CLI queries');
+  assert.equal(environments[1].AGENTBERTH_AGENT, 'opencode');
+  assert.equal(environments[1].AGENTBERTH_RUN_ID, rb.id);
+  const detect = (sessionId: string, runId: string, nativeSessionId: string, overrides = {}) => c.rpc('nativeSessionDetected', { sessionId, runId, nativeSessionId, provider: 'opencode', cwd: dir, ...overrides });
+  assert.deepEqual(await detect(a.id, randomUUID(), 'stale'), { linked: false });
+  assert.deepEqual(await detect(a.id, ra.id, 'foreign', { cwd: path.dirname(dir) }), { linked: false });
+  assert.deepEqual(await detect(a.id, ra.id, 'native-a'), { linked: true });
+  assert.deepEqual(await detect(b.id, rb.id, 'native-b'), { linked: true });
+  assert.deepEqual(await detect(a.id, ra.id, 'native-a-next'), { linked: true });
+  let state = await c.rpc<State>('state'); assert.equal(state.sessions.find(s => s.id === b.id)!.nativeSessionId, 'native-b');
+  assert.equal((await c.rpc<History>('refreshHistory', { sessionId: b.id })).messages[0].text, 'FINAL_NATIVE_TEXT');
+  await c.rpc('unlinkNativeSession', { sessionId: a.id });
+  assert.deepEqual(await detect(a.id, ra.id, 'must-not-rebind'), { linked: false });
+  await c.rpc('linkNativeSession', { sessionId: b.id, nativeSessionId: 'manual' });
+  assert.deepEqual(await detect(b.id, rb.id, 'must-not-replace'), { linked: false });
+  const list = await c.rpc<NativeHistoryPage>('discoverNativeHistories', { sessionId: b.id, query: 'Named' }); assert.equal(list.items[0].nativeSessionId, 'discovered');
+  assert.equal((await c.rpc<History>('nativeHistory', { sessionId: b.id, nativeSessionId: 'discovered' })).messages[0].text, 'FINAL_NATIVE_TEXT');
+  assert.equal((await c.rpc<State>('state')).sessions.find(s => s.id === b.id)!.nativeSessionId, 'manual', 'Preview must not change association');
+  const ca = await c.rpc<Session>('createSession', { projectId: project.id, title: 'Claude', agent: 'claude' });
+  const cr: any = await c.rpc('start', { sessionId: ca.id, cols: 80, rows: 24 });
+  const cp = { sessionId: ca.id, runId: cr.id, nativeSessionId: 'claude-native', provider: 'claude', cwd: dir };
+  assert.deepEqual(await c.rpc('nativeSessionDetected', cp), { linked: false }, 'Do not bind a pathless Claude transcript');
+  const transcript = path.join(claude, 'claude-native.jsonl'); await writeFile(transcript, JSON.stringify({ sessionId: 'claude-native', cwd: dir, type: 'assistant', message: { role: 'assistant', content: 'CLAUDE_FINAL' } }) + '\n');
+  assert.deepEqual(await c.rpc('nativeSessionDetected', cp), { linked: true });
+  assert.equal((await c.rpc<History>('refreshHistory', { sessionId: ca.id })).messages[0].text, 'CLAUDE_FINAL');
+  await c.rpc('stop', { sessionId: ca.id });
+  await c.rpc('stop', { sessionId: b.id });
+  await c.rpc('start', { sessionId: b.id, resume: true, cols: 80, rows: 24 });
+  assert.match(writes.at(-1)!, /opencode --session manual/);
+  assert.equal(environments.at(-1)!.AGENTBERTH_NATIVE_SESSION_ID, 'manual');
+});
 
 test('native discovery retries partial metadata, isolates projects and never guesses among multiple new IDs', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'berth-native-discovery-')); t.after(() => rm(dir, { recursive: true, force: true }));

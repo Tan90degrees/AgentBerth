@@ -3,7 +3,7 @@ import type { AgentDefinition, AgentDefinitionConfig } from '../shared/protocol'
 import { AsyncButton } from './AsyncButton';
 import { Dialog } from './Dialog';
 
-const capabilities = (agent: AgentDefinitionConfig) => [agent.skills && 'Skill 管理',agent.plugin?.list && '会话列表', agent.plugin?.history && '原生对话历史', (agent.plugin?.resume || agent.resumeCommand) && '会话恢复'].filter(Boolean).join(' · ') || '终端会话';
+const capabilities = (agent: AgentDefinitionConfig) => [agent.integration && `${agent.integration === 'claude' ? 'Claude Code' : 'OpenCode'} 原生适配`,(agent.skills || agent.integration) && 'Skill 管理',agent.plugin?.list && '会话列表', agent.plugin?.history && '原生对话历史', (agent.plugin?.resume || agent.resumeCommand) && '会话恢复'].filter(Boolean).join(' · ') || '终端会话';
 export function AgentManager({ agents, defaultAgent, used, disabled, busy, hotUpdates, error, onSave, onDelete, onError }: {
   hotUpdates: boolean; agents: AgentDefinition[]; defaultAgent: string; used: string[]; disabled: boolean; busy: boolean; error: string; onError: (value: string) => void;
   onSave: (value: AgentDefinitionConfig, id?: string) => Promise<AgentDefinition | undefined>; onDelete: (id: string) => Promise<unknown>;
@@ -34,8 +34,8 @@ export function AgentManager({ agents, defaultAgent, used, disabled, busy, hotUp
   });
   const opener = useRef<HTMLElement | null>(null);
   const open = (config: AgentDefinitionConfig, id?: string, imported = false) => {
-    const { name, command, resumeCommand, plugin, sourceId, skills } = config;
-    setEditing({ config: { name, command, resumeCommand, plugin, ...(skills ? { skills } : {}), ...(sourceId ? { sourceId } : {}) }, id, imported });
+    const { name, command, resumeCommand, plugin, sourceId, skills, integration } = config;
+    setEditing({ config: { name, command, resumeCommand, plugin, ...(integration ? { integration } : {}), ...(skills ? { skills } : {}), ...(sourceId ? { sourceId } : {}) }, id, imported });
     setName(name); setLocalError(''); onError('');
   };
   async function task(work: () => Promise<unknown>) {

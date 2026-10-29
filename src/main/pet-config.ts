@@ -1,19 +1,20 @@
 /** Explicit shell choice makes paths with spaces work under Windows Git Bash as well. */
-function hookCommand(executable: string, script: string, directory: string, platform: NodeJS.Platform, event?: string) {
+function hookCommand(executable: string, script: string, directory: string, platform: NodeJS.Platform, event?: string, provider?: 'claude') {
   const quoteSh = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
   const quotePs = (value: string) => "'" + value.replaceAll("'", "''") + "'";
+  const providerArg = provider ? ' --provider claude' : '';
   return platform === 'win32'
-    ? `$env:ELECTRON_RUN_AS_NODE='1'; ${event ? '' : '$input | '}& ${quotePs(executable)} ${quotePs(script)} --data-dir ${quotePs(directory)}${event ? ` --event ${quotePs(event)}` : ''}; exit 0`
-    : `ELECTRON_RUN_AS_NODE=1 ${quoteSh(executable)} ${quoteSh(script)} --data-dir ${quoteSh(directory)}${event ? ` --event ${quoteSh(event)}` : ''}`;
+    ? `$env:ELECTRON_RUN_AS_NODE='1'; ${event ? '' : '$input | '}& ${quotePs(executable)} ${quotePs(script)} --data-dir ${quotePs(directory)}${providerArg}${event ? ` --event ${quotePs(event)}` : ''}; exit 0`
+    : `ELECTRON_RUN_AS_NODE=1 ${quoteSh(executable)} ${quoteSh(script)} --data-dir ${quoteSh(directory)}${providerArg}${event ? ` --event ${quoteSh(event)}` : ''}`;
 }
 export function petHookConfiguration(executable: string, script: string, directory: string, platform = process.platform) {
-  const command = hookCommand(executable, script, directory, platform);
-  const handler = { type: 'command', command, timeout: 3, onFailure: 'continue', ...(platform === 'win32' ? { shell: 'powershell' } : {}) };
+  const command = hookCommand(executable, script, directory, platform, undefined, 'claude');
+  const handler = { type: 'command', command, timeout: 3, ...(platform === 'win32' ? { shell: 'powershell' } : {}) };
   return { hooks: Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'Notification', 'Stop', 'StopFailure', 'SessionEnd'].map(event => [event, [{ hooks: [handler] }]])) };
 }
 
 /** Copyable instructions use this installation's paths, never credentials or run IDs. */
-export function petHookSetupGuide(executable: string, script: string, directory: string, platform = process.platform): string {
+export function petHookSetupGuide(executable: string, script: string, directory: string, platform = process.platform, plugins?: string): string {
   return `# 自动配置 AgentBerth 桌宠 hook
 
 请直接为我当前使用的 Agent 完成 hook 配置和验证，而不是只给我手工操作步骤。
@@ -29,8 +30,8 @@ export function petHookSetupGuide(executable: string, script: string, directory:
 ## 配置流程
 1. 识别当前 Agent 和版本，检查它实际支持的事件 hook 格式。优先配置当前项目的本地设置；用户已指定全局范围时采用全局设置。不要修改系统或组织策略。
 2. 编辑前备份已有配置；保留所有其他配置和原有 hook。将下面的处理器追加到对应事件，按命令去重；重复执行本教程不能添加重复处理器。配置有语法错误时先报告具体位置，不得清空重建。写入后重新解析并检查格式。
-3. Claude Code 可将下方 JSON 合并到当前项目 .claude/settings.local.json；全局范围使用 ~/.claude/settings.json。先核对版本兼容性（onFailure 需要 v2.1.295+）；不支持的字段按该版本官方格式适配，保持失败不阻塞。不要将 hooks 整体覆盖，更不要调整 permissions 或关闭权限确认。
-4. 如果是其他 Agent，按其实际支持的事件使用下方通用命令。不要把 Claude 的配置直接写进其他 Agent 配置；没有 hook 能力时明确报告不支持，不要用屏幕内容猜测状态，也不要伪装成功。
+3. Claude Code 可将下方 JSON 合并到当前项目 .claude/settings.local.json；全局范围使用 ~/.claude/settings.json。先核对版本兼容性，不支持的事件按该版本官方格式适配；脚本失败返回 0，保持失败不阻塞。不要将 hooks 整体覆盖，更不要调整 permissions 或关闭权限确认。
+4. OpenCode 按下方独立插件说明配置；其他 Agent 按实际事件使用通用命令。不要把 Claude 的配置直接写进其他 Agent 配置；没有 hook 能力时明确报告不支持，不要用屏幕内容猜测状态，也不要伪装成功。
 5. hook 子进程必须继承 AGENTBERTH_DATA_DIR、AGENTBERTH_SESSION_ID、AGENTBERTH_RUN_ID，由 AgentBerth 在启动本机 Agent 会话时注入。不得将当前会话 ID、运行 ID 固定写入配置，也不要读取或导出 pet-hook.json 的 token。
 
 ## Claude Code 配置片段
@@ -44,6 +45,14 @@ ${JSON.stringify(petHookConfiguration(executable, script, directory, platform), 
 ${(['working', 'waiting', 'completed', 'error', 'idle'] as const).map(event => `- ${event}: ${hookCommand(executable, script, directory, platform, event)}`).join('\n')}
 开始处理/工具执行映射 working；需要用户输入或授权映射 waiting；本轮完成映射 completed；本轮失败映射 error；会话初始化/结束映射 idle。子 Agent 完成不能当作整个会话完成。只发送状态，不传 prompt、工具参数、命令输出或密码。hook 使用短超时，失败继续；脚本静默失败不影响 Agent，不要加入阻断决策。
 
+## OpenCode 1.x / 2.x
+优先使用 AgentBerth 设置 → 桌宠 → 安装/更新适配。它只部署一个无外部依赖的本地插件，不安装 OpenCode、不修改模型和账号。
+手动配置时先执行 opencode --version。1.x 用 opencode-pet-v1.mjs，2.x 用 opencode-pet-v2.mjs，两代接口不能混用。2.x 在 AgentBerth 中会自动追加 --standalone，保证独立服务继承当前会话身份；自定义包装命令需要自行转发 --standalone，不支持将桌宠绑定到共享 --server 服务。
+应用自带插件目录：${JSON.stringify(plugins ?? pathForPlugins(script, platform))}。
+复制对应文件到项目 .opencode/plugins/agentberth-pet.mjs；全局使用 $XDG_CONFIG_HOME/opencode/plugins/agentberth-pet.mjs（默认 ~/.config/opencode/plugins/agentberth-pet.mjs）。同名文件先备份，若是其他人的插件不得覆盖；不要在项目和全局重复安装。无需写 plugin 数组或运行 npm install。
+插件只在 AGENTBERTH_AGENT=opencode 的本机 Agent 会话生效，通过真实事件上报工作、授权等待、完成和失败，并关联原生会话 ID。子会话完成不会覆盖主会话状态。重新启动对应 Agent 会话后触发真实请求验证；官方接口：https://opencode.ai/docs/plugins/ 。
+Claude 全局自定义目录遵循 CLAUDE_CONFIG_DIR；两者的项目配置保留各自目录。自定义 Agent JSON 可声明 integration 为 claude 或 opencode 继承适配，启动命令仍使用用户已有 CLI。
+
 ## 验证与交付
 - 先检查实际配置文件语法、重复项、脚本和运行时是否存在，以及命令的路径引号。
 - 当前进程若没有三个 AGENTBERTH 环境变量，提示我从 AgentBerth 启动/重新启动一个 Agent 类型会话。不要替我停止正在执行的任务或重启整个后台；外部终端和 SSH 无法用于此次绑定验证。
@@ -51,3 +60,5 @@ ${(['working', 'waiting', 'completed', 'error', 'idle'] as const).map(event => `
 - 最后告诉我修改了哪个配置、备份位置、已注册的事件、验证结果，以及是否需要重新启动 Agent 会话。
 `;
 }
+
+function pathForPlugins(script: string, platform: NodeJS.Platform) { return script.slice(0, Math.max(script.lastIndexOf('/'), script.lastIndexOf(platform === 'win32' ? '\\' : '/'))); }
