@@ -31,7 +31,7 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('.pet-animation .pet-character')].length === 6 && [...document.querySelectorAll('.pet-animation .pet-character')].every(image => image.src.endsWith('.png') && image.complete && image.naturalWidth === 288 && image.naturalHeight === 240));
   await page.locator('.pet-animation .pet-character').first().hover();
   await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.webp'));
-  await page.getByRole('heading', { name: '桌宠', exact: true }).hover();
+  await page.getByRole('heading', { name: '桌宠', exact: true }).first().hover();
   await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.png'));
   const petReady = application.waitForEvent('window');
   await page.getByLabel('显示桌宠', { exact: true }).check();
