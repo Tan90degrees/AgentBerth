@@ -65,7 +65,7 @@ try{
  // Activation, UI exit, original bootstrap, native ZIP extraction and PTY/SSH
  // survival all run through production code in actual packaged Electron.
  await application.evaluate(({app,net},{release,manifest,archive,releaseApi,prefix,manifestName,bundleName,marker})=>{
-   const fs=require('node:fs');
+   const fs=process.getBuiltinModule('node:fs');
    net.fetch=async url=>url===releaseApi?Response.json(release):url===prefix+manifestName?new Response(fs.readFileSync(manifest)):url===prefix+bundleName?new Response(fs.readFileSync(archive)):new Response('',{status:404});
    app.relaunch=()=>fs.writeFileSync(marker,'requested');
  },{release,manifest:path.join(output,names.manifest),archive:path.join(output,names.bundle),releaseApi:RELEASE_API,prefix,manifestName:names.manifest,bundleName:names.bundle,marker:path.join(folder,'relaunch')});

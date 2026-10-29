@@ -116,6 +116,11 @@ jobs:
       - name: Create verified lightweight update bundle
         run: npm run dist:update
         timeout-minutes: 5
+      - name: Test packaged update and terminal continuity
+        id: hot-update-smoke
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: node scripts/smoke-updates.mjs
+        timeout-minutes: 5
       - name: Test installer progress, cancellation and upgrade
         id: installer-smoke
         run: ./scripts/test-installer.ps1
@@ -134,11 +139,6 @@ jobs:
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
-      - name: Test packaged update and terminal continuity
-        id: hot-update-smoke
-        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
-        run: node scripts/smoke-updates.mjs
-        timeout-minutes: 5
       - name: Write checksums and build information
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
