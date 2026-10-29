@@ -63,9 +63,12 @@ test('exact provider hooks isolate concurrent runs, follow new conversations and
   // rather than relying on OS signal delivery to trigger a fake onExit callback.
   exits[2](); exits[1]();
   await until(async () => (await c.rpc<State>('state')).sessions.find(s => s.id === b.id)!.latestRun?.status === 'exited');
-  await c.rpc('start', { sessionId: b.id, resume: true, cols: 80, rows: 24 });
+  const resumed: any = await c.rpc('start', { sessionId: b.id, resume: true, cols: 80, rows: 24 });
   assert.match(writes.at(-1)!, /opencode --session manual/);
   assert.equal(environments.at(-1)!.AGENTBERTH_NATIVE_SESSION_ID, 'manual');
+  assert.deepEqual(await detect(b.id, resumed.id, 'new-after-resume'), { linked: true });
+  await c.rpc('unlinkNativeSession', { sessionId: b.id });
+  assert.deepEqual(await detect(b.id, resumed.id, 'still-manual-unlink'), { linked: false });
 });
 
 test('native discovery retries partial metadata, isolates projects and never guesses among multiple new IDs', async t => {

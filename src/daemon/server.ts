@@ -540,12 +540,13 @@ export class DaemonServer {
       }
       case 'nativeSessionDetected': {
         const p = request.params, session = this.store.session(p.sessionId), tracking = this.nativeTracking.get(session.id);
+        const version = this.agentVersion(session.agent);
         if (this.integration(session) !== p.provider || session.remote || session.latestRun?.id !== p.runId || !this.live.has(session.id) || this.live.get(session.id)?.closed || tracking?.runId !== p.runId || session.nativeSessionId && session.nativeSessionId !== tracking.hookNativeId || this.historyBusy.has(session.id) || !await matchesProject(p.cwd, this.store.project(session.projectId).path)) return { linked: false };
         if (session.nativeSessionId === p.nativeSessionId) return { linked: true };
         const transcript = p.provider === 'claude' ? (await this.nativeDiscovery.list('claude', this.store.project(session.projectId).path)).find(item => item.nativeSessionId === p.nativeSessionId)?.path : null;
         if (p.provider === 'claude' && !transcript) return { linked: false };
         // Recheck after path I/O: manual association/unlink always wins.
-        if (this.nativeTracking.get(session.id) !== tracking || this.store.session(session.id).nativeSessionId !== session.nativeSessionId) return { linked: false };
+        if (this.nativeTracking.get(session.id) !== tracking || this.store.session(session.id).nativeSessionId !== session.nativeSessionId || this.agentVersion(session.agent) !== version) return { linked: false };
         this.store.saveHistory(session.id, { messages: [], warnings: [], path: transcript ?? null, nativeSessionId: p.nativeSessionId });
         tracking.ambiguous = true; tracking.hookNativeId = p.nativeSessionId; this.changed(); return { linked: true };
       }
@@ -808,6 +809,10 @@ export class DaemonServer {
       peers.forEach(id => { this.nativeTracking.get(id)!.ambiguous = true; });
       this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: provider === 'opencode' || peers.length > 0 || baseline === null });
       this.scheduleNativeScan();
+    } else if (resume && !session.remote && ['claude', 'opencode'].includes(provider)) {
+      // Resume keeps the selected ID; a later /new can still announce its exact
+      // replacement. Manual association/unlink during this run deletes tracking.
+      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set(), started: Date.now(), ambiguous: true, hookNativeId: session.nativeSessionId ?? undefined });
     }
     this.changed(); // Make connection startup visible and cancellable in the sidebar.
     this.pruneLogs();
@@ -871,7 +876,9 @@ export class DaemonServer {
       const current = this.store.session(sessionId);
       if (this.nativeTracking.get(sessionId) !== tracking || current.latestRun?.id !== tracking.runId || current.nativeSessionId || this.historyBusy.has(sessionId)) return;
       this.store.saveHistory(sessionId, { messages: [], warnings: [], path: candidate.path, nativeSessionId: candidate.nativeSessionId });
-      this.nativeTracking.delete(sessionId); this.changed();
+      if (this.integration(session) === 'claude') { tracking.ambiguous = true; tracking.hookNativeId = candidate.nativeSessionId; }
+      else this.nativeTracking.delete(sessionId);
+      this.changed();
     } catch (error) { this.logError(error); }
   }
 
