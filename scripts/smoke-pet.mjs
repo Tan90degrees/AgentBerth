@@ -158,7 +158,7 @@ try {
   assert.ok(!openCodeMcp.mcpServers);
   const integrated = await rpc('createAgent', { name: 'OpenCode fixture', integration: 'opencode', command: 'opencode', resumeCommand: 'opencode --session {sessionId}' });
   const skills = await page.evaluate(location => window.berth.skills({ action: 'list', location }), { agentId: integrated.id, projectId: project.id });
-  assert.equal(skills.root, path.join(folder, '.opencode', 'skills'));
+  assert.equal(skills.root, path.join(project.path, '.opencode', 'skills'));
   const oc = await rpc('createSession', { projectId: project.id, title: 'OpenCode fixture', agent: integrated.id });
   const ocRun = await rpc('start', { sessionId: oc.id, cols: 80, rows: 24 }); assert.match(ocRun.command, /--standalone/);
   const detected = await fetch(`http://127.0.0.1:${descriptor.port}/hook`, { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.token }, body: JSON.stringify({ sessionId: oc.id, runId: ocRun.id, provider: 'opencode', nativeSessionId: 'smoke-native', cwd: folder, status: 'waiting' }) });
