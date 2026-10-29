@@ -37,7 +37,7 @@ interface LiveTerminal {
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null; finishing: Promise<void> | null;
 }
-interface Client { id: string; subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
+interface Client { id: string; disposing: boolean; subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
   private sshProvider: Client | null = null;
@@ -87,7 +87,7 @@ export class DaemonServer {
       this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
     });
     this.ws.on('connection', socket => {
-      const client: Client = { id: randomUUID(), subscriptions: new Set(), activity: new Map(), pending: 0, abort: new AbortController() };
+      const client: Client = { id: randomUUID(), disposing: false, subscriptions: new Set(), activity: new Map(), pending: 0, abort: new AbortController() };
       this.clients.set(socket, client);
       socket.on('error', () => socket.close());
       socket.on('close', () => { if (this.sshProvider === client) this.sshProvider = null; for (const pending of this.sshChallenges.values()) if (pending.client === client) pending.reject(new Error('请打开 AgentBerth 后重试 SSH 连接')); client.abort.abort(); for (const live of this.live.values()) live.remote?.activity.release(client); this.clients.delete(socket); });
@@ -253,10 +253,19 @@ export class DaemonServer {
         return { recovered };
       }
       case 'remoteAgentClose': {
+        if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
         const sessions = this.store.state().sessions.filter(session => this.agentOwners.get(session.id) === client);
-        for (const session of sessions) this.live.get(session.id)?.remote?.activity.assertManage(client);
-        await Promise.all(sessions.map(session => this.stop(session.id)));
-        return { closed: sessions.map(session => session.id) };
+        for (const session of sessions) {
+          const activity=this.live.get(session.id)?.remote?.activity;
+          if(activity&&(!this.starting.has(session.id)||activity.controlChosen))activity.assertManage(client);
+        }
+        client.disposing = true;
+        try {
+          const opening = [...this.openingAliases].filter(([key]) => key.startsWith(client.id + ':')).map(([,promise]) => promise);
+          await Promise.all(sessions.map(session => this.stop(session.id)));
+          await Promise.allSettled(opening);
+          return { closed: sessions.map(session => session.id) };
+        } finally { client.disposing = false; }
       }
       case 'remoteAgentSessions': {
         const state = this.store.state();
@@ -269,6 +278,7 @@ export class DaemonServer {
         return { sessionId: session.id, runId: live.run.id };
       }
       case 'remoteOpen': {
+        if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
         const {profile, session: previous} = this.aliasTarget(request.params.alias, client, request.params.owner === 'user');
         if (request.params.owner === 'agent' && !profile.allowAgent) throw new Error('此连接未允许 Agent 打开，请在 SSH 设置中修改');
         const key = `${client.id}:${profile.id}:${previous?.title ?? profile.alias}`;
@@ -283,7 +293,8 @@ export class DaemonServer {
           const session = previous ?? this.store.createSession(project!.id, profile.alias, 'shell', '', null, { connectionId: profile.id, host: profile.alias, directory: '' });
           if(request.params.owner === 'agent') this.agentOwners.set(session.id, client);
           const run = await this.start(session.id, false, 100, 30);
-          const info = this.remote(session.id,run.id).activity.control(request.params.owner);
+          const activity = this.remote(session.id,run.id).activity;
+          const info = activity.controlChosen ? {...activity.info} : activity.control(request.params.owner);
           if (request.params.owner === 'agent') this.remote(session.id,run.id).activity.assertManage(client);
           if (client.abort.signal.aborted) this.remote(session.id,run.id).activity.release(client);
           this.changed(); return { sessionId: session.id, runId: run.id, info };
@@ -296,6 +307,7 @@ export class DaemonServer {
       case 'remoteManage': {
         const params=request.params;
         if(params.action==='create'){
+          if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
           const profile=this.store.sshConnections().find(item=>item.alias.toLowerCase()===params.alias!.toLowerCase());
           if(!profile)throw new Error('服务器别名不存在，请先填写服务器信息');
           if(!profile.allowAgent)throw new Error('此服务器未允许 Agent 打开');
@@ -308,7 +320,8 @@ export class DaemonServer {
             const session=previous??this.store.createSession(this.remoteProject().id,title,'shell','',null,{connectionId:profile.id,host:profile.alias,directory:params.directory??''});
             this.agentOwners.set(session.id,client);
             const existing=this.live.get(session.id);if(existing)return {sessionId:session.id,runId:existing.run.id,info:existing.remote!.activity.info};
-            const run=await this.start(session.id,false,100,30),info=this.remote(session.id,run.id).activity.control('agent');
+            const run=await this.start(session.id,false,100,30),activity=this.remote(session.id,run.id).activity;
+            const info=activity.controlChosen?{...activity.info}:activity.control('agent');
             this.remote(session.id,run.id).activity.assertManage(client);
             if(client.abort.signal.aborted)this.remote(session.id,run.id).activity.release(client);
             this.changed();return {sessionId:session.id,runId:run.id,info};
@@ -714,6 +727,7 @@ export class DaemonServer {
       throw error;
     }
     if (this.closing) throw new Error('后台无法再启动终端');
+    if (this.agentOwners.get(sessionId)?.disposing) throw new Error('SSH 连接已取消，Agent 正在清理自己的连接');
     if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
     const trackNative = !resume && !session.remote && (['codex', 'claude'].includes(session.agent) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
     let baseline: NativeCandidate[] | null = [];

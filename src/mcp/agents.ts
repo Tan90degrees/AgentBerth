@@ -11,7 +11,7 @@ export class AgentMcp {
   constructor(private create: (agentId: string) => AgentContext) {}
   disconnect(agentId: string): void { this.contexts.get(agentId)?.disconnect(); }
   close(): void { for (const context of this.contexts.values()) context.disconnect(); this.contexts.clear(); }
-  async request(method: string, params: unknown): Promise<any> {
+  async request(method: string, params: unknown, onContext?: (agentId: string) => void): Promise<any> {
     const p = params as { name?: string; arguments?: Record<string, unknown> } | undefined;
     const supplied = method === 'tools/call' ? p?.arguments?.agentId : undefined;
     if (supplied !== undefined && (typeof supplied !== 'string' || !supplied.trim() || supplied.length > 100 || /[\x00-\x1f]/.test(supplied))) {
@@ -19,6 +19,7 @@ export class AgentMcp {
     }
     const fresh = method === 'tools/call' && p?.name === 'terminal_session' && ['open','create'].includes(String(p.arguments?.action));
     const agentId = supplied as string | undefined ?? (fresh ? randomUUID() : '');
+    onContext?.(agentId);
     let context = this.contexts.get(agentId);
     if (!context) {
       if (this.contexts.size >= 128) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: { code: 'AGENT_CONTEXT_LIMIT', execution: 'not_started', message: 'Dispose finished agent contexts with terminal_session(action=dispose, agentId=...) before opening more.' } }) }] };

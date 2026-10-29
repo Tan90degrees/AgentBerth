@@ -16,6 +16,8 @@ export class RemoteActivity {
   private pending: RemoteAction | null = null;
   private started = false;
   private holder: object | null = null;
+  private chosen = false;
+  get controlChosen(): boolean { return this.chosen; }
   private outputs = new Map<string, CommandOutput>();
   constructor(readonly info: RemoteInfo, private store: Pick<Store, 'remoteAction' | 'saveRemoteAction'>,
     private publish: (info: RemoteInfo) => void, private publishAction: (action: RemoteAction) => void, private outputDirectory?:string) {}
@@ -28,6 +30,7 @@ export class RemoteActivity {
     if (update.connection && previousConnection !== update.connection) this.action('connection', update.connection === 'connected' ? 'SSH 已连接' : update.connection === 'connecting' ? '连接 SSH' : 'SSH 已断开，远端任务结果未知');
   }
   control(owner: 'user' | 'agent'): RemoteInfo {
+    this.chosen = true;
     this.holder = null;
     this.info.owner = owner;
     this.change({}); this.action('control', owner === 'user' ? '人工接管' : '允许 Agent 操作');

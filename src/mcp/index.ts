@@ -54,7 +54,7 @@ async function line(text: string): Promise<void> {
   }
   if (pending >= 32 || controllers.has(id)) { send({ jsonrpc: '2.0', id, error: { code: -32600, message: 'Too many or duplicate requests' } }); return; }
   pending++; controllers.set(id,typeof message.params?.arguments?.agentId === 'string' ? message.params.arguments.agentId : '');
-  try { send({ jsonrpc: '2.0', id, result: await server.request(message.method,message.params) }); }
+  try { send({ jsonrpc: '2.0', id, result: await server.request(message.method,message.params,agentId=>controllers.set(id,agentId)) }); }
   catch (error) { send({ jsonrpc: '2.0', id, error: { code: error instanceof McpError ? error.code : -32603, message: String(error) } }); }
   finally { pending--; controllers.delete(id); }
 }

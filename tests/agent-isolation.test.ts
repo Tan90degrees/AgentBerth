@@ -17,10 +17,10 @@ const decode=(reply:any)=>{const value=JSON.parse(reply.content[0].text);assert.
 const call=async(server:{request(method:string,params:unknown):Promise<any>},name:string,args:Record<string,unknown>={})=>decode(await server.request('tools/call',{name,arguments:args}));
 async function fixture(t:any){
  const keys=generateKeyPairSync('rsa',{modulusLength:2048,privateKeyEncoding:{type:'pkcs1',format:'pem'},publicKeyEncoding:{type:'pkcs1',format:'pem'}});
- const peers=new Set<any>();let shells=0;
+ const peers=new Set<any>();let shells=0,holdAuthentication=false;let onAuthentication:(()=>void)|undefined;const blockedAuthentication:any[]=[];
  const ssh=new Server({hostKeys:[keys.privateKey]},peer=>{
   peers.add(peer);peer.on('error',()=>{});peer.on('close',()=>peers.delete(peer));
-  peer.on('authentication',ctx=>ctx.method==='password'&&ctx.password==='fixture-secret'?ctx.accept():ctx.reject(['password']));
+  peer.on('authentication',ctx=>{if(holdAuthentication){blockedAuthentication.push(ctx);onAuthentication?.();return;}ctx.method==='password'&&ctx.password==='fixture-secret'?ctx.accept():ctx.reject(['password']);});
   peer.on('ready',()=>peer.on('session',accept=>{
    const session=accept();session.on('pty',accept=>accept?.());session.on('window-change',accept=>accept?.());
    session.on('exec',accept=>{accept().end('non-POSIX fixture');});
@@ -36,7 +36,7 @@ async function fixture(t:any){
  ui=await DaemonConnection.open(runtime,event=>{if(event.event==='sshChallenge')void ui.rpc('sshChallengeReply',{challengeId:event.data.id,...(event.data.kind==='credentials'?{secret:{password:'fixture-secret'}}:{accepted:true})});});
  t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});for(const client of connections)client.close(true);ui.close(true);await daemon.close();for(const peer of peers)peer.end();await new Promise<void>(resolve=>ssh.close(()=>resolve()));rmSync(folder,{recursive:true,force:true});});
  await ui.rpc('registerSshProvider');await ui.rpc('saveSshConnection',{config:{alias:'fixture',hostname:'127.0.0.1',port:address.port,username:'fixture',authentication:'password',privateKeyPath:'',allowAgent:true}});
- return {folder,runtime,ui,connect,shells:()=>shells};
+ return {folder,runtime,ui,connect,shells:()=>shells,holdAuthentication(){holdAuthentication=true;return new Promise<void>(resolve=>{onAuthentication=resolve;});},releaseAuthentication(){holdAuthentication=false;for(const ctx of blockedAuthentication.splice(0))ctx.reject(['password']);}};
 }
 test('separate Agents get independent SSH shells for the same alias and cannot close or delete each other’s sessions', {timeout:20000},async t=>{
  const f=await fixture(t),a=new TerminalMcp(await f.connect()),b=new TerminalMcp(await f.connect());
@@ -105,6 +105,7 @@ test('named contexts keep command continuations, last targets and cancellation i
  await call(router,a.harness.next.tool,a.harness.next.arguments);await call(router,'terminal_execute',{agentId:'b',waitMs:0});
  assert.equal(calls.at(-1)!.params!.sessionId,identities.get('b')!.sessionId);assert.equal(calls.filter(c=>c.method==='remoteCommand').length,2);
  router.disconnect('a');assert.deepEqual(disconnected,['a']);
+ let selected='';const auto:any=await router.request('tools/call',{name:'terminal_session',arguments:{action:'create',alias:'fixture'}},agentId=>{selected=agentId;});assert.equal(JSON.parse(auto.content[0].text).agentId,selected);assert.match(selected,/^[a-f0-9-]{36}$/);
  for(const agentId of ['',123,'x'.repeat(101)]){const reply:any=await router.request('tools/call',{name:'terminal_session',arguments:{agentId}});assert.equal(reply.isError,true);}
  await assert.rejects(router.request('tools/call',{name:'terminal_session',arguments:[]}),/Invalid arguments/);
  router.close();
@@ -152,4 +153,20 @@ test('context recovery retains every owned session, including multiple names on 
  assert.deepEqual(new Set(server.ownedTargets().map(t=>t.sessionId)),new Set([a.sessionId,b.sessionId]));
  await call(server,'terminal_session',{action:'close',...a});assert.deepEqual(server.ownedTargets(),[b]);
  await call(server,'terminal_session',{action:'dispose'});assert.deepEqual(server.ownedTargets(),[]);
+});
+
+test('disposing an Agent cancels its unfinished SSH authentication and leaves another Agent running', {timeout:12000},async t=>{
+ const f=await fixture(t),a=new TerminalMcp(await f.connect()),b=new TerminalMcp(await f.connect());
+ const kept=await call(b,'terminal_session',{action:'open',alias:'fixture'});
+ const held=f.holdAuthentication();const opening=a.request('tools/call',{name:'terminal_session',arguments:{action:'open',alias:'fixture'}});
+ await held;await call(a,'terminal_session',{action:'dispose'});assert.equal((await opening as any).isError,true);
+ const state=await f.ui.rpc<State>('state');assert.equal(state.sessions.find(s=>s.id===kept.sessionId)!.latestRun!.status,'running');
+ assert.ok(state.sessions.filter(s=>s.id!==kept.sessionId).every(s=>!['running','stopping'].includes(s.latestRun?.status??'')));
+ const nextHeld=f.holdAuthentication(),next=a.request('tools/call',{name:'terminal_session',arguments:{action:'open',alias:'fixture'}});await nextHeld;
+ const pending=(await f.ui.rpc<State>('state')).sessions.find(s=>s.id!==kept.sessionId&&s.latestRun?.status==='running')!;
+ await f.ui.rpc('remoteControl',{sessionId:pending.id,runId:pending.latestRun!.id,owner:'user'});
+ const denied:any=await a.request('tools/call',{name:'terminal_session',arguments:{action:'dispose'}});assert.equal(JSON.parse(denied.content[0].text).error.code,'USER_CONTROLLED');
+ f.releaseAuthentication();assert.equal((await next as any).isError,true);
+ assert.equal((await f.ui.rpc<RemoteInfo>('remoteInfo',{sessionId:pending.id})).owner,'user','SSH startup completion must preserve a takeover made during authentication');
+ await f.ui.rpc('stop',{sessionId:pending.id});await call(b,'terminal_session',{action:'dispose'});
 });
