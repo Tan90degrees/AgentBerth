@@ -120,6 +120,10 @@
       {
         "from": "dist/pet-hook.cjs",
         "to": "pet/pet-hook.cjs"
+      },
+      {
+        "from": "assets/pet",
+        "to": "assets/pet"
       }
     ]
   }

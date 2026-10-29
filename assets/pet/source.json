@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "repository": "QCYTSN/dsh-dafeiyu",
+  "commit": "084323845ab82b68d5388d5c638bec09d8544a8a",
+  "manifestBlob": "07b9975eba76d4ec7fec7480414aeb5769226e4b",
+  "manifest": "assets/pet-manifest.json",
+  "fps": 24,
+  "canvas": [
+    288,
+    240
+  ],
+  "states": {
+    "idle": {
+      "clip": "idle",
+      "loop": true
+    },
+    "working": {
+      "clip": "working",
+      "loop": true
+    },
+    "waiting": {
+      "clip": "waiting",
+      "loop": true
+    },
+    "completed": {
+      "clip": "success",
+      "loop": false
+    },
+    "error": {
+      "clip": "error",
+      "loop": false
+    },
+    "unknown": {
+      "clip": "thinking",
+      "loop": true
+    }
+  }
+}
