@@ -3,7 +3,7 @@ import { defaultPetPreferences, petLabels, petStatuses, type PetPreferences, typ
 import { AsyncButton } from './AsyncButton';
 import './pet.css';
 
-const defaults = import.meta.glob('./pet-assets/*.gif', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+const defaults = import.meta.glob('./pet-assets/*.{webp,png}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const empty: PetSnapshot = { preferences: defaultPetPreferences, sessions: [], connected: false, images: {}, imageVersion: 0 };
 function usePet() {
   const [snapshot, setSnapshot] = useState<PetSnapshot>(empty), [error, setError] = useState('');
@@ -23,15 +23,47 @@ function usePet() {
   };
   return { snapshot, setSnapshot, error, setError, save };
 }
-function PetImage({ status, custom, revision = '' }: { status: PetStatus; custom?: string; revision?: string }) {
-  const [image, setImage] = useState<string | null>(null);
+function PetImage({ status, custom, revision = '', preview = false }: { status: PetStatus; custom?: string; revision?: string; preview?: boolean }) {
+  const [image, setImage] = useState<string | null>(null), [still, setStill] = useState<string | null>(null);
+  const [hovered, setHovered] = useState(false), [focused, setFocused] = useState(false);
+  const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReduced(media.matches);
+    update(); media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
   useEffect(() => {
     let alive = true; setImage(null);
     if (custom) void window.berth.pet<string | null>({ action: 'image', status }).then(value => { if (alive) setImage(value); }).catch(() => {});
     return () => { alive = false; };
   }, [status, custom, revision]);
-  return <img draggable={false} className="pet-character" src={image ?? defaults[`./pet-assets/${status}.gif`]} alt={petLabels[status]} onError={() => setImage(null)} />;
+  useEffect(() => {
+    setStill(null);
+    if (!image) return;
+    let alive = true;
+    const frame = new Image();
+    frame.onload = () => {
+      if (!alive) return;
+      const ratio = Math.min(1, 384 / frame.naturalWidth, 320 / frame.naturalHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(frame.naturalWidth * ratio));
+      canvas.height = Math.max(1, Math.round(frame.naturalHeight * ratio));
+      const context = canvas.getContext('2d');
+      if (context) { context.drawImage(frame, 0, 0, canvas.width, canvas.height); setStill(canvas.toDataURL('image/png')); }
+      frame.onload = null; frame.src = '';
+    };
+    frame.src = image;
+    return () => { alive = false; frame.onload = null; frame.src = ''; };
+  }, [image]);
+  const animation = defaults[`./pet-assets/${status}.webp`], poster = defaults[`./pet-assets/${status}.png`] ?? animation;
+  const animate = !reduced && (!preview || hovered || focused);
+  return <img draggable={false} className={preview ? "pet-character pet-preview" : "pet-character"} src={animate ? image ?? animation : still ?? poster}
+    alt={petLabels[status]} title={preview ? '悬停或聚焦预览动作' : undefined} tabIndex={preview ? 0 : undefined}
+    onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+    onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onError={() => setImage(null)} />;
 }
+
 export function DesktopPet() {
   const { snapshot, error, setError, save } = usePet();
   const [busy, setBusy] = useState(false);
@@ -74,8 +106,9 @@ export function PetSettings() {
     <h3>Agent hook</h3><p>复制配置并合并到 Claude Code 的 settings.json；其他 Agent 可按接入文档调用同一脚本。配置后，从 AgentBerth 新启动的本机会话会自动绑定，当前终端需要重新启动。</p>
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const config = await window.berth.pet<string>({ action: 'hookConfig' }); await window.berth.copyText(config); }}>复制 Claude Code hook 配置</AsyncButton>
     <p className="form-hint">未接入 hook 时只显示终端状态。不会读取提示词或解析 TUI 屏幕；SSH 远端不会安装 hook。</p>
-    <h3>形象与动作</h3><p>内置六种状态动画。可为每种状态导入自己的 GIF，文件复制到应用数据目录后保存；恢复默认只替换对应动作。</p>
-    <div className="pet-animation-grid">{petStatuses.map(status => <div className="pet-animation" key={status}><PetImage status={status} custom={snapshot.images[status]} revision={String(snapshot.imageVersion) + revision} /><strong>{petLabels[status]}</strong><small>{snapshot.images[status] ?? '默认形象'}</small><div><AsyncButton className="subtle" onError={setError} onAction={async () => { const value = await window.berth.pet<PetSnapshot | null>({ action: 'importImage', status }); if (!value) return 'cancelled'; setSnapshot(value); setRevision(value => value + 1); }}>导入 GIF</AsyncButton><AsyncButton className="text-button" disabled={!snapshot.images[status]} onError={setError} onAction={async () => { setSnapshot(await window.berth.pet({ action: 'resetImage', status })); setRevision(value => value + 1); }}>恢复默认</AsyncButton></div></div>)}</div>
+    <h3>形象与动作</h3><p>内置完整角色动画，悬停或聚焦可预览动作。可为每种状态导入自己的 GIF；恢复默认只替换对应动作。</p>
+    <div className="pet-animation-grid">{petStatuses.map(status => <div className="pet-animation" key={status}><PetImage preview status={status} custom={snapshot.images[status]} revision={String(snapshot.imageVersion) + revision} /><strong>{petLabels[status]}</strong><small>{snapshot.images[status] ?? '默认形象'}</small><div><AsyncButton className="subtle" onError={setError} onAction={async () => { const value = await window.berth.pet<PetSnapshot | null>({ action: 'importImage', status }); if (!value) return 'cancelled'; setSnapshot(value); setRevision(value => value + 1); }}>导入 GIF</AsyncButton><AsyncButton className="text-button" disabled={!snapshot.images[status]} onError={setError} onAction={async () => { setSnapshot(await window.berth.pet({ action: 'resetImage', status })); setRevision(value => value + 1); }}>恢复默认</AsyncButton></div></div>)}</div>
+    <p className="form-hint">默认形象来自 dsh-pet（MIT），动作帧由 dsh-dafeiyu 提供。<AsyncButton className="text-button" onError={setError} onAction={() => window.berth.openExternal('https://github.com/PC2005-cloud/dsh-pet')}>素材来源</AsyncButton></p>
     {error && <p className="form-error" role="alert">{error.replace(/^Error: /, '')}</p>}
   </section>;
 }

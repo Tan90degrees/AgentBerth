@@ -46,7 +46,7 @@ test('pet hooks isolate sessions/runs, highlight waiting and invalidate old laun
 test('pet preferences and copied GIF survive reload; same-name replacement changes revision', t => {
   const { pet, folder } = fixture(t);
   pet.save({ ...pet.preferences, enabled: true, scale: 1.25 });
-  const bytes = readFileSync('src/renderer/pet-assets/working.gif');
+  const bytes = readFileSync('tests/fixtures/pet-working.gif');
   pet.importImage('working', bytes, 'my-pet.gif');
   const first = pet.snapshot().imageVersion;
   pet.importImage('working', bytes, 'my-pet.gif');

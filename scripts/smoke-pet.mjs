@@ -15,6 +15,7 @@ let application;
 try {
   application = await electron.launch({ executablePath, args, env, timeout: 20000 });
   const page = await application.firstWindow(); page.setDefaultTimeout(15000);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.berth);
   const rpc = (method, params) => page.evaluate(({ method, params }) => window.berth.rpc(method, params), { method, params });
@@ -27,10 +28,17 @@ try {
   console.log('Pet smoke: open settings/window');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.pet-animation .pet-character')].length === 6 && [...document.querySelectorAll('.pet-animation .pet-character')].every(image => image.src.endsWith('.png') && image.complete && image.naturalWidth === 288 && image.naturalHeight === 240));
+  await page.locator('.pet-animation .pet-character').first().hover();
+  await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.webp'));
+  await page.getByRole('heading', { name: '桌宠', exact: true }).hover();
+  await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.png'));
   const petReady = application.waitForEvent('window');
   await page.getByLabel('显示桌宠', { exact: true }).check();
   const pet = await petReady; pet.setDefaultTimeout(15000); pet.on('pageerror', error => errors.push(error.message));
+  await pet.emulateMedia({ reducedMotion: 'no-preference' });
   await pet.locator('.desktop-pet').waitFor();
+  await pet.waitForFunction(() => document.querySelector('.pet-character').complete && document.querySelector('.pet-character').naturalWidth === 288);
   await pet.getByLabel('桌宠展示的会话').selectOption(a.id);
   await pet.waitForFunction(id => document.querySelector('select').value === id, a.id);
   console.log('Pet smoke: real terminal hook identity');
@@ -41,6 +49,11 @@ try {
   const command = process.platform === 'win32' ? `$env:ELECTRON_RUN_AS_NODE='1'; & ${quote(runtime.exec)} ${quote(script)} --event working\r` : `ELECTRON_RUN_AS_NODE=1 ${quote(runtime.exec)} ${quote(script)} --event working\r`;
   await rpc('input', { sessionId: a.id, runId: runA.id, data: command });
   await pet.waitForFunction(() => document.querySelector('.pet-state-working'));
+  await pet.emulateMedia({ reducedMotion: 'reduce' });
+  await pet.waitForFunction(() => document.querySelector('.pet-character').src.endsWith('.png'));
+  assert.equal(await pet.locator('.pet-character').isVisible(), true);
+  await pet.emulateMedia({ reducedMotion: 'no-preference' });
+  await pet.waitForFunction(() => document.querySelector('.pet-character').src.endsWith('.webp'));
   const descriptor = JSON.parse(await readFile(path.join(dataDirectory, 'pet-hook.json'), 'utf8'));
   const hook = async (session, run, status) => {
     const response = await fetch(`http://127.0.0.1:${descriptor.port}/hook`, { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.token }, body: JSON.stringify({ sessionId: session.id, runId: run.id, status }) });
@@ -65,7 +78,7 @@ try {
     return { width: innerWidth, height: innerHeight, right: bounds.right, bottom: bounds.bottom, cardBottom: document.querySelector('.pet-card').getBoundingClientRect().bottom };
   });
   assert.ok(layout.right <= layout.width + 1 && layout.bottom <= layout.height + 1 && layout.cardBottom <= layout.height + 1, JSON.stringify(layout));
-  const image = path.resolve('src/renderer/pet-assets/completed.gif');
+  const image = path.resolve('tests/fixtures/pet-completed.gif');
   await application.evaluate(({ dialog }, image) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [image] }); }, image);
   const animation = page.locator('.pet-animation').filter({ has: page.getByText('已完成', { exact: true }) });
   await animation.getByRole('button', { name: '导入 GIF', exact: true }).click();

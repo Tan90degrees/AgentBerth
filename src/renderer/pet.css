@@ -24,4 +24,6 @@ html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { b
 .pet-animation .pet-character { width:120px; height:100px; }
 .pet-animation small { max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; margin:5px 0 9px; opacity:.65; }
 .pet-animation>div { display:flex; gap:6px; flex-wrap:wrap; justify-content:center; }
-@media (prefers-reduced-motion:reduce) { .pet-character { visibility:hidden; } .pet-stage::after { content:'●'; font-size:80px; color:#8ce0c5; } .pet-animation .pet-character { display:none; } }
+
+.pet-preview { pointer-events: auto; cursor: help; border-radius: 8px; }
+.pet-preview:focus-visible { outline: 2px solid var(--focus,#8cdec4); outline-offset: 3px; }
