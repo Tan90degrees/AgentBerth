@@ -8,7 +8,7 @@
 
 在 **设置 → 桌宠** 选择 Claude Code 或 OpenCode，再选项目或用户范围，点击 **安装/更新适配**。它只修改对应 hook/插件文件，不安装 Agent、不修改模型、账号或权限。已有配置保留，有变更时生成 `.agentberth-<id>.bak` 备份；再次安装按命令去重。损坏的 JSON 或非本应用管理的同名插件不会被覆盖。安装后重新启动对应 Agent 会话。
 
-Claude 项目文件为 `.claude/settings.local.json`；用户文件为 `$CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`）。OpenCode 项目插件为 `.opencode/plugins/agentberth-pet.mjs`；用户插件为 `$XDG_CONFIG_HOME/opencode/plugins/agentberth-pet.mjs`（默认 `~/.config/opencode/plugins/agentberth-pet.mjs`）。同一范围只安装一次，避免同时在项目和全局重复安装。
+Claude 项目文件为 `.claude/settings.local.json`；用户文件为 `$CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`）。OpenCode 项目插件为 `.opencode/plugins/agentberth-pet.js`；用户插件为 `$XDG_CONFIG_HOME/opencode/plugins/agentberth-pet.js`（默认 `~/.config/opencode/plugins/agentberth-pet.js`）。同一范围只安装一次，避免同时在项目和全局重复安装。
 
 OpenCode 自动执行本机 `opencode --version` 选择 1.x 的函数式插件或 2.x 的 setup 插件，不安装 npm 包。工作/授权或问题等待/完成/错误均来自真实事件，不发送 prompt、工具参数或输出。子会话完成不能结束主会话。2.x 需独立服务继承当前运行的身份，标准启动和恢复自动附加 `--standalone`；非标准包装命令自行转发该参数。共享 `--server` 无法按终端安全归属，因此不参与桌宠绑定。上游接口参考 [OpenCode 官方插件文档](https://opencode.ai/docs/plugins/) 和 [2.x Promise Plugin API](https://github.com/anomalyco/opencode/blob/dev/packages/plugin/src/README.md)。
 

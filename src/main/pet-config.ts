@@ -49,7 +49,7 @@ ${(['working', 'waiting', 'completed', 'error', 'idle'] as const).map(event => `
 优先使用 AgentBerth 设置 → 桌宠 → 安装/更新适配。它只部署一个无外部依赖的本地插件，不安装 OpenCode、不修改模型和账号。
 手动配置时先执行 opencode --version。1.x 用 opencode-pet-v1.mjs，2.x 用 opencode-pet-v2.mjs，两代接口不能混用。2.x 在 AgentBerth 中会自动追加 --standalone，保证独立服务继承当前会话身份；自定义包装命令需要自行转发 --standalone，不支持将桌宠绑定到共享 --server 服务。
 应用自带插件目录：${JSON.stringify(plugins ?? pathForPlugins(script, platform))}。
-复制对应文件到项目 .opencode/plugins/agentberth-pet.mjs；全局使用 $XDG_CONFIG_HOME/opencode/plugins/agentberth-pet.mjs（默认 ~/.config/opencode/plugins/agentberth-pet.mjs）。同名文件先备份，若是其他人的插件不得覆盖；不要在项目和全局重复安装。无需写 plugin 数组或运行 npm install。
+复制对应文件到项目 .opencode/plugins/agentberth-pet.js；全局使用 $XDG_CONFIG_HOME/opencode/plugins/agentberth-pet.js（默认 ~/.config/opencode/plugins/agentberth-pet.js）。同名文件先备份，若是其他人的插件不得覆盖；不要在项目和全局重复安装。无需写 plugin 数组或运行 npm install。
 插件只在 AGENTBERTH_AGENT=opencode 的本机 Agent 会话生效，通过真实事件上报工作、授权等待、完成和失败，并关联原生会话 ID。子会话完成不会覆盖主会话状态。重新启动对应 Agent 会话后触发真实请求验证；官方接口：https://opencode.ai/docs/plugins/ 。
 Claude 全局自定义目录遵循 CLAUDE_CONFIG_DIR；两者的项目配置保留各自目录。自定义 Agent JSON 可声明 integration 为 claude 或 opencode 继承适配，启动命令仍使用用户已有 CLI。
 

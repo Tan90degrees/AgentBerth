@@ -54,6 +54,10 @@ test('Claude installer preserves settings and hooks, backs up, deduplicates and 
 test('OpenCode installer selects the matching bundled API, updates atomically and preserves foreign plugins', async t => {
   const project = await temporary(t), options = { provider: 'opencode' as const, project, executable: process.execPath, script: '', dataDirectory: project, pluginDirectory: path.resolve('dist'), detectVersion: async () => '1.14.33\n' };
   const first = await installAgentHook(options), v1 = await readFile(first.path, 'utf8'); assert.ok(v1.includes('OpenCode major: 1'));
+  // Both upstream autoloaders discover .js/.ts only, even though the bundled
+  // resource itself uses .mjs for direct Node-based contract tests.
+  assert.equal(path.extname(first.path), '.js');
+  assert.deepEqual((await readdir(path.dirname(first.path))).filter(name => /\.(?:js|ts)$/.test(name)), ['agentberth-pet.js']);
   assert.equal((await installAgentHook(options)).backup, null);
   const second = await installAgentHook({ ...options, detectVersion: async () => 'opencode 2.0.1' });
   assert.equal(await readFile(second.backup!, 'utf8'), v1); assert.match(await readFile(first.path, 'utf8'), /OpenCode major: 2/);

@@ -149,7 +149,7 @@ try {
   await page.getByLabel('桌宠适配 Agent', { exact: true }).selectOption('opencode');
   await page.getByRole('button', { name: '安装/更新适配', exact: true }).click();
   await page.getByRole('status', { name: '适配安装结果', exact: true }).filter({ hasText: '适配已安装；' }).waitFor();
-  const installedPlugin = path.join(folder, '.opencode', 'plugins', 'agentberth-pet.mjs');
+  const installedPlugin = path.join(folder, '.opencode', 'plugins', 'agentberth-pet.js');
   assert.match(await readFile(installedPlugin, 'utf8'), /OpenCode major: 1/);
   await page.evaluate(projectId => window.berth.pet({ action: 'installHook', provider: 'opencode', projectId, opencodeVersion: '2' }), project.id);
   assert.match(await readFile(installedPlugin, 'utf8'), /OpenCode major: 2/);

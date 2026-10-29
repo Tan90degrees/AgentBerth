@@ -40,7 +40,7 @@ export async function installAgentHook(options: {
   detectVersion?: () => Promise<string>;
 }): Promise<HookInstallation> {
   const { provider } = options, root = integrationRoot(provider, options.project, options.home, options.env);
-  const file = provider === 'claude' ? path.join(root, options.project ? 'settings.local.json' : 'settings.json') : path.join(root, 'plugins', 'agentberth-pet.mjs');
+  const file = provider === 'claude' ? path.join(root, options.project ? 'settings.local.json' : 'settings.json') : path.join(root, 'plugins', 'agentberth-pet.js');
   const previous = pending.get(file) ?? Promise.resolve();
   const task = previous.catch(() => {}).then(async () => {
     const before = await existing(file);
