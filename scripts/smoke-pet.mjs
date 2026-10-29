@@ -21,7 +21,13 @@ try {
   const rpc = (method, params) => page.evaluate(({ method, params }) => window.berth.rpc(method, params), { method, params });
   await rpc('state', {});
   const project = await rpc('createProject', { name: 'Pet test', path: folder });
-  const create = title => rpc('createSession', { projectId: project.id, title, agent: 'shell', command: '' });
+  const shell = await rpc('createSession', { projectId: project.id, title: 'Ordinary terminal', agent: 'shell', command: '' });
+  await rpc('start', { sessionId: shell.id, cols: 80, rows: 24 });
+  // Seed a failed remote locally without making a network connection.
+  const profile = await page.evaluate(privateKeyPath => window.berth.saveSshConnection({ alias: 'pet-filter-fixture', hostname: '127.0.0.1', port: 22, username: 'fixture', authentication: 'key', privateKeyPath, allowAgent: false }, undefined, {}, false), path.join(folder, 'missing-fixture-key'));
+  const remote = await rpc('createRemoteSession', { title: 'Excluded SSH', remote: { host: profile.alias, connectionId: profile.id, directory: '' } });
+  await assert.rejects(rpc('start', { sessionId: remote.id, cols: 80, rows: 24 }), /无法读取私钥/);
+  const create = title => rpc('createSession', { projectId: project.id, title, agent: 'custom', command: 'echo Agent-fixture-ready' });
   const a = await create('Agent A'), b = await create('Agent B');
   const runA = await rpc('start', { sessionId: a.id, cols: 80, rows: 24 });
   const runB = await rpc('start', { sessionId: b.id, cols: 80, rows: 24 });
@@ -38,9 +44,12 @@ try {
   const pet = await petReady; pet.setDefaultTimeout(15000); pet.on('pageerror', error => errors.push(error.message));
   await pet.emulateMedia({ reducedMotion: 'no-preference' });
   await pet.locator('.desktop-pet').waitFor();
+  assert.equal(await pet.locator('.pet-drag').count(), 0, 'No separate title/close bar above the character');
+  assert.equal(await pet.locator('.pet-card-head .pet-hide').count(), 1);
+  assert.deepEqual(await pet.getByLabel('桌宠展示的会话').locator('option').evaluateAll(options => options.map(option => option.value).sort()), [a.id, b.id].sort());
   await pet.waitForFunction(() => document.querySelector('.pet-character').complete && document.querySelector('.pet-character').naturalWidth === 288);
   await pet.getByLabel('桌宠展示的会话').selectOption(a.id);
-  await pet.waitForFunction(id => document.querySelector('select').value === id, a.id);
+  await pet.waitForFunction(id => document.querySelector('[aria-label="桌宠展示的会话"]').value === id, a.id);
   console.log('Pet smoke: real terminal hook identity');
   const runtime = await application.evaluate(() => ({ exec: process.execPath, resources: process.resourcesPath }));
   const script = packaged ? path.join(runtime.resources, 'pet', 'pet-hook.cjs') : path.resolve('dist/pet-hook.cjs');
@@ -61,75 +70,39 @@ try {
   };
   console.log('Pet smoke: waiting switches session, jump and hidden workbench');
   await hook(b, runB, 'waiting');
-  await pet.waitForFunction(id => document.querySelector('select').value === id && document.querySelector('.pet-state-waiting'), b.id);
+  await pet.waitForFunction(id => document.querySelector('[aria-label="桌宠展示的会话"]').value === id && document.querySelector('.pet-state-waiting'), b.id);
   await pet.getByRole('button', { name: '打开当前会话', exact: true }).click();
   await page.waitForFunction(id => document.querySelector('.session-header')?.dataset.sessionId === id, b.id);
   await application.evaluate(({ BrowserWindow }) => { for (const target of BrowserWindow.getAllWindows()) if (!target.webContents.getURL().includes('view=pet')) target.hide(); });
   await hook(b, runB, 'completed');
   await pet.waitForFunction(() => document.querySelector('.pet-state-completed'));
   await pet.getByRole('button', { name: '打开当前会话', exact: true }).click();
-  console.log('Pet smoke: navigate docked/detached SSH without creating or restarting terminals');
-  // Missing key files fail locally, before networking, and leave inspectable runs.
-  const profile = await page.evaluate(privateKeyPath => window.berth.saveSshConnection({ alias: 'pet-navigation-fixture', hostname: '127.0.0.1', port: 22, username: 'fixture', authentication: 'key', privateKeyPath, allowAgent: false }, undefined, {}, false), path.join(folder, 'missing-fixture-key'));
-  const remotes = [];
-  for (const title of ['Pet SSH A', 'Pet SSH B']) {
-    const remote = await rpc('createRemoteSession', { title, remote: { host: profile.alias, connectionId: profile.id, directory: '' } });
-    await assert.rejects(rpc('start', { sessionId: remote.id, cols: 80, rows: 24 }), /无法读取私钥/);
-    remotes.push(remote);
-  }
-  const remoteRuns = async () => (await rpc('state', {})).sessions.filter(session => session.remote).map(session => ({ sessionId: session.id, runId: session.latestRun?.id, status: session.latestRun?.status }));
-  const beforeNavigation = await remoteRuns();
-  const openPetSession = async id => {
-    await pet.getByLabel('桌宠展示的会话').selectOption(id);
-    await pet.getByRole('button', { name: '打开当前会话', exact: true }).click();
-  };
-  await openPetSession(remotes[0].id);
-  await page.locator('.ssh-dock').getByRole('heading', { name: 'Pet SSH A', exact: true }).waitFor();
-  const popupReady = application.waitForEvent('window');
-  await page.locator('.ssh-dock').getByRole('button', { name: '在独立窗口打开', exact: true }).click();
-  const popup = await popupReady; popup.on('pageerror', error => errors.push(error.message));
-  await popup.getByRole('heading', { name: 'Pet SSH A', exact: true }).waitFor();
-  const hideWindows = minimize => application.evaluate(({ BrowserWindow }, minimize) => {
-    const windows = BrowserWindow.getAllWindows();
-    windows.find(target => !target.webContents.getURL().includes('view='))?.hide();
-    const ssh = windows.find(target => target.webContents.getURL().includes('view=ssh'));
-    if (minimize) ssh.minimize(); else ssh.hide();
-  }, minimize);
-  const assertSshRestored = async () => {
-    const state = await application.evaluate(({ BrowserWindow }) => {
-      const windows = BrowserWindow.getAllWindows(), ssh = windows.find(target => target.webContents.getURL().includes('view=ssh'));
-      return { count: windows.length, visible: ssh.isVisible(), minimized: ssh.isMinimized(), mainVisible: windows.find(target => !target.webContents.getURL().includes('view='))?.isVisible() };
-    });
-    assert.deepEqual(state, { count: 3, visible: true, minimized: false, mainVisible: false });
-  };
-  await hideWindows(true);
-  await openPetSession(remotes[1].id);
-  await popup.getByRole('heading', { name: 'Pet SSH B', exact: true }).waitFor();
-  await assertSshRestored();
-  await hideWindows(false);
-  await openPetSession(remotes[0].id);
-  await popup.getByRole('heading', { name: 'Pet SSH A', exact: true }).waitFor();
-  await assertSshRestored();
-  await openPetSession(a.id);
-  await page.waitForFunction(id => document.querySelector('.session-header')?.dataset.sessionId === id, a.id);
-  assert.equal(await popup.getByLabel('SSH 终端', { exact: true }).inputValue(), remotes[0].id);
-  await popup.getByRole('button', { name: '放回主窗口', exact: true }).click();
-  await openPetSession(remotes[1].id);
-  await page.locator('.ssh-dock').getByRole('heading', { name: 'Pet SSH B', exact: true }).waitFor();
-  assert.deepEqual(await remoteRuns(), beforeNavigation, 'Pet navigation must not create, reconnect or restart SSH sessions');
-  for (const remote of remotes) await rpc('deleteSession', { sessionId: remote.id });
-  await page.evaluate(id => window.berth.deleteSshConnection(id), profile.id);
-  await openPetSession(b.id);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).click();
-  console.log('Pet smoke: scale/layout and GIF import/reset');
-  await page.getByLabel('桌宠大小', { exact: true }).selectOption('1.5');
+  console.log('Pet smoke: copy Agent setup tutorial with actual installation paths');
+  await page.getByRole('button', { name: '复制给 Agent 自动配置', exact: true }).click();
+  const guide = await page.evaluate(() => window.berth.readClipboard());
+  assert.ok(guide.includes(JSON.stringify(runtime.exec)) && guide.includes(JSON.stringify(script)));
+  assert.ok(guide.includes('AGENTBERTH_SESSION_ID') && guide.includes('备份') && guide.includes('去重'));
+  await page.getByText('查看完整自动配置教程', { exact: true }).click();
+  assert.equal((await page.locator('.pet-hook-guide pre').innerText()).trimEnd(), guide.trimEnd());
+  console.log('Pet smoke: inline scale control, synchronized settings and layout');
+  for (const scale of [0.5, 2, 1.5]) {
+    await pet.getByLabel('桌宠大小', { exact: true }).selectOption(String(scale));
+    await pet.waitForFunction(scale => Number(document.querySelector('.desktop-pet').style.zoom) === scale, scale);
+    await page.waitForFunction(scale => Number(document.querySelector('[aria-label="桌宠大小"]').value) === scale, scale);
+    const layout = await pet.evaluate(() => {
+      const bounds = document.querySelector('.desktop-pet').getBoundingClientRect();
+      return { width: innerWidth, height: innerHeight, right: bounds.right, bottom: bounds.bottom, cardBottom: document.querySelector('.pet-card').getBoundingClientRect().bottom };
+    });
+    assert.ok(layout.right <= layout.width + 1 && layout.bottom <= layout.height + 1 && layout.cardBottom <= layout.height + 1, JSON.stringify({ scale, ...layout }));
+  }
+  // The settings control changes the same persisted preference in the other window.
+  await page.getByLabel('桌宠大小', { exact: true }).selectOption('1');
+  await pet.waitForFunction(() => Number(document.querySelector('.desktop-pet').style.zoom) === 1);
+  await pet.getByLabel('桌宠大小', { exact: true }).selectOption('1.5');
   await pet.waitForFunction(() => Number(document.querySelector('.desktop-pet').style.zoom) === 1.5);
-  const layout = await pet.evaluate(() => {
-    const bounds = document.querySelector('.desktop-pet').getBoundingClientRect();
-    return { width: innerWidth, height: innerHeight, right: bounds.right, bottom: bounds.bottom, cardBottom: document.querySelector('.pet-card').getBoundingClientRect().bottom };
-  });
-  assert.ok(layout.right <= layout.width + 1 && layout.bottom <= layout.height + 1 && layout.cardBottom <= layout.height + 1, JSON.stringify(layout));
+  console.log('Pet smoke: GIF import/reset');
   const image = path.resolve('tests/fixtures/pet-completed.gif');
   await application.evaluate(({ dialog }, image) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [image] }); }, image);
   const animation = page.locator('.pet-animation').filter({ has: page.getByText('已完成', { exact: true }) });
@@ -149,8 +122,9 @@ try {
   assert.equal((await page.evaluate(() => window.berth.pet({ action: 'state' }))).preferences.enabled, false);
   assert.equal((await rpc('state', {})).sessions.find(session => session.id === a.id).latestRun.status, 'running');
   assert.deepEqual(errors, []);
-  await rpc('stop', { sessionId: a.id }); await rpc('stop', { sessionId: b.id });
-  console.log('Pet smoke passed: independent window, actual PTY hook binding, local/docked/detached SSH navigation, hidden/minimized windows, scaling, GIF import/reset and non-destructive hide');
+  assert.equal((await rpc('state', {})).sessions.find(session => session.id === shell.id).latestRun.status, 'running');
+  await rpc('stop', { sessionId: a.id }); await rpc('stop', { sessionId: b.id }); await rpc('stop', { sessionId: shell.id });
+  console.log('Pet smoke passed: independent window, actual PTY hook binding, Agent-only list, local navigation, copyable setup guide, inline size/close controls, scaling, GIF import/reset and non-destructive hide');
 } catch (error) {
   await mkdir('test-results', { recursive: true });
   for (const [index, page] of (application?.windows() ?? []).entries()) await page.screenshot({ path: `test-results/pet-failure-${process.platform}-${index}.png` }).catch(() => {});

@@ -3,9 +3,11 @@ import { z } from 'zod';
 export const petStatuses = ['idle', 'working', 'waiting', 'completed', 'error', 'unknown'] as const;
 export type PetStatus = typeof petStatuses[number];
 export const petLabels: Record<PetStatus, string> = { idle: '空闲', working: '执行中', waiting: '等待你处理', completed: '已完成', error: '执行失败', unknown: '状态待确认' };
+export const petWindowSize = { width: 280, height: 300 } as const;
+export const petScales = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 export const petPreferencesSchema = z.object({
   enabled: z.boolean().default(false), alwaysOnTop: z.boolean().default(true),
-  autoSwitch: z.boolean().default(true), scale: z.number().min(0.75).max(1.5).default(1),
+  autoSwitch: z.boolean().default(true), scale: z.number().min(0.5).max(2).default(1),
   selectedSessionId: z.string().max(100).default(''),
 }).strict();
 export type PetPreferences = z.infer<typeof petPreferencesSchema>;
@@ -23,7 +25,7 @@ export interface PetSnapshot {
   images: Partial<Record<PetStatus, string>>; imageVersion: number;
 }
 export const petRequestSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.enum(['state', 'hookConfig', 'showSession']) }).strict(),
+  z.object({ action: z.enum(['state', 'hookConfig', 'hookGuide', 'showSession']) }).strict(),
   z.object({ action: z.literal('save'), preferences: petPreferencesSchema }).strict(),
   z.object({ action: z.enum(['importImage', 'resetImage', 'image']), status: z.enum(petStatuses) }).strict(),
 ]);

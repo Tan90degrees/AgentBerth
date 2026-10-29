@@ -1,4 +1,4 @@
-import { petHookConfiguration } from '../src/main/pet-config';
+import { petHookConfiguration, petHookSetupGuide } from '../src/main/pet-config';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -129,16 +129,54 @@ test('generated Claude hook runs through the selected native shell with spaces a
 });
 
 
-test('SSH command phases are shown without implying remote Agent hooks or changing ownership', t => {
-  const { pet, a, state } = fixture(t);
-  const info = { sessionId: a.id, runId: a.latestRun!.id, host: 'example', connection: 'connected' as const, owner: 'agent' as const, phase: 'busy' as const, cwd: null, error: null };
-  pet.remote(info);
-  assert.equal(pet.snapshot().sessions[0].status, 'working');
-  assert.equal(pet.snapshot().sessions[0].hooked, false);
-  assert.equal(pet.snapshot().sessions[0].label, 'SSH 命令执行中');
-  pet.remote({ ...info, phase: 'idle' });
-  assert.equal(pet.snapshot().sessions[0].status, 'completed');
-  assert.equal(info.owner, 'agent');
-  a.latestRun!.id = randomUUID(); pet.update(state);
-  assert.equal(pet.snapshot().sessions[0].status, 'idle');
+test('only local Agent sessions appear; excluded hooks cannot grab attention and stale selections fall back', t => {
+  const { pet, a, b, state } = fixture(t);
+  const variants = ['codex', 'claude', 'opencode', 'custom', `agent:${randomUUID()}`] as Session['agent'][];
+  const agents = variants.map(agent => ({ ...a, id: randomUUID(), agent, latestRun: { ...a.latestRun!, id: randomUUID() } }));
+  const shell: Session = { ...b, id: randomUUID(), agent: 'shell' };
+  const ssh: Session = { ...b, id: randomUUID(), remote: { host: 'fixture', directory: '' } };
+  const notStarted: Session = { ...a, id: randomUUID(), latestRun: null };
+  state.sessions = [shell, ssh, ...agents, notStarted];
+  pet.update(state);
+  assert.deepEqual(pet.snapshot().sessions.map(session => session.sessionId), agents.map(session => session.id));
+  assert.equal(pet.preferences.selectedSessionId, agents[0].id);
+  assert.ok(pet.snapshot().sessions.every(session => session.status === 'unknown' && !session.hooked));
+  for (const session of [shell, ssh]) {
+    assert.equal(pet.accept({ sessionId: session.id, runId: session.latestRun!.id, status: 'waiting' }), false);
+    pet.save({ ...pet.preferences, selectedSessionId: session.id });
+    assert.equal(pet.preferences.selectedSessionId, agents[0].id);
+  }
+  const selected = agents[0];
+  assert.equal(pet.accept({ sessionId: selected.id, runId: selected.latestRun!.id, status: 'working' }), true);
+  selected.agent = 'shell'; pet.update(state);
+  assert.equal(pet.snapshot().sessions.some(session => session.sessionId === selected.id), false);
+  assert.equal(pet.preferences.selectedSessionId, agents[1].id);
+  selected.agent = 'codex'; pet.update(state);
+  assert.equal(pet.snapshot().sessions.find(session => session.sessionId === selected.id)?.hooked, false, 'Excluded session state must not return after changing back to Agent');
+  state.sessions = [shell, ssh]; pet.update(state);
+  assert.deepEqual(pet.snapshot().sessions, []);
+  assert.equal(pet.preferences.selectedSessionId, '');
+});
+
+test('copyable setup guide embeds exact local configuration and safe, idempotent verification steps', () => {
+  for (const platform of ['win32', 'linux'] as const) {
+    const executable = platform === 'win32' ? "C:\\User's App\\AgentBerth.exe" : "/some path/it's/electron";
+    const script = platform === 'win32' ? "C:\\User's App\\pet-hook.cjs" : "/some path/it's/pet-hook.cjs";
+    const guide = petHookSetupGuide(executable, script, '/data/fixture', platform);
+    const config = JSON.parse(guide.split('```json\n')[1].split('\n```')[0]);
+    assert.deepEqual(config, petHookConfiguration(executable, script, '/data/fixture', platform));
+    assert.ok(guide.includes(JSON.stringify(executable)) && guide.includes(JSON.stringify(script)));
+    for (const word of ['备份', '去重', '不得清空重建', 'AGENTBERTH_SESSION_ID', 'AGENTBERTH_RUN_ID', '不能仅用退出码', '待重启/验证', '不支持']) assert.ok(guide.includes(word), word);
+    assert.ok(!guide.includes('--session-id') && !guide.includes('--run-id'), 'Run identity must be inherited, never baked into saved configuration');
+    assert.ok(guide.length < 20000, 'Copyable instructions must remain bounded');
+  }
+});
+
+test('pet size settings persist the full supported range and reject invalid dimensions', t => {
+  const { pet, folder } = fixture(t);
+  for (const scale of [0.5, 0.75, 1.1, 1.5, 2]) {
+    pet.save({ ...pet.preferences, scale });
+    assert.equal(new PetState(path.join(folder, 'pet')).preferences.scale, scale);
+  }
+  for (const scale of [0, 0.49, 2.01, Infinity, NaN]) assert.throws(() => pet.save({ ...pet.preferences, scale }));
 });

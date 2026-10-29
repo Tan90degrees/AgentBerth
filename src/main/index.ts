@@ -1,8 +1,8 @@
 import { PetState } from './pet-state';
 import { PetHooks } from './pet-hooks';
-import { petRequestSchema, petStatuses } from '../shared/pet';
+import { petRequestSchema, petStatuses, petWindowSize } from '../shared/pet';
 import { statSync, writeFileSync } from 'node:fs';
-import { petHookConfiguration } from './pet-config';
+import { petHookConfiguration, petHookSetupGuide } from './pet-config';
 import { SkillManager, skillRoot } from './skills';
 import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
@@ -128,7 +128,6 @@ async function registerSshProvider(): Promise<void> {
 }
 function emit(event: ServerEvent) {
   if (event.event === 'state') pet?.update(event.data);
-  if (event.event === 'remote') pet?.remote(event.data);
   if (event.event === 'connection') pet?.connection(event.data.connected);
   if (event.event === 'sshChallenge') { void answerSshChallenge(event.data); return; }
   if (event.event === 'state') remoteSessionIds = new Set(event.data.sessions.filter(session => session.remote).map(session => session.id));
@@ -188,7 +187,7 @@ function publishPet() {
 async function openPetWindow() {
   if (quitting) return;
   if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); return; }
-  const width = Math.round(280 * pet.preferences.scale), height = Math.round(316 * pet.preferences.scale);
+  const width = Math.round(petWindowSize.width * pet.preferences.scale), height = Math.round(petWindowSize.height * pet.preferences.scale);
   let area = screen.getPrimaryDisplay().workArea, x = area.x + area.width - width - 20, y = area.y + area.height - height - 20;
   try {
     const saved = JSON.parse(readFileSync(path.join(dataDirectory, 'pet', 'position.json'), 'utf8'));
@@ -221,12 +220,16 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
       pet.save(request.preferences);
       if (pet.preferences.enabled) {
         await openPetWindow(); petWindow?.setAlwaysOnTop(pet.preferences.alwaysOnTop);
-        petWindow?.setSize(Math.round(280 * pet.preferences.scale), Math.round(316 * pet.preferences.scale));
+        petWindow?.setSize(Math.round(petWindowSize.width * pet.preferences.scale), Math.round(petWindowSize.height * pet.preferences.scale));
         if (petWindow) { const bounds = petWindow.getBounds(), area = screen.getDisplayMatching(bounds).workArea; petWindow.setPosition(Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width)), Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height))); }
       } else petWindow?.close();
       return pet.snapshot();
     }
     case 'hookConfig': return petHookConfig();
+    case 'hookGuide': {
+      const script = app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs');
+      return petHookSetupGuide(process.execPath, script, dataDirectory);
+    }
     case 'image': return pet.image(request.status);
     case 'resetImage': pet.resetImage(request.status); return pet.snapshot();
     case 'importImage': {
@@ -240,12 +243,6 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
       const sessions = pet.snapshot().sessions;
       const id = sessions.find(session => session.sessionId === pet.preferences.selectedSessionId)?.sessionId ?? sessions[0]?.sessionId;
       if (!id) return;
-      if (remoteSessionIds.has(id) && sshWindow && !sshWindow.isDestroyed()) {
-        sshWindowSession = id;
-        publishSshWindow();
-        await openSshWindow();
-        return;
-      }
       showWindow();
       const send = () => window?.webContents.send('berth:petSession', id);
       if (window?.webContents.isLoadingMainFrame()) window.webContents.once('did-finish-load', send); else send();
