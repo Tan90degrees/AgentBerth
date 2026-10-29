@@ -283,7 +283,7 @@ SSH 控制权只由用户主动切换。同一运行实例中，MCP 断开、命
 
 MCP 设置可查看本次后台的调用次数和成功率；工具支持在已有命令缓存中搜索、计数和提取上下文，默认精简重复元数据。详见 [使用与边界说明](docs/remote-terminals.md) 和 [内置 MCP 契约参考](docs/remote-terminal-agent.md)。
 
-多 Agent 会按保存的服务器信息建立各自独立的 SSH，不再全局共用同一别名的终端。共享一个 MCP 的 subagent 使用各自稳定的 `agentId`，命令、续取和文件传输都带同一 ID；这已写入工具说明。`terminal_session` 只列本 Agent 的会话，`action:dispose` 一次关闭自己创建的全部连接。用户仍可在桌面观看所有终端并主动接管，SSH 配额沿用独立设置。安装后更新空闲后台到 API 36，再重连 MCP。
+多 Agent 会按保存的服务器信息建立各自独立的 SSH，不再全局共用同一别名的终端。共享一个 MCP 的 subagent 首次 open/create 可只传别名，程序自动分配唯一 `agentId`；命令、续取和文件传输都带回同一 ID。这已写入工具说明。`terminal_session` 只列本 Agent 的会话，`action:dispose` 一次关闭自己创建的全部连接。用户仍可在桌面观看所有终端并主动接管，SSH 配额沿用独立设置。安装后更新空闲后台到 API 36，再重连 MCP。
 
 ## v0.15：恢复入口、多文件预览和 Skill 管理
 

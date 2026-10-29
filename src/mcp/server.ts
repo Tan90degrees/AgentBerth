@@ -45,10 +45,11 @@ export class McpError extends Error { constructor(readonly code: number, message
 // Dedicated per-Agent SSH contexts require API 36; never fall back to globally shared aliases.
 export const MCP_API_VERSION = 36;
 export class TerminalMcp {
+  private targets = new Map<string,{sessionId:string;runId:string}>();
   private aliases = new Map<string, {sessionId:string;runId:string}>();
   private lastTarget:{sessionId:string;runId:string}|null=null;
   constructor(private connection: Pick<DaemonConnection, 'rpc'>,private reportCall?:(event:McpCallMetric)=>void|Promise<unknown>) {}
-  ownedTargets(): {sessionId:string;runId:string}[] { return [...new Map([...this.aliases.values(),...(this.lastTarget?[this.lastTarget]:[])].map(target=>[target.sessionId,target])).values()]; }
+  ownedTargets(): {sessionId:string;runId:string}[] { return [...new Map([...this.targets.values(),...this.aliases.values(),...(this.lastTarget?[this.lastTarget]:[])].map(target=>[target.sessionId,target])).values()]; }
   private validateParams(method:Method,params:Record<string,unknown>) {
     const checked=requestSchema.safeParse({id:randomUUID(),method,params});
     if(!checked.success)throw new ToolArgumentError('工具参数无效：'+checked.error.issues.map(issue=>`${issue.path.join('.')}: ${issue.message}`).join('; '));
@@ -127,11 +128,11 @@ export class TerminalMcp {
         const { alias, ...rest } = args;
         const key=String(alias).toLowerCase();
         const resolved = this.aliases.get(key) ?? await this.connection.rpc<{sessionId:string;runId:string}>(name==='terminal_execute'?'remoteOpen':'remoteResolve', {alias});
-        this.aliases.set(key,{sessionId:resolved.sessionId,runId:resolved.runId});
+        this.aliases.set(key,{sessionId:resolved.sessionId,runId:resolved.runId});this.targets.set(resolved.sessionId,{sessionId:resolved.sessionId,runId:resolved.runId});
         inputArgs = {...rest,sessionId:resolved.sessionId,runId:resolved.runId};
       }
       const endpoint=async(alias:unknown,sessionId:unknown,runId:unknown,file:unknown)=>{
-        if(alias!==undefined){if(sessionId!==undefined||runId!==undefined)throw new ToolArgumentError('Use alias OR sessionId/runId');const key=String(alias).toLowerCase(),resolved=this.aliases.get(key)??await this.connection.rpc<{sessionId:string;runId:string}>('remoteResolve',{alias});this.aliases.set(key,{sessionId:resolved.sessionId,runId:resolved.runId});return {kind:'remote',sessionId:resolved.sessionId,runId:resolved.runId,path:file};}
+        if(alias!==undefined){if(sessionId!==undefined||runId!==undefined)throw new ToolArgumentError('Use alias OR sessionId/runId');const key=String(alias).toLowerCase(),resolved=this.aliases.get(key)??await this.connection.rpc<{sessionId:string;runId:string}>('remoteResolve',{alias});this.aliases.set(key,{sessionId:resolved.sessionId,runId:resolved.runId});this.targets.set(resolved.sessionId,{sessionId:resolved.sessionId,runId:resolved.runId});return {kind:'remote',sessionId:resolved.sessionId,runId:resolved.runId,path:file};}
         return {kind:'remote',sessionId,runId,path:file};
       };
       dispatched=true;
@@ -149,7 +150,7 @@ export class TerminalMcp {
         }
         case 'terminal_transfer_status':value=await this.connection.rpc('remoteTransferStatus',this.validateParams('remoteTransferStatus',{...args,timeoutMs:args.timeoutMs??25000}));break;
         case 'terminal_transfer_cancel':value=await this.connection.rpc('remoteTransferCancel',this.validateParams('remoteTransferCancel',args));break;
-        case 'terminal_dispose': value = await this.connection.rpc('remoteAgentClose'); this.lastTarget=null; this.aliases.clear(); break;
+        case 'terminal_dispose': value = await this.connection.rpc('remoteAgentClose'); this.lastTarget=null; this.aliases.clear(); this.targets.clear(); break;
         case 'terminal_list': value = await this.connection.rpc('remoteAgentSessions'); break;
         case 'terminal_execute': value = await this.outputRpc('remoteCommand', {...inputArgs,requestId:inputArgs.requestId??randomUUID()}); break;
         case 'terminal_screen': {
@@ -175,11 +176,12 @@ export class TerminalMcp {
       if(value&&typeof value==='object'){
         const info=(value as any).info;
         if(info?.sessionId&&info?.runId){
-          const target={sessionId:info.sessionId,runId:info.runId}; this.lastTarget=target;
+          const target={sessionId:info.sessionId,runId:info.runId}; this.lastTarget=target; this.targets.set(target.sessionId,target);
           if(typeof args.alias==='string')this.aliases.set(args.alias.toLowerCase(),target);
         }
         if(['terminal_close','terminal_delete'].includes(name!)){
           const closed=(value as any).sessionId??(value as any).id;
+          this.targets.delete(closed);
           for(const [alias,target] of this.aliases)if(target.sessionId===closed)this.aliases.delete(alias);
           if(this.lastTarget?.sessionId===closed)this.lastTarget=null;
         }

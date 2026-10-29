@@ -34,7 +34,7 @@ async function fixture(t:any){
  const connections:DaemonConnection[]=[];const connect=async()=>{const client=await DaemonConnection.open(runtime,()=>{});connections.push(client);return client;};
  let ui:DaemonConnection;
  ui=await DaemonConnection.open(runtime,event=>{if(event.event==='sshChallenge')void ui.rpc('sshChallengeReply',{challengeId:event.data.id,...(event.data.kind==='credentials'?{secret:{password:'fixture-secret'}}:{accepted:true})});});
- t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});for(const client of connections)client.close(true);ui.close(true);await daemon.close();for(const peer of peers)peer.destroy();await new Promise<void>(resolve=>ssh.close(()=>resolve()));rmSync(folder,{recursive:true,force:true});});
+ t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});for(const client of connections)client.close(true);ui.close(true);await daemon.close();for(const peer of peers)peer.end();await new Promise<void>(resolve=>ssh.close(()=>resolve()));rmSync(folder,{recursive:true,force:true});});
  await ui.rpc('registerSshProvider');await ui.rpc('saveSshConnection',{config:{alias:'fixture',hostname:'127.0.0.1',port:address.port,username:'fixture',authentication:'password',privateKeyPath:'',allowAgent:true}});
  return {folder,runtime,ui,connect,shells:()=>shells};
 }
@@ -66,17 +66,17 @@ test('one bundled MCP process isolates concurrent named subagents and disposes o
  createInterface({input:child.stdout}).on('line',line=>{const reply=JSON.parse(line),p=pending.get(reply.id);if(p){clearTimeout(p.timer);pending.delete(reply.id);reply.error?p.reject(new Error(reply.error.message)):p.resolve(reply.result);}});
  t.after(()=>{for(const p of pending.values())clearTimeout(p.timer);child.kill();});
  const request=(method:string,params:unknown)=>new Promise<any>((resolve,reject)=>{const id=++sequence,timer=setTimeout(()=>reject(new Error('MCP timeout: '+stderr)),10000);pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});
- const invoke=async(agentId:string,name:string,args:Record<string,unknown>={})=>decode(await request('tools/call',{name,arguments:{...args,agentId}}));
+ const invoke=async(agentId:string|undefined,name:string,args:Record<string,unknown>={})=>decode(await request('tools/call',{name,arguments:{...args,agentId}}));
  const discovery=await request('tools/list',{});assert.equal(discovery.tools.length,4);assert.ok(discovery.tools.every((tool:any)=>tool.inputSchema.properties.agentId));
- const [a,b]=await Promise.all([invoke('worker-a','terminal_session',{action:'create',alias:'fixture',title:'same-name'}),invoke('worker-b','terminal_session',{action:'create',alias:'fixture',title:'same-name'})]);
- assert.notEqual(a.sessionId,b.sessionId);assert.equal(f.shells(),2);
- await Promise.all([invoke('worker-a','terminal_interact',{text:'SET=A'}),invoke('worker-b','terminal_interact',{text:'SET=B'})]);
- assert.match((await invoke('worker-a','terminal_interact',{text:'GET'})).text,/TOKEN=A/);assert.match((await invoke('worker-b','terminal_interact',{text:'GET'})).text,/TOKEN=B/);
- assert.deepEqual((await invoke('worker-a','terminal_session')).sessions.map((s:any)=>s.sessionId),[a.sessionId]);
- await invoke('worker-a','terminal_session',{action:'dispose'});
- assert.equal((await f.ui.rpc<State>('state')).sessions.find(s=>s.id===b.sessionId)!.latestRun!.status,'running');assert.match((await invoke('worker-b','terminal_interact',{text:'GET'})).text,/TOKEN=B/);
- const fresh=await invoke('worker-a','terminal_session',{action:'open',alias:'fixture'});assert.notEqual(fresh.sessionId,a.sessionId);assert.equal(f.shells(),3);
- await invoke('worker-a','terminal_session',{action:'dispose'});await invoke('worker-b','terminal_session',{action:'dispose'});
+ const [a,b]=await Promise.all([invoke(undefined,'terminal_session',{action:'create',alias:'fixture',title:'same-name'}),invoke(undefined,'terminal_session',{action:'create',alias:'fixture',title:'same-name'})]);
+ assert.notEqual(a.agentId,b.agentId);assert.match(a.agentId,/^[a-f0-9-]{36}$/);assert.notEqual(a.sessionId,b.sessionId);assert.equal(f.shells(),2);
+ await Promise.all([invoke(a.agentId,'terminal_interact',{text:'SET=A'}),invoke(b.agentId,'terminal_interact',{text:'SET=B'})]);
+ assert.match((await invoke(a.agentId,'terminal_interact',{text:'GET'})).text,/TOKEN=A/);assert.match((await invoke(b.agentId,'terminal_interact',{text:'GET'})).text,/TOKEN=B/);
+ assert.deepEqual((await invoke(a.agentId,'terminal_session')).sessions.map((s:any)=>s.sessionId),[a.sessionId]);
+ await invoke(a.agentId,'terminal_session',{action:'dispose'});
+ assert.equal((await f.ui.rpc<State>('state')).sessions.find(s=>s.id===b.sessionId)!.latestRun!.status,'running');assert.match((await invoke(b.agentId,'terminal_interact',{text:'GET'})).text,/TOKEN=B/);
+ const fresh=await invoke(a.agentId,'terminal_session',{action:'open',alias:'fixture'});assert.notEqual(fresh.sessionId,a.sessionId);assert.equal(f.shells(),3);
+ await invoke(a.agentId,'terminal_session',{action:'dispose'});await invoke(b.agentId,'terminal_session',{action:'dispose'});
  child.stdin.end();await new Promise<void>(resolve=>child.once('exit',()=>resolve()));
 });
 
@@ -139,4 +139,17 @@ test('real sshd keeps cwd/environment and a running command independent across A
  await call(a,'terminal_interact',{text:'finish'});
  const finished=await call(a,'terminal_execute',{sessionId:waiting.sessionId,runId:waiting.runId,actionId:waiting.id,waitMs:5000});assert.equal(finished.status,'completed');assert.match(finished.output.text,/DONE=A:\/tmp/);
  await call(a,'terminal_session',{action:'dispose'});assert.equal((await call(b,'terminal_execute',{command:'printf STILL_B'})).output.text,'STILL_B');await call(b,'terminal_session',{action:'dispose'});
+});
+
+test('context recovery retains every owned session, including multiple names on one server, and cleanup forgets only closed targets',async()=>{
+ const a={sessionId:randomUUID(),runId:randomUUID()},b={sessionId:randomUUID(),runId:randomUUID()};let created=0;
+ const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{
+  if(method==='remoteManage'&&params?.action==='close')return {id:params.sessionId} as T;
+  if(method==='remoteAgentClose')return {closed:[a.sessionId,b.sessionId]} as T;
+  const target=created++===0?a:b;return {...target,info:{...target}} as T;
+ }});
+ await call(server,'terminal_session',{action:'create',alias:'fixture',title:'first'});await call(server,'terminal_session',{action:'create',alias:'fixture',title:'second'});
+ assert.deepEqual(new Set(server.ownedTargets().map(t=>t.sessionId)),new Set([a.sessionId,b.sessionId]));
+ await call(server,'terminal_session',{action:'close',...a});assert.deepEqual(server.ownedTargets(),[b]);
+ await call(server,'terminal_session',{action:'dispose'});assert.deepEqual(server.ownedTargets(),[]);
 });

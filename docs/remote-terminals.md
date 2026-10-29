@@ -56,7 +56,7 @@ MCP 后台按事件等待，单次最长 25 秒，完成即返回。工具返回
 
 ## 服务器与会话
 
-不同 Agent 按同一服务器别名操作会获得独立 SSH；共享一个 MCP 的 subagent 使用各自稳定的 agentId，工具自带该说明，用户无需额外提示词。Agent 只能列出和清理自己的会话，任务完成可调用 terminal_session(action=dispose) 关闭该上下文创建的全部连接。用户可在桌面看到所有真实终端，SSH 数量仍受单独设置的上限约束。
+不同 Agent 按同一服务器别名操作会获得独立 SSH；共享一个 MCP 的 subagent 首次 open/create 可省略 agentId，由程序自动生成唯一 ID，后续每次调用带回该 ID。工具自带该说明，用户无需额外提示词。Agent 只能列出和清理自己的会话，任务完成可调用 terminal_session(action=dispose) 关闭该上下文创建的全部连接。用户可在桌面看到所有真实终端，SSH 数量仍受单独设置的上限约束。
 
 用户只填写服务器信息，Agent 通过 terminal_session 的 open/create/update/close/delete/reconnect 操作管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 36。
 

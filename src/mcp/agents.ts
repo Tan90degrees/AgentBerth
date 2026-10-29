@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { TerminalMcp } from './server';
 import { boundedToolText } from './result-limits';
 import { errorReply, ToolArgumentError } from './harness';
@@ -16,7 +17,8 @@ export class AgentMcp {
     if (supplied !== undefined && (typeof supplied !== 'string' || !supplied.trim() || supplied.length > 100 || /[\x00-\x1f]/.test(supplied))) {
       return { isError: true, content: [{ type: 'text', text: boundedToolText(errorReply(new ToolArgumentError('agentId must be a nonempty stable name, at most 100 characters'), { name: p?.name ?? '', args: {}, target: {}, dispatched: false })) }] };
     }
-    const agentId = supplied as string | undefined ?? '';
+    const fresh = method === 'tools/call' && p?.name === 'terminal_session' && ['open','create'].includes(String(p.arguments?.action));
+    const agentId = supplied as string | undefined ?? (fresh ? randomUUID() : '');
     let context = this.contexts.get(agentId);
     if (!context) {
       if (this.contexts.size >= 128) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: { code: 'AGENT_CONTEXT_LIMIT', execution: 'not_started', message: 'Dispose finished agent contexts with terminal_session(action=dispose, agentId=...) before opening more.' } }) }] };

@@ -13,13 +13,13 @@
 
 保存的别名表示服务器信息，不是大家共用的终端。不同 MCP 客户端即使使用同一 alias、同一会话名称，也会建立独立 SSH，目录、环境变量、TUI 输入和文件传输互不占用。
 
-如果多个 subagent 共用同一个 MCP 进程，每个 Agent 必须自行选择唯一、稳定的 `agentId`，并在每次工具调用中携带。MCP 协议不会自动提供通用的 subagent 身份，后端不能根据命令文本猜测来源。该字段会选择独立后台连接和目标记忆；用户无需配置。完整指针中的 agentId 会自动保留。
+如果多个 subagent 共用同一个 MCP 进程，首次调用 terminal_session 的 open/create 时只传 alias 和可选 title，不传 agentId，程序会自动分配独立 SSH 和唯一 agentId；后续每次调用携带返回的 agentId。也可由 Agent 显式选择自己的稳定唯一 ID。MCP 协议不会自动提供通用的 subagent 身份，后端不能根据命令文本猜测来源。该字段会选择独立后台连接和目标记忆；用户无需配置。完整指针中的 agentId 会自动保留。
 
 ```json
-{"agentId":"inspect-a","action":"create","alias":"dev-server","title":"检查系统"}
+{"action":"create","alias":"dev-server","title":"检查系统"}
 ```
 
-后续命令使用 `terminal_execute({"agentId":"inspect-a","alias":"dev-server","command":"uname -a"})`，或传回自己的 sessionId/runId。普通 execute 也可直接创建自己的连接，不必先调用 create。会话列表只列当前上下文的连接；用户仍能在桌面查看所有 Agent 的真实终端。若同一 Agent 主动创建多个会话，使用明确 ID 区分。
+假设返回的 agentId 为 inspect-a，后续命令使用 `terminal_execute({"agentId":"inspect-a","alias":"dev-server","command":"uname -a"})`，或传回自己的 sessionId/runId。普通 execute 也可直接创建自己的连接，不必先调用 create。会话列表只列当前上下文的连接；用户仍能在桌面查看所有 Agent 的真实终端。若同一 Agent 主动创建多个会话，使用明确 ID 区分。
 
 任务完成后调用 `terminal_session({"agentId":"inspect-a","action":"dispose"})`，一次关闭本上下文创建的全部 SSH 并释放上下文，不关闭其他 Agent 或用户创建的终端。只关闭某条连接用 close，删除已停止的记录用 delete。不要 dispose 仍需保留长任务的上下文。断开 MCP 或取消等待不会自动停止 SSH；同一 MCP 进程可带原目标恢复连接，整个 MCP 进程重启后需保留原 sessionId/runId 查询旧任务，不能仅按服务器别名猜测旧任务归属。
 
