@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "format": "animated-webp",
   "importRepository": "QCYTSN/dsh-dafeiyu",
   "importCommit": "084323845ab82b68d5388d5c638bec09d8544a8a",
   "originalSource": {
@@ -20,6 +21,19 @@
     288,
     240
   ],
+  "encoder": {
+    "quality": 85,
+    "method": 4,
+    "minimizeSize": false,
+    "allowMixed": false,
+    "background": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "alphaCutoff": 2
+  },
   "states": {
     "idle": {
       "clip": "idle",
@@ -32,8 +46,8 @@
         "endFrame": 241,
         "frameCount": 241
       },
-      "gifSha256": "cb1e9e608834ce52b4db553e089e65cf0bf41569b951c3053354e9c7082c22ec",
-      "posterSha256": "f66249323cf66095c3ffddb814b0907dd03a911c015cc110e88e9e8abd25cbf6"
+      "animationSha256": "a28e54703bc80d8702baa68efda1f463612e71c0b2fecad4f2650a421ca56454",
+      "posterSha256": "cd0d090d8516bb6e63cbf35614bff6e01bcfa55998ed2620f5e3d8d3d8924327"
     },
     "working": {
       "clip": "working",
@@ -46,8 +60,8 @@
         "endFrame": 241,
         "frameCount": 241
       },
-      "gifSha256": "2bdc613e586005bf4ebdcc22e147a5e58dd0b5a405193cfdb81a3848e13a778c",
-      "posterSha256": "8322f9f13a2dd002e9eaee5e95eefa003fc5237ca47ea099cc8a6519b250de1c"
+      "animationSha256": "6ea16da5625e22575b402ea2abaa7d982539d65cc5f24413584fc928fe266a9a",
+      "posterSha256": "4b196514d587032025abcb566a2df3a44c99866536177a5a3d71286b15359620"
     },
     "waiting": {
       "clip": "waiting",
@@ -60,8 +74,8 @@
         "endFrame": 241,
         "frameCount": 241
       },
-      "gifSha256": "5cd501c4ee1fe47beed9bbdf84b448e64087eb2357de06ac32d32e7558042828",
-      "posterSha256": "1826fabbdf325a9326bb211605d8a24cbaf3ee5564b9572dc60605f5bbce0418"
+      "animationSha256": "422656137e6767e9931e8e67d783ffc554a31e2a1b0bd27e7e043c6fcf804770",
+      "posterSha256": "03cf769f0da973e423e36fe02f82a3d406e8c4bb25707494ef0c31d3a74443c9"
     },
     "completed": {
       "clip": "success",
@@ -74,8 +88,8 @@
         "endFrame": 241,
         "frameCount": 241
       },
-      "gifSha256": "116bf4c0e942b4d16326f8a6c78ae7e29e0c8312ce9091399568adc61d7f05b6",
-      "posterSha256": "41a85cc845994f2ebfd4bea099ebf556a38cbbe41a822bedbbbbcec979ee66c3"
+      "animationSha256": "bc97fd48e24b3f63197cc25c3983c5d612a69705c6410ffbb976d11826e71906",
+      "posterSha256": "e0b7aaca438feb683384c544b82fe7207de1d259724d322860c400b2673e87de"
     },
     "error": {
       "clip": "error",
@@ -88,8 +102,8 @@
         "endFrame": 118,
         "frameCount": 118
       },
-      "gifSha256": "c9da5003f3beaa603cdb73a6e9ebd147ee75caf436291c5ca7005b1a2818823c",
-      "posterSha256": "c6adc9064f3d27fd78b3fe2102298b4e450ab85c6752fec8204a0b4120a6cb94"
+      "animationSha256": "476f501165c406b717c54bb5644742d20de06141e2cc70bcbe2b7d0d131faff9",
+      "posterSha256": "cf54add6acfc54e9d3a727ea9c36faf87875a559c9abedd3455a0314fcb90524"
     },
     "unknown": {
       "clip": "thinking",
@@ -102,8 +116,8 @@
         "endFrame": 241,
         "frameCount": 241
       },
-      "gifSha256": "9c03554e75e2e50b781f215a41825d458d22c548eb338b68f034381be00e6983",
-      "posterSha256": "d8155e391502dac0059737f0f79fd06923719998c5a7f46d1300526034d8071b"
+      "animationSha256": "f085905b63a1c6a57c0f05b1203d47445d2faecb8f5fa04a33e1ccf5aac0755f",
+      "posterSha256": "04266bfa89d7a506a5088f5a3752ffc55324c39bdb8727236903cd768ecf2274"
     }
   }
 }
