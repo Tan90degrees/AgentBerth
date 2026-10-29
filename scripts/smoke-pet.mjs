@@ -99,8 +99,10 @@ try {
   const quote = value => "'" + value.replaceAll("'", process.platform === 'win32' ? "''" : "'\\''") + "'";
   // Run through the actual PTY: injected identity must reach the hook unchanged.
   const command = process.platform === 'win32' ? `$env:ELECTRON_RUN_AS_NODE='1'; & ${quote(runtime.exec)} ${quote(script)} --event working\r` : `ELECTRON_RUN_AS_NODE=1 ${quote(runtime.exec)} ${quote(script)} --event working\r`;
+  await rpc('attach', { sessionId: a.id });
   await rpc('input', { sessionId: a.id, runId: runA.id, data: command });
   await pet.waitForFunction(() => document.querySelector('.pet-state-working'));
+  await rpc('detach', { sessionId: a.id });
   await pet.emulateMedia({ reducedMotion: 'reduce' });
   await pet.waitForFunction(() => document.querySelector('.pet-character').src.endsWith('.png'));
   assert.equal(await pet.locator('.pet-character').isVisible(), true);
