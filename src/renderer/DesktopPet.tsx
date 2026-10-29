@@ -133,7 +133,7 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
       const result = await window.berth.pet<import('../main/agent-integration').HookInstallation>({ action: 'installHook', provider, projectId: scope || null, opencodeVersion: 'auto' });
       setNotice(`${result.message}\n${result.path}${result.backup ? '\n备份：' + result.backup : ''}`);
     }}>安装/更新适配</AsyncButton>
-    {notice && <p className="form-hint" role="status" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{notice}</p>}
+    {notice && <p className="form-hint" role="status" aria-label="适配安装结果" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{notice}</p>}
     {apiVersion < 38 && <p className="form-hint">请先在设置中更新空闲后台，再安装适配。</p>}
     <p className="form-hint">保留已有配置与 hook，有变更时自动备份。OpenCode 自动检测 1.x / 2.x 插件接口。也可以把以下说明复制给 Agent 自行配置；项目和用户范围任选一个即可。</p>
     <ol className="pet-hook-steps"><li>在 AgentBerth 中启动一个 Agent 类型会话。</li><li>点击“复制给 Agent 自动配置”，粘贴给该 Agent 执行。</li><li>配置完成后重新启动该 Agent 会话，检查执行、等待和完成状态。</li></ol>
