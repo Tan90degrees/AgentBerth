@@ -35,5 +35,11 @@
       "loop": true
     }
   },
-  "format": "animated-webp"
+  "format": "animated-webp",
+  "encoder": {
+    "quality": 85,
+    "method": 4,
+    "minimizeSize": false,
+    "allowMixed": false
+  }
 }

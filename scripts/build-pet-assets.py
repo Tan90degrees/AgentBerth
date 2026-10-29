@@ -115,7 +115,7 @@ def render():
         # Animated WebP keeps soft alpha edges and full colour, with a much smaller payload than GIF.
         frames[0].save(DEST / (status + '.webp'), format='WEBP', save_all=True, append_images=frames[1:],
                        duration=durations, loop=0 if selection['loop'] else 1,
-                       quality=85, method=6, minimize_size=True, allow_mixed=True)
+                       quality=85, method=4, minimize_size=False, allow_mixed=False)
         frames[len(frames) // 3].save(DEST / (status + '.png'), optimize=True)
         data = (DEST / (status + '.webp')).read_bytes()
         assert len(data) <= 4 * 1024 * 1024, status + ' exceeds animation budget'
