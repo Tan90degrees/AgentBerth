@@ -767,7 +767,7 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) });
+      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id } });
     }
     catch (error) {
       terminal.dispose();

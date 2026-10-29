@@ -3,7 +3,7 @@ import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 36;
+export const API_VERSION = 37;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -226,6 +226,9 @@ export interface RuntimeInfo { version: number; pid: number; port: number; token
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
+  pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;
+  onPet(listener: (state: import('./pet').PetSnapshot) => void): () => void;
+  onPetSession(listener: (sessionId: string) => void): () => void;
   sshWindow(action: 'state' | 'open' | 'dock' | 'select', sessionId?: string): Promise<SshWindowState>;
   onSshWindow(listener: (state: SshWindowState) => void): () => void;
   openSshConnection(alias: string): Promise<{sessionId: string; runId: string; info: RemoteInfo}>;

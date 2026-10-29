@@ -116,6 +116,10 @@
       {
         "from": "dist/mcp.cjs",
         "to": "mcp/mcp.cjs"
+      },
+      {
+        "from": "dist/pet-hook.cjs",
+        "to": "pet/pet-hook.cjs"
       }
     ]
   }

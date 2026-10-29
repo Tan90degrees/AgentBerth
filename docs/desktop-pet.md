@@ -1,0 +1,65 @@
+# 桌宠与 Agent hook
+
+安装后先在 **设置 → 后台服务** 更新空闲后台至 API 37，再在 **设置 → 桌宠** 开启桌宠，也可从托盘选择“显示桌宠”。默认关闭，不会额外占据终端面积。桌宠是可拖动的独立透明窗口，显示会话名称、状态和动作；使用下拉菜单或左右按钮切换会话，点击“打开当前会话”回到对应终端。关闭主窗口后桌宠仍然显示，隐藏桌宠不影响终端；托盘退出会一并结束应用和 hook 监听。
+
+可选择置顶、75%–150% 大小，以及等待输入/失败时自动切换会话。默认形象为泊栈小机器人，提供空闲、执行、等待、完成、失败、状态待确认六种 GIF。为任意状态导入本地 GIF 即可替换动作；支持透明背景、每文件最多 8 MiB、边长最多 2048 px。文件复制到应用数据目录，原文件移动后仍可使用；恢复默认只重置对应动作。跟随系统的减少动态效果设置。
+
+## Claude Code
+
+1. 在设置的桌宠页面，点击 **复制 Claude Code hook 配置**。
+2. 将复制的 `hooks` 合并到自己的 `~/.claude/settings.json` 或项目 `.claude/settings.local.json`，保留原有 hook。
+3. 在 AgentBerth **重新启动本机会话**，然后使用 Claude Code。已有进程没有新注入的会话标识，必须重新启动。
+
+配置使用 Claude Code 当前的 command hook 格式；Windows 显式选择 PowerShell，其他平台使用 Shell。事件从 stdin 接收，配置设置短超时和 `onFailure: continue`，不参与权限决策，不向 stdout 输出提示词或决策。只转发会话与运行 ID、状态，不保存 prompt、命令输入、工具输出或完整 hook 原文。上游格式见 [Claude Code 官方 hook 文档](https://code.claude.com/docs/en/hooks)。
+
+| hook | 桌宠状态 |
+| --- | --- |
+| SessionStart、SessionEnd | 空闲 |
+| UserPromptSubmit、PreToolUse、PostToolUse | 执行中 |
+| PreToolUse 且工具为 AskUserQuestion | 等待处理 |
+| PermissionRequest、Notification 的 permission_prompt / idle_prompt / elicitation_dialog | 等待处理 |
+| Stop | 完成 |
+| StopFailure、PostToolUseFailure | 失败 |
+
+SubagentStop 不会被当作整个会话完成。多个 AgentBerth 会话使用各自的会话/运行 ID，不会因为 cwd 或 Agent 原生 session_id 相同而串台。同一个终端内部的多个 subagent 合并显示该终端状态，不为每个子任务虚构独立终端。
+
+## 自定义 Agent / 私有 TUI
+
+不需要修改 TUI 渲染或开源。只要它支持事件 hook，就在相应 hook 中调用软件包内 `resources/pet/pet-hook.cjs`；开发环境对应 `dist/pet-hook.cjs`。如果没有 hook 能力，只显示终端是否仍在运行，不从屏幕猜测思考状态。
+
+AgentBerth 启动的每个**本机终端**会获得以下环境变量，子进程自动继承：
+
+- `AGENTBERTH_DATA_DIR`：当前实例数据目录，脚本用于发现监听地址。
+- `AGENTBERTH_SESSION_ID`：工作台会话 ID。
+- `AGENTBERTH_RUN_ID`：本次启动 ID。
+
+脚本支持 `--event working|waiting|completed|error|idle`，或从 stdin JSON 的 `hook_event_name` / `event` 接收事件。也支持显式 `--data-dir`、`--session-id`、`--run-id` 和诊断选项 `--verbose`。不要传入服务器密码或私钥，也不要把 hook token 写进 Agent 配置。
+
+已安装 Node.js 的自定义 Agent 可以使用以下形式（替换脚本路径）：
+
+```sh
+node /path/to/resources/pet/pet-hook.cjs --event working
+```
+
+Windows PowerShell 可直接复用应用自带运行时，无需另装 Node；路径由实际安装位置决定：
+
+```powershell
+$env:ELECTRON_RUN_AS_NODE='1'
+& 'C:\Path\AgentBerth.exe' 'C:\Path\resources\pet\pet-hook.cjs' --event working
+```
+
+也可将以下 JSON 通过 stdin 送给该脚本，ID 使用继承的环境变量，无需在正文重复填写：
+
+```json
+{"event":"waiting"}
+```
+
+长时间没有工具调用的任务可以每隔数分钟发送一次 `working` 作为心跳；超过十分钟没有执行状态事件会显示“状态待确认”，不会自行宣称完成。等待输入不会自动超时。重启应用后不会恢复旧 hook 状态，而会等待当前运行的新事件。
+
+## SSH、断线与边界
+
+SSH 不安装远端依赖，也不把本机 hook token 传到远端。对 MCP 管理的 SSH 命令，桌宠直接使用已有后端命令状态显示执行/结束；这是命令状态，不能替代远端私有 TUI 的 Agent hook。没有可靠状态时明确显示待确认。后台断线时不会继续宣称 Agent 正常运行。
+
+hook 接口仅监听本机回环地址，随机端口，鉴权信息在当前数据目录的 `pet-hook.json` 中，由每次应用启动重新生成。请求限制为 4 KiB，只接受已有会话的当前运行 ID；已停止、已删除、旧运行事件会被拒绝。脚本没有命令执行、终端输入或文件读写控制接口。未运行应用或 hook 失败时脚本静默退出且返回成功，不阻断 Agent 工作；必要时使用 `--verbose` 排查。不要分享 `pet-hook.json`。
+
+桌宠与 hook 接收服务属于桌面应用，主窗口隐藏仍有效；完全退出桌面应用后停止接收。不会更改终端控制权、MCP 的 Agent 隔离或命令输出预算。
