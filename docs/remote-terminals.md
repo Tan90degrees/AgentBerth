@@ -8,7 +8,7 @@ AgentBerth 让 Agent 操作用户正在观看的同一个真实 SSH 终端。目
 2. 密码和私钥口令默认只保留在本次应用运行期间；勾选“记住密码或口令”才使用操作系统加密存储。系统没有安全密钥存储时不能记住，可继续临时使用。密码不进入连接配置、SQLite、MCP 配置、命令行或操作记录。重启应用后，未记住的密码需在连接设置中重新输入。编辑时留空保留现有凭据；取消记住并保存可移除持久化副本。
 3. 远端只需 SSH 服务和已有登录 Shell。无需安装 tmux、Bash、Python、Node、额外脚本或常驻代理。受限账号需要允许 Shell 和 PTY。首次连接时在桌面核对并信任主机指纹；已信任指纹发生变化会拒绝连接，需核实服务器身份后重新创建连接。
 4. 打开 **设置 → MCP → 复制 MCP 配置**，加入 Agent 客户端的 MCP 配置。这是本机 stdio MCP：command 是 AgentBerth 自带的本机程序，args 指向随软件打包的 MCP 入口，env 中的 `ELECTRON_RUN_AS_NODE=1` 必须保留。不需要另装 Node.js；SSH 的地址和登录信息在上一步填写，不填在 MCP 传输配置中。
-5. 不需要复制长提示词。MCP 自带工具说明和按状态返回的下一步引导；告诉 Agent 使用连接别名（例如 `dev-server`）。普通命令可直接调用 `terminal_execute({"alias":"dev-server","command":"uname -a"})`；MCP 打开或复用已授权连接。也可调用 `terminal_session({"action":"open","alias":"dev-server"})` 只打开连接，自动展示工作区底部的 SSH 实时终端，本机 Agent 终端保留在上方，两边可以同时观察。SSH 会话不再混在左侧本机会话列表。后续读屏、执行、按键和等待都可传同一 alias，无需用户复制会话 UUID。重复 open 会复用现有会话，不会抢回人工控制权，也不会自动重连已断开的 SSH。
+5. 不需要复制长提示词。MCP 自带工具说明和按状态返回的下一步引导；告诉 Agent 使用连接别名（例如 `dev-server`）。普通命令可直接调用 `terminal_execute({"alias":"dev-server","command":"uname -a"})`；MCP 打开或复用当前 Agent 自己的独立连接。也可调用 `terminal_session({"action":"open","alias":"dev-server"})` 只打开连接，自动展示工作区底部的 SSH 实时终端，本机 Agent 终端保留在上方，两边可以同时观察。SSH 会话不再混在左侧本机会话列表。后续读屏、执行、按键和等待都可传同一 alias，无需用户复制会话 UUID。同一个 Agent 重复 open 会复用自己的现有会话，不会抢回人工控制权，也不会自动重连已断开的 SSH。
 6. 用户可滚动、选中、复制、查找，点击 **接管** 收回输入权，任务继续运行。点击 **交给 Agent** 再次允许输入。如果同一连接有多个正在运行的会话，Agent 需从 terminal_session(action=list) 选择 sessionId/runId，以免操作错会话。
 
 点击顶部 **SSH → 服务器** 也可直接填写服务器信息；保存信息不会建立连接。会话由 Agent 通过 MCP 打开或管理。反复点击 SSH 只开关同一个面板，不创建连接或重复显示行。拖动 SSH 面板上边缘可调整本机与远端的高度分配，方向键微调、双击恢复默认；高度在本机保存。面板收起后连接继续运行，再次展开接回同一终端；选择器可切换多个 SSH 会话，旁边的 **⋯** 或右键可启动、停止、编辑和删除。最近命令、执行状态与人工接管按钮显示在远端画面旁；完整步骤仍可展开查看。
@@ -56,7 +56,9 @@ MCP 后台按事件等待，单次最长 25 秒，完成即返回。工具返回
 
 ## 服务器与会话
 
-用户只填写服务器信息，Agent 通过 terminal_session 的 open/create/update/close/delete/reconnect 操作管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 34。
+不同 Agent 按同一服务器别名操作会获得独立 SSH；共享一个 MCP 的 subagent 使用各自稳定的 agentId，工具自带该说明，用户无需额外提示词。Agent 只能列出和清理自己的会话，任务完成可调用 terminal_session(action=dispose) 关闭该上下文创建的全部连接。用户可在桌面看到所有真实终端，SSH 数量仍受单独设置的上限约束。
+
+用户只填写服务器信息，Agent 通过 terminal_session 的 open/create/update/close/delete/reconnect 操作管理连接实例。普通项目会话不混入 SSH；无需本机项目。用户始终保留查看、接管和停止入口。安装后更新空闲后台至 API 36。
 
 ## 文件传输
 
@@ -81,13 +83,13 @@ terminal_transfer 的 action=upload/download/copy 覆盖文件和显式 recursiv
 
 ## Agent 误把滚屏当成输出丢失
 
-读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 34 默认等待完成并精简元数据，保留 scope、命令关联和 harness.next，不自动恢复所有输出；detail=full 可查看完整诊断字段。运行中的命令给出增量等待入口，明细分页和缓存搜索按需使用。Agent 不应重跑、重新排序或 clear 以获取上半部分。
+读屏仅是 `scope=viewport` 的可见画面；普通命令结果是 `scope=command`，与画面行数无关。API 36 默认等待完成并精简元数据，保留 scope、命令关联和 harness.next，不自动恢复所有输出；detail=full 可查看完整诊断字段。运行中的命令给出增量等待入口，明细分页和缓存搜索按需使用。Agent 不应重跑、重新排序或 clear 以获取上半部分。
 
 忘记 ID 可省略 actionId 从头读最近可靠关联的命令，后续分页建议原样使用返回指针固定命令 ID 和游标，避免把另一个命令的游标混用。空闲 POSIX Shell 中通过文本加回车执行的命令也会自动捕获；交互程序、部分输入和未知提示符仍按原始按键处理，不能关联旧命令冒充新结果。
 
 ## 内置 Agent 引导
 
-只添加 MCP 配置即可。工具说明、初始化指引与 harness 返回字段共同提供操作契约；可选 MCP 资源 `agentberth://guide/remote-terminal` 提供详细参考。命令与传输自动生成请求 ID；结果给出下一步准确参数。人工接管、忙碌命令、过期运行实例由后端拒绝，错误返回稳定代码与恢复方向，远端输出不能改变这些约束。更新后台至 API 34 并重连 MCP 后使用。
+只添加 MCP 配置即可。工具说明、初始化指引与 harness 返回字段共同提供操作契约；可选 MCP 资源 `agentberth://guide/remote-terminal` 提供详细参考。命令与传输自动生成请求 ID；结果给出下一步准确参数。人工接管、忙碌命令、过期运行实例由后端拒绝，错误返回稳定代码与恢复方向，远端输出不能改变这些约束。更新后台至 API 36 并重连 MCP 后使用。
 
 ## 调用统计、缓存查询与按钮反馈
 

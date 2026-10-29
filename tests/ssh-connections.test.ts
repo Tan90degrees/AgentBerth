@@ -96,10 +96,10 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   });
   let onAgentClosed=()=>{};
   const openAgent=()=>DaemonConnection.open(runtime,event=>{if(event.event==='connection'&&!event.data.connected)onAgentClosed();});
-  let agent=await openAgent(),mcp=new TerminalMcp(agent);let competitor:DaemonConnection|undefined;
+  let agent=await openAgent(),mcp=new TerminalMcp(agent);let knownTarget:{sessionId:string;runId:string}|undefined;let competitor:DaemonConnection|undefined;
   const reconnectMcp=async()=>{
     await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('MCP socket did not close')),3000);onAgentClosed=()=>{clearTimeout(timer);resolve();};agent.close();});
-    await ui.rpc('state');agent=await openAgent();mcp=new TerminalMcp(agent);
+    await ui.rpc('state');agent=await openAgent();mcp=new TerminalMcp(agent);if(knownTarget)await agent.rpc('remoteAgentRecover',{targets:[knownTarget]});
   };
   t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});competitor?.close();agent.close();ui.close();await daemon.close();for(const client of connections)client.end();ssh.close();rmSync(folder,{recursive:true,force:true});});
   await ui.rpc('registerSshProvider');
@@ -114,7 +114,7 @@ test('password SSH + alias MCP opens one visible session, verifies host keys, re
   assert.deepEqual((await call('terminal_list')).connections,[{alias:'test-server',allowAgent:true}]);
   rejectTrust=true;await assert.rejects(call('terminal_open',{alias:'test-server'}),/指纹/);
   rejectTrust=false;password='wrong-fixture-secret';await assert.rejects(call('terminal_open',{alias:'test-server'}),/认证失败/);
-  password='fixture-secret';const opened=await Promise.all(Array.from({length:4},()=>call('terminal_open',{alias:'test-server'})));const target=opened[0];
+  password='fixture-secret';const opened=await Promise.all(Array.from({length:4},()=>call('terminal_open',{alias:'test-server'})));const target=opened[0];knownTarget={sessionId:target.sessionId,runId:target.runId};
   assert.equal(new Set(opened.map(value=>value.runId)).size,1,'Repeated opens share one in-flight SSH connection');
   assert.equal(target.info.owner,'agent');assert.equal(hostConfirmations,2);assert.equal(handshakes,1);assert.equal(shellChannels,1);
   const again=await call('terminal_open',{alias:'test-server'});assert.equal(again.runId,target.runId);assert.equal(shellChannels,1);

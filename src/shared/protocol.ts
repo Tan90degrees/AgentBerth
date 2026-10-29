@@ -3,7 +3,7 @@ import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 35;
+export const API_VERSION = 36;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -76,7 +76,7 @@ export const transferSpecSchema=z.object({requestId:id,source:transferEndpointSc
 export type TransferEndpoint=z.infer<typeof transferEndpointSchema>;
 export type TransferSpec=z.infer<typeof transferSpecSchema>;
 export interface RemoteTransfer {id:string;spec:TransferSpec;sessionId:string;runId:string;status:'running'|'completed'|'failed'|'cancelled'|'unknown';bytes:number;totalBytes:number;files:number;totalFiles:number;startedAt:string;endedAt:string|null;error:string|null}
-export const remoteManageSchema=z.object({action:z.enum(['create','update','close','delete','reconnect']),alias:z.string().min(1).max(100).optional(),sessionId:id.optional(),runId:id.optional(),title:title.optional(),directory:remoteSchema.shape.directory.optional()}).strict().refine(value=>value.action==='create'?!!value.alias&&!!value.title:!!value.alias||!!value.sessionId,'请提供服务器别名或会话 ID').refine(value=>!(value.alias&&value.sessionId),'别名和会话 ID 二选一');
+export const remoteManageSchema=z.object({action:z.enum(['create','update','close','delete','reconnect']),alias:z.string().min(1).max(100).optional(),sessionId:id.optional(),runId:id.optional(),title:title.optional(),directory:remoteSchema.shape.directory.optional()}).strict().refine(value=>value.action==='create'?!!value.alias:!!value.alias||!!value.sessionId,'请提供服务器别名或会话 ID').refine(value=>!(value.alias&&value.sessionId),'别名和会话 ID 二选一');
 export const remoteKeySchema = z.enum(['Enter', 'Tab', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Ctrl+C', 'Ctrl+D', 'Ctrl+Z', 'Backspace']);
 export type RemoteKey = z.infer<typeof remoteKeySchema>;
 const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null), remote: remoteSchema.nullable().default(null) };
@@ -101,6 +101,9 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('deleteSshConnection'), params: z.object({ connectionId: id }).strict() }),
   z.object({ id, method: z.literal('registerSshProvider'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('sshChallengeReply'), params: z.object({ challengeId: id, secret: sshSecretSchema.optional(), accepted: z.boolean().optional() }).strict() }),
+  z.object({ id, method: z.literal('remoteAgentRecover'), params: z.object({ targets: z.array(z.object(remoteTarget).strict()).max(128) }).strict() }),
+  z.object({ id, method: z.literal('remoteAgentClose'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('remoteAgentSessions'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteAliases'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100), owner: z.enum(['user','agent']).default('agent') }).strict() }),
   z.object({ id, method: z.literal('remoteResolve'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
