@@ -13,7 +13,7 @@
 
 开发分支通过 PR 事件执行完整验证，避免 push 与 PR 同时重复构建。未创建 PR 时，可在 Actions 手动运行工作流并选择分支生成测试包；main 的推送继续自动验证并发布。
 
-发布任务从同一次运行下载验证包，校验版本、提交、main 分支、packagedSmoke=success、installerSmoke=success、四个更新/安装载荷的 SHA-256、文件名及发布说明。随后创建轻量版本标签和草稿 Release，上传六个附件，再核对附件状态、大小和 GitHub 返回的摘要；main 仍指向该提交时才公开 Release。
+发布任务从同一次运行下载验证包，校验版本、提交、main 分支、packagedSmoke=success、installerSmoke=success、两个包的 SHA-256、文件名及发布说明。随后创建轻量版本标签和草稿 Release，上传四个附件，再核对附件状态、大小和 GitHub 返回的摘要；main 仍指向该提交时才公开 Release。
 
 - 上传中断时，草稿保留；从原运行重跑可继续上传。
 - 已公开的同一提交/版本不重复发布，也不覆盖附件。
@@ -21,7 +21,7 @@
 - 标签已指向其他提交且版本尚未公开时直接失败，不移动标签。
 - main 在上传期间前进时保留草稿，避免自动发布过时提交。
 
-正式包提供安装 EXE、免安装 ZIP、轻量更新 ZIP、更新清单 JSON、SHA256SUMS.txt、build-info.json。构建信息记录版本、提交、分支、运行链接、打包测试和实际安装器测试结果；两项测试均通过后才允许发布。
+正式包提供安装 EXE、免安装 ZIP、SHA256SUMS.txt、build-info.json。构建信息记录版本、提交、分支、运行链接、打包测试和实际安装器测试结果；两项测试均通过后才允许发布。
 
 桌面与打包后测试分别执行工作台套件和文件预览/Git 套件，各自使用独立的 5 分钟步骤时限，避免前一组耗时挤掉后一组。全部原有断言保留，任一组失败仍使任务失败；未取消时会继续执行另一组以提供独立诊断。打包信息中的 `packagedSuites.workbench` 与 `packagedSuites.files` 分别记录结果，只有两组都为 success 时 `packagedSmoke` 才为 success。发布脚本同时核对总结果和存在的分组结果，失败、取消、跳过或缺少任一分组结果的包均不能发布；旧格式构建信息继续按原有总结果验证。本地 `npm run test:desktop` 和 `npm run test:packaged` 仍按顺序执行两组。
 
@@ -42,13 +42,3 @@ Windows 测试显式等待 GUI 类型的 Electron 校验进程，按本轮启动
 ## 本地验证发布脚本
 
 `npm run test:scripts` 覆盖校验失败、分支门禁、草稿上传顺序、中断恢复、重复运行、冲突标签、已发布附件保护和 main 前进等行为，测试使用本地替身，不访问 GitHub 或公开版本。
-
-## 软件内更新包
-
-Windows 打包后运行 `npm run dist:update`，通过构建机的 Python 标准库压缩最终 resources 目录，无需给用户安装 Python。更新包与 Electron 版本、平台、架构和后台 API 最低版本绑定；发布脚本校验清单和压缩包摘要。`hotUpdateSmoke=success` 是 v0.16.0 起的发布前置条件，缺失、跳过或失败均不能发布。
-
-`scripts/smoke-updates.mjs` 使用真实打包 Electron、系统 ZIP 解压器、本地 PTY、SSH 协议连接和 MCP 进程验证更新。测试只控制操作系统的 relaunch 启动步骤，便于 Playwright 附加到新进程；指针切换、进程退出、固定启动器选择更新 ASAR、界面恢复及后台延后切换均走正式代码。夹具仅模拟官方 GitHub 的网络响应，产品不开放自定义下载源或测试绕过参数。
-
-资源更新存入数据目录的 `app-updates/versions`，不覆盖原安装目录。活动版本和回退版本不可被下载操作替换；旧资源保留，避免删除运行中的后台或 MCP 仍可能加载的文件。首次安装更新启动器需要完整软件包；Electron 版本改变时继续使用完整安装包。
-
-`package.json` 的 `agentberthUpdates.minimumBackendApi` 明确声明界面可兼容的最小后台 API；新增兼容功能时保留该值，并用后台版本判断隐藏未生效功能，避免每次迭代都强迫用户结束终端。只有无法兼容旧后台的变更才提高下限；此时更新保留在本地，等待终端结束后再应用。

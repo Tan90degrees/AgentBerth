@@ -113,16 +113,6 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
-      - name: Create verified lightweight update bundle
-        run: npm run dist:update
-        timeout-minutes: 5
-      - name: Test packaged update and terminal continuity
-        id: hot-update-smoke
-        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
-        run: node scripts/smoke-updates.mjs
-        timeout-minutes: 5
-        env:
-          DEBUG: pw:browser
       - name: Test installer progress, cancellation and upgrade
         id: installer-smoke
         run: ./scripts/test-installer.ps1
@@ -147,11 +137,10 @@ jobs:
         env:
           PACKAGED_WORKBENCH_RESULT: ${{ steps.packaged-smoke.outcome }}
           PACKAGED_FILES_RESULT: ${{ steps.packaged-files-smoke.outcome }}
-          HOT_UPDATE_RESULT: ${{ steps.hot-update-smoke.outcome }}
           INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
         run: |
-          $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.zip' -or $_.Name -like '*-update.json' }
-          if ($files.Count -ne 4) { throw 'Expected installer, full ZIP, update ZIP and update manifest' }
+          $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.zip' }
+          if ($files.Count -ne 2) { throw 'Expected one installer and one ZIP' }
           $checksums = $files | Sort-Object Name | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($_.Name)"
@@ -159,7 +148,7 @@ jobs:
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success') { 'success' } else { 'failure' }
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; hotUpdateSmoke = $env:HOT_UPDATE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
@@ -175,7 +164,6 @@ jobs:
           path: |
             release/*.exe
             release/*.zip
-            release/*-update.json
             release/SHA256SUMS.txt
             release/build-info.json
           if-no-files-found: error

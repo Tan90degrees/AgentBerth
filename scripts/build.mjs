@@ -14,9 +14,7 @@ export async function buildBackend() {
       sourcemap: true,
     });
   }
-  await build({ entryPoints: ['src/bootstrap/index.ts'], outfile: 'dist/bootstrap.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', external: ['electron','original-fs'] });
-  await build({ entryPoints: ['src/mcp/bootstrap.ts'], outfile: 'dist/mcp.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', external: ['original-fs'] });
-  await build({ entryPoints: ['src/mcp/index.ts'], outfile: 'dist/mcp-server.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', external: ['bufferutil', 'utf-8-validate'] });
+  await build({ entryPoints: ['src/mcp/index.ts'], outfile: 'dist/mcp.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', external: ['bufferutil', 'utf-8-validate'] });
   // Exported developer tooling must work outside this repository without npm install.
   await build({ entryPoints: ['src/plugin-check/index.ts'], outfile: 'dist/check-plugin.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', minify: true });
 }

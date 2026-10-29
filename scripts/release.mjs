@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { parseUpdateManifest, updateNames } from '../src/shared/update-format.mjs';
 
 const json = async file => JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, ''));
 async function digest(file) {
@@ -11,20 +10,13 @@ async function digest(file) {
   return hash.digest('hex');
 }
 export async function verifyRelease(root, directory, commit) {
-  const { version, build, agentberthUpdates, devDependencies } = await json(path.join(root, 'package.json'));
+  const { version, build } = await json(path.join(root, 'package.json'));
   const productName = build?.productName ?? 'AgentBerth';
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Release requires a stable numeric version');
   const info = await json(path.join(directory, 'build-info.json'));
   const failedSuite = info.packagedSuites !== undefined && (info.packagedSuites?.workbench !== 'success' || info.packagedSuites?.files !== 'success');
   if (info.version !== version || info.commit !== commit || info.packagedSmoke !== 'success' || failedSuite || info.installerSmoke !== 'success' || info.ref !== 'main') throw new Error('Package version, commit, main ref, installer or packaged smoke does not match this release');
   const names = [`${productName}-${version}-windows-x64-setup.exe`, `${productName}-${version}-windows-x64.zip`];
-  if (agentberthUpdates) {
-    if (agentberthUpdates.schema !== 1 || info.hotUpdateSmoke !== 'success') throw new Error('Hot update smoke does not match this release');
-    const updates = updateNames(version); names.push(updates.bundle, updates.manifest);
-    const manifest = parseUpdateManifest(await json(path.join(directory, updates.manifest)));
-    const bundle = path.join(directory, updates.bundle);
-    if (manifest.version !== version || manifest.minimumBackendApi !== agentberthUpdates.minimumBackendApi || manifest.electron !== devDependencies?.electron || manifest.bundle.size !== (await stat(bundle)).size || manifest.bundle.sha256 !== await digest(bundle)) throw new Error('Hot update package does not match this release');
-  }
   const checksums = new Map();
   for (const line of (await readFile(path.join(directory, 'SHA256SUMS.txt'), 'utf8')).replace(/^\uFEFF/, '').trim().split(/\r?\n/)) {
     const match = /^([a-f0-9]{64})  ([^/\\]+)$/.exec(line);

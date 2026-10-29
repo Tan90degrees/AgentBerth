@@ -4,11 +4,7 @@ import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
 import { legacyProfile } from './profile';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, safeStorage, screen, shell, Tray } from 'electron';
-import { AppUpdates } from './app-updates';
-import { extractUpdate } from './update-extract';
-import { cleanStorage, updateBoot, UpdateStore } from './update-files';
-import type { AppUpdateState, UpdateResume, UpdateWindow } from '../shared/updates';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, shell, Tray } from 'electron';
 import path from 'node:path';
 import { release } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -39,25 +35,14 @@ const terminalSubscriptions = new TerminalSubscriptions(async (method, sessionId
   if (!connection) throw new Error('后台连接已断开');
   return connection.rpc(method, { sessionId });
 });
-const boot = updateBoot();
-const resourceRoot = boot?.resources ?? (app.isPackaged ? path.dirname(path.dirname(__dirname)) : path.join(__dirname, '..'));
-const applicationVersion = boot?.version ?? JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
+const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
 const iconFile = path.join(resourceRoot, 'assets', process.platform === 'win32' ? 'app.ico' : 'app.png');
 if (!app.commandLine.hasSwitch('user-data-dir')) { const profile = legacyProfile(app.getPath('appData')); mkdirSync(profile, { recursive: true }); app.setPath('userData', profile); }
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
-const updateStore = new UpdateStore(dataDirectory);
-const appUpdates = new AppUpdates({ store: updateStore, version: applicationVersion, electron: process.versions.electron!, platform: process.platform, arch: process.arch, supported: app.isPackaged && process.platform === 'win32' && process.arch === 'x64', fetch: (url, options) => net.fetch(url, options), extract: extractUpdate, publish: publishUpdate });
-const initialResume = boot?.resume ?? null;
-let resumeStorage: Record<string,string> | null = initialResume?.storage ?? null;
-const restoredKinds = new Set<string>();
-let mainLoaded = false, backendSeen = false, bootConfirmed = false;
-let backendUpdateTimer: NodeJS.Timeout | null = null;
-let pendingSshChallenges = 0;
-let applyingUpdate = false;
 const sshVault = new SshVault(path.join(dataDirectory,'ssh-secrets.json'), safeStorage);
 if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must be an absolute path');
 
-if (!app.hasSingleInstanceLock() && !app.requestSingleInstanceLock()) app.quit();
+if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', showWindow);
   app.on('before-quit', event => { if (!quitReady) { event.preventDefault(); void quitApplication(); } });
@@ -67,7 +52,6 @@ else {
     mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
     if (process.platform === 'win32') app.setAppUserModelId('dev.agentberth.desktop');
     createWindow();
-    if (initialResume?.ssh) { sshWindowSession = initialResume.sshSession; void openSshWindow(); }
     const icon = nativeImage.createFromPath(iconFile);
     if (icon.isEmpty()) throw new Error('应用图标资源未正确打包');
     tray = new Tray(iconFile);
@@ -79,9 +63,6 @@ else {
     ]));
     tray.on('double-click', showWindow);
     try { await reconnect(); } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
-    const check = async () => { if (appUpdates.state().automatic && !quitting) { const value = await appUpdates.check(); if (value.phase === 'available' && value.automatic) await appUpdates.download(); } };
-    const initialCheck = setTimeout(() => void check(), 15000); initialCheck.unref();
-    const checks = setInterval(() => void check(), 6 * 60 * 60 * 1000); checks.unref();
   });
 }
 
@@ -113,7 +94,6 @@ function quitApplication(): Promise<void> {
 async function answerSshChallenge(challenge: SshChallenge): Promise<void> {
   const provider = connection;
   if (!provider) return;
-  pendingSshChallenges++;
   try {
     if (challenge.kind === 'credentials') {
       await provider.rpc('sshChallengeReply', { challengeId: challenge.id, secret: sshVault.get(challenge.connectionId) });
@@ -123,7 +103,6 @@ async function answerSshChallenge(challenge: SshChallenge): Promise<void> {
       await provider.rpc('sshChallengeReply', { challengeId: challenge.id, accepted: result.response === 1 });
     }
   } catch { await provider.rpc('sshChallengeReply', { challengeId: challenge.id, accepted: false }).catch(() => {}); }
-  finally { pendingSshChallenges--; }
 }
 async function registerSshProvider(): Promise<void> {
   const state = await connection!.rpc<import('../shared/protocol').State>('state');
@@ -131,7 +110,7 @@ async function registerSshProvider(): Promise<void> {
 }
 function emit(event: ServerEvent) {
   if (event.event === 'sshChallenge') { void answerSshChallenge(event.data); return; }
-  if (event.event === 'state') { remoteSessionIds = new Set(event.data.sessions.filter(session => session.remote).map(session => session.id)); backendSeen = true; confirmUpdateBoot(); scheduleBackendUpdate(); }
+  if (event.event === 'state') remoteSessionIds = new Set(event.data.sessions.filter(session => session.remote).map(session => session.id));
   for (const target of [window, sshWindow]) {
     if (!target || target.isDestroyed()) continue;
     const visible = target.isVisible() && !target.isMinimized();
@@ -187,112 +166,23 @@ async function openSshWindow() {
   if (sshWindow && !sshWindow.isDestroyed()) { if (sshWindow.isMinimized()) sshWindow.restore(); sshWindow.show(); sshWindow.focus(); return; }
   const target = new BrowserWindow({ width: 1100, height: 700, minWidth: 640, minHeight: 360, title: 'AgentBerth · SSH', icon: iconFile, show: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   sshWindow = target;
-  const resume = initialResume?.ssh && !restoredKinds.has('ssh') ? initialResume.ssh : null;
-  if (resume) restoreWindow(target, resume);
   publishSshWindow();
-  target.once('ready-to-show', () => showUpdatedWindow(target, resume, true));
+  target.once('ready-to-show', () => { if (!quitting) { target.show(); target.focus(); } });
   target.on('closed', () => { if (sshWindow === target) { sshWindow = null; publishSshWindow(); if (!quitting) showWindow(); } });
   try { await secureWindow(target, true); }
   catch (error) { if (!target.isDestroyed()) target.destroy(); throw error; }
 }
 function createWindow() {
   window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, show: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  const resume = initialResume?.main && !restoredKinds.has('main') ? initialResume.main : null;
-  if (resume) restoreWindow(window, resume);
-  window.once('ready-to-show',()=>{if(window)showUpdatedWindow(window,resume,false);});
+  window.once('ready-to-show',()=>{if(!quitting)window?.show();});
   window.on('close', event => { if (!quitReady) { event.preventDefault(); window?.hide(); } });
   window.on('closed', () => { window = null; });
   void secureWindow(window);
 }
 
-function trusted(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): void {
+function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (![window, sshWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问本地接口');
 }
-function publishUpdate(value: AppUpdateState) { for (const target of [window, sshWindow]) if (target && !target.isDestroyed()) target.webContents.send('berth:updates', value); }
-function captureWindow(target: BrowserWindow | null): UpdateWindow | null { return target && !target.isDestroyed() ? { bounds: target.getNormalBounds(), maximized: target.isMaximized(), minimized: target.isMinimized(), visible: target.isVisible() } : null; }
-function restoreWindow(target: BrowserWindow, saved: UpdateWindow) {
-  const b = saved?.bounds;
-  if (!b || ![b.x,b.y,b.width,b.height].every(Number.isFinite) || b.width < 100 || b.height < 100 || b.width > 20000 || b.height > 20000) return;
-  const visible = screen.getAllDisplays().some(({ workArea: a }) => b.x + b.width > a.x + 40 && b.y + b.height > a.y + 40 && b.x < a.x + a.width - 40 && b.y < a.y + a.height - 40);
-  target.setBounds(visible ? b : { width: b.width, height: b.height });
-}
-function showUpdatedWindow(target: BrowserWindow, saved: UpdateWindow | null, detached: boolean) {
-  if (quitting) return;
-  if (saved?.maximized) target.maximize();
-  if (saved?.visible !== false) { if (saved && detached) target.showInactive(); else target.show(); }
-  if (saved?.minimized) target.minimize();
-}
-function confirmUpdateBoot() {
-  if (bootConfirmed || !mainLoaded || !backendSeen) return;
-  bootConfirmed = true;
-  const state = updateStore.read(); if (state.pending || state.resume) updateStore.confirm();
-  scheduleBackendUpdate();
-}
-function scheduleBackendUpdate(delay = 1000) {
-  if (!bootConfirmed || quitting || backendUpdateTimer || !updateStore.read().backendPending) return;
-  backendUpdateTimer = setTimeout(async () => {
-    backendUpdateTimer = null;
-    if (quitting || !connection?.connected || !updateStore.read().backendPending) return;
-    if (connecting || restarting) { scheduleBackendUpdate(1000); return; }
-    try {
-      const state = await connection.rpc<import('../shared/protocol').State>('state');
-      if (state.sessions.some(s => ['running','stopping'].includes(s.latestRun?.status ?? ''))) return;
-      await restartBackend(); appUpdates.backendApplied();
-    } catch { scheduleBackendUpdate(30000); }
-  }, delay); backendUpdateTimer.unref();
-}
-ipcMain.on('berth:updatePreferences', event => {
-  try {
-    trusted(event); const kind = event.sender === sshWindow?.webContents ? 'ssh' : 'main';
-    event.returnValue = !restoredKinds.has(kind) && resumeStorage && (kind === 'main' || initialResume?.ssh) ? cleanStorage(resumeStorage) : null;
-    restoredKinds.add(kind);
-    if (restoredKinds.has('main') && (!initialResume?.ssh || restoredKinds.has('ssh'))) resumeStorage = null;
-  } catch { event.returnValue = null; }
-});
-ipcMain.handle('berth:updateReady', event => { trusted(event); if (event.sender === window?.webContents) { mainLoaded = true; confirmUpdateBoot(); } });
-ipcMain.handle('berth:updates', async (event, request: unknown) => {
-  trusted(event);
-  if (!request || typeof request !== 'object' || !('action' in request) || typeof request.action !== 'string' || !['state','check','download','cancel','apply','automatic'].includes(request.action)) throw new Error('更新操作无效');
-  const args = request as { action: string; automatic?: unknown; storage?: unknown };
-  if (args.action === 'state') return appUpdates.state();
-  if (quitting || applyingUpdate) throw new Error('应用正在退出或更新');
-  if (args.action === 'check') return appUpdates.check();
-  if (args.action === 'download') return appUpdates.download();
-  if (args.action === 'cancel') return appUpdates.cancel();
-  if (args.action === 'automatic') { if (typeof args.automatic !== 'boolean') throw new Error('更新设置无效'); return appUpdates.automatic(args.automatic); }
-  applyingUpdate = true;
-  try {
-    if (pendingSshChallenges) throw new Error('请先完成 SSH 登录或指纹确认，再应用更新');
-    const storage = cleanStorage(args.storage);
-    if (connecting) await connecting;
-    if (!connection?.connected) throw new Error('请恢复后台连接后再应用更新');
-    const state = await connection.rpc<import('../shared/protocol').State>('state');
-    const active = state.sessions.some(s => ['running','stopping'].includes(s.latestRun?.status ?? ''));
-    if (appUpdates.needsIdleBackend(state.apiVersion) && active) throw new Error('此版本需要同时更新后台，请等终端结束后应用，更新包已保留。');
-    const resume: UpdateResume = { storage, main: captureWindow(window), ssh: captureWindow(sshWindow), sshSession: sshWindowSession };
-    let activated = false;
-    try {
-      await importingPlugins.close();
-      if (pendingSshChallenges) throw new Error('请先完成 SSH 登录或指纹确认，再应用更新');
-      if (appUpdates.needsIdleBackend(state.apiVersion)) { restarting = true; await stopIdleDaemon(dataDirectory); connection.close(true); connection = null; }
-      appUpdates.prepare(resume, { apiVersion: state.apiVersion, active }); activated = true;
-      // This is a UI relaunch only. The normal tray Quit path still shuts down
-      // the daemon; update never calls shutdownDaemon for live terminals.
-      quitting = true; quitReady = true;
-      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-      if (backendUpdateTimer) { clearTimeout(backendUpdateTimer); backendUpdateTimer = null; }
-      connection?.close(true); connection = null;
-      app.relaunch(); tray?.destroy(); tray = null;
-      setTimeout(() => app.exit(0), 80);
-      return appUpdates.state();
-    } catch (error) {
-      if (activated) { updateStore.rollback('应用更新未完成，原版本仍在运行。'); appUpdates.applyFailed(); }
-      quitting = false; quitReady = false; restarting = false; importingPlugins = new AgentPlugins();
-      if (!connection?.connected) void reconnect().catch(() => {});
-      throw error;
-    }
-  } finally { applyingUpdate = false; }
-});
 ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unknown) => {
   trusted(event);
   if (quitting || typeof action !== 'string' || !['state','open','dock','select'].includes(action)) throw new Error('SSH 窗口操作无效');
@@ -390,9 +280,6 @@ ipcMain.handle('berth:openProject', async (event, folder: string) => {
 ipcMain.handle('berth:reconnect', async event => { trusted(event); if (!connection) await reconnect(); });
 ipcMain.handle('berth:restart', async event => {
   trusted(event);
-  await restartBackend(); appUpdates.backendApplied();
-});
-async function restartBackend(): Promise<void> {
   if (connecting) await connecting;
   restarting = true;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -406,7 +293,7 @@ async function restartBackend(): Promise<void> {
   })().finally(() => { connecting = null; restarting = false; });
   try { await connecting; }
   catch (error) { if (!connection?.connected) { connection = null; emit({ event: 'connection', data: { connected: false, error: String(error) } }); } throw error; }
-}
+});
 
 ipcMain.handle('berth:importPlugin', async event => {
   trusted(event);
@@ -427,7 +314,7 @@ ipcMain.handle('berth:pluginPrompt', async (event, folder?: string) => {
 
 ipcMain.handle('berth:appInfo', event => {
   trusted(event);
-  return { version: applicationVersion, platform: process.platform, arch: process.arch, osRelease: release(), electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged };
+  return { version: app.getVersion(), platform: process.platform, arch: process.arch, osRelease: release(), electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged };
 });
 ipcMain.handle('berth:dataDirectory', async event => {
   trusted(event);

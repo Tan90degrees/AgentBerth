@@ -1,11 +1,11 @@
 {
   "name": "agentberth",
-  "version": "0.16.0",
+  "version": "0.15.2",
   "private": true,
   "type": "module",
   "description": "A project workspace for persistent terminals, agents, files and history",
   "license": "Apache-2.0",
-  "main": "dist/bootstrap.cjs",
+  "main": "dist/main.cjs",
   "engines": {
     "node": ">=24"
   },
@@ -22,8 +22,7 @@
     "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "check": "npm run typecheck && npm test && npm run build",
     "dist:win": "npm run build && electron-builder --win nsis zip --x64 --publish never",
-    "test:files": "npm run build && node scripts/smoke-files.mjs",
-    "dist:update": "node scripts/create-update.mjs"
+    "test:files": "npm run build && node scripts/smoke-files.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
@@ -67,7 +66,6 @@
       "output": "release"
     },
     "files": [
-      "dist/bootstrap.cjs",
       "dist/main.cjs",
       "dist/preload.cjs",
       "dist/daemon.cjs",
@@ -118,15 +116,7 @@
       {
         "from": "dist/mcp.cjs",
         "to": "mcp/mcp.cjs"
-      },
-      {
-        "from": "dist/mcp-server.cjs",
-        "to": "mcp/server.cjs"
       }
     ]
-  },
-  "agentberthUpdates": {
-    "schema": 1,
-    "minimumBackendApi": 35
   }
 }

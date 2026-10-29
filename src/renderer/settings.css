@@ -89,5 +89,3 @@ button[data-feedback=error]::after { content:'!'; font-weight:700; line-height:1
 
 .settings-entry .skill-manager { min-width:0; max-width:100%; }
 .skill-manager > .form-hint { max-width:68ch; white-space:normal; }
-
-.app-update-progress{display:flex;align-items:center;gap:12px;margin:12px 0}.app-update-progress progress{flex:1;min-width:80px}.app-update-progress span{font-variant-numeric:tabular-nums;white-space:nowrap}.update-notes{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;font:inherit;color:var(--text-muted)}.app-update-notice{flex-shrink:0;font-size:12px}

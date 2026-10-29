@@ -52,15 +52,14 @@
 
 | 文件 | 使用方式 |
 |---|---|
-| `AgentBerth-0.16.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `AgentBerth-0.16.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
-| `AgentBerth-0.16.0-windows-x64-update.zip` / `-update.json` | 软件内更新使用的资源包与清单，无需手动解压 |
-| `SHA256SUMS.txt` | 安装包、完整 ZIP、更新包和清单的 SHA-256 校验值 |
+| `AgentBerth-0.15.2-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.15.2-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
-软件包自带 Electron、Node 运行时和 `node-pty`，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code / OpenCode 需在本机单独安装、配置，并能从所选 Shell 的 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。使用完整安装包替换运行环境时，先停止全部后台任务；日常代码更新可直接在软件内应用并保留运行任务，后台在空闲后自动更新。0.1 数据会自动迁移并保留。
+软件包自带 Electron、Node 运行时和 `node-pty`，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code / OpenCode 需在本机单独安装、配置，并能从所选 Shell 的 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。升级前停止全部后台任务；安装新版后通过提示或 **设置 → 后台服务 → 更新后台** 加载新后台，0.1 数据会自动迁移并保留。
 
-第一版软件包没有代码签名，Windows 可能显示“未知发布者”。正常包应对应成功的 Windows 打包任务且 `build-info.json` 中 `packagedSmoke` 为 `success`；新构建还在 `packagedSuites` 中分别记录工作台与文件预览/Git 测试结果，两组均通过才标记验证成功。v0.16.0 起还要求 `hotUpdateSmoke` 为 `success`。若测试失败，构建产物会保留供排查，但不代表已验证可用。
+第一版软件包没有代码签名，Windows 可能显示“未知发布者”。正常包应对应成功的 Windows 打包任务且 `build-info.json` 中 `packagedSmoke` 为 `success`；新构建还在 `packagedSuites` 中分别记录工作台与文件预览/Git 测试结果，两组均通过才标记验证成功。若测试失败，构建产物会保留供排查，但不代表已验证可用。
 
 ## 开发环境与启动
 
@@ -291,9 +290,3 @@ MCP 设置可查看本次后台的调用次数和成功率；工具支持在已�
 - 文件预览支持最多 20 个可关闭标签，切换保留滚动位置、语言和 Markdown 模式；项目切换／重开恢复打开路径，内容按需读取。终端继续运行，字体仍统一放在全局设置。
 - 「设置 → Skills」与已有 Agent 类型共用插件。原配置或脚本声明可选 `skills.project` / `skills.user` 后，可导入完整 SKILL.md 文件夹、编辑说明、启停和移除；无需第二份插件或手填目录。停用和移除保留文件在加载目录同级位置，Agent 是否即时发现变更取决于其实现。
 - 后台新增能力为 API 35；原有四工具 MCP 继续兼容 API 34。安装后更新空闲后台以使用自动关联与新插件字段。
-
-### 软件内更新
-
-设置 → 关于 → 软件更新：默认自动检查并后台下载，也可手动检查、下载或取消。更新就绪后点“立即更新”，界面自动重载并接回原来的终端，主窗口和独立 SSH 窗口布局一并恢复。后台代码等全部终端结束后再自动切换，当前任务不会被停止。
-
-第一次需要安装 v0.16.0 或更高版本以启用更新启动器。软件内更新目前支持 Windows x64 安装版和 ZIP 版；涉及 Electron 运行环境变化时需要完整安装包。更新包会校验 SHA-256 和文件清单，新界面启动失败会回退。托盘“退出”仍会停止全部终端。
