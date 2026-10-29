@@ -126,6 +126,7 @@
     ]
   },
   "agentberthUpdates": {
-    "schema": 1
+    "schema": 1,
+    "minimumBackendApi": 35
   }
 }

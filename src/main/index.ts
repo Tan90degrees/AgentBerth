@@ -53,6 +53,7 @@ const restoredKinds = new Set<string>();
 let mainLoaded = false, backendSeen = false, bootConfirmed = false;
 let backendUpdateTimer: NodeJS.Timeout | null = null;
 let pendingSshChallenges = 0;
+let applyingUpdate = false;
 const sshVault = new SshVault(path.join(dataDirectory,'ssh-secrets.json'), safeStorage);
 if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must be an absolute path');
 
@@ -254,39 +255,43 @@ ipcMain.handle('berth:updates', async (event, request: unknown) => {
   if (!request || typeof request !== 'object' || !('action' in request) || typeof request.action !== 'string' || !['state','check','download','cancel','apply','automatic'].includes(request.action)) throw new Error('更新操作无效');
   const args = request as { action: string; automatic?: unknown; storage?: unknown };
   if (args.action === 'state') return appUpdates.state();
-  if (quitting) throw new Error('应用正在退出或更新');
+  if (quitting || applyingUpdate) throw new Error('应用正在退出或更新');
   if (args.action === 'check') return appUpdates.check();
   if (args.action === 'download') return appUpdates.download();
   if (args.action === 'cancel') return appUpdates.cancel();
   if (args.action === 'automatic') { if (typeof args.automatic !== 'boolean') throw new Error('更新设置无效'); return appUpdates.automatic(args.automatic); }
-  if (pendingSshChallenges) throw new Error('请先完成 SSH 登录或指纹确认，再应用更新');
-  const storage = cleanStorage(args.storage);
-  if (connecting) await connecting;
-  if (!connection?.connected) throw new Error('请恢复后台连接后再应用更新');
-  const state = await connection.rpc<import('../shared/protocol').State>('state');
-  const active = state.sessions.some(s => ['running','stopping'].includes(s.latestRun?.status ?? ''));
-  if (appUpdates.needsIdleBackend(state.apiVersion) && active) throw new Error('此版本需要同时更新后台，请等终端结束后应用，更新包已保留。');
-  const resume: UpdateResume = { storage, main: captureWindow(window), ssh: captureWindow(sshWindow), sshSession: sshWindowSession };
-  let activated = false;
+  applyingUpdate = true;
   try {
-    await importingPlugins.close();
-    if (appUpdates.needsIdleBackend(state.apiVersion)) { restarting = true; await stopIdleDaemon(dataDirectory); connection.close(true); connection = null; }
-    appUpdates.prepare(resume, { apiVersion: state.apiVersion, active }); activated = true;
-    // This is a UI relaunch only. The normal tray Quit path still shuts down
-    // the daemon; update never calls shutdownDaemon for live terminals.
-    quitting = true; quitReady = true;
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    if (backendUpdateTimer) { clearTimeout(backendUpdateTimer); backendUpdateTimer = null; }
-    connection?.close(true); connection = null;
-    app.relaunch(); tray?.destroy(); tray = null;
-    setTimeout(() => app.exit(0), 80);
-    return appUpdates.state();
-  } catch (error) {
-    if (activated) { updateStore.rollback('应用更新未完成，原版本仍在运行。'); appUpdates.applyFailed(); }
-    quitting = false; quitReady = false; restarting = false; importingPlugins = new AgentPlugins();
-    if (!connection?.connected) void reconnect().catch(() => {});
-    throw error;
-  }
+    if (pendingSshChallenges) throw new Error('请先完成 SSH 登录或指纹确认，再应用更新');
+    const storage = cleanStorage(args.storage);
+    if (connecting) await connecting;
+    if (!connection?.connected) throw new Error('请恢复后台连接后再应用更新');
+    const state = await connection.rpc<import('../shared/protocol').State>('state');
+    const active = state.sessions.some(s => ['running','stopping'].includes(s.latestRun?.status ?? ''));
+    if (appUpdates.needsIdleBackend(state.apiVersion) && active) throw new Error('此版本需要同时更新后台，请等终端结束后应用，更新包已保留。');
+    const resume: UpdateResume = { storage, main: captureWindow(window), ssh: captureWindow(sshWindow), sshSession: sshWindowSession };
+    let activated = false;
+    try {
+      await importingPlugins.close();
+      if (pendingSshChallenges) throw new Error('请先完成 SSH 登录或指纹确认，再应用更新');
+      if (appUpdates.needsIdleBackend(state.apiVersion)) { restarting = true; await stopIdleDaemon(dataDirectory); connection.close(true); connection = null; }
+      appUpdates.prepare(resume, { apiVersion: state.apiVersion, active }); activated = true;
+      // This is a UI relaunch only. The normal tray Quit path still shuts down
+      // the daemon; update never calls shutdownDaemon for live terminals.
+      quitting = true; quitReady = true;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (backendUpdateTimer) { clearTimeout(backendUpdateTimer); backendUpdateTimer = null; }
+      connection?.close(true); connection = null;
+      app.relaunch(); tray?.destroy(); tray = null;
+      setTimeout(() => app.exit(0), 80);
+      return appUpdates.state();
+    } catch (error) {
+      if (activated) { updateStore.rollback('应用更新未完成，原版本仍在运行。'); appUpdates.applyFailed(); }
+      quitting = false; quitReady = false; restarting = false; importingPlugins = new AgentPlugins();
+      if (!connection?.connected) void reconnect().catch(() => {});
+      throw error;
+    }
+  } finally { applyingUpdate = false; }
 });
 ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unknown) => {
   trusted(event);

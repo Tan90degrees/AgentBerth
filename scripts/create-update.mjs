@@ -25,7 +25,7 @@ export async function createUpdate(root, resources, output, overrides = {}) {
   try {
     await execute(process.env.PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3'), ['-I', '-c', zipScript, path.resolve(resources), path.resolve(archive), path.resolve(temporary)], { timeout: 300000, maxBuffer: 1024 * 1024, windowsHide: true });
     const hash = createHash('sha256'); for await (const chunk of createReadStream(archive)) hash.update(chunk);
-    const manifest = parseUpdateManifest({ schema: 1, bootstrap: 1, version, electron: pkg.devDependencies.electron, platform: 'win32', arch: 'x64', protocol: Number(/PROTOCOL_VERSION\s*=\s*(\d+)/.exec(protocol)?.[1]), minimumBackendApi: overrides.minimumBackendApi ?? Number(/API_VERSION\s*=\s*(\d+)/.exec(protocol)?.[1]), bundle: { name: names.bundle, size: (await stat(archive)).size, sha256: hash.digest('hex') }, files });
+    const manifest = parseUpdateManifest({ schema: 1, bootstrap: 1, version, electron: pkg.devDependencies.electron, platform: 'win32', arch: 'x64', protocol: Number(/PROTOCOL_VERSION\s*=\s*(\d+)/.exec(protocol)?.[1]), minimumBackendApi: overrides.minimumBackendApi ?? pkg.agentberthUpdates?.minimumBackendApi ?? Number(/API_VERSION\s*=\s*(\d+)/.exec(protocol)?.[1]), bundle: { name: names.bundle, size: (await stat(archive)).size, sha256: hash.digest('hex') }, files });
     await writeFile(path.join(output, names.manifest), JSON.stringify(manifest, null, 2) + '\n');
     return manifest;
   } catch (error) { await rm(archive, { force: true }); throw error; }

@@ -1,10 +1,11 @@
 import { _electron as electron } from 'playwright';
-import { Server } from 'ssh2';
+import ssh2 from 'ssh2';
+const { Server } = ssh2;
 import { generateKeyPairSync } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, cp, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createUpdate } from './create-update.mjs';
@@ -15,7 +16,9 @@ const root = process.cwd(), executablePath = path.resolve('release/win-unpacked/
 const current = JSON.parse(await readFile('package.json','utf8')).version;
 const next = current.split('.').map(Number); next[2]++; const version = next.join('.');
 const output = path.join(folder,'updates'), data = path.join(folder,'data'), stateFile = path.join(data,'app-updates/state.json');
-const manifest = await createUpdate(root,path.resolve('release/win-unpacked/resources'),output,{version});
+const fixtureResources=path.join(folder,'resources');await cp(path.resolve('release/win-unpacked/resources'),fixtureResources,{recursive:true});
+await appendFile(path.join(fixtureResources,'mcp/server.cjs'),'\nprocess.stderr.write("UPDATE_MCP_FIXTURE_LOADED\\n");\n');
+const manifest = await createUpdate(root,fixtureResources,output,{version});
 const names = updateNames(version), prefix = `https://github.com/${RELEASE_REPOSITORY}/releases/download/v${version}/`;
 const manifestBytes = await readFile(path.join(output,names.manifest));
 const release = {tag_name:'v'+version,draft:false,prerelease:false,body:'Controlled packaged update fixture',assets:[{name:names.bundle,size:manifest.bundle.size},{name:names.manifest,size:manifestBytes.length}].map(a=>({...a,state:'uploaded',browser_download_url:prefix+a.name}))};
@@ -37,9 +40,9 @@ async function eventually(check,message,ms=20000){const until=Date.now()+ms;whil
 async function launch(){application=await electron.launch({executablePath,args,env,timeout:20000});page=await application.firstWindow();page.setDefaultTimeout(15000);await page.waitForFunction(()=>!!window.berth);await eventually(()=>page.evaluate(()=>window.berth.rpc('state').then(s=>s.apiVersion>=35)),'backend did not connect');return application;}
 const runtime=async()=>JSON.parse(await readFile(path.join(data,'runtime.json'),'utf8'));
 function mcpClient(config){
- const child=spawn(config.command,config.args,{env:{...env,...config.env},windowsHide:true,stdio:['pipe','pipe','pipe']});child.stderr.resume();let seq=0;const pending=new Map();
+ const child=spawn(config.command,config.args,{env:{...env,...config.env},windowsHide:true,stdio:['pipe','pipe','pipe']});let stderr='';child.stderr.on('data',bytes=>{stderr+=bytes.toString();});let seq=0;const pending=new Map();
  createInterface({input:child.stdout}).on('line',line=>{const reply=JSON.parse(line);const p=pending.get(reply.id);if(p){clearTimeout(p.timer);pending.delete(reply.id);reply.error?p.reject(new Error(reply.error.message)):p.resolve(reply.result);}});
- return {child,call(method,params={}){return new Promise((resolve,reject)=>{const id=++seq,timer=setTimeout(()=>{pending.delete(id);reject(new Error('MCP fixture timed out'));},10000);pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});},close(){child.stdin.end();}};
+ return {child,get stderr(){return stderr;},call(method,params={}){return new Promise((resolve,reject)=>{const id=++seq,timer=setTimeout(()=>{pending.delete(id);reject(new Error('MCP fixture timed out'));},10000);pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});},close(){child.stdin.end();}};
 }
 try{
  step('launch packaged runtime, persistent local PTY, real SSH and detached window');
@@ -57,7 +60,7 @@ try{
  await application.evaluate(({BrowserWindow})=>{const main=BrowserWindow.getAllWindows().find(w=>!w.webContents.getURL().includes('view=ssh'));const ssh=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('view=ssh'));main.setBounds({x:40,y:45,width:1060,height:740});ssh.setBounds({x:100,y:100,width:760,height:480});});
  const before=await runtime();
  const config=JSON.parse(await page.evaluate(()=>window.berth.mcpConfig())).mcpServers.agentberth;
- mcp=mcpClient(config);assert.equal((await mcp.call('tools/list')).tools.length,4);
+ mcp=mcpClient(config);assert.equal((await mcp.call('tools/list')).tools.length,4);assert.ok(!(await mcp.call('tools/call',{name:'terminal_session',arguments:{}})).isError);
  // Stub only OS relaunch spawning so Playwright can attach to the next process.
  // Activation, UI exit, original bootstrap, native ZIP extraction and PTY/SSH
  // survival all run through production code in actual packaged Electron.
@@ -66,14 +69,20 @@ try{
    net.fetch=async url=>url===releaseApi?Response.json(release):url===prefix+manifestName?new Response(fs.readFileSync(manifest)):url===prefix+bundleName?new Response(fs.readFileSync(archive)):new Response('',{status:404});
    app.relaunch=()=>fs.writeFileSync(marker,'requested');
  },{release,manifest:path.join(output,names.manifest),archive:path.join(output,names.bundle),releaseApi:RELEASE_API,prefix,manifestName:names.manifest,bundleName:names.bundle,marker:path.join(folder,'relaunch')});
- assert.equal((await page.evaluate(()=>window.berth.updates('check'))).phase,'available');
- const downloaded=await page.evaluate(()=>window.berth.updates('download'));assert.equal(downloaded.phase,'ready',downloaded.message);
+ await page.getByRole('button',{name:'设置',exact:true}).click();
+ await page.getByRole('navigation',{name:'设置分类',exact:true}).getByRole('button',{name:'关于与支持',exact:true}).click();
+ await page.getByRole('button',{name:'检查更新',exact:true}).click();
+ await page.getByRole('button',{name:'下载更新',exact:true}).waitFor();
+ await page.getByRole('button',{name:'下载更新',exact:true}).click();
+ await eventually(()=>page.evaluate(()=>window.berth.updates('state').then(s=>s.phase==='ready')),'update did not become ready');
+ await page.getByRole('button',{name:'立即更新（终端继续运行）',exact:true}).waitFor();
+ await mkdir('test-results',{recursive:true});await page.screenshot({animations:'disabled',path:'test-results/packaged-software-update-ready.png'});
  await page.evaluate(({project,session})=>{localStorage.setItem('berth.project',project);localStorage.setItem('berth.session',session);localStorage.setItem('berth.updateFixture','preserved');},{project:project.id,session:session.id});
  step('activate verified bundle and relaunch only the UI; keep daemon, PTY, SSH and MCP alive');
  const exiting=new Promise(resolve=>application.process().once('exit',resolve));
- await page.evaluate(()=>window.berth.updates('apply'));await exiting;application=null;
+ await page.getByRole('button',{name:'立即更新（终端继续运行）',exact:true}).click();await exiting;application=null;
  assert.equal(await readFile(path.join(folder,'relaunch'),'utf8'),'requested');assert.equal((await runtime()).pid,before.pid);
- assert.equal((await mcp.call('tools/list')).tools.length,4);assert.equal(logins,1);assert.equal(shells,1);
+ assert.equal((await mcp.call('tools/list')).tools.length,4);assert.ok(!(await mcp.call('tools/call',{name:'terminal_session',arguments:{}})).isError);assert.equal(logins,1);assert.equal(shells,1);
  await launch();
  assert.equal((await page.evaluate(()=>window.berth.appInfo())).version,version);
  assert.ok(decodeURIComponent(page.url()).replaceAll('\\','/').includes('/app-updates/versions/'+version+'/app.asar/'),'renderer is loaded from the new version directory');
@@ -90,8 +99,8 @@ try{
  await eventually(()=>page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}).then(a=>a.snapshot.includes('LOCAL_AFTER_UPDATE')),session.id),'PTY input/output did not continue');
  assert.equal(logins,1);assert.equal(shells,1);assert.equal((await page.evaluate(()=>window.berth.updates('state'))).backendPending,true);
  assert.deepEqual(JSON.parse(await page.evaluate(()=>window.berth.mcpConfig())).mcpServers.agentberth,config);
- mcp2=mcpClient(config);assert.equal((await mcp2.call('tools/list')).tools.length,4);
  await eventually(async()=>JSON.parse(await readFile(stateFile,'utf8')).pending===false,'renderer did not confirm startup');
+ mcp2=mcpClient(config);assert.equal((await mcp2.call('tools/list')).tools.length,4);assert.ok(!(await mcp2.call('tools/call',{name:'terminal_session',arguments:{}})).isError);await eventually(()=>mcp2.stderr.includes('UPDATE_MCP_FIXTURE_LOADED'),'stable MCP bootstrap did not load the confirmed update');
  step('defer backend update until both terminals end; normal Quit still stops all terminals');
  await page.evaluate(id=>window.berth.rpc('stop',{sessionId:id}),remote.sessionId);await page.evaluate(id=>window.berth.rpc('stop',{sessionId:id}),session.id);
  await eventually(async()=>(await runtime()).pid!==before.pid,'idle backend was not upgraded');
@@ -100,7 +109,12 @@ try{
  const finalRuntime=await runtime(); const quit=new Promise(resolve=>application.process().once('exit',resolve));await application.evaluate(({app})=>app.quit());await quit;application=null;
  await eventually(async()=>{try{process.kill(finalRuntime.pid,0);return false;}catch{return true;}},'normal Quit left the daemon alive');
  await eventually(async()=>{try{process.kill(last.pid,0);return false;}catch{return true;}},'normal Quit left a local terminal alive');
- step('passed: code bundle, native extraction, window restoration, live PTY/SSH/MCP and idle backend replacement');
+ step('boot an unconfirmed attempted update and verify rollback to installed code');
+ const disk=JSON.parse(await readFile(stateFile,'utf8'));await writeFile(stateFile,JSON.stringify({...disk,active:version,previous:null,pending:true,attempted:true,backendPending:true,previousBackendPending:false}));
+ await launch();assert.equal((await page.evaluate(()=>window.berth.appInfo())).version,current);
+ assert.match((await page.evaluate(()=>window.berth.updates('state'))).message,/恢复/);
+ const rollbackQuit=new Promise(resolve=>application.process().once('exit',resolve));await application.evaluate(({app})=>app.quit());await rollbackQuit;application=null;
+ step('passed: code bundle, native extraction, window restoration, live PTY/SSH/MCP, idle backend replacement and rollback');
 }finally{
  mcp?.close();mcp2?.close();if(application)await application.close().catch(()=>{});
  for(const client of clients)client.end();await new Promise(resolve=>ssh.close(resolve));

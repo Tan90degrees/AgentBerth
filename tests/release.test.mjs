@@ -186,7 +186,7 @@ test('hot update releases require smoke success, both extra assets and verified 
   await mkdir(path.join(resources,'mcp'),{ recursive:true }); await mkdir(path.join(f.root,'src/shared'),{ recursive:true });
   await writeFile(path.join(resources,'app.asar'),'archive'); await writeFile(path.join(resources,'mcp/server.cjs'),'module.exports={}');
   await writeFile(path.join(f.root,'src/shared/protocol.ts'),'export const PROTOCOL_VERSION = 1; export const API_VERSION = 35;');
-  await writeFile(path.join(f.root,'package.json'),JSON.stringify({ version:'0.8.0',agentberthUpdates:{schema:1},devDependencies:{electron:'44.7.0'} }));
+  await writeFile(path.join(f.root,'package.json'),JSON.stringify({ version:'0.8.0',agentberthUpdates:{schema:1,minimumBackendApi:35},devDependencies:{electron:'44.7.0'} }));
   const { createUpdate } = await import('../scripts/create-update.mjs');
   const manifest = await createUpdate(f.root,resources,f.directory);
   const { updateNames } = await import('../src/shared/update-format.mjs'); const names = updateNames('0.8.0');

@@ -21,7 +21,7 @@ function fixture(t: any) {
   const names = updateNames('0.16.1'), base = `https://github.com/${RELEASE_REPOSITORY}/releases/download/v0.16.1/`;
   const release = { tag_name: 'v0.16.1', draft: false, prerelease: false, assets: [names.bundle,names.manifest].map(name => ({ name, state: 'uploaded', size: name.endsWith('.zip') ? archive.length : 1024, browser_download_url: base + name })) };
   const calls: string[] = []; let download = archive, fail = false;
-  const manager = () => new AppUpdates({ store, ...runtime, version: '0.16.0', supported: true, publish() {}, fetch: async url => { calls.push(url); if (fail) throw new Error('offline'); return url === RELEASE_API ? Response.json(release) : url.endsWith('.json') ? Response.json(manifest()) : new Response(new Uint8Array(download)); }, extract: async (_zip, destination) => { for (const f of files) { const target = path.join(destination, f.path); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, f.data); } } });
+  const manager = (stream?: ReadableStream<Uint8Array>) => new AppUpdates({ store, ...runtime, version: '0.16.0', supported: true, publish() {}, fetch: async url => { calls.push(url); if (fail) throw new Error('offline'); return url === RELEASE_API ? Response.json(release) : url.endsWith('.json') ? Response.json(manifest()) : new Response(stream ?? new Uint8Array(download)); }, extract: async (_zip, destination) => { for (const f of files) { const target = path.join(destination, f.path); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, f.data); } } });
   return { root, store, archive, files, manifest, write, release, calls, manager, corrupt() { download = Buffer.from('bad'); }, offline() { fail = true; } };
 }
 test('update metadata enforces stable versions, portable paths, official assets and bounded unique files', t => {
@@ -77,4 +77,13 @@ test('Windows ZIP extraction supports Unicode/long paths and rejects traversal, 
     fs.rmSync(destination,{ recursive:true,force:true }); fs.mkdirSync(destination); make(entries);
     await assert.rejects(extractUpdate(zip,destination,new AbortController().signal)); assert.deepEqual(fs.readdirSync(destination),[]);
   }
+});
+
+test('cancelling an incomplete stream removes temporary files without touching active versions', async t => {
+  const f = fixture(t), manager = f.manager(new ReadableStream<Uint8Array>({ start() {} }));
+  await manager.check(); const work = manager.download();
+  await new Promise(resolve => setImmediate(resolve)); manager.cancel(); await work;
+  assert.equal(manager.state().phase,'available'); assert.equal(f.store.read().active,null);
+  assert.ok(!fs.readdirSync(f.store.root).some(name => name.startsWith('download-')));
+  const retry = f.manager(); await retry.check(); assert.equal((await retry.download()).phase,'ready');
 });

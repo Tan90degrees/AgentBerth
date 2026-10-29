@@ -23,7 +23,7 @@ export async function verifyRelease(root, directory, commit) {
     const updates = updateNames(version); names.push(updates.bundle, updates.manifest);
     const manifest = parseUpdateManifest(await json(path.join(directory, updates.manifest)));
     const bundle = path.join(directory, updates.bundle);
-    if (manifest.version !== version || manifest.electron !== devDependencies?.electron || manifest.bundle.size !== (await stat(bundle)).size || manifest.bundle.sha256 !== await digest(bundle)) throw new Error('Hot update package does not match this release');
+    if (manifest.version !== version || manifest.minimumBackendApi !== agentberthUpdates.minimumBackendApi || manifest.electron !== devDependencies?.electron || manifest.bundle.size !== (await stat(bundle)).size || manifest.bundle.sha256 !== await digest(bundle)) throw new Error('Hot update package does not match this release');
   }
   const checksums = new Map();
   for (const line of (await readFile(path.join(directory, 'SHA256SUMS.txt'), 'utf8')).replace(/^\uFEFF/, '').trim().split(/\r?\n/)) {
