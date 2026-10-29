@@ -180,3 +180,22 @@ test('release verification follows the new product name while retaining old fixt
   const verified = await verifyRelease(root, directory, sha);
   assert.ok(verified.files.some(file => file.name === 'StackIsle-0.8.0-windows-x64-setup.exe'));
 });
+
+test('hot update releases require smoke success, both extra assets and verified manifest provenance', async t => {
+  const f = await fixture(t), resources = path.join(f.root,'resources');
+  await mkdir(path.join(resources,'mcp'),{ recursive:true }); await mkdir(path.join(f.root,'src/shared'),{ recursive:true });
+  await writeFile(path.join(resources,'app.asar'),'archive'); await writeFile(path.join(resources,'mcp/server.cjs'),'module.exports={}');
+  await writeFile(path.join(f.root,'src/shared/protocol.ts'),'export const PROTOCOL_VERSION = 1; export const API_VERSION = 35;');
+  await writeFile(path.join(f.root,'package.json'),JSON.stringify({ version:'0.8.0',agentberthUpdates:{schema:1},devDependencies:{electron:'44.7.0'} }));
+  const { createUpdate } = await import('../scripts/create-update.mjs');
+  const manifest = await createUpdate(f.root,resources,f.directory);
+  const { updateNames } = await import('../src/shared/update-format.mjs'); const names = updateNames('0.8.0');
+  let sums = await readFile(path.join(f.directory,'SHA256SUMS.txt'),'utf8');
+  for (const name of [names.bundle,names.manifest]) sums += hash(await readFile(path.join(f.directory,name))).slice(7) + '  ' + name + '\n';
+  await writeFile(path.join(f.directory,'SHA256SUMS.txt'),sums);
+  await assert.rejects(verifyRelease(f.root,f.directory,sha),/Hot update smoke/);
+  await writeFile(path.join(f.directory,'build-info.json'),JSON.stringify({ ...f.info,hotUpdateSmoke:'success' }));
+  assert.equal((await verifyRelease(f.root,f.directory,sha)).files.length,6);
+  await writeFile(path.join(f.directory,names.manifest),JSON.stringify({ ...manifest,electron:'45.0.0' }));
+  await assert.rejects(verifyRelease(f.root,f.directory,sha),/Hot update package/);
+});

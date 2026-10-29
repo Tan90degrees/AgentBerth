@@ -8,6 +8,7 @@ import { AppearanceControls } from './AppearanceControls';
 import { PreviewSettings } from './PreviewSettings';
 import { McpSettings } from './RemoteTerminal';
 import { AboutCard } from './AboutCard';
+import { AppUpdateCard } from './AppUpdates';
 import { SshConnections } from './SshConnections';
 import { filterSettings, settingsCatalog, settingsCategories, type SettingsCategory, type SettingsEntry } from './settings-catalog';
 import { readStored, saveStored } from './storage';
@@ -91,6 +92,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
         {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
         {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再更新后台。` : '安装新版本后，可更新后台以加载新功能。项目、会话和设置会保留。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>更新后台</button></section>)}
+        {item('updates', <AppUpdateCard />)}
         {item('about', <AboutCard connected={connected} apiVersion={apiVersion} running={running} onError={onError} />)}
       </div>
     </div>

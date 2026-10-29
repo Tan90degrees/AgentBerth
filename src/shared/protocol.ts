@@ -223,6 +223,9 @@ export interface RuntimeInfo { version: number; pid: number; port: number; token
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
+  updateReady(): Promise<void>;
+  updates(action: import('./updates').UpdateAction, automatic?: boolean): Promise<import('./updates').AppUpdateState>;
+  onUpdates(listener: (state: import('./updates').AppUpdateState) => void): () => void;
   sshWindow(action: 'state' | 'open' | 'dock' | 'select', sessionId?: string): Promise<SshWindowState>;
   onSshWindow(listener: (state: SshWindowState) => void): () => void;
   openSshConnection(alias: string): Promise<{sessionId: string; runId: string; info: RemoteInfo}>;

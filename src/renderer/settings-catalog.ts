@@ -23,6 +23,7 @@ export function settingsCatalog(agents: AgentDefinition[], apiVersion: number): 
     ...(apiVersion >= 22 ? [{ id: 'connections', category: 'ssh' as const, title: '服务器信息', keywords: 'ssh server host hostname IP 连接 别名 用户名 密码 私钥 身份 登录 authentication 端口 port 地址 新建 编辑 删除' }] : []),
     ...(apiVersion >= 21 ? [{ id: 'mcp', category: 'mcp' as const, title: 'Agent 远程终端 · MCP', keywords: '复制 配置 说明 远端 工具 文件 传输 上传 下载 协议 连接 Agent' }] : []),
     { id: 'backend', category: 'backend', title: '后台服务', keywords: 'daemon restart 更新 后台 重启 API 运行' },
+    { id: 'updates', category: 'about', title: '软件更新', keywords: 'update upgrade hot 热更新 自动 更新 检查 下载 安装 版本 升级' },
     { id: 'about', category: 'about', title: '关于与支持', keywords: 'about version 版本 系统 环境 diagnostics 复制诊断信息 打开 诊断 日志 数据目录 使用说明 反馈 帮助' },
   ];
 }

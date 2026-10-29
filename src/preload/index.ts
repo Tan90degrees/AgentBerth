@@ -1,7 +1,26 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopApi, ServerEvent, SshWindowState } from '../shared/protocol';
+import type { AppUpdateState } from '../shared/updates';
+
+// Restore before React reads project/session and layout preferences, even when
+// the updated renderer is loaded from a different ASAR path.
+try {
+  const restored: unknown = ipcRenderer.sendSync('berth:updatePreferences');
+  if (restored && typeof restored === 'object') for (const [key, value] of Object.entries(restored)) if (key.startsWith('berth.') && typeof value === 'string') localStorage.setItem(key, value);
+} catch { /* An ordinary startup needs no preference migration. */ }
 
 const api: DesktopApi = {
+  updateReady: () => ipcRenderer.invoke('berth:updateReady'),
+  updates: (action, automatic) => {
+    let storage: Record<string,string> | undefined;
+    if (action === 'apply') { storage = {}; for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (key?.startsWith('berth.')) storage[key] = localStorage.getItem(key)!; } }
+    return ipcRenderer.invoke('berth:updates', { action, automatic, storage });
+  },
+  onUpdates: listener => {
+    const callback = (_event: Electron.IpcRendererEvent, value: AppUpdateState) => listener(value);
+    ipcRenderer.on('berth:updates', callback);
+    return () => ipcRenderer.removeListener('berth:updates', callback);
+  },
   sshWindow: (action, sessionId) => ipcRenderer.invoke('berth:sshWindow', action, sessionId),
   onSshWindow: listener => {
     const callback = (_event: Electron.IpcRendererEvent, state: SshWindowState) => listener(state);
