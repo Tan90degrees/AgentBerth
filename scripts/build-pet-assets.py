@@ -51,7 +51,9 @@ def verify():
             assert image.size == tuple(config['canvas'])
             assert image.n_frames >= 24, (status, image.n_frames)
             assert image.info.get('loop') == (0 if selection['loop'] else 1)
-            assert image.convert('RGBA').getpixel((0, 0))[3] == 0
+            alpha = image.convert('RGBA').getpixel((0, 0))[3]
+            print(status + ': alpha=' + str(alpha) + ', extrema=' + str(image.convert('RGBA').getchannel('A').getextrema()), flush=True)
+            assert alpha == 0, (status, alpha)
             total = 0
             for n in range(image.n_frames):
                 image.seek(n)
@@ -115,7 +117,7 @@ def render():
         # Animated WebP keeps soft alpha edges and full colour, with a much smaller payload than GIF.
         frames[0].save(DEST / (status + '.webp'), format='WEBP', save_all=True, append_images=frames[1:],
                        duration=durations, loop=0 if selection['loop'] else 1,
-                       quality=85, method=4, minimize_size=False, allow_mixed=False)
+                       quality=85, method=4, minimize_size=False, allow_mixed=False, background=(0, 0, 0, 0))
         frames[len(frames) // 3].save(DEST / (status + '.png'), optimize=True)
         data = (DEST / (status + '.webp')).read_bytes()
         assert len(data) <= 4 * 1024 * 1024, status + ' exceeds animation budget'

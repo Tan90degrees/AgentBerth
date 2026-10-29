@@ -40,6 +40,12 @@
     "quality": 85,
     "method": 4,
     "minimizeSize": false,
-    "allowMixed": false
+    "allowMixed": false,
+    "background": [
+      0,
+      0,
+      0,
+      0
+    ]
   }
 }
