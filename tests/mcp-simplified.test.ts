@@ -10,6 +10,16 @@ const info:RemoteInfo={sessionId,runId,host:'fixture',connection:'connected',own
 const command=(status:'running'|'completed'='completed'):RemoteCommandResult=>({id,sessionId,runId,sequence:1,kind:'command',label:'fixture',startedAt:new Date().toISOString(),endedAt:null,status,exitCode:status==='completed'?0:null,elapsedMs:1,info,output:{text:'FIRST\nLAST\n',nextCursor:11,earliestCursor:0,available:true,truncated:false,hasMore:false,format:'terminal',mode:'summary'}});
 const invoke=async(server:TerminalMcp,name:string,args:Record<string,unknown>={})=>{const reply:any=await server.request('tools/call',{name,arguments:args});return {reply,value:JSON.parse(reply.content[0].text)};};
 
+test('MCP does not expose control release or an ownership argument',async()=>{
+  const calls:Method[]=[];
+  const server=new TerminalMcp({rpc:async<T>(method:Method)=>{calls.push(method);return {} as T;}});
+  for(const args of [{action:'release'},{action:'control'},{action:'open',alias:'fixture',owner:'user'}]){
+    const result=await invoke(server,'terminal_session',args);
+    assert.equal(result.reply.isError,true);
+  }
+  assert.equal(calls.length,0,'Invalid ownership operations must be rejected before reaching the backend');
+});
+
 test('one execution tool waits for completion, then reads the same result with no target or command bookkeeping',async()=>{
   const calls:{method:string;params:any}[]=[];
   const server=new TerminalMcp({rpc:async<T>(method:Method,params?:Record<string,unknown>)=>{calls.push({method,params});return (method==='remoteOpen'?{sessionId,runId,info}:command()) as T;}});
@@ -49,7 +59,7 @@ test('session and transfer actions share four discoverable names and all trusted
 
 test('running results and cache/parameter errors retain identity without offering hidden tools or replay',async()=>{
   let fault:DaemonRpcError|undefined;
-  const server=new TerminalMcp({rpc:async<T>(method:Method)=>{if(method==='state')return {apiVersion:34} as T;if(fault)throw fault;return command('running') as T;}});
+  const server=new TerminalMcp({rpc:async<T>(method:Method)=>{if(method==='state')return {apiVersion:36} as T;if(fault)throw fault;return command('running') as T;}});
   const running=await invoke(server,'terminal_execute',{sessionId,runId,command:'long task'});assert.equal(running.value.harness.next.tool,'terminal_execute');assert.equal(running.value.harness.next.arguments.actionId,id);assert.equal(running.value.harness.next.arguments.waitFor,'completion');assert.ok(!('command'in running.value.harness.next.arguments));
   fault=new DaemonRpcError('Invalid arguments: cursor','INVALID_ARGUMENTS');const invalid=await invoke(server,'terminal_execute',{waitMs:0});assert.equal(invalid.value.error.code,'INVALID_ARGUMENTS');assert.equal(invalid.value.error.execution,'not_started');
   fault=new DaemonRpcError('lost','OUTCOME_UNKNOWN',{sessionId,runId,actionId:id});const unknown=await invoke(server,'terminal_execute',{sessionId,runId,command:'side effect',requestId:id});assert.equal(unknown.value.harness.next.tool,'terminal_execute');assert.equal(unknown.value.harness.next.arguments.actionId,id);assert.equal(unknown.value.harness.replayAllowed,false);

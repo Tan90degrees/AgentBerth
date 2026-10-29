@@ -15,6 +15,7 @@ export async function buildBackend() {
     });
   }
   await build({ entryPoints: ['src/mcp/index.ts'], outfile: 'dist/mcp.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', external: ['bufferutil', 'utf-8-validate'] });
+  await build({ entryPoints: ['src/pet-hook/index.ts'], outfile: 'dist/pet-hook.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24' });
   // Exported developer tooling must work outside this repository without npm install.
   await build({ entryPoints: ['src/plugin-check/index.ts'], outfile: 'dist/check-plugin.cjs', bundle: true, platform: 'node', format: 'cjs', target: 'node24', minify: true });
 }

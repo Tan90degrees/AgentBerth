@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from 'ssh2';
 import { StringDecoder } from 'node:string_decoder';
 import { shellBootstrap, ManagedOutput, type TerminalProcess } from './remote';
-import type { RemoteInfo, SshConnection, SshSecret } from '../shared/protocol';
+import type { RemoteStatusUpdate, SshConnection, SshSecret } from '../shared/protocol';
 
 export interface SshAccess {
   credentials(): Promise<SshSecret>;
@@ -23,7 +23,7 @@ export class SshTerminal implements TerminalProcess {
   private startupAbort: AbortController | null = null;
   private display: ManagedOutput | null = null;
   constructor(private config: SshConnection, private sessionId: string, private directory: string, private cols: number, private rows: number,
-    private access: SshAccess, private notify: (change: Partial<RemoteInfo>) => void,
+    private access: SshAccess, private notify: (change: RemoteStatusUpdate) => void,
     private marker: (kind: 'ready' | 'start', status: number, cwd: string | null, requestId: string) => void) {}
   onData(listener: (text: string) => void) { this.events.on('data', listener); return { dispose: () => { this.events.off('data', listener); } }; }
   onExit(listener: (value: {exitCode: number; signal?: number}) => void) { this.events.on('exit', listener); return { dispose: () => { this.events.off('exit', listener); } }; }
@@ -59,7 +59,7 @@ export class SshTerminal implements TerminalProcess {
   private async establish(signal: AbortSignal): Promise<void> {
     if (this.closed) throw new Error('终端已关闭');
     const generation = ++this.generation;
-    this.notify({ connection: 'connecting', phase: 'unknown', owner: 'user', error: null });
+    this.notify({ connection: 'connecting', phase: 'unknown', error: null });
     const secret = this.config.authentication === 'agent' ? {} : await this.access.credentials();
     if (this.config.authentication === 'password' && !secret.password) throw new Error('请在 SSH 连接设置中输入密码并保存；未记住的密码仅在本次应用运行期间有效');
     let privateKey: Buffer | undefined;
@@ -75,7 +75,7 @@ export class SshTerminal implements TerminalProcess {
       const active = () => generation === this.generation && !this.closed;
       const fail = (message: string) => {
         if (!active()) return;
-        this.notify({ connection: 'disconnected', phase: 'unknown', owner: 'user', error: message });
+        this.notify({ connection: 'disconnected', phase: 'unknown', error: message });
         if (!settled) { settled = true; cleanup(); reject(new Error(message)); }
         client.destroy();
       };
@@ -95,7 +95,7 @@ export class SshTerminal implements TerminalProcess {
         if (!active()) return;
         this.display?.end();this.display=null;cleanup(); this.channel = null; this.client = null;
         if (!settled) { settled = true; reject(new Error(verificationError?.message ?? 'SSH 登录未完成，请检查连接设置')); }
-        this.notify({ connection: 'disconnected', phase: 'unknown', owner: 'user', error: shellExit === null ? 'SSH 链路已断开，远端任务结果未知。重新连接将新建 Shell。' : 'SSH 会话已结束' });
+        this.notify({ connection: 'disconnected', phase: 'unknown', error: shellExit === null ? 'SSH 链路已断开，远端任务结果未知。重新连接将新建 Shell。' : 'SSH 会话已结束' });
         if (online && shellExit !== null) this.events.emit('exit', { exitCode: shellExit });
       });
       client.once('ready', () => {
@@ -152,7 +152,7 @@ export class SshTerminal implements TerminalProcess {
   }
   async stop(): Promise<void> {
     this.kill();
-    this.notify({ connection: 'disconnected', phase: 'unknown', owner: 'user', error: 'SSH 已关闭；脱离 SSH 的远端进程不保证停止。' });
+    this.notify({ connection: 'disconnected', phase: 'unknown', error: 'SSH 已关闭；脱离 SSH 的远端进程不保证停止。' });
     this.events.emit('exit', { exitCode: 0 });
   }
 }

@@ -25,6 +25,7 @@ const descriptions:Record<string,string>={
 };
 const legacyTools = [
   { name: 'terminal_open', description: descriptions.terminal_open, inputSchema: schema({ alias: { type: 'string', minLength: 1, maxLength: 100 } }, ['alias']) },
+  { name: 'terminal_dispose', description: 'Close all SSH sessions belonging to this Agent context. Never touches other agents or user-controlled terminals.', inputSchema: schema({}, []) },
   { name: 'terminal_list', description: descriptions.terminal_list, inputSchema: schema({}, []) },
   { name: 'terminal_create', description: 'Create and open a named SSH terminal on a saved authorized server. Reuses the same alias+title to make retries safe; different titles create parallel terminals. User only needs to save server/login information. Does not reclaim human input or reconnect an existing broken link.', inputSchema: schema({alias:{type:'string',minLength:1,maxLength:100},title:{type:'string',minLength:1,maxLength:100},directory:{type:'string',description:'Optional absolute remote directory; empty means login directory.'}},['alias','title']) },
   ...(['update','close','delete','reconnect'] as const).map(action=>({name:'terminal_'+action,description:{update:'Rename an SSH session; directory changes require a stopped session. Never changes saved server credentials.',close:'Close SSH and retain the session/history. This does not prove detached remote tasks have stopped.',delete:'Delete a stopped SSH session and its workbench records. Close it first; saved server information remains.',reconnect:'Explicitly start a NEW remote Shell after link loss. Old jobs are not restored or replayed. Cannot bypass human takeover.'}[action],inputSchema:schema({...target,...(action==='update'?{title:{type:'string',minLength:1,maxLength:100},directory:{type:'string'}}:{})},[])})),
@@ -38,14 +39,17 @@ const legacyTools = [
   { name: 'terminal_read_output', description: descriptions.terminal_read_output, inputSchema: schema({ ...target, waitFor:{type:'string',enum:['completion','output']}, ...outputOptions, actionId:uuid, timeoutMs:{type:'integer',minimum:0,maximum:30000,default:25000}},[]) },
   { name: 'terminal_wait', description: 'Event-driven wait for command COMPLETION up to 30 seconds; also returns bounded command output and current Shell info. For streaming logs prefer terminal_read_output, which wakes on new output. Pass cursor=output.nextCursor to avoid repeated output. Timeout returns running; unknown is not failure and must not be replayed.', inputSchema: schema({ ...target, ...outputOptions, actionId: uuid, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000, default: 25000 } }, ['actionId']) },
   { name: 'terminal_actions', description: 'Read actual command/input/control/connection steps (newest first, 50 per page). Use before=last sequence for older steps. Does not contain Agent private reasoning or full terminal video.', inputSchema: schema({ ...target, before: { type: 'integer', minimum: 1 } }, []) },
-].map(tool => ({...tool, inputSchema: {...tool.inputSchema, ...(['terminal_list','terminal_open','terminal_create','terminal_transfer_status','terminal_transfer_cancel'].includes(tool.name) ? {} : tool.name==='terminal_transfer' ? {allOf:[{anyOf:[{required:['sourceAlias']},{required:['sourceSessionId','sourceRunId']}]},{anyOf:[{required:['destinationAlias']},{required:['destinationSessionId','destinationRunId']}]}]} : { anyOf: [{required:['alias']},{required:['terminal_actions','terminal_update','terminal_close','terminal_delete','terminal_reconnect'].includes(tool.name) ? ['sessionId'] : ['sessionId','runId']}] })}})).map(tool=>({...tool,title:tool.name.replace('terminal_','SSH · '),annotations:{readOnlyHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status'].includes(tool.name),destructiveHint:!['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create'].includes(tool.name),idempotentHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create','terminal_close'].includes(tool.name),openWorldHint:true}}));
+].map(tool => ({...tool, inputSchema: {...tool.inputSchema, ...(['terminal_list','terminal_dispose','terminal_open','terminal_create','terminal_transfer_status','terminal_transfer_cancel'].includes(tool.name) ? {} : tool.name==='terminal_transfer' ? {allOf:[{anyOf:[{required:['sourceAlias']},{required:['sourceSessionId','sourceRunId']}]},{anyOf:[{required:['destinationAlias']},{required:['destinationSessionId','destinationRunId']}]}]} : { anyOf: [{required:['alias']},{required:['terminal_actions','terminal_update','terminal_close','terminal_delete','terminal_reconnect'].includes(tool.name) ? ['sessionId'] : ['sessionId','runId']}] })}})).map(tool=>({...tool,title:tool.name.replace('terminal_','SSH · '),annotations:{readOnlyHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status'].includes(tool.name),destructiveHint:!['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create'].includes(tool.name),idempotentHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create','terminal_close'].includes(tool.name),openWorldHint:true}}));
 
 export class McpError extends Error { constructor(readonly code: number, message: string) { super(message); } }
-// MCP wire behavior remains compatible with API 34; workspace features use API 35.
-const MCP_API_VERSION = 34;
+// Dedicated per-Agent SSH contexts require API 36; never fall back to globally shared aliases.
+export const MCP_API_VERSION = 36;
 export class TerminalMcp {
+  private targets = new Map<string,{sessionId:string;runId:string}>();
+  private aliases = new Map<string, {sessionId:string;runId:string}>();
   private lastTarget:{sessionId:string;runId:string}|null=null;
   constructor(private connection: Pick<DaemonConnection, 'rpc'>,private reportCall?:(event:McpCallMetric)=>void|Promise<unknown>) {}
+  ownedTargets(): {sessionId:string;runId:string}[] { return [...new Map([...this.targets.values(),...this.aliases.values(),...(this.lastTarget?[this.lastTarget]:[])].map(target=>[target.sessionId,target])).values()]; }
   private validateParams(method:Method,params:Record<string,unknown>) {
     const checked=requestSchema.safeParse({id:randomUUID(),method,params});
     if(!checked.success)throw new ToolArgumentError('工具参数无效：'+checked.error.issues.map(issue=>`${issue.path.join('.')}: ${issue.message}`).join('; '));
@@ -75,7 +79,7 @@ export class TerminalMcp {
   private async dispatch(method: string, params: unknown): Promise<unknown> {
     if (method === 'initialize') {
       const requested = (params as { protocolVersion?: string })?.protocolVersion;
-      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {}, resources:{} }, serverInfo: { name: 'agentberth-terminal', title:'AgentBerth shared SSH terminal', version: '0.14.0' }, instructions };
+      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {}, resources:{} }, serverInfo: { name: 'agentberth-terminal', title:'AgentBerth shared SSH terminal', version: '0.15.2' }, instructions };
     }
     if (method === 'ping') return {};
     if (method === 'tools/list') return { tools };
@@ -122,11 +126,13 @@ export class TerminalMcp {
       if (['terminal_execute','terminal_keys','terminal_screen','terminal_wait','terminal_read_output','terminal_actions','terminal_upload','terminal_download'].includes(name!) && args.alias !== undefined) {
         if (args.sessionId !== undefined || args.runId !== undefined) throw new ToolArgumentError('Use alias OR sessionId/runId');
         const { alias, ...rest } = args;
-        const resolved = await this.connection.rpc<{sessionId:string;runId:string}>(name==='terminal_execute'?'remoteOpen':'remoteResolve', {alias});
+        const key=String(alias).toLowerCase();
+        const resolved = this.aliases.get(key) ?? await this.connection.rpc<{sessionId:string;runId:string}>(name==='terminal_execute'?'remoteOpen':'remoteResolve', {alias});
+        this.aliases.set(key,{sessionId:resolved.sessionId,runId:resolved.runId});this.targets.set(resolved.sessionId,{sessionId:resolved.sessionId,runId:resolved.runId});
         inputArgs = {...rest,sessionId:resolved.sessionId,runId:resolved.runId};
       }
       const endpoint=async(alias:unknown,sessionId:unknown,runId:unknown,file:unknown)=>{
-        if(alias!==undefined){if(sessionId!==undefined||runId!==undefined)throw new ToolArgumentError('Use alias OR sessionId/runId');const resolved=await this.connection.rpc<{sessionId:string;runId:string}>('remoteResolve',{alias});return {kind:'remote',...resolved,path:file};}
+        if(alias!==undefined){if(sessionId!==undefined||runId!==undefined)throw new ToolArgumentError('Use alias OR sessionId/runId');const key=String(alias).toLowerCase(),resolved=this.aliases.get(key)??await this.connection.rpc<{sessionId:string;runId:string}>('remoteResolve',{alias});this.aliases.set(key,{sessionId:resolved.sessionId,runId:resolved.runId});this.targets.set(resolved.sessionId,{sessionId:resolved.sessionId,runId:resolved.runId});return {kind:'remote',sessionId:resolved.sessionId,runId:resolved.runId,path:file};}
         return {kind:'remote',sessionId,runId,path:file};
       };
       dispatched=true;
@@ -144,13 +150,8 @@ export class TerminalMcp {
         }
         case 'terminal_transfer_status':value=await this.connection.rpc('remoteTransferStatus',this.validateParams('remoteTransferStatus',{...args,timeoutMs:args.timeoutMs??25000}));break;
         case 'terminal_transfer_cancel':value=await this.connection.rpc('remoteTransferCancel',this.validateParams('remoteTransferCancel',args));break;
-        case 'terminal_list': {
-          const state = await this.connection.rpc<State>('state');
-          if (state.apiVersion < 21) throw new Error('请在 AgentBerth 设置中更新后台');
-          const sessions = await Promise.all(state.sessions.filter(session => session.remote).map(async session => ({ sessionId: session.id, runId: session.latestRun?.id ?? null, title: session.title, project: state.projects.find(project => project.id === session.projectId)?.name, remote: session.remote, status: session.latestRun?.status ?? 'not-started', info: await this.connection.rpc('remoteInfo', { sessionId: session.id }) })));
-          value = state.apiVersion >= 22 ? { connections: await this.connection.rpc('remoteAliases'), sessions } : { connections: [], sessions };
-          break;
-        }
+        case 'terminal_dispose': value = await this.connection.rpc('remoteAgentClose'); this.lastTarget=null; this.aliases.clear(); this.targets.clear(); break;
+        case 'terminal_list': value = await this.connection.rpc('remoteAgentSessions'); break;
         case 'terminal_execute': value = await this.outputRpc('remoteCommand', {...inputArgs,requestId:inputArgs.requestId??randomUUID()}); break;
         case 'terminal_screen': {
           if(publicName==='terminal_interact'&&provided.view!=='screen'){
@@ -172,7 +173,19 @@ export class TerminalMcp {
         await new Promise(resolve=>setTimeout(resolve,50));
         value=await this.connection.rpc('remoteScreen',{sessionId:info.sessionId,runId:info.runId});
       }
-      if(value&&typeof value==='object'){const info=(value as any).info;if(info?.sessionId&&info?.runId)this.lastTarget={sessionId:info.sessionId,runId:info.runId};}
+      if(value&&typeof value==='object'){
+        const info=(value as any).info;
+        if(info?.sessionId&&info?.runId){
+          const target={sessionId:info.sessionId,runId:info.runId}; this.lastTarget=target; this.targets.set(target.sessionId,target);
+          if(typeof args.alias==='string')this.aliases.set(args.alias.toLowerCase(),target);
+        }
+        if(['terminal_close','terminal_delete'].includes(name!)){
+          const closed=(value as any).sessionId??(value as any).id;
+          this.targets.delete(closed);
+          for(const [alias,target] of this.aliases)if(target.sessionId===closed)this.aliases.delete(alias);
+          if(this.lastTarget?.sessionId===closed)this.lastTarget=null;
+        }
+      }
       if(value&&typeof value==='object'&&'output'in value)value=commandReply(value as RemoteCommandResult,typeof args.cursor==='number'?args.cursor:0,typeof args.maxChars==='number'?args.maxChars:undefined);
       else if(name==='terminal_screen'||publicName==='terminal_interact')value=screenReply(value as Record<string,any>);
       const reply=resultHarness(publicName==='terminal_interact'&&(value as any)?.scope==='viewport'?'terminal_screen':name!,value);

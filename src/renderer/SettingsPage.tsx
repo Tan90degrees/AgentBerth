@@ -1,3 +1,4 @@
+import { PetSettings } from './DesktopPet';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
 import { agentLabels } from './labels';
@@ -30,6 +31,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
   const pending = entries.filter(modified).length;
   const change = (value: Settings) => { onChange(value); setSaved(false);setSaveState('idle'); };
   useEffect(() => { saveStored('berth.settingsCategory', category); content.current?.scrollTo(0, 0); }, [category]);
+  useEffect(() => window.berth.onPetSettings(() => { setQuery(''); setCategory('pet'); content.current?.scrollTo(0, 0); }), []);
   useEffect(() => { if (!categories.some(item => item.id === category)) setCategory('common'); }, [category, apiVersion]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -68,6 +70,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {conflict && <p className="draft-notice" role="status">后台设置已更新，草稿已保留。保存将应用此处的值；取消修改可加载后台设置。</p>}
         {error && <div className="form-error" role="alert">{error.replace(/^Error: /, '')}</div>}
         {!visible.size && <div className="settings-no-results"><h3>没有匹配的设置</h3><p>试试“终端”“字体”或“SSH”，也可以查看全部设置。</p><button type="button" className="subtle" onClick={() => { setQuery(''); setCategory('all'); search.current?.focus(); }}>查看全部设置</button></div>}
+        {item('pet', visible.has('pet') ? <PetSettings /> : null)}
         {item('theme', <AppearanceControls />)}
         {item('preview', <PreviewSettings />)}
         <form id="workspace-settings-form" className="settings-values" ref={form} noValidate onSubmit={async event => {

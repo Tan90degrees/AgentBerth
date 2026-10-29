@@ -3,7 +3,7 @@ import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 35;
+export const API_VERSION = 37;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -76,7 +76,7 @@ export const transferSpecSchema=z.object({requestId:id,source:transferEndpointSc
 export type TransferEndpoint=z.infer<typeof transferEndpointSchema>;
 export type TransferSpec=z.infer<typeof transferSpecSchema>;
 export interface RemoteTransfer {id:string;spec:TransferSpec;sessionId:string;runId:string;status:'running'|'completed'|'failed'|'cancelled'|'unknown';bytes:number;totalBytes:number;files:number;totalFiles:number;startedAt:string;endedAt:string|null;error:string|null}
-export const remoteManageSchema=z.object({action:z.enum(['create','update','close','delete','reconnect']),alias:z.string().min(1).max(100).optional(),sessionId:id.optional(),runId:id.optional(),title:title.optional(),directory:remoteSchema.shape.directory.optional()}).strict().refine(value=>value.action==='create'?!!value.alias&&!!value.title:!!value.alias||!!value.sessionId,'请提供服务器别名或会话 ID').refine(value=>!(value.alias&&value.sessionId),'别名和会话 ID 二选一');
+export const remoteManageSchema=z.object({action:z.enum(['create','update','close','delete','reconnect']),alias:z.string().min(1).max(100).optional(),sessionId:id.optional(),runId:id.optional(),title:title.optional(),directory:remoteSchema.shape.directory.optional()}).strict().refine(value=>value.action==='create'?!!value.alias:!!value.alias||!!value.sessionId,'请提供服务器别名或会话 ID').refine(value=>!(value.alias&&value.sessionId),'别名和会话 ID 二选一');
 export const remoteKeySchema = z.enum(['Enter', 'Tab', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Ctrl+C', 'Ctrl+D', 'Ctrl+Z', 'Backspace']);
 export type RemoteKey = z.infer<typeof remoteKeySchema>;
 const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null), remote: remoteSchema.nullable().default(null) };
@@ -101,6 +101,9 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('deleteSshConnection'), params: z.object({ connectionId: id }).strict() }),
   z.object({ id, method: z.literal('registerSshProvider'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('sshChallengeReply'), params: z.object({ challengeId: id, secret: sshSecretSchema.optional(), accepted: z.boolean().optional() }).strict() }),
+  z.object({ id, method: z.literal('remoteAgentRecover'), params: z.object({ targets: z.array(z.object(remoteTarget).strict()).max(128) }).strict() }),
+  z.object({ id, method: z.literal('remoteAgentClose'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('remoteAgentSessions'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteAliases'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100), owner: z.enum(['user','agent']).default('agent') }).strict() }),
   z.object({ id, method: z.literal('remoteResolve'), params: z.object({ alias: z.string().min(1).max(100) }).strict() }),
@@ -200,6 +203,8 @@ export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
 export interface RemoteInfo { commandTracking?: 'posix' | 'none'; sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
+/** Transport lifecycle cannot grant or revoke the user's input permission. */
+export type RemoteStatusUpdate = Partial<Omit<RemoteInfo, 'owner'>>;
 export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection' | 'transfer'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null; transfer?:RemoteTransfer }
 export interface OutputSearchResult {query:string;caseSensitive:boolean;contextLines:number;maxBytes:number;offset:number;limit:number;totalMatches:number;returnedMatches:number;nextOffset:number|null;startCursor:number;endCursor:number;lineNumbering:'range';omitted:boolean;groups:{startLine:number;cursor:number;text:string;matchLines:number[]}[]}
 export interface McpCallMetric {callId:string;tool:string;success:boolean}
@@ -221,6 +226,10 @@ export interface RuntimeInfo { version: number; pid: number; port: number; token
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
+  pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;
+  onPet(listener: (state: import('./pet').PetSnapshot) => void): () => void;
+  onPetSession(listener: (sessionId: string) => void): () => void;
+  onPetSettings(listener: () => void): () => void;
   sshWindow(action: 'state' | 'open' | 'dock' | 'select', sessionId?: string): Promise<SshWindowState>;
   onSshWindow(listener: (state: SshWindowState) => void): () => void;
   openSshConnection(alias: string): Promise<{sessionId: string; runId: string; info: RemoteInfo}>;

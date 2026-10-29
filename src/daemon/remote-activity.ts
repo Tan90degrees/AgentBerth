@@ -1,7 +1,7 @@
 import { managedCommand } from './remote';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { OutputSearch, RemoteAction, RemoteCommandResult, RemoteInfo, RemoteKey } from '../shared/protocol';
+import type { OutputSearch, RemoteAction, RemoteCommandResult, RemoteInfo, RemoteKey, RemoteStatusUpdate } from '../shared/protocol';
 import type { Store } from './store';
 import { CommandOutput, COMMAND_OUTPUT_CAPACITY } from './remote-output';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -16,26 +16,30 @@ export class RemoteActivity {
   private pending: RemoteAction | null = null;
   private started = false;
   private holder: object | null = null;
-  private agentGranted = false;
+  private chosen = false;
+  get controlChosen(): boolean { return this.chosen; }
   private outputs = new Map<string, CommandOutput>();
   constructor(readonly info: RemoteInfo, private store: Pick<Store, 'remoteAction' | 'saveRemoteAction'>,
     private publish: (info: RemoteInfo) => void, private publishAction: (action: RemoteAction) => void, private outputDirectory?:string) {}
-  change(update: Partial<RemoteInfo>): void {
+  change(update: RemoteStatusUpdate): void {
     const previousConnection = this.info.connection;
-    Object.assign(this.info, update);
+    const owner = this.info.owner;
+    Object.assign(this.info, update, { owner });
     if (update.connection === 'disconnected') this.unknown();
     this.publish({ ...this.info }); this.events.emit('change');
     if (update.connection && previousConnection !== update.connection) this.action('connection', update.connection === 'connected' ? 'SSH 已连接' : update.connection === 'connecting' ? '连接 SSH' : 'SSH 已断开，远端任务结果未知');
   }
   control(owner: 'user' | 'agent'): RemoteInfo {
-    this.agentGranted=owner==='agent';
+    this.chosen = true;
     this.holder = null;
-    this.change({ owner }); this.action('control', owner === 'user' ? '人工接管' : '允许 Agent 操作');
+    this.info.owner = owner;
+    this.change({}); this.action('control', owner === 'user' ? '人工接管' : '允许 Agent 操作');
     return { ...this.info };
   }
-  release(client: object): void { if (this.holder === client) this.control('user'); }
+  // A disconnected MCP client frees its writer slot, not the user's grant.
+  release(client: object): void { if (this.holder === client) this.holder = null; }
   assertManage(client:object):void {
-    if(!this.agentGranted)throw new RemoteOperationError('USER_CONTROLLED','终端由用户控制，请等待用户交还控制权',this.target());
+    if(this.info.owner!=='agent')throw new RemoteOperationError('USER_CONTROLLED','终端由用户控制，请等待用户交还控制权',this.target());
     if(this.holder&&this.holder!==client)throw new RemoteOperationError('AGENT_BUSY','另一个 Agent 正在操作此终端',this.target());
     this.holder=client;
   }

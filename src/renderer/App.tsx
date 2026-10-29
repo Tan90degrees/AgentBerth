@@ -206,6 +206,17 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const expandProject = useCallback((id: string) => setCollapsed(previous => previous.includes(id) ? previous.filter(item => item !== id) : previous), []);
   const selectProject = useCallback((id: string) => { setProjectId(id); setSearch(''); setFilter('all'); setPage('workspace'); setError(''); expandProject(id); }, [expandProject]);
   const selectSession = useCallback((projectId: string, sessionId: string) => { if(state.sessions.find(item=>item.id===sessionId)?.remote){selectSsh(sessionId);setSshOpen(true);setPage('workspace');return;} setProjectId(projectId); setSessionId(sessionId); setPage('workspace'); setTab('terminal'); setError(''); expandProject(projectId); }, [expandProject,state.sessions]);
+  useEffect(() => {
+    if (sshWindow) return;
+    return window.berth.onPetSession(id => {
+      const target = state.sessions.find(session => session.id === id);
+      if (target) selectSession(target.projectId, id);
+    });
+  }, [sshWindow, state.sessions, selectSession]);
+  useEffect(() => {
+    if (sshWindow) return;
+    return window.berth.onPetSettings(() => { saveStored('berth.settingsCategory', 'pet'); setPage('settings'); setError(''); });
+  }, [sshWindow]);
   const toggleProject = useCallback((id: string) => setCollapsed(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]), []);
   useEffect(() => { if (!sshWindow&&!loading) saveStored('berth.collapsedProjects', JSON.stringify(collapsed.filter(id => workspaceProjects.some(project => project.id === id)))); }, [collapsed, workspaceProjects, loading]);
   function openModal(value: Modal, target: { projectId: string; sessionId?: string } | null = null) { setModalTarget(target); if (!quickOpen) opener.current = document.activeElement as HTMLElement | null; setError(''); setModal(value); }

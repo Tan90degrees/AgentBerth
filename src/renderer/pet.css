@@ -1,0 +1,22 @@
+html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { background: transparent !important; min-width: 0; min-height: 0; width: 100%; height: 100%; overflow: hidden; }
+.desktop-pet { padding: 8px 12px 12px; box-sizing: border-box; user-select: none; color: #ecf5f3; font: 12px/1.4 system-ui, sans-serif; }
+.pet-stage { display:grid; place-items:center; width:100%; height:160px; border:0; padding:0; margin:0; background:transparent; border-radius:12px; cursor:grab; touch-action:none; }
+.pet-stage:active { cursor:grabbing; }
+.desktop-pet .pet-stage:hover:not(:disabled), .desktop-pet .pet-stage:active { background:transparent; box-shadow:none; border-color:transparent; }
+.pet-stage:focus-visible { outline:2px solid #8cdec4; outline-offset:0; }
+.pet-character { width:192px; height:160px; object-fit:contain; pointer-events:none; }
+.pet-settings .pet-toggle { display:flex; align-items:center; gap:8px; margin:12px 0; }
+.pet-settings .pet-toggle input { width:auto; margin:0; }
+.pet-settings h3 { margin-top:22px; }
+.pet-hook-steps { padding-left:22px; line-height:1.9; }
+.pet-hook-guide { margin:12px 0; }
+.pet-hook-guide summary { cursor:pointer; }
+.pet-hook-guide pre { margin-top:10px; max-height:360px; overflow:auto; padding:12px; border:1px solid var(--border,#444); border-radius:8px; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; font:12px/1.7 ui-monospace,monospace; }
+.pet-animation-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(185px,1fr)); gap:12px; }
+.pet-animation { display:flex; flex-direction:column; align-items:center; border:1px solid var(--border,#444); border-radius:12px; padding:10px; min-width:0; }
+.pet-animation .pet-character { width:120px; height:100px; }
+.pet-animation small { max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; margin:5px 0 9px; opacity:.65; }
+.pet-animation>div { display:flex; gap:6px; flex-wrap:wrap; justify-content:center; }
+
+.pet-preview { pointer-events: auto; cursor: help; border-radius: 8px; }
+.pet-preview:focus-visible { outline: 2px solid var(--focus,#8cdec4); outline-offset: 3px; }

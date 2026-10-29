@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "private": true,
   "type": "module",
   "description": "A project workspace for persistent terminals, agents, files and history",
@@ -116,6 +116,14 @@
       {
         "from": "dist/mcp.cjs",
         "to": "mcp/mcp.cjs"
+      },
+      {
+        "from": "dist/pet-hook.cjs",
+        "to": "pet/pet-hook.cjs"
+      },
+      {
+        "from": "assets/pet",
+        "to": "assets/pet"
       }
     ]
   }

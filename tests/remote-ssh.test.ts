@@ -58,8 +58,7 @@ test('SSH-only remote shares a live terminal, survives MCP detach, and exposes r
   assert.equal((await agent.rpc<RemoteAction>('remoteWait',{...target,actionId:lost.id,timeoutMs:0})).status,'unknown');
   await ui.rpc('remoteReconnect',target);
   await eventually(async()=>{const info=await ui.rpc<RemoteInfo>('remoteInfo',{sessionId});return info.connection==='connected'&&info.phase==='idle';});
-  assert.equal((await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).owner,'user');
-  await ui.rpc('remoteControl',{...target,owner:'agent'});
+  assert.equal((await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).owner,'agent');
   assert.equal((await execute('test "${AB_REMOTE_VALUE-unset}" = unset && test "$PWD" = /tmp')).exitCode,0);
   // The old request remains unknown and is never executed again in the new Shell.
   assert.equal((await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId:lost.id,command:'exit 255'})).status,'unknown');
@@ -67,8 +66,9 @@ test('SSH-only remote shares a live terminal, survives MCP detach, and exposes r
   assert.equal((await agent.rpc<{cols:number}>('remoteScreen',target)).cols,110);
   const long=await agent.rpc<RemoteAction>('remoteExecute',{...target,requestId:randomUUID(),command:'/bin/sleep 2; echo SURVIVED_AGENT_EXIT'});
   agent.close();await wait(50);agent=await DaemonConnection.open(runtime,()=>{});
-  await eventually(async()=>(await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).owner==='user');
+  assert.equal((await ui.rpc<RemoteInfo>('remoteInfo',{sessionId})).owner,'agent');
   assert.equal((await agent.rpc<RemoteAction>('remoteWait',{...target,actionId:long.id,timeoutMs:5000})).status,'completed');
+  assert.equal((await execute('printf AFTER_MCP_RECONNECT')).exitCode,0);
   await ui.rpc('stop',{sessionId});
   await eventually(async()=>{try{await ui.rpc('remoteScreen',target);return false;}catch{return true;}});
   assert.equal((await ui.rpc<Run[]>('runs',{sessionId}))[0].status,'stopped');

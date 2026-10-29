@@ -37,11 +37,12 @@ interface LiveTerminal {
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null; finishing: Promise<void> | null;
 }
-interface Client { subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
+interface Client { id: string; disposing: boolean; subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
   private sshProvider: Client | null = null;
   private sshChallenges = new Map<string, { client: Client; resolve: (value: {secret?: SshSecret; accepted?: boolean}) => void; reject: (error: Error) => void }>();
+  private agentOwners = new Map<string, Client>();
   private openingAliases = new Map<string, Promise<{sessionId:string;runId:string;info: import('../shared/protocol').RemoteInfo}>>();
   private store: Store;
   private transfers: RemoteTransfers;
@@ -86,7 +87,7 @@ export class DaemonServer {
       this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
     });
     this.ws.on('connection', socket => {
-      const client: Client = { subscriptions: new Set(), activity: new Map(), pending: 0, abort: new AbortController() };
+      const client: Client = { id: randomUUID(), disposing: false, subscriptions: new Set(), activity: new Map(), pending: 0, abort: new AbortController() };
       this.clients.set(socket, client);
       socket.on('error', () => socket.close());
       socket.on('close', () => { if (this.sshProvider === client) this.sshProvider = null; for (const pending of this.sshChallenges.values()) if (pending.client === client) pending.reject(new Error('请打开 AgentBerth 后重试 SSH 连接')); client.abort.abort(); for (const live of this.live.values()) live.remote?.activity.release(client); this.clients.delete(socket); });
@@ -142,6 +143,7 @@ export class DaemonServer {
   }
   private changed(): void {
     const state = this.store.state(), valid = new Set(state.sessions.map(session => session.id));
+    for (const id of this.agentOwners.keys()) if (!valid.has(id)) this.agentOwners.delete(id);
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
   }
@@ -183,13 +185,31 @@ export class DaemonServer {
       this.send(socket, { event: 'sshChallenge', data: { id, connectionId: profile.id, alias: profile.alias, kind, fingerprint, hostname: profile.hostname, port: profile.port } });
     });
   }
-  private aliasTarget(alias: string) {
+  private aliasTarget(alias: string, client?: Client, human = false) {
     const profile = this.store.sshConnections().find(item => item.alias.toLowerCase() === alias.toLowerCase());
     if (!profile) throw new RemoteOperationError('ALIAS_NOT_FOUND','连接别名不存在，请先在 AgentBerth 设置中保存 SSH 连接',{alias});
-    const sessions = this.store.state().sessions.filter(session => session.remote?.connectionId === profile.id);
+    const sessions = this.store.state().sessions.filter(session => session.remote?.connectionId === profile.id && (!client || this.agentOwners.get(session.id) === client));
+    if (human && !sessions.length) {
+      // The desktop can recover its own unclaimed human terminal after restart;
+      // Agent defaults never select any globally shared or foreign terminal.
+      sessions.push(...this.store.state().sessions.filter(session => session.remote?.connectionId === profile.id && (!this.agentOwners.get(session.id) || this.agentOwners.get(session.id)!.abort.signal.aborted) && this.live.get(session.id)?.remote?.activity.info.owner === 'user'));
+    }
     const active = sessions.filter(session => this.live.has(session.id));
-    if (active.length > 1) throw new RemoteOperationError('ALIAS_AMBIGUOUS','此别名有多个运行会话，请从 terminal_list 选择 sessionId 和 runId',{alias});
+    if (active.length > 1) throw new RemoteOperationError('ALIAS_AMBIGUOUS','当前 Agent 在此服务器有多个会话，请使用自己的 sessionId 和 runId',{alias});
     return { profile, session: active[0] ?? sessions[0] };
+  }
+  private recoverReadTarget(sessionId: string, client: Client): void {
+    // An explicitly retained session/run can be recovered by a fresh MCP
+    // process. Desktop observation must never acquire an Agent's connection.
+    if(client !== this.sshProvider && this.agentOwners.get(sessionId)?.abort.signal.aborted)this.agentOwners.set(sessionId,client);
+  }
+  private assertOwnSession(sessionId: string, client: Client): void {
+    const previous = this.agentOwners.get(sessionId);
+    if (previous && previous !== client && !previous.abort.signal.aborted) {
+      const session = this.store.session(sessionId);
+      throw new RemoteOperationError('AGENT_BUSY', '此 SSH 会话属于另一个 Agent，请基于服务器信息创建自己的连接', { sessionId, runId: session.latestRun?.id, alias: session.remote?.host });
+    }
+    if (previous) this.agentOwners.set(sessionId, client);
   }
   private remoteProject() {
     const folder = path.join(this.dataDirectory, 'remote-sessions');
@@ -198,6 +218,7 @@ export class DaemonServer {
   }
   private authorizeRemote(endpoint:TransferEndpoint,client:Client,connected=true):void {
     if(endpoint.kind==='local')return;
+    this.assertOwnSession(endpoint.sessionId,client);
     const session=this.store.session(endpoint.sessionId);
     if(!session.remote?.connectionId||!this.store.sshConnection(session.remote.connectionId).allowAgent)throw new Error('请使用已填写服务器信息并允许 Agent 使用的 SSH 连接');
     const remote=this.remote(endpoint.sessionId,endpoint.runId);
@@ -228,16 +249,45 @@ export class DaemonServer {
         return null;
       }
       case 'remoteAliases': return this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent }));
+      case 'remoteAgentRecover': {
+        const recovered: string[] = [];
+        for (const target of request.params.targets) {
+          const owner = this.agentOwners.get(target.sessionId), live = this.live.get(target.sessionId);
+          if (owner?.abort.signal.aborted && live?.run.id === target.runId) { this.agentOwners.set(target.sessionId, client); recovered.push(target.sessionId); }
+        }
+        return { recovered };
+      }
+      case 'remoteAgentClose': {
+        if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
+        const sessions = this.store.state().sessions.filter(session => this.agentOwners.get(session.id) === client);
+        for (const session of sessions) {
+          const activity=this.live.get(session.id)?.remote?.activity;
+          if(activity&&(!this.starting.has(session.id)||activity.controlChosen))activity.assertManage(client);
+        }
+        client.disposing = true;
+        try {
+          const opening = [...this.openingAliases].filter(([key]) => key.startsWith(client.id + ':')).map(([,promise]) => promise);
+          await Promise.all(sessions.map(session => this.stop(session.id)));
+          await Promise.allSettled(opening);
+          return { closed: sessions.map(session => session.id) };
+        } finally { client.disposing = false; }
+      }
+      case 'remoteAgentSessions': {
+        const state = this.store.state();
+        return { connections: this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent })), sessions: state.sessions.filter(session => this.agentOwners.get(session.id) === client).map(session => ({ sessionId: session.id, runId: session.latestRun?.id ?? null, title: session.title, project: state.projects.find(project => project.id === session.projectId)?.name, remote: session.remote, status: session.latestRun?.status ?? 'not-started', info: this.live.get(session.id)?.remote?.activity.info ?? null })) };
+      }
       case 'remoteResolve': {
-        const {session} = this.aliasTarget(request.params.alias);
+        const {session} = this.aliasTarget(request.params.alias, client);
         if (!session) throw new RemoteOperationError('SESSION_NOT_OPEN','此连接尚未打开，请先调用 terminal_open',{alias:request.params.alias});
         const live = this.terminal(session.id);
         return { sessionId: session.id, runId: live.run.id };
       }
       case 'remoteOpen': {
-        const {profile, session: previous} = this.aliasTarget(request.params.alias);
+        if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
+        const {profile, session: previous} = this.aliasTarget(request.params.alias, client, request.params.owner === 'user');
         if (request.params.owner === 'agent' && !profile.allowAgent) throw new Error('此连接未允许 Agent 打开，请在 SSH 设置中修改');
-        const pending = this.openingAliases.get(profile.id);
+        const key = `${client.id}:${profile.id}:${previous?.title ?? profile.alias}`;
+        const pending = this.openingAliases.get(key);
         if (pending) return pending;
         if (previous && this.live.has(previous.id)) {
           const live = this.terminal(previous.id);
@@ -246,40 +296,46 @@ export class DaemonServer {
         const opening = (async () => {
           const project = previous ? null : this.remoteProject();
           const session = previous ?? this.store.createSession(project!.id, profile.alias, 'shell', '', null, { connectionId: profile.id, host: profile.alias, directory: '' });
+          if(request.params.owner === 'agent') this.agentOwners.set(session.id, client);
           const run = await this.start(session.id, false, 100, 30);
-          const info = this.remote(session.id,run.id).activity.control(request.params.owner);
+          const activity = this.remote(session.id,run.id).activity;
+          const info = activity.controlChosen ? {...activity.info} : activity.control(request.params.owner);
+          if (request.params.owner === 'agent') this.remote(session.id,run.id).activity.assertManage(client);
+          if (client.abort.signal.aborted) this.remote(session.id,run.id).activity.release(client);
           this.changed(); return { sessionId: session.id, runId: run.id, info };
         })();
-        this.openingAliases.set(profile.id, opening);
+        this.openingAliases.set(key, opening);
         try { return await opening; }
-        finally { if (this.openingAliases.get(profile.id) === opening) this.openingAliases.delete(profile.id); }
+        finally { if (this.openingAliases.get(key) === opening) this.openingAliases.delete(key); }
       }
       case 'sshHosts': return sshHosts();
       case 'remoteManage': {
         const params=request.params;
         if(params.action==='create'){
+          if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
           const profile=this.store.sshConnections().find(item=>item.alias.toLowerCase()===params.alias!.toLowerCase());
           if(!profile)throw new Error('服务器别名不存在，请先填写服务器信息');
           if(!profile.allowAgent)throw new Error('此服务器未允许 Agent 打开');
-          const key=`${profile.id}:${params.title}`;
-          const pending=this.openingAliases.get(key);if(pending)return pending;
-          const previous=this.store.state().sessions.find(item=>item.remote?.connectionId===profile.id&&item.title===params.title);
+          const title=params.title??profile.alias;
+          const key=`${client.id}:${profile.id}:${title}`;
+          const previous=this.store.state().sessions.find(item=>item.remote?.connectionId===profile.id&&item.title===title&&this.agentOwners.get(item.id)===client);
           if(previous&&(previous.remote?.directory??'')!==(params.directory??''))throw new Error('同名 SSH 会话使用不同目录，请选择不同会话名称或停止后编辑');
+          const pending=this.openingAliases.get(key);if(pending)return pending;
           const opening=(async()=>{
-            const session=previous??this.store.createSession(this.remoteProject().id,params.title!,'shell','',null,{connectionId:profile.id,host:profile.alias,directory:params.directory??''});
+            const session=previous??this.store.createSession(this.remoteProject().id,title,'shell','',null,{connectionId:profile.id,host:profile.alias,directory:params.directory??''});
+            this.agentOwners.set(session.id,client);
             const existing=this.live.get(session.id);if(existing)return {sessionId:session.id,runId:existing.run.id,info:existing.remote!.activity.info};
-            const run=await this.start(session.id,false,100,30),info=this.remote(session.id,run.id).activity.control('agent');
+            const run=await this.start(session.id,false,100,30),activity=this.remote(session.id,run.id).activity;
+            const info=activity.controlChosen?{...activity.info}:activity.control('agent');
+            this.remote(session.id,run.id).activity.assertManage(client);
+            if(client.abort.signal.aborted)this.remote(session.id,run.id).activity.release(client);
             this.changed();return {sessionId:session.id,runId:run.id,info};
           })();
           this.openingAliases.set(key,opening);try{return await opening;}finally{this.openingAliases.delete(key);}
         }
-        let session;
-        if(params.alias){
-          const {profile}=this.aliasTarget(params.alias);
-          const matches=this.store.state().sessions.filter(item=>item.remote?.connectionId===profile.id);
-          if(matches.length!==1)throw new Error('此别名没有唯一会话，请从 terminal_list 选择 sessionId 和 runId');
-          session=matches[0];
-        }else session=this.store.session(params.sessionId!);
+        const session=params.alias?this.aliasTarget(params.alias,client).session:this.store.session(params.sessionId!);
+        if(!session)throw new RemoteOperationError('SESSION_NOT_OPEN','当前 Agent 尚未创建此服务器的会话',{alias:params.alias});
+        this.assertOwnSession(session.id,client);
         if(!session.remote?.connectionId||!this.store.sshConnection(session.remote.connectionId).allowAgent)throw new Error('此 SSH 会话未允许 Agent 管理');
         const live=this.live.get(session.id);
         if(params.runId&&session.latestRun?.id!==params.runId)throw new Error('终端运行实例已变化，请重新读取会话列表');
@@ -290,7 +346,7 @@ export class DaemonServer {
         }
         if(params.action==='reconnect'){
           if(!live)throw new Error('SSH 会话已停止，请调用 terminal_open');
-          await live.remote!.transport.reconnect();live.remote!.activity.assertManage(client);live.remote!.activity.control('agent');this.changed();
+          await live.remote!.transport.reconnect();live.remote!.activity.assertManage(client);this.changed();
           return {sessionId:session.id,runId:live.run.id,info:live.remote!.activity.info};
         }
         if(params.title===undefined&&params.directory===undefined)throw new Error('请提供会话名称或远端目录');
@@ -325,12 +381,14 @@ export class DaemonServer {
       case 'remoteControl': return this.remote(request.params.sessionId, request.params.runId).activity.control(request.params.owner);
       case 'remoteReconnect': { const live=this.terminal(request.params.sessionId,request.params.runId); await this.remote(request.params.sessionId,request.params.runId).transport.reconnect(); this.store.setPid(live.run.id,live.pty.pid);live.run=this.store.run(live.run.id);this.changed();return null; }
       case 'remoteExecute': {
+        this.assertOwnSession(request.params.sessionId,client);
         const remote = this.remote(request.params.sessionId, request.params.runId);
         return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.writeManaged(request.params.requestId,request.params.command,text), request.params.atPrompt);
       }
       case 'remoteCommand': return this.runRemoteCommand(client,request.params);
       case 'remoteReadOutput': {
         const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
+        this.recoverReadTarget(p.sessionId,client);
         const actionId=p.actionId??remote.activity.latestOutputCommand()?.id;
         if(!actionId)throw new RemoteOperationError('NO_COMMAND_OUTPUT','当前没有已捕获的命令结果；普通命令使用 terminal_execute，交互程序使用 terminal_interact。不要重跑此前结果未知的输入。',{sessionId:p.sessionId,runId:p.runId});
         if(p.search&&p.waitFor==='completion')await remote.activity.wait(actionId,p.timeoutMs,client.abort.signal);
@@ -338,16 +396,21 @@ export class DaemonServer {
         return {...value,requestMs:performance.now()-started};
       }
       case 'remoteKeys': {
+        this.assertOwnSession(request.params.sessionId,client);
         const remote = this.remote(request.params.sessionId, request.params.runId), { key, text, enter } = request.params;
         if(text!==undefined&&enter&&text.trim()&&remote.activity.info.phase==='idle'&&remote.activity.info.commandTracking==='posix'){
           return this.runRemoteCommand(client,{sessionId:request.params.sessionId,runId:request.params.runId,command:text,requestId:randomUUID(),atPrompt:false,waitMs:5000,waitFor:'completion',maxChars:32768,mode:'summary'});
         }
         remote.activity.keys(client, key ? remoteKeys[key] : text! + (enter ? '\r' : ''), key ? `按键 ${key}` : `输入文本（${text!.length} 字符${enter?'，回车':''}）`, data => remote.transport.write(data)); return {inputKind:'interactive',info:{...remote.activity.info}};
       }
-      case 'remoteWait': return this.remote(request.params.sessionId, request.params.runId).activity.wait(request.params.actionId, request.params.timeoutMs, client.abort.signal);
+      case 'remoteWait': {
+        const remote=this.remote(request.params.sessionId,request.params.runId);this.recoverReadTarget(request.params.sessionId,client);
+        return remote.activity.wait(request.params.actionId,request.params.timeoutMs,client.abort.signal);
+      }
       case 'remoteScreen': {
         const live = this.terminal(request.params.sessionId, request.params.runId);
         if (!live.remote) throw new Error('此会话不是远程终端');
+        this.recoverReadTarget(request.params.sessionId,client);
         const screen = await this.screen(live,false);
         const buffer = live.terminal.buffer.active, lines: string[] = [];
         for (let row = buffer.baseY; row < buffer.baseY + live.terminal.rows; row++) lines.push(buffer.getLine(row)?.translateToString(true) ?? '');
@@ -541,6 +604,7 @@ export class DaemonServer {
   }
 
   private async runRemoteCommand(client:Client,p:Extract<Request,{method:'remoteCommand'}>['params']) {
+    this.assertOwnSession(p.sessionId,client);
     const started=performance.now(),remote=this.remote(p.sessionId,p.runId);
     remote.activity.execute(client,p.requestId,p.command,text=>remote.transport.writeManaged(p.requestId,p.command,text),p.atPrompt);
     const first=await remote.activity.readOutput(p.requestId,0,p.maxChars,p.waitMs,p.waitFor??'completion',client.abort.signal,p.mode);
@@ -673,6 +737,7 @@ export class DaemonServer {
       throw error;
     }
     if (this.closing) throw new Error('后台无法再启动终端');
+    if (this.agentOwners.get(sessionId)?.disposing) throw new Error('SSH 连接已取消，Agent 正在清理自己的连接');
     if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
     const trackNative = !resume && !session.remote && (['codex', 'claude'].includes(session.agent) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
     let baseline: NativeCandidate[] | null = [];
@@ -702,7 +767,7 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: terminalEnvironment(selected.file) });
+      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id } });
     }
     catch (error) {
       terminal.dispose();
