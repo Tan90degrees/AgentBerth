@@ -16,7 +16,7 @@ const record = (id: string, cwd: string) => JSON.stringify({ type: 'session_meta
 
 test('exact provider hooks isolate concurrent runs, follow new conversations and yield to manual association', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'berth-exact-hooks-')), claude = path.join(dir, 'claude'); await mkdir(claude);
-  const commands: string[][] = [], environments: NodeJS.ProcessEnv[] = [], writes: string[] = [];
+  const commands: string[][] = [], environments: NodeJS.ProcessEnv[] = [], writes: string[] = [], exits: (() => void)[] = [];
   const fakeCli = { async run(args: string[]) {
     commands.push(args);
     if (args[1] === 'list') return JSON.stringify([{ id: 'discovered', directory: dir, updated: Date.now(), title: 'Named conversation' }]);
@@ -24,11 +24,11 @@ test('exact provider hooks isolate concurrent runs, follow new conversations and
   }, async close() {} };
   const spawn = (_file: string, _args: string[], options: any) => {
     environments.push(options.env); let exit: ((event: { exitCode: number }) => void) | undefined;
-    return { pid: 987654321, write(text: string) { writes.push(text); }, resize() {}, pause() {}, resume() {}, kill() { exit?.({ exitCode: 0 }); }, onData() {}, onExit(fn: any) { exit = fn; } };
+    return { pid: 987654321, write(text: string) { writes.push(text); }, resize() {}, pause() {}, resume() {}, kill() { exit?.({ exitCode: 0 }); }, onData() {}, onExit(fn: any) { exit = fn; exits.push(() => fn({ exitCode: 0 })); } };
   };
   const discovery = new NativeDiscovery({ codex: path.join(dir, 'codex'), claude }, new OpenCodeHistory(fakeCli as any));
   const server = new DaemonServer(path.join(dir, 'data'), () => {}, spawn as any, discovery), c = await DaemonConnection.open(await server.listen(), () => {});
-  t.after(async () => { c.close(); await server.close(); await rm(dir, { recursive: true, force: true, maxRetries: 5 }); });
+  t.after(async () => { exits.forEach(exit => exit()); await wait(50); c.close(); await server.close(); await rm(dir, { recursive: true, force: true, maxRetries: 5 }); });
   const project = await c.rpc<Project>('createProject', { name: 'Hook project', path: dir });
   const definition: any = await c.rpc('createAgent', { name: 'OpenCode profile', integration: 'opencode', command: 'opencode --model fixture', resumeCommand: 'opencode --session {sessionId}' });
   const a = await c.rpc<Session>('createSession', { projectId: project.id, title: 'A', agent: 'opencode' });
@@ -59,8 +59,10 @@ test('exact provider hooks isolate concurrent runs, follow new conversations and
   const transcript = path.join(claude, 'claude-native.jsonl'); await writeFile(transcript, JSON.stringify({ sessionId: 'claude-native', cwd: dir, type: 'assistant', message: { role: 'assistant', content: 'CLAUDE_FINAL' } }) + '\n');
   assert.deepEqual(await c.rpc('nativeSessionDetected', cp), { linked: true });
   assert.equal((await c.rpc<History>('refreshHistory', { sessionId: ca.id })).messages[0].text, 'CLAUDE_FINAL');
-  await c.rpc('stop', { sessionId: ca.id });
-  await c.rpc('stop', { sessionId: b.id });
+  // These PTYs have deliberately nonexistent PIDs: simulate their actual exit,
+  // rather than relying on OS signal delivery to trigger a fake onExit callback.
+  exits[2](); exits[1]();
+  await until(async () => (await c.rpc<State>('state')).sessions.find(s => s.id === b.id)!.latestRun?.status === 'exited');
   await c.rpc('start', { sessionId: b.id, resume: true, cols: 80, rows: 24 });
   assert.match(writes.at(-1)!, /opencode --session manual/);
   assert.equal(environments.at(-1)!.AGENTBERTH_NATIVE_SESSION_ID, 'manual');

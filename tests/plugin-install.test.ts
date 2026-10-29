@@ -21,6 +21,7 @@ test('plugin kit exports to a new folder and installs with the embedded runtime 
   assert.ok(guide.includes('describe') && guide.includes('history') && guide.includes('resume'));
   assert.ok(developmentPrompt(guide, kit).includes(kit));
   assert.ok(developmentPrompt(guide).includes('不要记录 TUI'));
+  for (const integration of ['claude', 'opencode']) assert.equal(JSON.parse(await readFile(path.join(kit, integration + '-profile.json'), 'utf8')).integration, integration);
   const config = await installPluginManifest(path.join(kit, 'agentberth-plugin.json'), path.join(folder, 'data'));
   assert.equal(config.plugin!.runtime, 'node');
   assert.equal(config.plugin!.args.length, 0);

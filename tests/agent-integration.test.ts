@@ -57,7 +57,8 @@ test('OpenCode installer selects the matching bundled API, updates atomically an
   assert.equal((await installAgentHook(options)).backup, null);
   const second = await installAgentHook({ ...options, detectVersion: async () => 'opencode 2.0.1' });
   assert.equal(await readFile(second.backup!, 'utf8'), v1); assert.match(await readFile(first.path, 'utf8'), /OpenCode major: 2/);
-  assert.equal(await openCodeLaunch('opencode --session ses_one', project, project, {}), 'opencode --session ses_one --standalone');
+  assert.equal(await openCodeLaunch('opencode --session ses_one', project, project, {}), 'opencode --standalone --session ses_one');
+  assert.equal(await openCodeLaunch('opencode && echo done', project, project, {}), 'opencode --standalone && echo done');
   assert.equal(await openCodeLaunch('opencode --server http://localhost:1234', project, project, {}), 'opencode --server http://localhost:1234');
   assert.equal(await openCodeLaunch('my-wrapper', project, project, {}), 'my-wrapper');
   await writeFile(first.path, '// user plugin'); await assert.rejects(installAgentHook(options), /不是 AgentBerth/); assert.equal(await readFile(first.path, 'utf8'), '// user plugin');
@@ -135,11 +136,13 @@ test('installed OpenCode CLI is resolved without profiles and reads JSON through
 });
 
 test('single-file Agent profiles retain provider inheritance through import, save and rename', async t => {
-  const folder = await temporary(t), store = new Store(path.join(folder, 'data')); t.after(() => store.close());
-  for (const integration of ['claude', 'opencode']) {
-    const file = path.join(folder, integration + '.json'); await writeFile(file, JSON.stringify({ schemaVersion: 1, id: integration + '-profile', name: integration + ' profile', integration, command: integration, resumeCommand: integration + ' --resume {sessionId}' }));
-    const config = await installAgentFile(file, folder), saved = store.saveAgent(config);
-    assert.equal(store.saveAgent({ ...config, name: 'Renamed ' + integration }, saved.id).integration, integration);
-  }
+  const folder = await temporary(t), store = new Store(path.join(folder, 'data'));
+  try {
+    for (const integration of ['claude', 'opencode']) {
+      const file = path.join(folder, integration + '.json'); await writeFile(file, JSON.stringify({ schemaVersion: 1, id: integration + '-profile', name: integration + ' profile', integration, command: integration, resumeCommand: integration + ' --resume {sessionId}' }));
+      const config = await installAgentFile(file, folder), saved = store.saveAgent(config);
+      assert.equal(store.saveAgent({ ...config, name: 'Renamed ' + integration }, saved.id).integration, integration);
+    }
+  } finally { store.close(); }
   assert.equal((await readdir(folder)).includes('node_modules'), false, 'Integration does not install an Agent engine');
 });

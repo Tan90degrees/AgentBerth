@@ -78,6 +78,7 @@ export async function exportPluginKit(directory: string, resourceRoot: string, c
   const destination = await mkdtemp(path.join(await realpath(directory), 'agentberth-plugin-'));
   try {
     for (const name of ['agent.json', 'agentberth-plugin.json', 'plugin.cjs']) await copyFile(path.join(resourceRoot, 'examples', 'plugin-template', name), path.join(destination, name));
+    for (const name of ['claude-profile.json', 'opencode-profile.json']) await copyFile(path.join(resourceRoot, 'examples', name), path.join(destination, name));
     await copyFile(path.join(resourceRoot, 'docs', 'AGENT_PLUGIN_DEVELOPMENT.md'), path.join(destination, 'AGENT_PLUGIN_DEVELOPMENT.md'));
     await copyFile(checkerFile, path.join(destination, 'check-plugin.cjs'));
     return destination;
