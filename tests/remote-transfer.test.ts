@@ -1,17 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes, generateKeyPairSync } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, readdir, open, symlink } from 'node:fs/promises';
-import type { FileHandle } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { Server, utils, type SFTPWrapper } from 'ssh2';
+import { Server, type Connection } from 'ssh2';
 import { copyTransfer, localTransferFs, RemoteTransfers, type TransferFs } from '../src/daemon/remote-transfer';
 import { Store } from '../src/daemon/store';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import { TerminalMcp } from '../src/mcp/server';
 import { transferSpecSchema, type RemoteTransfer, type Session, type SshConnection, type TransferSpec } from '../src/shared/protocol';
+
+import { serveSftp } from './fixtures/sftp-server';
 
 const spec=(source:string,destination:string,options:Partial<TransferSpec>={}):TransferSpec=>({requestId:randomUUID(),source:{kind:'remote',sessionId:randomUUID(),runId:randomUUID(),path:source},destination:{kind:'local',path:destination},recursive:false,resume:false,overwrite:false,...options});
 test('binary and recursive transfers preserve bytes, empty folders and explicit overwrite/resume behavior',async t=>{
@@ -69,27 +70,10 @@ test('background transfer IDs deduplicate, survive waits/disconnects and preserv
 
 // Protocol-level SFTP fixture: files stay under a temporary directory, with real
 // SSH authentication/channel multiplexing on both Windows and Linux.
-function serveSftp(sftp:SFTPWrapper,root:string,holdWrite:()=>boolean=()=>false):void {
-  let next=0;const handles=new Map<string,FileHandle|string[]>();
-  const file=(name:string)=>{const value=path.resolve(root,'.'+name);if(!value.startsWith(root+path.sep)&&value!==root)throw new Error('outside fixture');return value;};
-  const attrs=(s:Awaited<ReturnType<typeof lstat>>)=>({mode:Number(s.mode),size:Number(s.size),uid:0,gid:0,atime:Math.floor(Number(s.atimeMs)/1000),mtime:Math.floor(Number(s.mtimeMs)/1000)});
-  const safe=(id:number,fn:()=>Promise<void>)=>{void fn().catch((error:NodeJS.ErrnoException)=>sftp.status(id,error.code==='ENOENT'?2:4,error.code));};
-  sftp.on('OPEN',(id,name,flags,a)=>safe(id,async()=>{const handle=await open(file(name),utils.sftp.flagsToString(flags)!,a.mode),key=String(++next);handles.set(key,handle);sftp.handle(id,Buffer.from(key));}));
-  sftp.on('CLOSE',(id,key)=>safe(id,async()=>{const handle=handles.get(key.toString());if(handle&&!Array.isArray(handle))await handle.close();handles.delete(key.toString());sftp.status(id,0);}));
-  sftp.on('READ',(id,key,offset,length)=>safe(id,async()=>{const handle=handles.get(key.toString()) as FileHandle,bytes=Buffer.alloc(length);const read=await handle.read(bytes,0,length,offset);if(read.bytesRead)sftp.data(id,bytes.subarray(0,read.bytesRead));else sftp.status(id,1);}));
-  sftp.on('WRITE',(id,key,offset,data)=>{if(holdWrite())return;safe(id,async()=>{const handle=handles.get(key.toString()) as FileHandle;let written=0;while(written<data.length)written+=(await handle.write(data,written,data.length-written,offset+written)).bytesWritten;sftp.status(id,0);});});
-  for(const event of ['LSTAT','STAT'] as const)sftp.on(event,(id:number,name:string)=>safe(id,async()=>{sftp.attrs(id,attrs(await lstat(file(name))));}));
-  sftp.on('FSTAT',(id,key)=>safe(id,async()=>{const handle=handles.get(key.toString()) as FileHandle;sftp.attrs(id,attrs(await handle.stat()));}));
-  sftp.on('MKDIR',(id,name,a)=>safe(id,async()=>{await mkdir(file(name),{mode:a.mode});sftp.status(id,0);}));
-  sftp.on('OPENDIR',(id,name)=>safe(id,async()=>{const entries=await readdir(file(name));const key=String(++next);handles.set(key,entries.map(entry=>path.posix.join(name,entry)));sftp.handle(id,Buffer.from(key));}));
-  sftp.on('READDIR',(id,key)=>safe(id,async()=>{const entries=handles.get(key.toString()) as string[];if(!entries.length){sftp.status(id,1);return;}const batch=entries.splice(0,100);sftp.name(id,await Promise.all(batch.map(async name=>({filename:path.posix.basename(name),longname:name,attrs:attrs(await lstat(file(name)))}))));}));
-  sftp.on('error',()=>{});sftp.on('close',()=>{for(const handle of handles.values())if(!Array.isArray(handle))void handle.close().catch(()=>{});handles.clear();});
-}
-
 test('Agent manages sessions and uploads/downloads/streams over the same authenticated SSH while PTY remains live', {timeout:60000},async t=>{
   const folder=await mkdtemp(path.join(tmpdir(),'ab-transfer-ssh-')),remoteRoot=path.join(folder,'remote');await mkdir(remoteRoot);
   const key=generateKeyPairSync('rsa',{modulusLength:2048,privateKeyEncoding:{type:'pkcs1',format:'pem'},publicKeyEncoding:{type:'pkcs1',format:'pem'}});
-  const clients=new Set<any>();let handshakes=0,channels=0,holdWrites=false,denySftp=false,onHeld=()=>{};
+  const clients=new Set<Connection>();let handshakes=0,channels=0,holdWrites=false,denySftp=false,onHeld=()=>{};
   const ssh=new Server({hostKeys:[key.privateKey]},client=>{
     clients.add(client);client.on('error',()=>{});client.on('close',()=>clients.delete(client));
     client.on('authentication',context=>{if(context.method==='password'&&context.password==='fixture-secret')context.accept();else context.reject(['password']);});
@@ -106,7 +90,7 @@ test('Agent manages sessions and uploads/downloads/streams over the same authent
   const daemon=new DaemonServer(path.join(folder,'data')),runtime=await daemon.listen();let ui:DaemonConnection;
   ui=await DaemonConnection.open(runtime,event=>{if(event.event==='sshChallenge')void ui.rpc('sshChallengeReply',{challengeId:event.data.id,...(event.data.kind==='hostKey'?{accepted:true}:{secret:{password:'fixture-secret'}})});});
   const agent=await DaemonConnection.open(runtime,()=>{}),mcp=new TerminalMcp(agent);
-  t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});agent.close();ui.close();await daemon.close();for(const client of clients)client.destroy();await new Promise<void>(resolve=>ssh.close(()=>resolve()));await rm(folder,{recursive:true,force:true});});
+  t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});agent.close();ui.close();await daemon.close();for(const client of clients)client.end();await new Promise<void>(resolve=>ssh.close(()=>resolve()));await rm(folder,{recursive:true,force:true});});
   await ui.rpc('registerSshProvider');
   await ui.rpc<SshConnection>('saveSshConnection',{config:{alias:'fixture-server',hostname:'127.0.0.1',port:address.port,username:'fixture-user',authentication:'password',privateKeyPath:'',allowAgent:true}});
   const call=async(name:string,args:Record<string,unknown>={})=>{const result:any=await mcp.request('tools/call',{name,arguments:args});if(result.isError)throw new Error(JSON.parse(result.content[0].text).error.message);return JSON.parse(result.content[0].text);};

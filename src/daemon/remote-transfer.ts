@@ -20,13 +20,16 @@ export interface TransferFs {
   close:()=>void;
 }
 const missing=(error:unknown)=>(error as {code?:unknown})?.code==='ENOENT'||(error as {code?:unknown})?.code===2;
+// Keep a bounded 1 MiB window in flight instead of paying one network round
+// trip for every packet. 32 KiB requests also work with non-OpenSSH servers.
+const WRITE_CHUNK=32*1024,WRITE_CONCURRENCY=32,WRITE_WINDOW=WRITE_CHUNK*WRITE_CONCURRENCY;
 export const localTransferFs=():TransferFs=>({
   join:path.join,
   dirname:path.dirname,
   stat:async file=>{try{const s=await lstat(file);return {size:s.size,mtime:s.mtimeMs,mode:s.mode,file:s.isFile(),directory:s.isDirectory(),symlink:s.isSymbolicLink()};}catch(error){if(missing(error))return null;throw error;}},
   list:readdir,
   mkdir:async(file,mode)=>{await mkdir(file,{mode});},
-  read:(file,start,end)=>createReadStream(file,{start,end,highWaterMark:256*1024}),
+  read:(file,start,end)=>createReadStream(file,{start,end,highWaterMark:WRITE_WINDOW}),
   write:(file,flags,start,mode)=>createWriteStream(file,{flags,start,mode,highWaterMark:256*1024}),
   close:()=>{},
 });
@@ -57,14 +60,36 @@ export function sftpTransferFs(sftp:SFTPWrapper):TransferFs {
     },
     write:(file,flags,start,mode)=>{
       let handle:Buffer|null=null,position=start;
-      return new Writable({highWaterMark:256*1024,
+      return new Writable({highWaterMark:WRITE_WINDOW,
         construct(callback){
           if(!alive){callback(new Error('SFTP 通道已关闭'));return;}
           sftp.open(file,flags,{mode},(error,value)=>{handle=value??null;callback(error);});
         },
         write(chunk,_encoding,callback){
           if(!alive||!handle){callback(new Error('SFTP 通道已关闭'));return;}
-          sftp.write(handle,chunk,0,chunk.length,position,error=>{if(!error)position+=chunk.length;callback(error);});
+          let offset=0,pending=0,settled=false,pumping=false;
+          const stream=this,opened=handle;
+          const fail=(error:Error)=>{if(settled||stream.destroyed)return;settled=true;callback(error);};
+          const pump=()=>{
+            if(pumping||settled||stream.destroyed)return;
+            pumping=true;
+            try {
+              while(offset<chunk.length&&pending<WRITE_CONCURRENCY&&!settled&&!stream.destroyed){
+                if(!alive){fail(new Error('SFTP 通道已关闭'));break;}
+                const start=offset,length=Math.min(WRITE_CHUNK,chunk.length-start);
+                offset+=length;pending++;
+                sftp.write(opened,chunk,start,length,position+start,error=>{
+                  pending--;
+                  if(error)fail(error);else pump();
+                });
+              }
+            }catch(error){fail(error instanceof Error?error:new Error(String(error)));}
+            finally{pumping=false;}
+            if(!settled&&!stream.destroyed&&offset===chunk.length&&!pending){settled=true;position+=chunk.length;callback();}
+          };
+          // Do not acknowledge the stream chunk until every offset is confirmed;
+          // final/close, progress completion and resume must never race writes.
+          pump();
         },
         final(callback){if(!handle||!alive){callback(new Error('SFTP 通道已关闭'));return;}const value=handle;handle=null;sftp.close(value,callback);},
         // Never await an acknowledgement from a closed/unresponsive channel
