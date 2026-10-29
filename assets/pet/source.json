@@ -34,5 +34,6 @@
       "clip": "thinking",
       "loop": true
     }
-  }
+  },
+  "format": "animated-webp"
 }

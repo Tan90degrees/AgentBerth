@@ -1,4 +1,4 @@
-"""Pack the pinned MIT DSH character frames into offline GIFs and static posters.
+"""Pack the pinned MIT DSH character frames into offline animations and static posters.
 
 No drawing, synthetic poses, frame dropping or runtime downloads. Pillow is a
 build-time dependency only: python -m pip install Pillow==12.0.0
@@ -45,18 +45,19 @@ def verify():
     for status, selection in config['states'].items():
         record = report['states'][status]
         assert record['clip'] == selection['clip']
-        data = (DEST / (status + '.gif')).read_bytes()
-        assert len(data) <= BUDGET and digest(data) == record['gifSha256']
+        data = (DEST / (status + '.webp')).read_bytes()
+        assert len(data) <= 4 * 1024 * 1024 and digest(data) == record['animationSha256']
         with Image.open(BytesIO(data)) as image:
             assert image.size == tuple(config['canvas'])
             assert image.n_frames >= 24, (status, image.n_frames)
-            assert (image.info.get('loop') == 0) == selection['loop']
+            assert image.info.get('loop') == (0 if selection['loop'] else 1)
             assert image.convert('RGBA').getpixel((0, 0))[3] == 0
             total = 0
             for n in range(image.n_frames):
                 image.seek(n)
+                image.load()
                 total += image.info['duration']
-            assert abs(total - record['sourceFrames'] * 1000 / 24) <= 10
+            assert abs(total - record['sourceFrames'] * 1000 / 24) <= 2
         poster = (DEST / (status + '.png')).read_bytes()
         assert digest(poster) == record['posterSha256']
         with Image.open(BytesIO(poster)) as image:
@@ -65,6 +66,9 @@ def verify():
         print(status + ': ' + str(record['sourceFrames']) + ' frames, ' + str(len(data)) + ' bytes', flush=True)
     assert (ROOT / 'assets/pet/LICENSE-PC2005-cloud.txt').is_file()
     assert (ROOT / 'assets/pet/LICENSE-QCYTSN.txt').is_file()
+    for name in ['working', 'completed']:
+        with Image.open(ROOT / 'tests/fixtures' / ('pet-' + name + '.gif')) as image:
+            assert image.is_animated
 
 
 def render():
@@ -102,44 +106,34 @@ def render():
         frame.alpha_composite(fitted, ((canvas[0] - fitted.width) // 2, canvas[1] - fitted.height))
         return frame
 
-    report = {'version': 1, 'importRepository': config['repository'], 'importCommit': config['commit'],
+    report = {'version': 1, 'format': 'animated-webp', 'importRepository': config['repository'], 'importCommit': config['commit'],
               'originalSource': manifest['assetSource'], 'sourceFps': config['fps'], 'canvas': config['canvas'], 'states': {}}
     for status, selection in config['states'].items():
         clip = manifest['clips'][selection['clip']]
-        paths = clip['frames']
-        # One palette for an entire action keeps skin/hair/outline colours stable.
-        samples = [rgba_frame(paths[round(n * (len(paths) - 1) / 15)]) for n in range(16)]
-        swatches = Image.new('RGB', (canvas[0] * 4, canvas[1] * 4))
-        for n, sample in enumerate(samples):
-            swatches.paste(sample.convert('RGB'), ((n % 4) * canvas[0], (n // 4) * canvas[1]))
-        palette = swatches.quantize(colors=255)
-        colours = palette.getpalette()
-        colours += [0] * (768 - len(colours))
-        palette.putpalette(colours)
-        reserved = colours[255 * 3:256 * 3]
-        # Pillow may select unused black index 255; remap it before reserving alpha.
-        opaque_index = min(range(255), key=lambda n: sum((colours[n * 3 + c] - reserved[c]) ** 2 for c in range(3)))
-        remap = bytes(opaque_index if n == 255 else n for n in range(256))
-        frames = []
-        for relative in paths:
-            rgba = rgba_frame(relative)
-            indexed = rgba.convert('RGB').quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG)
-            indexed.frombytes(indexed.tobytes().translate(remap))
-            indexed.paste(255, mask=rgba.getchannel('A').point(lambda alpha: 255 if alpha < 96 else 0))
-            indexed.info['transparency'] = 255
-            frames.append(indexed)
-        # GIF timing has 10 ms precision. Alternate 40/50 ms to retain 24 fps timing.
-        durations = [round((n + 1) * 100 / 24) * 10 - round(n * 100 / 24) * 10 for n in range(len(frames))]
-        options = {'loop': 0} if selection['loop'] else {}
-        frames[0].save(DEST / (status + '.gif'), save_all=True, append_images=frames[1:], duration=durations,
-                       transparency=255, disposal=2, optimize=False,
-                       comment=b'dsh-pet / PC2005-cloud (MIT); frames QCYTSN/dsh-dafeiyu (MIT); see assets/pet', **options)
-        rgba_frame(paths[len(paths) // 3]).save(DEST / (status + '.png'), optimize=True)
-        gif = (DEST / (status + '.gif')).read_bytes()
-        assert len(gif) <= BUDGET, status + ' exceeds animation budget'
+        frames = [rgba_frame(relative) for relative in clip['frames']]
+        durations = [round((n + 1) * 1000 / 24) - round(n * 1000 / 24) for n in range(len(frames))]
+        # Animated WebP keeps soft alpha edges and full colour, with a much smaller payload than GIF.
+        frames[0].save(DEST / (status + '.webp'), format='WEBP', save_all=True, append_images=frames[1:],
+                       duration=durations, loop=0 if selection['loop'] else 1,
+                       quality=85, method=6, minimize_size=True, allow_mixed=True)
+        frames[len(frames) // 3].save(DEST / (status + '.png'), optimize=True)
+        data = (DEST / (status + '.webp')).read_bytes()
+        assert len(data) <= 4 * 1024 * 1024, status + ' exceeds animation budget'
         poster = (DEST / (status + '.png')).read_bytes()
-        report['states'][status] = {'clip': selection['clip'], 'loop': selection['loop'], 'sourceFrames': len(paths),
-            'source': clip['source'], 'gifSha256': digest(gif), 'posterSha256': digest(poster)}
+        report['states'][status] = {'clip': selection['clip'], 'loop': selection['loop'], 'sourceFrames': len(frames),
+            'source': clip['source'], 'animationSha256': digest(data), 'posterSha256': digest(poster)}
+        if status in ['working', 'completed']:
+            # Small animated GIFs exercise the separate custom-GIF import path without shipping duplicate defaults.
+            fixture = []
+            for rgba in frames[:12]:
+                image = rgba.convert('RGB').quantize(colors=255)
+                image.paste(255, mask=rgba.getchannel('A').point(lambda a: 255 if a < 96 else 0))
+                fixture.append(image)
+            target = ROOT / 'tests/fixtures' / ('pet-' + status + '.gif')
+            fixture[0].save(target, save_all=True, append_images=fixture[1:],
+                            duration=[round((n + 1) * 100 / 24) * 10 - round(n * 100 / 24) * 10 for n in range(12)],
+                            loop=0, transparency=255, disposal=2, optimize=False)
+        (DEST / (status + '.gif')).unlink(missing_ok=True)
         print('Encoded ' + status, flush=True)
     REPORT.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf8')
     verify()
