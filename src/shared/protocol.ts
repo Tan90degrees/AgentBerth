@@ -200,6 +200,8 @@ export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
 export interface RemoteInfo { commandTracking?: 'posix' | 'none'; sessionId: string; runId: string; host: string; connection: 'connecting' | 'connected' | 'disconnected'; owner: 'user' | 'agent'; phase: 'unknown' | 'idle' | 'busy'; cwd: string | null; error: string | null }
+/** Transport lifecycle cannot grant or revoke the user's input permission. */
+export type RemoteStatusUpdate = Partial<Omit<RemoteInfo, 'owner'>>;
 export interface RemoteAction { sequence: number; id: string; sessionId: string; runId: string; kind: 'command' | 'input' | 'control' | 'connection' | 'transfer'; label: string; status: 'running' | 'completed' | 'unknown'; startedAt: string; endedAt: string | null; exitCode: number | null; transfer?:RemoteTransfer }
 export interface OutputSearchResult {query:string;caseSensitive:boolean;contextLines:number;maxBytes:number;offset:number;limit:number;totalMatches:number;returnedMatches:number;nextOffset:number|null;startCursor:number;endCursor:number;lineNumbering:'range';omitted:boolean;groups:{startLine:number;cursor:number;text:string;matchLines:number[]}[]}
 export interface McpCallMetric {callId:string;tool:string;success:boolean}

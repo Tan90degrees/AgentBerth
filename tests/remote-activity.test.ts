@@ -50,12 +50,40 @@ test('long commands survive wait timeouts; request IDs deduplicate and disconnec
   assert.equal(x.store.remoteAction(id)!.status,'unknown');x.activity.execute(client,id,'sleep 100',()=>writes++);assert.equal(writes,1);
 });
 
+test('MCP detach frees only its writer slot and preserves the grant and running command',t=>{
+  const x=setup();t.after(x.close);const a={},b={},c={},id=randomUUID();let writes=0;
+  x.activity.control('agent');x.activity.execute(a,id,'long task',()=>writes++);
+  const actions=x.store.remoteActions(x.session.id).length;
+  x.activity.release(b);assert.throws(()=>x.activity.assertAgent(b),/另一个 Agent/);
+  x.activity.release(a);
+  assert.equal(x.info.owner,'agent');assert.equal(x.store.remoteAction(id)!.status,'running');
+  assert.equal(x.store.remoteActions(x.session.id).length,actions,'Disconnect must not invent a human takeover step');
+  assert.equal(x.activity.execute(b,id,'long task',()=>writes++).id,id);assert.equal(writes,1);
+  x.activity.release(a);assert.throws(()=>x.activity.assertAgent(c),/另一个 Agent/);
+  x.activity.control('user');x.activity.release(b);
+  assert.equal(x.info.owner,'user');assert.throws(()=>x.activity.assertManage(c),/用户控制/);
+});
+
+test('SSH lifecycle updates cannot revoke Agent permission or undo an explicit human takeover',t=>{
+  const x=setup();t.after(x.close);const client={},id=randomUUID();
+  x.activity.control('agent');x.activity.execute(client,id,'long task',()=>{});
+  const oldTransportUpdate:Partial<RemoteInfo>={connection:'disconnected',owner:'user'};
+  x.activity.change(oldTransportUpdate);
+  assert.equal(x.info.owner,'agent');assert.equal(x.store.remoteAction(id)!.status,'unknown');
+  x.activity.assertManage(client);assert.throws(()=>x.activity.assertAgent(client),/尚未连接/);
+  x.activity.change({connection:'connecting'});x.activity.control('user');
+  const lateUpdate:Partial<RemoteInfo>={connection:'connected',owner:'agent'};
+  x.activity.change(lateUpdate);x.activity.release(client);
+  assert.equal(x.info.owner,'user');assert.throws(()=>x.activity.assertManage(client),/用户控制/);
+  x.activity.control('agent');x.activity.assertAgent(client);
+});
+
 test('unstarted commands are not completed by a stale prompt; wait cancellation releases listeners',async t=>{
   const x=setup();t.after(x.close);const client={},id=randomUUID();x.activity.control('agent');x.activity.execute(client,id,'echo 1',()=>{});
   x.activity.marker('ready',0,'/work');assert.equal(x.store.remoteAction(id)!.status,'running');
   const controller=new AbortController();const wait=x.activity.wait(id,1000,controller.signal);controller.abort();
   assert.equal((await wait).status,'running');assert.equal(x.activity.events.listenerCount('change'),0);
-  x.activity.release(client);assert.equal(x.info.owner,'user');
+  x.activity.release(client);assert.equal(x.info.owner,'agent');
 });
 
 test('raw input requires prompt confirmation; other login Shells use screen and keys',t=>{

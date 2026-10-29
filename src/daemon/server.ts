@@ -290,7 +290,7 @@ export class DaemonServer {
         }
         if(params.action==='reconnect'){
           if(!live)throw new Error('SSH 会话已停止，请调用 terminal_open');
-          await live.remote!.transport.reconnect();live.remote!.activity.assertManage(client);live.remote!.activity.control('agent');this.changed();
+          await live.remote!.transport.reconnect();live.remote!.activity.assertManage(client);this.changed();
           return {sessionId:session.id,runId:live.run.id,info:live.remote!.activity.info};
         }
         if(params.title===undefined&&params.directory===undefined)throw new Error('请提供会话名称或远端目录');

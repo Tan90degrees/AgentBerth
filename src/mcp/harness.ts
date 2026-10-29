@@ -25,6 +25,8 @@ COMMAND_RUNNING refers to the existing command, not permission to start another.
 ## Sessions and files
 terminal_session defaults to action:list and discovers saved aliases and sessions. open/create/update/close/delete/reconnect/actions cover management. Normal execute requires no preliminary open. Reconnect explicitly creates a new Shell and does not restore/replay unknown jobs. Server passwords/keys stay in AgentBerth.
 
+Input ownership changes in the desktop UI. MCP disconnect, request timeout, command completion and SSH reconnection do not return control to the user or revoke an existing Agent grant. A disconnected MCP client only releases its single-writer slot. Only an explicit user takeover changes an Agent-controlled terminal to user-controlled; MCP tools cannot release or change this permission. After takeover, wait for the user to click 交给 Agent.
+
 terminal_transfer actions upload/download/copy/status/cancel use SFTP without remote helpers. Exact absolute paths, recursive directories and explicit overwrite/prefix-verified resume are supported. Retain requestId; running or unknown transfers use status rather than repeated copy.
 
 Closing a desktop window preserves SSH. Tray exit closes local SSH; it cannot prove detached remote jobs stopped. The remote needs only SSH and its existing Shell. Legacy tool names remain callable for cached clients, but all new next pointers use these four tools. Update the backend to API 34 and reconnect MCP to refresh discovery.

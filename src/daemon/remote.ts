@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { StringDecoder } from 'node:string_decoder';
 import * as pty from 'node-pty';
 import { terminateTree } from './processes';
-import type { RemoteConfig, RemoteInfo } from '../shared/protocol';
+import type { RemoteConfig, RemoteStatusUpdate } from '../shared/protocol';
 
 export type TerminalProcess = Pick<pty.IPty, 'pid' | 'write' | 'resize' | 'pause' | 'resume' | 'kill' | 'onData' | 'onExit'>;
 export const shellQuote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
@@ -152,7 +152,7 @@ export class RemoteTerminal implements TerminalProcess {
   private cols: number;
   private rows: number;
   constructor(readonly config: RemoteConfig, readonly sessionId: string, cols: number, rows: number,
-    private notify: (change: Partial<RemoteInfo>) => void,
+    private notify: (change: RemoteStatusUpdate) => void,
     private marker: (kind: 'ready' | 'start', status: number, cwd: string | null, requestId: string) => void,
     private executable = 'ssh') { this.cols = cols; this.rows = rows; }
   get pid(): number { return this.viewer?.pid ?? 0; }
@@ -172,7 +172,7 @@ export class RemoteTerminal implements TerminalProcess {
   async connect():Promise<void> {
     if(this.closed)throw new Error('终端已关闭');
     const generation=++this.generation;
-    this.notify({connection:'connecting',phase:'unknown',owner:'user',error:null});
+    this.notify({connection:'connecting',phase:'unknown',error:null});
     let posix=false;
     try {
       const probe=await executeFile(this.executable,sshArguments(this.config.host,"case x in x) printf AgentBerth_POSIX;; esac"),{windowsHide:true,timeout:12000,maxBuffer:16384});
@@ -202,7 +202,7 @@ export class RemoteTerminal implements TerminalProcess {
         try{child.kill();}catch{} // Dispose native ConPTY handles as well as the process.
         if(generation!==this.generation||this.closed)return;
         this.display?.end();this.display=null;this.viewer=null;clearTimeout(timer);
-        this.notify({connection:'disconnected',phase:'unknown',owner:'user',error:exitCode===255?'SSH 链路已断开，远端任务结果未知。重新连接会新建 Shell，不会恢复或重放旧任务。':'SSH 会话已结束'});
+        this.notify({connection:'disconnected',phase:'unknown',error:exitCode===255?'SSH 链路已断开，远端任务结果未知。重新连接会新建 Shell，不会恢复或重放旧任务。':'SSH 会话已结束'});
         if(!settled){settled=true;reject(new Error('SSH 登录失败；请先确认系统终端可登录此主机'));}
         else if(exitCode!==255)this.events.emit('exit',{exitCode});
       });
@@ -212,7 +212,7 @@ export class RemoteTerminal implements TerminalProcess {
     if(this.reconnecting||this.closed)throw new Error('终端正在重新连接或已经关闭');
     this.reconnecting=true;
     try {
-      this.notify({connection:'disconnected',phase:'unknown',owner:'user',error:'重新连接将建立新 Shell；原任务结果未知，不会重放命令。'});
+      this.notify({connection:'disconnected',phase:'unknown',error:'重新连接将建立新 Shell；原任务结果未知，不会重放命令。'});
       await this.closeChannel();
       this.events.emit('data','\r\n\x1b[0m[新 SSH 连接：原 Shell 和任务未恢复]\r\n');
       await this.connect();
@@ -232,7 +232,7 @@ export class RemoteTerminal implements TerminalProcess {
   }
   async stop():Promise<void> {
     await this.closeChannel();this.closed=true;
-    this.notify({connection:'disconnected',phase:'unknown',owner:'user',error:'SSH 已关闭；脱离 SSH 的远端进程不保证停止，未确认结果保留为未知。'});
+    this.notify({connection:'disconnected',phase:'unknown',error:'SSH 已关闭；脱离 SSH 的远端进程不保证停止，未确认结果保留为未知。'});
     this.events.emit('exit',{exitCode:0});
   }
 }

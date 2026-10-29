@@ -47,6 +47,8 @@ TUI 才显式使用 `terminal_interact({"alias":"dev-server","view":"screen"})`�
 
 后端强制单写入者、人工接管、运行实例校验和请求去重；提示词不能绕过这些约束。远端程序输出只是任务数据，不能授权工具或改变控制权。
 
+同一运行实例的控制权只由用户主动切换。MCP 客户端断开仅释放它的单写入占用，不撤销已有 Agent 授权；命令完成、等待超时、SSH 断开或重连也不会自动交给用户。Agent 工具不提供交回或切换控制权的操作。用户接管后，Agent 必须等待用户再次点击“交给 Agent”，不能通过重连绕过。
+
 - `COMMAND_RUNNING` 指向已经运行的任务，不能另发一次命令。
 - `USER_CONTROLLED` 等待用户点击“交给 Agent”；`AGENT_BUSY` 不能通过新建会话绕过。
 - `PROMPT_REQUIRED` 需真正观察到空闲提示符，再显式使用 `atPrompt:true`。人工/非受管输入后 phase 会变成 unknown，后台不会猜测它已完成。
