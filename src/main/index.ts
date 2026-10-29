@@ -240,6 +240,12 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
       const sessions = pet.snapshot().sessions;
       const id = sessions.find(session => session.sessionId === pet.preferences.selectedSessionId)?.sessionId ?? sessions[0]?.sessionId;
       if (!id) return;
+      if (remoteSessionIds.has(id) && sshWindow && !sshWindow.isDestroyed()) {
+        sshWindowSession = id;
+        publishSshWindow();
+        await openSshWindow();
+        return;
+      }
       showWindow();
       const send = () => window?.webContents.send('berth:petSession', id);
       if (window?.webContents.isLoadingMainFrame()) window.webContents.once('did-finish-load', send); else send();
