@@ -24,6 +24,7 @@ try {
   const a = await create('Agent A'), b = await create('Agent B');
   const runA = await rpc('start', { sessionId: a.id, cols: 80, rows: 24 });
   const runB = await rpc('start', { sessionId: b.id, cols: 80, rows: 24 });
+  console.log('Pet smoke: open settings/window');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).click();
   const petReady = application.waitForEvent('window');
@@ -32,6 +33,7 @@ try {
   await pet.locator('.desktop-pet').waitFor();
   await pet.getByLabel('桌宠展示的会话').selectOption(a.id);
   await pet.waitForFunction(id => document.querySelector('select').value === id, a.id);
+  console.log('Pet smoke: real terminal hook identity');
   const runtime = await application.evaluate(() => ({ exec: process.execPath, resources: process.resourcesPath }));
   const script = packaged ? path.join(runtime.resources, 'pet', 'pet-hook.cjs') : path.resolve('dist/pet-hook.cjs');
   const quote = value => "'" + value.replaceAll("'", process.platform === 'win32' ? "''" : "'\\''") + "'";
@@ -44,6 +46,7 @@ try {
     const response = await fetch(`http://127.0.0.1:${descriptor.port}/hook`, { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.token }, body: JSON.stringify({ sessionId: session.id, runId: run.id, status }) });
     assert.equal(response.status, 200);
   };
+  console.log('Pet smoke: waiting switches session, jump and hidden workbench');
   await hook(b, runB, 'waiting');
   await pet.waitForFunction(id => document.querySelector('select').value === id && document.querySelector('.pet-state-waiting'), b.id);
   await pet.getByRole('button', { name: '打开当前会话', exact: true }).click();
@@ -54,6 +57,7 @@ try {
   await pet.getByRole('button', { name: '打开当前会话', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).click();
+  console.log('Pet smoke: scale/layout and GIF import/reset');
   await page.getByLabel('桌宠大小', { exact: true }).selectOption('1.5');
   await pet.waitForFunction(() => Number(document.querySelector('.desktop-pet').style.zoom) === 1.5);
   const layout = await pet.evaluate(() => {
@@ -78,6 +82,10 @@ try {
   assert.deepEqual(errors, []);
   await rpc('stop', { sessionId: a.id }); await rpc('stop', { sessionId: b.id });
   console.log('Pet smoke passed: independent window, actual PTY hook binding, session switch/jump, hidden workbench, scaling, GIF import/reset and non-destructive hide');
+} catch (error) {
+  await mkdir('test-results', { recursive: true });
+  for (const [index, page] of (application?.windows() ?? []).entries()) await page.screenshot({ path: `test-results/pet-failure-${process.platform}-${index}.png` }).catch(() => {});
+  throw error;
 } finally {
   if (application) await application.close();
   await rm(folder, { recursive: true, force: true });

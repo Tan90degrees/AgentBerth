@@ -14,7 +14,12 @@ function usePet() {
     return () => { alive = false; off(); };
   }, []);
   const save = async (change: Partial<PetPreferences>) => {
-    const value = await window.berth.pet({ action: 'save', preferences: { ...snapshot.preferences, ...change } }); setSnapshot(value);
+    const previous = snapshot;
+    const preferences = { ...snapshot.preferences, ...change };
+    // Controlled inputs acknowledge the click while the native window loads.
+    setSnapshot(current => ({ ...current, preferences }));
+    try { const value = await window.berth.pet({ action: 'save', preferences }); setSnapshot(value); }
+    catch (reason) { setSnapshot(previous); throw reason; }
   };
   return { snapshot, setSnapshot, error, setError, save };
 }
