@@ -36,7 +36,7 @@ export class AgentMcp {
       if (item.type !== 'text') return item;
       let value; try { value = JSON.parse(item.text); } catch { return item; }
       // Preserve identity on trusted continuation pointers, never rewrite remote text.
-      for (const pointer of [value.continuation, value.details, value.harness?.next]) if (pointer?.tool && pointer.arguments) pointer.arguments.agentId = agentId;
+      for (const pointer of [value.continuation, value.details, value.harness?.next, value.harness?.lifecycle?.onTaskComplete]) if (pointer?.tool && pointer.arguments) pointer.arguments.agentId = agentId;
       value.agentId = agentId;
       return { ...item, text: boundedToolText(value) };
     }) };

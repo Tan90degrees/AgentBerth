@@ -3,7 +3,7 @@ import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 38;
+export const API_VERSION = 39;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -103,7 +103,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('registerSshProvider'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('sshChallengeReply'), params: z.object({ challengeId: id, secret: sshSecretSchema.optional(), accepted: z.boolean().optional() }).strict() }),
   z.object({ id, method: z.literal('remoteAgentRecover'), params: z.object({ targets: z.array(z.object(remoteTarget).strict()).max(128) }).strict() }),
-  z.object({ id, method: z.literal('remoteAgentClose'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('remoteAgentClose'), params: z.object({ deleteHistory: z.boolean().default(false) }).strict() }),
   z.object({ id, method: z.literal('remoteAgentSessions'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteAliases'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('remoteOpen'), params: z.object({ alias: z.string().min(1).max(100), owner: z.enum(['user','agent']).default('agent') }).strict() }),

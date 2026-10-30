@@ -205,6 +205,7 @@ export class DaemonServer {
     if(client !== this.sshProvider && this.agentOwners.get(sessionId)?.abort.signal.aborted)this.agentOwners.set(sessionId,client);
   }
   private assertOwnSession(sessionId: string, client: Client): void {
+    if (client.disposing) throw new RemoteOperationError('CLEANUP_BLOCKED', '此 Agent 正在清理连接，请等待清理完成；未发送新操作', {sessionId});
     const previous = this.agentOwners.get(sessionId);
     if (previous && previous !== client && !previous.abort.signal.aborted) {
       const session = this.store.session(sessionId);
@@ -264,13 +265,21 @@ export class DaemonServer {
         for (const session of sessions) {
           const activity=this.live.get(session.id)?.remote?.activity;
           if(activity&&(!this.starting.has(session.id)||activity.controlChosen))activity.assertManage(client);
+          const work = this.store.unresolvedRemoteAction(session.id);
+          if (work && (work.status === 'running' || request.params.deleteHistory)) throw new RemoteOperationError('CLEANUP_BLOCKED', '此上下文仍有运行中或结果不明的任务；继续查询原任务，完成或明确取消后再清理。不要为了清理重放命令。', { sessionId: session.id, runId: work.runId, ...(work.kind === 'transfer' ? { transferId: work.id } : { actionId: work.id }) });
         }
         client.disposing = true;
         try {
           const opening = [...this.openingAliases].filter(([key]) => key.startsWith(client.id + ':')).map(([,promise]) => promise);
           await Promise.all(sessions.map(session => this.stop(session.id)));
           await Promise.allSettled(opening);
-          return { closed: sessions.map(session => session.id) };
+          const closed = sessions.map(session => session.id), deleted: string[] = [];
+          if (request.params.deleteHistory) for (const session of sessions) {
+            if (this.live.has(session.id) || this.starting.has(session.id)) continue;
+            this.removeLogs(this.store.deleteSession(session.id)); deleted.push(session.id);
+          }
+          this.changed();
+          return { closed, deleted, retained: closed.filter(id => !deleted.includes(id)) };
         } finally { client.disposing = false; }
       }
       case 'remoteAgentSessions': {

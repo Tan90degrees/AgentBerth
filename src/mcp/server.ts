@@ -7,6 +7,7 @@ import { tools, routeTool, publicReply } from './catalog';
 export { tools } from './catalog';
 import { boundedToolText } from './result-limits';
 import { instructions, guide, guideUri, ToolArgumentError, errorReply, resultHarness } from './harness';
+import { TaskLifecycle } from './lifecycle';
 
 const uuid = { type: 'string', format: 'uuid' };
 const target = { alias: { type: 'string', description: 'Saved SSH connection alias; use alias OR sessionId + runId.' }, sessionId: uuid, runId: uuid };
@@ -25,7 +26,7 @@ const descriptions:Record<string,string>={
 };
 const legacyTools = [
   { name: 'terminal_open', description: descriptions.terminal_open, inputSchema: schema({ alias: { type: 'string', minLength: 1, maxLength: 100 } }, ['alias']) },
-  { name: 'terminal_dispose', description: 'Close all SSH sessions belonging to this Agent context. Never touches other agents or user-controlled terminals.', inputSchema: schema({}, []) },
+  { name: 'terminal_dispose', description: 'Task finalizer: explicitly close and DELETE this context\'s SSH sessions and local history. Call before the final answer after ALL work is complete. Retain long-running/unknown work. keepHistory=true closes but keeps records. Never touches other agents or user-created terminals.', inputSchema: schema({keepHistory:{type:'boolean',default:false}}, []) },
   { name: 'terminal_list', description: descriptions.terminal_list, inputSchema: schema({}, []) },
   { name: 'terminal_create', description: 'Create and open a named SSH terminal on a saved authorized server. Reuses the same alias+title to make retries safe; different titles create parallel terminals. User only needs to save server/login information. Does not reclaim human input or reconnect an existing broken link.', inputSchema: schema({alias:{type:'string',minLength:1,maxLength:100},title:{type:'string',minLength:1,maxLength:100},directory:{type:'string',description:'Optional absolute remote directory; empty means login directory.'}},['alias','title']) },
   ...(['update','close','delete','reconnect'] as const).map(action=>({name:'terminal_'+action,description:{update:'Rename an SSH session; directory changes require a stopped session. Never changes saved server credentials.',close:'Close SSH and retain the session/history. This does not prove detached remote tasks have stopped.',delete:'Delete a stopped SSH session and its workbench records. Close it first; saved server information remains.',reconnect:'Explicitly start a NEW remote Shell after link loss. Old jobs are not restored or replayed. Cannot bypass human takeover.'}[action],inputSchema:schema({...target,...(action==='update'?{title:{type:'string',minLength:1,maxLength:100},directory:{type:'string'}}:{})},[])})),
@@ -42,12 +43,13 @@ const legacyTools = [
 ].map(tool => ({...tool, inputSchema: {...tool.inputSchema, ...(['terminal_list','terminal_dispose','terminal_open','terminal_create','terminal_transfer_status','terminal_transfer_cancel'].includes(tool.name) ? {} : tool.name==='terminal_transfer' ? {allOf:[{anyOf:[{required:['sourceAlias']},{required:['sourceSessionId','sourceRunId']}]},{anyOf:[{required:['destinationAlias']},{required:['destinationSessionId','destinationRunId']}]}]} : { anyOf: [{required:['alias']},{required:['terminal_actions','terminal_update','terminal_close','terminal_delete','terminal_reconnect'].includes(tool.name) ? ['sessionId'] : ['sessionId','runId']}] })}})).map(tool=>({...tool,title:tool.name.replace('terminal_','SSH · '),annotations:{readOnlyHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status'].includes(tool.name),destructiveHint:!['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create'].includes(tool.name),idempotentHint:['terminal_list','terminal_screen','terminal_read_output','terminal_wait','terminal_actions','terminal_transfer_status','terminal_open','terminal_create','terminal_close'].includes(tool.name),openWorldHint:true}}));
 
 export class McpError extends Error { constructor(readonly code: number, message: string) { super(message); } }
-// Dedicated per-Agent SSH contexts require API 36; never fall back to globally shared aliases.
-export const MCP_API_VERSION = 36;
+// Explicit task finalization requires API 39; no silent close-only fallback.
+export const MCP_API_VERSION = 39;
 export class TerminalMcp {
   private targets = new Map<string,{sessionId:string;runId:string}>();
   private aliases = new Map<string, {sessionId:string;runId:string}>();
   private lastTarget:{sessionId:string;runId:string}|null=null;
+  private lifecycle = new TaskLifecycle();
   constructor(private connection: Pick<DaemonConnection, 'rpc'>,private reportCall?:(event:McpCallMetric)=>void|Promise<unknown>) {}
   ownedTargets(): {sessionId:string;runId:string}[] { return [...new Map([...this.targets.values(),...this.aliases.values(),...(this.lastTarget?[this.lastTarget]:[])].map(target=>[target.sessionId,target])).values()]; }
   private validateParams(method:Method,params:Record<string,unknown>) {
@@ -79,7 +81,7 @@ export class TerminalMcp {
   private async dispatch(method: string, params: unknown): Promise<unknown> {
     if (method === 'initialize') {
       const requested = (params as { protocolVersion?: string })?.protocolVersion;
-      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {}, resources:{} }, serverInfo: { name: 'agentberth-terminal', title:'AgentBerth shared SSH terminal', version: '0.15.2' }, instructions };
+      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {}, resources:{} }, serverInfo: { name: 'agentberth-terminal', title:'AgentBerth shared SSH terminal', version: '0.16.0' }, instructions };
     }
     if (method === 'ping') return {};
     if (method === 'tools/list') return { tools };
@@ -150,7 +152,11 @@ export class TerminalMcp {
         }
         case 'terminal_transfer_status':value=await this.connection.rpc('remoteTransferStatus',this.validateParams('remoteTransferStatus',{...args,timeoutMs:args.timeoutMs??25000}));break;
         case 'terminal_transfer_cancel':value=await this.connection.rpc('remoteTransferCancel',this.validateParams('remoteTransferCancel',args));break;
-        case 'terminal_dispose': value = await this.connection.rpc('remoteAgentClose'); this.lastTarget=null; this.aliases.clear(); this.targets.clear(); break;
+        case 'terminal_dispose': {
+          if (args.keepHistory !== undefined && typeof args.keepHistory !== 'boolean') throw new ToolArgumentError('keepHistory must be a boolean');
+          value = await this.connection.rpc('remoteAgentClose', { deleteHistory: args.keepHistory !== true });
+          this.lastTarget=null; this.aliases.clear(); this.targets.clear(); break;
+        }
         case 'terminal_list': value = await this.connection.rpc('remoteAgentSessions'); break;
         case 'terminal_execute': value = await this.outputRpc('remoteCommand', {...inputArgs,requestId:inputArgs.requestId??randomUUID()}); break;
         case 'terminal_screen': {
@@ -186,11 +192,18 @@ export class TerminalMcp {
           if(this.lastTarget?.sessionId===closed)this.lastTarget=null;
         }
       }
+      this.lifecycle.observe(name!, value);
       if(value&&typeof value==='object'&&'output'in value)value=commandReply(value as RemoteCommandResult,typeof args.cursor==='number'?args.cursor:0,typeof args.maxChars==='number'?args.maxChars:undefined);
       else if(name==='terminal_screen'||publicName==='terminal_interact')value=screenReply(value as Record<string,any>);
       const reply=resultHarness(publicName==='terminal_interact'&&(value as any)?.scope==='viewport'?'terminal_screen':name!,value);
+      if (reply?.harness) reply.harness.lifecycle = this.lifecycle.hint(name === 'terminal_dispose', (value as any)?.info?.owner === 'user');
       if(detail==='full')for(const next of [reply?.continuation,reply?.details,reply?.harness?.next])if(next&&['terminal_execute','terminal_read_output','terminal_wait','terminal_screen','terminal_keys'].includes(next.tool))next.arguments.detail='full';
       return { content: [{ type: 'text', text: boundedToolText(publicReply(detail==='full'?reply:compactReply(reply),inputArgs.waitFor==='output'?'output':'completion')) }] };
-    } catch (error) { return { isError: true, content: [{ type: 'text', text: boundedToolText(publicReply(errorReply(error,{name:name!,args:{...args,...(provided.detail==='full'?{detail:'full'}:{})},target:inputArgs,dispatched}),inputArgs.waitFor==='output'?'output':'completion')) }] }; }
+    } catch (error) {
+      const reply = errorReply(error,{name:name!,args:{...args,...(provided.detail==='full'?{detail:'full'}:{})},target:inputArgs,dispatched});
+      this.lifecycle.failure(reply.error.code, inputArgs, error instanceof DaemonRpcError ? error.details : {});
+      Object.assign(reply.harness, { lifecycle: this.lifecycle.hint(false, reply.error.code === 'USER_CONTROLLED') });
+      return { isError: true, content: [{ type: 'text', text: boundedToolText(publicReply(reply,inputArgs.waitFor==='output'?'output':'completion')) }] };
+    }
   }
 }

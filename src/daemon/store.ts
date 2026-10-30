@@ -205,6 +205,10 @@ export class Store {
     const row = this.db.prepare('SELECT sequence,value FROM remote_actions WHERE id=?').get(id) ?? this.db.prepare('SELECT 0 AS sequence,value FROM remote_requests WHERE id=?').get(id);
     return row ? { ...JSON.parse(String(row.value)), sequence: Number(row.sequence) } : null;
   }
+  unresolvedRemoteAction(sessionId: string): RemoteAction | null {
+    const row = this.db.prepare("SELECT value FROM remote_requests WHERE (sessionId=? OR json_extract(value,'$.transfer.spec.destination.sessionId')=?) AND json_extract(value,'$.status') IN ('running','unknown') ORDER BY CASE json_extract(value,'$.status') WHEN 'running' THEN 0 ELSE 1 END, rowid LIMIT 1").get(sessionId, sessionId);
+    return row ? JSON.parse(String(row.value)) : null;
+  }
   remoteActions(sessionId: string, before = Number.MAX_SAFE_INTEGER): RemoteAction[] {
     this.session(sessionId);
     return this.db.prepare('SELECT sequence,value FROM remote_actions WHERE sessionId=? AND sequence<? ORDER BY sequence DESC LIMIT 50').all(sessionId, before).map(row => ({ ...JSON.parse(String(row.value)), sequence: Number(row.sequence) }));
