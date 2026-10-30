@@ -948,7 +948,7 @@ try {
   assert.throws(() => process.kill(original.pid, 0), /ESRCH/);
   await assert.rejects(stat(path.join(folder, 'data', 'runtime.json')), /ENOENT/);
   await assert.rejects(stat(path.join(folder, 'data', 'daemon.lock')), /ENOENT/);
-  step('reopen workbench');
+  step('reopen workbench and automatically restore only previously running sessions');
   application = await electron.launch({ executablePath, args: launchArgs, env, timeout: 20000 });
   page = await application.firstWindow({ timeout: 20000 });
   page.setDefaultTimeout(15000);
@@ -956,10 +956,12 @@ try {
   await page.getByRole('button', { name: '展开顶部信息', exact: true }).waitFor();
   assert.equal(await page.evaluate(() => localStorage.getItem('berth.headerCollapsed')), 'true');
   await page.getByRole('button', { name: '展开顶部信息', exact: true }).click();
+  await eventually(async () => (await page.evaluate(() => window.berth.rpc('state'))).recovery?.status === 'completed', 'Workspace restoration did not complete');
   const after = await page.evaluate(() => window.berth.rpc('state'));
-  assert.equal(after.sessions[0].latestRun.id, original.id);
-  assert.equal(after.sessions[0].latestRun.pid, original.pid);
-  assert.equal(after.sessions[0].latestRun.status, 'stopped');
+  assert.notEqual(after.sessions[0].latestRun.id, original.id);
+  assert.equal(after.sessions[0].latestRun.status, 'running');
+  assert.deepEqual(after.recovery.errors, []);
+  assert.ok(after.recovery.restored >= 1);
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   assert.notEqual(daemonPid, quittingDaemon);
   await page.getByRole('button',{name:'展开侧栏',exact:true}).waitFor();
@@ -983,12 +985,11 @@ try {
   assert.equal(await page.getByLabel('SSH 会话上限', { exact: true }).inputValue(), '8');
   await page.locator('.projects .project-item').click();
   const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), after.sessions[0].id);
-  assert.match(snapshot.snapshot, /FLOW_DONE/);
+  assert.doesNotMatch(snapshot.snapshot, /FLOW_DONE/, 'A restored terminal must not replay historical output or commands');
   const retainedLog = await page.evaluate(runId => window.berth.rpc('output', { runId }), original.id);
   assert.match(retainedLog, /DESKTOP_SMOKE_READY/);
   assert.match(retainedLog, /FLOW_DONE/);
-  step('start a fresh terminal after full quit, then stop it');
-  await menuAction(page, '启动终端', 'session');
+  step('automatically restored terminal has a fresh run, then stops normally');
   await waitRunState(page, true);
   assert.notEqual((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.id, original.id);
   const activeRun = (await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun;
@@ -1025,6 +1026,11 @@ try {
   await page.getByRole('search').getByRole('status').filter({ hasText: '已定位' }).waitFor();
   await page.getByRole('button', { name: '复制选中', exact: true }).click();
   await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === 'FLOW_DONE', 'Read-only output copy failed');
+  // Recovery notices never disappear on a timer: changing the terminal height
+  // during search can clear xterm's selection between finding and copying.
+  await page.getByLabel('工作区恢复状态', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '关闭恢复提示', exact: true }).click();
+  await page.getByLabel('工作区恢复状态', { exact: true }).waitFor({ state: 'hidden' });
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
   await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
   await assertTerminalGutter(page);
@@ -1267,7 +1273,10 @@ try {
   step('reimport the same type as one self-describing script, preserving its name and ID');
   const beforeImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
   const directScript = path.join(pluginBundle, 'standalone.cjs');
-  await writeFile(directScript, 'setTimeout(()=>{\n' + source + '\n},600);');
+  const describeCalls = path.join(folder, 'plugin-describe-calls.txt');
+  const countedSource = source.replace("if (request.method === 'describe') {", "if (request.method === 'describe') { await fs.appendFile(" + JSON.stringify(describeCalls) + ", 'describe\\n');");
+  assert.notEqual(countedSource, source);
+  await writeFile(directScript, 'setTimeout(()=>{\n' + countedSource + '\n},600);');
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, directScript);
   await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
@@ -1277,6 +1286,7 @@ try {
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   const afterImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
+  assert.deepEqual((await readFile(describeCalls, 'utf8')).trim().split('\n'), ['describe', 'describe'], 'Import probes once; saving an update validates once in the daemon');
   assert.equal(afterImport.id, beforeImport.id);
   assert.equal(afterImport.plugin.runtime, 'node'); assert.equal(afterImport.plugin.sourceId, 'beta-smoke');
   await rm(pluginBundle, { recursive: true });

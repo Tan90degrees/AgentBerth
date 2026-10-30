@@ -108,9 +108,10 @@ export function DesktopPet() {
   </main>;
 }
 
-export function PetSettings() {
+export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }: { projects?: import('../shared/protocol').Project[]; currentProjectId?: string; apiVersion?: number }) {
   const { snapshot, setSnapshot, error, setError, save } = usePet();
   const [busy, setBusy] = useState(false), [revision, setRevision] = useState(0), [guide, setGuide] = useState('');
+  const [provider, setProvider] = useState<'claude' | 'opencode'>('claude'), [scope, setScope] = useState(currentProjectId ?? ''), [notice, setNotice] = useState('');
   useEffect(() => {
     let alive = true;
     void window.berth.pet<string>({ action: 'hookGuide' }).then(value => { if (alive) setGuide(value); }).catch(reason => { if (alive) setError(String(reason)); });
@@ -125,7 +126,16 @@ export function PetSettings() {
     <label className="pet-toggle"><input type="checkbox" checked={preferences.alwaysOnTop} disabled={busy} onChange={event => void apply({ alwaysOnTop: event.target.checked })} />保持在其他窗口上方</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.autoSwitch} disabled={busy} onChange={event => void apply({ autoSwitch: event.target.checked })} />等待处理或失败时，自动切换到对应会话</label>
     <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label><p className="form-hint">支持 50%–200%，也可右键桌宠图像，在“桌宠大小”中调节，自动保存。</p>
-    <h3>Agent hook 自动配置</h3><p>把说明复制给正在使用的 Agent，让它自动识别配置、合并 hook 并验证。说明已包含本机安装路径和可执行命令。</p>
+    <h3>Agent hook 自动配置</h3><p>适配已安装的 Claude Code 和 OpenCode，不安装 Agent、不修改模型与账号。安装后重新启动对应 Agent 会话。</p>
+    <div className="skill-filters"><label>适配 Agent<select aria-label="桌宠适配 Agent" value={provider} onChange={event => { setProvider(event.target.value as typeof provider); setNotice(''); }}><option value="claude">Claude Code</option><option value="opencode">OpenCode</option></select></label><label>安装范围<select aria-label="桌宠适配范围" value={scope} onChange={event => { setScope(event.target.value); setNotice(''); }}><option value="">用户级 · 所有项目</option>{projects.map(project => <option key={project.id} value={project.id}>项目 · {project.name}</option>)}</select></label></div>
+    <AsyncButton className="subtle" disabled={apiVersion < 38} onError={setError} onAction={async () => {
+      setError(''); setNotice('');
+      const result = await window.berth.pet<import('../main/agent-integration').HookInstallation>({ action: 'installHook', provider, projectId: scope || null, opencodeVersion: 'auto' });
+      setNotice(`${result.message}\n${result.path}${result.backup ? '\n备份：' + result.backup : ''}`);
+    }}>安装/更新适配</AsyncButton>
+    {notice && <p className="form-hint" role="status" aria-label="适配安装结果" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{notice}</p>}
+    {apiVersion < 38 && <p className="form-hint">请先在设置中更新空闲后台，再安装适配。</p>}
+    <p className="form-hint">保留已有配置与 hook，有变更时自动备份。OpenCode 自动检测 1.x / 2.x 插件接口。也可以把以下说明复制给 Agent 自行配置；项目和用户范围任选一个即可。</p>
     <ol className="pet-hook-steps"><li>在 AgentBerth 中启动一个 Agent 类型会话。</li><li>点击“复制给 Agent 自动配置”，粘贴给该 Agent 执行。</li><li>配置完成后重新启动该 Agent 会话，检查执行、等待和完成状态。</li></ol>
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const text = await window.berth.pet<string>({ action: 'hookGuide' }); setGuide(text); await window.berth.copyText(text); }}>复制给 Agent 自动配置</AsyncButton>
     <details className="pet-hook-guide"><summary>查看完整自动配置教程</summary><pre>{guide || '正在生成本机配置教程…'}</pre></details>

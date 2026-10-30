@@ -4,6 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import childProcess from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { Store } from '../src/daemon/store';
 import { AgentPlugins } from '../src/daemon/plugins';
 import { DaemonServer } from '../src/daemon/server';
@@ -120,6 +123,26 @@ test('malformed, excessive, failed and disabled plugins fail without accepting p
   await assert.rejects(plugins.history(a, session, folder, null), /退出码 3：PLUGIN_ERROR_DETAIL/);
   await assert.rejects(plugins.history({ ...a, plugin: null }, session, folder, null), /未启用/);
   await assert.rejects(plugins.history({ ...a, plugin: { ...a.plugin!, executable: 'node' } }, session, folder, null), /完整路径/);
+});
+
+test('plugin timeout settles when a terminated process never closes its pipes, and late close cannot resolve it', { timeout: 3000 }, async t => {
+  const fake = () => Object.assign(new EventEmitter(), { pid: undefined, stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() });
+  let child = fake();
+  t.mock.method(childProcess, 'spawn', () => child);
+  const plugins = new AgentPlugins(20);
+  t.after(() => plugins.close());
+  const agent = { id: 'agent:67c082df-af5a-4b4c-8b0a-174f0598315c', name: 'Fixture', command: 'fixture', resumeCommand: '', plugin: { runtime: 'node' as const, executable: process.execPath, args: [], history: false, resume: false } };
+  await assert.rejects(plugins.describe(agent), /插件请求超时/);
+  assert.equal(child.stdout.destroyed, true);
+  assert.equal(child.stderr.destroyed, true);
+  assert.equal(child.stdin.destroyed, true);
+  child.emit('close', 0);
+  child = fake();
+  const cancelled = assert.rejects(plugins.describe(agent), /插件请求已取消/);
+  await plugins.close();
+  await cancelled;
+  assert.equal(child.stdout.destroyed, true);
+  child.emit('close', 0);
 });
 
 test('plugin timeout and shutdown clean up running program and descendants', { timeout: 15000 }, async t => {

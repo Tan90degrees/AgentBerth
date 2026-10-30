@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "claude-profile",
+  "name": "Claude Code profile",
+  "integration": "claude",
+  "command": "claude",
+  "resumeCommand": "claude --resume {sessionId}"
+}

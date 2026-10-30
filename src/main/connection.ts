@@ -43,7 +43,7 @@ export class DaemonConnection {
     if (this.pending.size >= 128) return Promise.reject(new Error('请求过多，请稍后重试'));
     const id = randomUUID();
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, method === 'gitOperation' ? 600000 : ['start', 'remoteOpen', 'remoteManage', 'stop', 'shutdown', 'remoteReconnect'].includes(method) ? 60000 : ['remoteWait','remoteCommand','remoteReadOutput','remoteTransferStatus'].includes(method) ? 35000 : 15000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, method === 'gitOperation' ? 600000 : ['start', 'remoteOpen', 'remoteManage', 'remoteAgentClose', 'stop', 'shutdown', 'remoteReconnect'].includes(method) ? 60000 : ['remoteWait','remoteCommand','remoteReadOutput','remoteTransferStatus'].includes(method) ? 35000 : 15000);
       this.pending.set(id, { resolve: value => resolve(value as T), reject, timer });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
@@ -75,7 +75,7 @@ async function waitForExit(pid: number): Promise<void> {
 
 // Never launch a new daemon while quitting, and never signal a PID from an
 // unauthenticated or replaced runtime descriptor.
-export async function shutdownDaemon(directory: string): Promise<void> {
+export async function shutdownDaemon(directory: string, restoreOnOpen = false): Promise<void> {
   const runtime = runtimeFile(directory);
   if (!runtime) {
     const lock = path.join(directory, 'daemon.lock');
@@ -90,7 +90,16 @@ export async function shutdownDaemon(directory: string): Promise<void> {
   try {
     let state = await candidate.rpc<State>('state');
     if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
-    if (state.apiVersion >= 4) await candidate.rpc('shutdown');
+    if (state.apiVersion >= 4) {
+      try { await candidate.rpc('shutdown', state.apiVersion >= 40 ? {restoreOnOpen} : {}); }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== '后台连接已断开') throw error;
+        // A fully stopped authenticated daemon may close before Windows delivers
+        // its final reply. Never replay shutdown; verify its completed cleanup.
+        await waitForExit(runtime.pid);
+        if (existsSync(path.join(directory,'runtime.json')) || existsSync(path.join(directory,'daemon.lock'))) throw error;
+      }
+    }
     else {
       // Older backends have stop + idle shutdown. Drain first, then use their
       // atomic idle gate; never forcibly abandon still-running process trees.

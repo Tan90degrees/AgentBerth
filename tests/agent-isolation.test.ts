@@ -36,7 +36,7 @@ async function fixture(t:any){
  ui=await DaemonConnection.open(runtime,event=>{if(event.event==='sshChallenge')void ui.rpc('sshChallengeReply',{challengeId:event.data.id,...(event.data.kind==='credentials'?{secret:{password:'fixture-secret'}}:{accepted:true})});});
  t.after(async()=>{await ui.rpc('shutdown').catch(()=>{});for(const client of connections)client.close(true);ui.close(true);await daemon.close();for(const peer of peers)peer.end();await new Promise<void>(resolve=>ssh.close(()=>resolve()));rmSync(folder,{recursive:true,force:true});});
  await ui.rpc('registerSshProvider');await ui.rpc('saveSshConnection',{config:{alias:'fixture',hostname:'127.0.0.1',port:address.port,username:'fixture',authentication:'password',privateKeyPath:'',allowAgent:true}});
- return {folder,runtime,ui,connect,shells:()=>shells,holdAuthentication(){holdAuthentication=true;return new Promise<void>(resolve=>{onAuthentication=resolve;});},releaseAuthentication(){holdAuthentication=false;for(const ctx of blockedAuthentication.splice(0))ctx.reject(['password']);}};
+ return {folder,runtime,ui,connect,daemon,shells:()=>shells,holdAuthentication(){holdAuthentication=true;return new Promise<void>(resolve=>{onAuthentication=resolve;});},releaseAuthentication(){holdAuthentication=false;for(const ctx of blockedAuthentication.splice(0))ctx.reject(['password']);}};
 }
 test('separate Agents get independent SSH shells for the same alias and cannot close or delete each other’s sessions', {timeout:20000},async t=>{
  const f=await fixture(t),a=new TerminalMcp(await f.connect()),b=new TerminalMcp(await f.connect());
@@ -57,7 +57,30 @@ test('separate Agents get independent SSH shells for the same alias and cannot c
  await call(b,'terminal_session',{action:'close'});await call(b,'terminal_session',{action:'delete',sessionId:two.sessionId});
  assert.equal((await f.ui.rpc<State>('state')).sessions.find(s=>s.id===one.sessionId)!.latestRun!.status,'running');
  const still=await call(a,'terminal_interact',{text:'GET'});assert.match(still.text,/TOKEN=AGENT_A/);
- await call(a,'terminal_session',{action:'dispose'});assert.equal((await f.ui.rpc<State>('state')).sessions.find(s=>s.id===one.sessionId)!.latestRun!.status,'stopped');
+ const disposed=await call(a,'terminal_session',{action:'dispose'});assert.deepEqual(disposed.deleted,[one.sessionId]);assert.equal((await f.ui.rpc<State>('state')).sessions.some(s=>s.id===one.sessionId),false);
+});
+
+test('explicit task cleanup is blocked by unfinished work, then deletes only this context; history retention is opt-in', {timeout:20000}, async t => {
+ const f=await fixture(t),aClient=await f.connect(),a=new TerminalMcp(aClient),b=new TerminalMcp(await f.connect());
+ const one=await call(a,'terminal_session',{action:'create',alias:'fixture',title:'first'}),two=await call(a,'terminal_session',{action:'create',alias:'fixture',title:'long work'}),other=await call(b,'terminal_session',{action:'open',alias:'fixture'});
+ const store=(f.daemon as any).store;
+ const operation={id:randomUUID(),sessionId:two.sessionId,runId:two.runId,kind:'command',label:'long task',status:'running',startedAt:new Date().toISOString(),endedAt:null,exitCode:null};
+ store.saveRemoteAction(operation);
+ let denied:any=await a.request('tools/call',{name:'terminal_session',arguments:{action:'dispose'}});
+ assert.equal(JSON.parse(denied.content[0].text).error.code,'CLEANUP_BLOCKED');
+ for(const target of [one,two,other])assert.equal((await f.ui.rpc<State>('state')).sessions.find(s=>s.id===target.sessionId)!.latestRun!.status,'running','Rejected cleanup closes nothing');
+ store.saveRemoteAction({...operation,status:'unknown',endedAt:new Date().toISOString()});
+ denied=await a.request('tools/call',{name:'terminal_session',arguments:{action:'dispose'}});assert.equal(JSON.parse(denied.content[0].text).error.code,'CLEANUP_BLOCKED');
+ const newer={...operation,id:randomUUID()};store.saveRemoteAction(newer);
+ denied=await a.request('tools/call',{name:'terminal_session',arguments:{action:'dispose',keepHistory:true}});assert.equal(JSON.parse(denied.content[0].text).error.code,'CLEANUP_BLOCKED','An older unknown record cannot hide a newer running task');
+ store.saveRemoteAction({...newer,status:'completed',endedAt:new Date().toISOString(),exitCode:0});
+ store.saveRemoteAction({...operation,kind:'transfer',status:'running'});
+ denied=await a.request('tools/call',{name:'terminal_session',arguments:{action:'dispose'}});const failure=JSON.parse(denied.content[0].text);assert.equal(failure.harness.next.tool,'terminal_transfer');assert.equal(failure.harness.next.arguments.requestId,operation.id);
+ store.saveRemoteAction({...operation,status:'completed',endedAt:new Date().toISOString(),exitCode:0});
+ const disposed=await call(a,'terminal_session',{action:'dispose'});assert.deepEqual(new Set(disposed.deleted),new Set([one.sessionId,two.sessionId]));
+ let state=await f.ui.rpc<State>('state');assert.equal(state.sessions.length,1);assert.equal(state.sessions[0].id,other.sessionId);assert.equal(state.sessions[0].latestRun!.status,'running');
+ await call(b,'terminal_session',{action:'dispose',keepHistory:true});state=await f.ui.rpc<State>('state');assert.equal(state.sessions[0].latestRun!.status,'stopped');
+ assert.equal((await f.ui.rpc<any[]>('sshConnections')).length,1,'Saved servers survive cleanup');
 });
 
 test('one bundled MCP process isolates concurrent named subagents and disposes only the chosen context', {timeout:25000},async t=>{
@@ -70,6 +93,7 @@ test('one bundled MCP process isolates concurrent named subagents and disposes o
  const discovery=await request('tools/list',{});assert.equal(discovery.tools.length,4);assert.ok(discovery.tools.every((tool:any)=>tool.inputSchema.properties.agentId));
  const [a,b]=await Promise.all([invoke(undefined,'terminal_session',{action:'create',alias:'fixture',title:'same-name'}),invoke(undefined,'terminal_session',{action:'create',alias:'fixture',title:'same-name'})]);
  assert.notEqual(a.agentId,b.agentId);assert.match(a.agentId,/^[a-f0-9-]{36}$/);assert.notEqual(a.sessionId,b.sessionId);assert.equal(f.shells(),2);
+ assert.equal(a.harness.lifecycle.onTaskComplete.arguments.agentId,a.agentId);assert.equal(b.harness.lifecycle.onTaskComplete.arguments.agentId,b.agentId);
  await Promise.all([invoke(a.agentId,'terminal_interact',{text:'SET=A'}),invoke(b.agentId,'terminal_interact',{text:'SET=B'})]);
  assert.match((await invoke(a.agentId,'terminal_interact',{text:'GET'})).text,/TOKEN=A/);assert.match((await invoke(b.agentId,'terminal_interact',{text:'GET'})).text,/TOKEN=B/);
  assert.deepEqual((await invoke(a.agentId,'terminal_session')).sessions.map((s:any)=>s.sessionId),[a.sessionId]);

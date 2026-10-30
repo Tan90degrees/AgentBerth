@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
+import { restartPlanSchema, type RestartEntry } from './recovery';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
 
@@ -45,6 +46,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS histories_by_project ON native_histories(projectId, agent, updatedAt DESC, nativeSessionId);
       CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS restart_plan (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
     `);
     this.db.exec(`CREATE TABLE IF NOT EXISTS remote_actions (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
@@ -205,6 +207,10 @@ export class Store {
     const row = this.db.prepare('SELECT sequence,value FROM remote_actions WHERE id=?').get(id) ?? this.db.prepare('SELECT 0 AS sequence,value FROM remote_requests WHERE id=?').get(id);
     return row ? { ...JSON.parse(String(row.value)), sequence: Number(row.sequence) } : null;
   }
+  unresolvedRemoteAction(sessionId: string): RemoteAction | null {
+    const row = this.db.prepare("SELECT value FROM remote_requests WHERE (sessionId=? OR json_extract(value,'$.transfer.spec.destination.sessionId')=?) AND json_extract(value,'$.status') IN ('running','unknown') ORDER BY CASE json_extract(value,'$.status') WHEN 'running' THEN 0 ELSE 1 END, rowid LIMIT 1").get(sessionId, sessionId);
+    return row ? JSON.parse(String(row.value)) : null;
+  }
   remoteActions(sessionId: string, before = Number.MAX_SAFE_INTEGER): RemoteAction[] {
     this.session(sessionId);
     return this.db.prepare('SELECT sequence,value FROM remote_actions WHERE sessionId=? AND sequence<? ORDER BY sequence DESC LIMIT 50').all(sessionId, before).map(row => ({ ...JSON.parse(String(row.value)), sequence: Number(row.sequence) }));
@@ -263,11 +269,11 @@ export class Store {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
-  createRun(sessionId: string, command: string, cols: number, rows: number, shell = ''): Run {
+  createRun(sessionId: string, command: string, cols: number, rows: number, shell = '', preserveRequests = false): Run {
     this.session(sessionId);
     const id = randomUUID();
     const now = new Date().toISOString();
-    this.db.prepare('DELETE FROM remote_requests WHERE sessionId=?').run(sessionId);
+    if (!preserveRequests) this.db.prepare('DELETE FROM remote_requests WHERE sessionId=?').run(sessionId);
     this.db.prepare("INSERT INTO runs (id, sessionId, status, startedAt, command, cols, rows, shell) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)").run(id, sessionId, now, command, cols, rows, shell);
     this.db.prepare('UPDATE runs SET recordOutput = ? WHERE id = ?').run(this.session(sessionId).agent === 'shell' ? 1 : 0, id);
     this.db.prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(now, sessionId);
@@ -346,4 +352,15 @@ export class Store {
     return JSON.parse(String(row.history)) as History;
   }
   close(): void { this.db.close(); }
+  saveRestartPlan(entries: RestartEntry[]): void {
+    this.db.prepare('INSERT INTO restart_plan(id,value) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(JSON.stringify(restartPlanSchema.parse(entries)));
+  }
+  takeRestartPlan(): RestartEntry[] {
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT value FROM restart_plan WHERE id=1').get();
+      const entries = row ? restartPlanSchema.parse(JSON.parse(String(row.value))) : [];
+      this.db.prepare('DELETE FROM restart_plan WHERE id=1').run();
+      return entries;
+    });
+  }
 }

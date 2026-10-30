@@ -103,20 +103,24 @@ async function readOpenCode(canonical: string, projectPath: string): Promise<His
   const text = (buffer[0] === 0xff && buffer[1] === 0xfe ? buffer.toString('utf16le') : buffer.toString('utf8')).replace(/^\uFEFF/, '');
   let data: Json;
   try { data = JSON.parse(text); } catch { throw new Error('OpenCode 记录不是有效 JSON，请使用 opencode export 导出会话'); }
+  return parseOpenCodeHistory(data, projectPath, canonical);
+}
+
+export async function parseOpenCodeHistory(data: Json, projectPath: string, canonical: string | null): Promise<History> {
   const nativeSessionId = data?.info?.id;
   if (typeof nativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(nativeSessionId)) throw new Error('记录缺少有效的原生会话 ID');
-  if (!await matchesProject(data?.info?.directory, projectPath)) throw new Error('对话记录的工作目录与当前项目不一致');
+  if (!await matchesProject(data?.info?.directory ?? data?.info?.location?.directory, projectPath)) throw new Error('对话记录的工作目录与当前项目不一致');
   if (!Array.isArray(data.messages)) throw new Error('OpenCode 记录缺少 messages，请使用 opencode export 导出会话');
   const messages: HistoryMessage[] = [];
   let chars = 0;
   const warnings = ['只读导入最近最多 1000 条用户和助手文本；不改写 Agent 原生记录'];
   for (const message of data.messages.slice(-1000).reverse()) {
-    const role = message?.info?.role;
-    if (!['user', 'assistant'].includes(role) || !Array.isArray(message?.parts)) continue;
-    const content = textContent(message.parts).slice(0, 32768);
+    const role = message?.info?.role ?? message?.type;
+    if (!['user', 'assistant'].includes(role)) continue;
+    const content = (message?.info ? textContent(message.parts) : role === 'user' ? typeof message.text === 'string' ? message.text : '' : textContent(message.content)).slice(0, 32768);
     if (!content.trim()) continue;
     if (chars + content.length > 512 * 1024) { warnings.push('仅显示最近 512 KiB 对话文本'); break; }
-    const created = message.info?.time?.created;
+    const created = message.info?.time?.created ?? message.time?.created;
     const timestamp = typeof created === 'number' && Number.isFinite(created) && Math.abs(created) < 8.64e15 ? new Date(created).toISOString() : null;
     messages.unshift({ role, text: content, timestamp }); chars += content.length;
   }

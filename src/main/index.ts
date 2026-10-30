@@ -1,9 +1,11 @@
 import { PetState } from './pet-state';
 import { petMenuTemplate } from './pet-menu';
+import { keepPetAboveWindows } from './pet-window';
 import { PetHooks } from './pet-hooks';
 import { petRequestSchema, petStatuses, petWindowSize } from '../shared/pet';
 import { statSync, writeFileSync } from 'node:fs';
 import { petHookConfiguration, petHookSetupGuide } from './pet-config';
+import { installAgentHook, integrationRoot } from './agent-integration';
 import { SkillManager, skillRoot } from './skills';
 import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
@@ -64,7 +66,13 @@ else {
     if (process.platform === 'win32') app.setAppUserModelId('dev.agentberth.desktop');
     pet = new PetState(path.join(dataDirectory, 'pet'), publishPet);
     pet.loadImages(petStatuses);
-    petHooks = new PetHooks(dataDirectory, hook => pet.accept(hook));
+    petHooks = new PetHooks(dataDirectory, hook => {
+      const accepted = pet.accept(hook);
+      if (accepted && hook.provider && hook.nativeSessionId && hook.cwd && connection?.connected) {
+        void connection.rpc('nativeSessionDetected', { sessionId: hook.sessionId, runId: hook.runId, provider: hook.provider, nativeSessionId: hook.nativeSessionId, cwd: hook.cwd }).catch(() => { /* History remains manually recoverable. */ });
+      }
+      return accepted;
+    });
     try { await petHooks.start(); } catch (error) { console.error('桌宠 hook 启动失败', error); }
     createWindow();
     if (pet.preferences.enabled) void openPetWindow();
@@ -77,10 +85,14 @@ else {
       { label: '打开 AgentBerth', click: showWindow },
       { label: '显示桌宠', click: () => { pet.save({ ...pet.preferences, enabled: true }); void openPetWindow(); } },
       { type: 'separator' },
-      { label: '退出 AgentBerth（停止全部终端）', click: () => app.quit() },
+      { label: '退出 AgentBerth（停止终端，下次恢复）', click: () => app.quit() },
     ]));
     tray.on('double-click', showWindow);
-    try { await reconnect(); } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
+    try {
+      await reconnect();
+      const state = await connection!.rpc<import('../shared/protocol').State>('state');
+      if (state.apiVersion >= 40) await connection!.rpc('restoreWorkspace');
+    } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
   });
 }
 
@@ -95,7 +107,7 @@ function quitApplication(): Promise<void> {
     await petHooks?.close();
     await importingPlugins.close();
     if (connecting) await connecting.catch(() => {});
-    await shutdownDaemon(dataDirectory);
+    await shutdownDaemon(dataDirectory, true);
     connection?.close(true); connection = null;
     quitReady = true; tray?.destroy(); tray = null;
     // All owned workers and the daemon are gone; renderer/debugger unload must not delay explicit quit.
@@ -188,15 +200,20 @@ function publishPet() {
 }
 async function openPetWindow() {
   if (quitting) return;
-  if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); return; }
+  if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop); return; }
   const width = Math.round(petWindowSize.width * pet.preferences.scale), height = Math.round(petWindowSize.height * pet.preferences.scale);
   let area = screen.getPrimaryDisplay().workArea, x = area.x + area.width - width - 20, y = area.y + area.height - height - 20;
   try {
     const saved = JSON.parse(readFileSync(path.join(dataDirectory, 'pet', 'position.json'), 'utf8'));
     if (Number.isSafeInteger(saved.x) && Number.isSafeInteger(saved.y)) { area = screen.getDisplayNearestPoint(saved).workArea; x = Math.min(Math.max(saved.x, area.x), area.x + area.width - width); y = Math.min(Math.max(saved.y, area.y), area.y + area.height - height); }
   } catch { /* First launch or unavailable monitor. */ }
-  const target = new BrowserWindow({ x, y, width, height, resizable: false, frame: false, transparent: true, hasShadow: false, alwaysOnTop: pet.preferences.alwaysOnTop, skipTaskbar: true, show: false, title: 'AgentBerth · 桌宠', icon: iconFile, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const target = new BrowserWindow({ x, y, width, height, resizable: false, frame: false, transparent: true, hasShadow: false, alwaysOnTop: pet.preferences.alwaysOnTop, skipTaskbar: true, show: false, title: 'AgentBerth · 桌宠', icon: iconFile, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
   petWindow = target;
+  const keepAbove = () => keepPetAboveWindows(target, pet.preferences.alwaysOnTop);
+  keepAbove();
+  target.on('show', keepAbove);
+  target.on('restore', keepAbove);
+  target.on('blur', keepAbove);
   target.on('moved', () => { try { const { x, y } = target.getBounds(); writeFileSync(path.join(dataDirectory, 'pet', 'position.json'), JSON.stringify({ x, y }), { mode: 0o600 }); } catch { /* Position failure must not affect a terminal. */ } });
   target.setMenuBarVisibility(false);
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -214,12 +231,12 @@ function petHookConfig(): string {
 }
 function petGuide(): string {
   const script = app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs');
-  return petHookSetupGuide(process.execPath, script, dataDirectory);
+  return petHookSetupGuide(process.execPath, script, dataDirectory, process.platform, app.isPackaged ? path.join(resourceRoot, 'pet') : __dirname);
 }
 async function savePetPreferences(preferences: unknown) {
   pet.save(preferences);
   if (pet.preferences.enabled) {
-    await openPetWindow(); petWindow?.setAlwaysOnTop(pet.preferences.alwaysOnTop);
+    await openPetWindow(); if (petWindow) keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop);
     petWindow?.setSize(Math.round(petWindowSize.width * pet.preferences.scale), Math.round(petWindowSize.height * pet.preferences.scale));
     if (petWindow) { const bounds = petWindow.getBounds(), area = screen.getDisplayMatching(bounds).workArea; petWindow.setPosition(Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width)), Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height))); }
   } else petWindow?.close();
@@ -257,6 +274,20 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
     case 'save': return savePetPreferences(request.preferences);
     case 'hookConfig': return petHookConfig();
     case 'hookGuide': return petGuide();
+    case 'installHook': {
+      trusted(event);
+      let project: string | undefined;
+      if (request.projectId) {
+        if (connecting) await connecting;
+        if (!connection) await reconnect();
+        const state = await connection!.rpc<import('../shared/protocol').State>('state');
+        project = state.projects.find(item => item.id === request.projectId)?.path;
+        if (!project) throw new Error('项目不存在，请重新选择');
+      }
+      return installAgentHook({ provider: request.provider, project, version: request.opencodeVersion,
+        executable: process.execPath, script: app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs'),
+        dataDirectory, pluginDirectory: app.isPackaged ? path.join(resourceRoot, 'pet') : __dirname });
+    }
     case 'menu': openPetMenu(); return;
     case 'dragStart': {
       const cursor = screen.getCursorScreenPoint(), bounds = petWindow!.getBounds();
@@ -319,7 +350,7 @@ ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unkn
 });
 ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string, unknown>) => {
   trusted(event);
-  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
+  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['restoreWorkspace','registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;
@@ -369,22 +400,30 @@ ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown)
 ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:appearance',(event,mode:unknown)=>{trusted(event);if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
 nativeTheme.on('updated',()=>{for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
-ipcMain.handle('berth:mcpConfig', event => { trusted(event); return JSON.stringify({ mcpServers: { agentberth: { command: process.execPath, args: [app.isPackaged ? path.join(process.resourcesPath, 'mcp', 'mcp.cjs') : path.join(__dirname, 'mcp.cjs'), dataDirectory], env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2); });
+ipcMain.handle('berth:mcpConfig', (event, provider: unknown = 'claude') => {
+  trusted(event); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');
+  const args = [app.isPackaged ? path.join(process.resourcesPath, 'mcp', 'mcp.cjs') : path.join(__dirname, 'mcp.cjs'), dataDirectory];
+  return JSON.stringify(provider === 'opencode' ? { mcp: { agentberth: { type: 'local', command: [process.execPath, ...args], environment: { ELECTRON_RUN_AS_NODE: '1' }, enabled: true } } } : { mcpServers: { agentberth: { command: process.execPath, args, env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2);
+});
 const skillManager = new SkillManager();
 ipcMain.handle('berth:skills', async (event, input: unknown) => {
   trusted(event);
   const request = skillRequestSchema.parse(input);
   let projectPath: string | undefined;
+  let integration = ['claude', 'opencode'].includes(request.location.agentId) ? request.location.agentId as 'claude' | 'opencode' : undefined;
   let skills = builtinSkillProviders.find(agent => agent.id === request.location.agentId)?.skills;
   if (request.location.projectId || !skills) {
     if (connecting) await connecting;
     if (!connection) await reconnect();
     const state = await connection!.rpc<import('../shared/protocol').State>('state');
-    skills ??= (state.agents ?? []).find(agent => agent.id === request.location.agentId)?.skills;
+    const definition = (state.agents ?? []).find(agent => agent.id === request.location.agentId);
+    if (!definition?.skills) integration ??= definition?.integration;
+    skills ??= definition?.skills ?? builtinSkillProviders.find(agent => agent.id === definition?.integration)?.skills;
     projectPath = request.location.projectId ? state.projects.find(project => project.id === request.location.projectId)?.path : undefined;
     if (request.location.projectId && !projectPath) throw new Error('项目不存在，请重新选择');
   }
   if (!skills) throw new Error('此 Agent 尚未通过插件声明 Skill 管理能力，请更新同一个 Agent 配置或脚本');
+  if (integration) skills = { ...skills, user: path.join(integrationRoot(integration), 'skills') };
   return skillManager.run(skillRoot(skills, projectPath), request);
 });
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });

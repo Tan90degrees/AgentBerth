@@ -1,6 +1,6 @@
 # AgentBerth MCP 使用契约（可选参考）
 
-只需配置 MCP，无需复制本文给 Agent。工具说明、初始化指引与可信返回状态已内置这些规则。更新后台到 **API 36** 并重连 MCP，刷新为四个工具；旧工具名只作兼容，不再出现在工具列表和新续取指针中。
+只需配置 MCP，无需复制本文给 Agent。工具说明、初始化指引与可信返回状态已内置这些规则。更新后台到 **API 39** 并重连 MCP，刷新为四个工具；旧工具名只作兼容，不再出现在工具列表和新续取指针中。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -21,7 +21,7 @@
 
 假设返回的 agentId 为 inspect-a，后续命令使用 `terminal_execute({"agentId":"inspect-a","alias":"dev-server","command":"uname -a"})`，或传回自己的 sessionId/runId。普通 execute 也可直接创建自己的连接，不必先调用 create。会话列表只列当前上下文的连接；用户仍能在桌面查看所有 Agent 的真实终端。若同一 Agent 主动创建多个会话，使用明确 ID 区分。
 
-任务完成后调用 `terminal_session({"agentId":"inspect-a","action":"dispose"})`，一次关闭本上下文创建的全部 SSH 并释放上下文，不关闭其他 Agent 或用户创建的终端。只关闭某条连接用 close，删除已停止的记录用 delete。不要 dispose 仍需保留长任务的上下文。断开 MCP 或取消等待不会自动停止 SSH；同一 MCP 进程可带原目标恢复连接，整个 MCP 进程重启后需保留原 sessionId/runId 查询旧任务，不能仅按服务器别名猜测旧任务归属。
+任务完成后调用 `terminal_session({"agentId":"inspect-a","action":"dispose"})`，一次关闭并删除本上下文创建的全部 SSH 及本地记录，再释放上下文，不关闭其他 Agent 或用户创建的终端。只关闭某条连接用 close，删除已停止的记录用 delete。不要 dispose 仍需保留长任务的上下文。断开 MCP 或取消等待不会自动停止 SSH；同一 MCP 进程可带原目标恢复连接，整个 MCP 进程重启后需保留原 sessionId/runId 查询旧任务，不能仅按服务器别名猜测旧任务归属。
 
 ## 普通命令：执行即返回本轮结果
 
@@ -76,3 +76,9 @@ TUI 才显式使用 `terminal_interact({"agentId":"inspect-a","alias":"dev-serve
 `terminal_transfer` 指定 action=upload/download，填写 localPath/remotePath；action=copy 填 sourceAlias/sourcePath/destinationAlias/destinationPath。路径是准确的绝对目标路径。目录需 recursive=true，覆盖和前缀校验续传须显式开启。生成的 requestId 用于 action=status 或 cancel，未知/部分传输不重复拷贝。上传/下载以及 update/close/delete/reconnect/actions 可在整个目标省略时沿用当前会话；open/create 仍需明确别名。SFTP 不占终端输入，也不要求远端安装工具。
 
 主窗口或独立 SSH 窗口关闭、一次 MCP 等待超时不停止 SSH；托盘退出关闭本机连接。断线重连建立新 Shell，不能恢复旧进程或证明所有脱离连接的远端任务已停止。
+
+## 任务收尾约束
+
+连接生命周期由 Agent 根据整个任务是否完成来判断，不设置空闲回收、最长运行时长或后台自动裁剪。工具返回 `harness.lifecycle`：有运行中或未知结果的命令/传输时保留连接；全部已知工作完成后给出带 agentId 的 `onTaskComplete` 调用，要求 Agent 在最终答复前主动执行 dispose。单条命令结束不代表整个任务结束。用户要求后台长任务继续运行时，最终答复应说明保留的 sessionId/runId/actionId 和理由，继续使用原任务的等待入口。
+
+`dispose` 默认显式关闭并删除本 Agent 的临时会话、运行记录和本地日志，不删除服务器配置或远端文件；后台预检运行中和未知结果，拒绝有风险的批量清理，并且不会先关闭其他空闲连接。`keepHistory:true` 表示主动关闭但保留本地记录，并非让任务继续运行。需要取消任务时先明确取消，不能以清理为由偷偷中断或重放。MCP 断开、没有输出、时间过去很久都不会触发自动清理。

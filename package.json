@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.15.2",
+  "version": "0.16.0",
   "private": true,
   "type": "module",
   "description": "A project workspace for persistent terminals, agents, files and history",
@@ -124,6 +124,14 @@
       {
         "from": "assets/pet",
         "to": "assets/pet"
+      },
+      {
+        "from": "dist/opencode-pet-v1.mjs",
+        "to": "pet/opencode-pet-v1.mjs"
+      },
+      {
+        "from": "dist/opencode-pet-v2.mjs",
+        "to": "pet/opencode-pet-v2.mjs"
       }
     ]
   }

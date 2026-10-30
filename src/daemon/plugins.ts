@@ -45,6 +45,7 @@ export class AgentPlugins {
       let bytes = 0;
       let stderr = '';
       const output: Buffer[] = [];
+      let settled = false;
       let killing: Promise<void> | null = null;
       const kill = () => killing ??= (async () => {
         if (!child.pid) return;
@@ -54,7 +55,18 @@ export class AgentPlugins {
           try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL'); }
         }
       })();
-      const fail = (message: string) => { failure ??= new Error(message); void kill(); };
+      const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
+      const fail = (message: string) => {
+        failure ??= new Error(message);
+        // A Windows pipe can remain open after termination. Return the actual
+        // plugin failure after bounded cleanup, independently of the close event.
+        void kill().then(() => {
+          if (settled) return;
+          settled = true; cleanup();
+          child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+          reject(failure);
+        });
+      };
       const abort = () => fail('插件请求已取消，后台正在退出');
       signal.addEventListener('abort', abort, { once: true });
       const timer = setTimeout(() => fail('插件请求超时（10 秒），请检查插件程序'), this.timeout);
@@ -63,9 +75,10 @@ export class AgentPlugins {
       child.on('error', error => { failure ??= new Error(`无法启动插件：${error.message}`); });
       child.stdin.on('error', () => { /* Early exit is reported by close below. */ });
       child.on('close', code => {
-        clearTimeout(timer); signal.removeEventListener('abort', abort);
         void (async () => {
           await kill();
+          if (settled) return;
+          settled = true; cleanup();
           if (failure) throw failure;
           if (code !== 0) throw new Error(`插件退出码 ${code ?? '未知'}${stderr.trim() ? '：' + stderr.trim().slice(-1000) : '；请检查插件程序'}`);
           try { return JSON.parse(Buffer.concat(output).toString('utf8').replace(/^\uFEFF/, '')); }

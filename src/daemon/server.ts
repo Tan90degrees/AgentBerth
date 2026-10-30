@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { openCodeLaunch } from './opencode-launch';
 import { SshTerminal } from './ssh-terminal';
 import type { SshChallenge, SshSecret, TransferEndpoint } from '../shared/protocol';
 import { localTransferFs, RemoteTransfers, sftpTransferFs } from './remote-transfer';
@@ -19,7 +20,7 @@ import { GitWorkspace } from './git';
 import { ProjectFiles } from './files';
 import { AgentPlugins } from './plugins';
 import { directory, launchCommand, resolveTerminal, terminalEnvironment } from './paths';
-import { sameDirectory } from './history';
+import { sameDirectory, matchesProject } from './history';
 import { NativeDiscovery, unambiguousNewHistory, type NativeCandidate } from './native-discovery';
 import { RunLog } from './logs';
 import { readHistory } from './history';
@@ -30,6 +31,8 @@ import { RemoteActivity, remoteKeys } from './remote-activity';
 import { McpCallStats } from './mcp-metrics';
 import { RemoteOperationError } from '../shared/remote-errors';
 import { windowsPtyFor } from '../shared/desktop';
+import { restartConfiguration, shouldResume, type RestartEntry } from './recovery';
+import type { WorkspaceRecovery, State } from '../shared/protocol';
 
 interface LiveTerminal {
   run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal | SshTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
@@ -63,13 +66,17 @@ export class DaemonServer {
   private closing = false;
   private logs: string;
   private nativeDiscovery = new NativeDiscovery();
-  private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean }>();
+  private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string }>();
   private nativeTimer: NodeJS.Timeout | null = null;
   private nativeScanning: Promise<void> | null = null;
   private historyBusy = new Set<string>();
   private historyWrites = new Set<string>();
   private starting = new Set<string>();
   private editingProjects = new Set<string>();
+  private recoveryReport: WorkspaceRecovery | undefined;
+  private recovering: Promise<void> | null = null;
+  private recoveryPending = new Map<string, RestartEntry>();
+  private restoredRuns = new Map<string, {previousRunId:string|null;runId:string}>();
 
   constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery) {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
@@ -105,7 +112,7 @@ export class DaemonServer {
         const blocksIdleShutdown = !['resources','mcpMetrics','mcpRecordCall'].includes(result.data.method);
         client.pending++;
         if (blocksIdleShutdown) this.pendingWork++;
-        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value })).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败', ...(error instanceof RemoteOperationError?{errorCode:error.code,errorDetails:error.details}:{}) })).finally(() => {
+        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value }, ['shutdown','shutdownIdle'].includes(result.data.method) ? this.onShutdown : undefined)).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败', ...(error instanceof RemoteOperationError?{errorCode:error.code,errorDetails:error.details}:{}) })).finally(() => {
           client.pending--;
           if (blocksIdleShutdown) this.pendingWork--;
         });
@@ -119,12 +126,14 @@ export class DaemonServer {
     const expected = Buffer.from(`Bearer ${this.token}`);
     return actual.length === expected.length && timingSafeEqual(actual, expected);
   }
-  private send(socket: WebSocket, message: unknown): void {
-    if (socket.readyState !== WebSocket.OPEN) return;
+  private send(socket: WebSocket, message: unknown, sent?: () => void): void {
+    if (socket.readyState !== WebSocket.OPEN) { sent?.(); return; }
     // A slow or closed UI must never stop output consumption by the daemon.
     // Two bounded image replies can overlap; a slow UI still has a finite budget.
-    if (socket.bufferedAmount > 16 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); return; }
-    socket.send(JSON.stringify(message));
+    if (socket.bufferedAmount > 16 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); sent?.(); return; }
+    // Full/idle shutdown must follow the actual response write, not a timer
+    // that can fire while a loaded Windows runner is still sending the reply.
+    socket.send(JSON.stringify(message), sent ? () => sent() : undefined);
   }
   private broadcast(event: ServerEvent): void {
     for (const [socket, client] of this.clients) {
@@ -142,10 +151,62 @@ export class DaemonServer {
     }
   }
   private changed(): void {
-    const state = this.store.state(), valid = new Set(state.sessions.map(session => session.id));
+    const state = this.snapshot(), valid = new Set(state.sessions.map(session => session.id));
     for (const id of this.agentOwners.keys()) if (!valid.has(id)) this.agentOwners.delete(id);
+    for (const [id, restored] of this.restoredRuns) if (!state.sessions.some(session => session.id === id && session.latestRun?.id === restored.runId)) this.restoredRuns.delete(id);
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
+  }
+  private snapshot(): State { return {...this.store.state(), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private recoveryConfiguration(session: import('../shared/protocol').Session): string {
+    return restartConfiguration(session, this.store.project(session.projectId).path,
+      session.agent.startsWith('agent:') ? this.store.agent(session.agent) : undefined,
+      session.remote?.connectionId ? this.store.sshConnection(session.remote.connectionId) : undefined);
+  }
+  private checkpointWorkspace(): void {
+    const entries = new Map(this.recoveryPending);
+    for (const session of this.store.state().sessions) {
+      const live = this.live.get(session.id);
+      if ((!live && !this.starting.has(session.id)) || live?.closed || live?.stopping || this.agentOwners.get(session.id)?.disposing) continue;
+      entries.set(session.id, {sessionId:session.id,runId:session.latestRun?.id ?? null,cols:live?.terminal.cols ?? 100,rows:live?.terminal.rows ?? 30,
+        configuration:this.recoveryConfiguration(session),...(session.remote ? {remoteOwner:live?.remote?.activity.info.owner ?? 'user'} : {})});
+    }
+    this.store.saveRestartPlan([...entries.values()]);
+  }
+  private restoreWorkspace(): WorkspaceRecovery {
+    if (this.recoveryReport) return this.recoveryReport;
+    // Claim once, before any launch; reconnects and duplicate startup requests
+    // cannot replay a partially completed restoration.
+    let entries: RestartEntry[] = [], invalidPlan = false;
+    try { entries = this.store.takeRestartPlan(); }
+    catch (error) { invalidPlan = true; this.logError(error); }
+    const report: WorkspaceRecovery = {id:randomUUID(),status:'restoring',total:entries.length,restored:0,resumed:0,skipped:0,errors:[]};
+    if (invalidPlan) report.errors.push({sessionId:'',title:'恢复记录',message:'恢复记录无法读取，可手动启动会话；下次从托盘退出时会重新保存'});
+    this.recoveryReport = report;
+    this.recoveryPending = new Map(entries.map(entry => [entry.sessionId,entry]));
+    let next = 0;
+    const worker = async () => {
+      while (next < entries.length && !this.closing) {
+        const entry = entries[next++];
+        let title = entry.sessionId;
+        try {
+          const session = this.store.state().sessions.find(value => value.id === entry.sessionId);
+          if (!session || this.live.has(entry.sessionId) || this.starting.has(entry.sessionId)) { report.skipped++; continue; }
+          title = session.title;
+          if ((session.latestRun?.id ?? null) !== entry.runId || this.recoveryConfiguration(session) !== entry.configuration) { report.skipped++; continue; }
+          if (session.remote?.connectionId && entry.remoteOwner === 'agent' && !this.store.sshConnection(session.remote.connectionId).allowAgent) throw new Error('服务器已关闭 Agent 授权，请检查 SSH 设置后手动连接');
+          const resume = shouldResume(session, session.agent.startsWith('agent:') ? this.store.agent(session.agent) : undefined);
+          await this.start(session.id, resume, entry.cols, entry.rows, session.remote ? entry.remoteOwner ?? 'user' : undefined);
+          report.restored++; if (resume) report.resumed++;
+        } catch (error) {
+          report.errors.push({sessionId:entry.sessionId,title,message:error instanceof Error ? error.message : String(error)});
+        } finally { this.recoveryPending.delete(entry.sessionId); this.changed(); }
+      }
+    };
+    // Yield so the RPC returns immediately; SSH authentication never blocks the UI.
+    this.recovering = Promise.resolve().then(async () => { await Promise.all(Array.from({length:Math.min(3,entries.length)},worker)); })
+      .catch(error => this.logError(error)).finally(() => { report.status='completed';this.recovering=null;this.changed(); });
+    this.changed(); return report;
   }
 
   async listen(): Promise<RuntimeInfo> {
@@ -204,6 +265,7 @@ export class DaemonServer {
     if(client !== this.sshProvider && this.agentOwners.get(sessionId)?.abort.signal.aborted)this.agentOwners.set(sessionId,client);
   }
   private assertOwnSession(sessionId: string, client: Client): void {
+    if (client.disposing) throw new RemoteOperationError('CLEANUP_BLOCKED', '此 Agent 正在清理连接，请等待清理完成；未发送新操作', {sessionId});
     const previous = this.agentOwners.get(sessionId);
     if (previous && previous !== client && !previous.abort.signal.aborted) {
       const session = this.store.session(sessionId);
@@ -250,10 +312,12 @@ export class DaemonServer {
       }
       case 'remoteAliases': return this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent }));
       case 'remoteAgentRecover': {
+        if (client === this.sshProvider) return {recovered:[]};
         const recovered: string[] = [];
         for (const target of request.params.targets) {
           const owner = this.agentOwners.get(target.sessionId), live = this.live.get(target.sessionId);
-          if (owner?.abort.signal.aborted && live?.run.id === target.runId) { this.agentOwners.set(target.sessionId, client); recovered.push(target.sessionId); }
+          const restored = this.restoredRuns.get(target.sessionId);
+          if (owner?.abort.signal.aborted && live && (live.run.id === target.runId || restored?.runId === live.run.id && restored.previousRunId === target.runId)) { this.agentOwners.set(target.sessionId, client); recovered.push(target.sessionId); }
         }
         return { recovered };
       }
@@ -263,13 +327,21 @@ export class DaemonServer {
         for (const session of sessions) {
           const activity=this.live.get(session.id)?.remote?.activity;
           if(activity&&(!this.starting.has(session.id)||activity.controlChosen))activity.assertManage(client);
+          const work = this.store.unresolvedRemoteAction(session.id);
+          if (work && (work.status === 'running' || request.params.deleteHistory)) throw new RemoteOperationError('CLEANUP_BLOCKED', '此上下文仍有运行中或结果不明的任务；继续查询原任务，完成或明确取消后再清理。不要为了清理重放命令。', { sessionId: session.id, runId: work.runId, ...(work.kind === 'transfer' ? { transferId: work.id } : { actionId: work.id }) });
         }
         client.disposing = true;
         try {
           const opening = [...this.openingAliases].filter(([key]) => key.startsWith(client.id + ':')).map(([,promise]) => promise);
           await Promise.all(sessions.map(session => this.stop(session.id)));
           await Promise.allSettled(opening);
-          return { closed: sessions.map(session => session.id) };
+          const closed = sessions.map(session => session.id), deleted: string[] = [];
+          if (request.params.deleteHistory) for (const session of sessions) {
+            if (this.live.has(session.id) || this.starting.has(session.id)) continue;
+            this.removeLogs(this.store.deleteSession(session.id)); deleted.push(session.id);
+          }
+          this.changed();
+          return { closed, deleted, retained: closed.filter(id => !deleted.includes(id)) };
         } finally { client.disposing = false; }
       }
       case 'remoteAgentSessions': {
@@ -417,7 +489,8 @@ export class DaemonServer {
         const command=live.remote.activity.latestCommand();
         return { scope:'viewport', scrollbackLines:buffer.baseY, command:command?{id:command.id,status:command.status,sessionId:command.sessionId,runId:command.runId}:null, seq: screen.seq, cols: screen.cols, rows: screen.rows, text: lines.join('\n'), cursor: { x: buffer.cursorX, y: buffer.cursorY }, info: live.remote.activity.info };
       }
-      case 'state': return this.store.state();
+      case 'state': return this.snapshot();
+      case 'restoreWorkspace': return this.restoreWorkspace();
       case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed && !live.remote).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
       case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
       case 'gitDiff': return this.git.diff(this.store.project(request.params.projectId).path, request.params);
@@ -438,14 +511,12 @@ export class DaemonServer {
         finally { for (const item of affected) this.gitBusy.delete(item.id); }
       }
       case 'shutdown':
-        await this.stopAll();
-        setTimeout(this.onShutdown, 50); // Acknowledge cleanup before closing the authenticated connection.
+        await this.stopAll(request.params.restoreOnOpen);
         return null;
       case 'shutdownIdle':
         if (this.live.size || this.starting.size) throw new Error('请先停止全部终端，再更新后台');
         if (this.historyBusy.size || this.editingProjects.size || this.pendingWork > 1) throw new Error('后台正在处理数据，请稍后重试');
         this.closing = true;
-        setTimeout(this.onShutdown, 50);
         return null;
       case 'createProject': {
         const canonical = await directory(request.params.path);
@@ -526,7 +597,7 @@ export class DaemonServer {
       case 'linkNativeSession': {
         const session = this.store.session(request.params.sessionId);
         this.requireHistoryAvailable(session.id);
-        if (!['codex', 'claude', 'opencode'].includes(session.agent) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
+        if (!['codex', 'claude', 'opencode'].includes(this.integration(session)) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
         const history = this.store.nativeHistory(session.id, request.params.nativeSessionId) ?? { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
         this.nativeTracking.delete(session.id);
         this.store.saveHistory(session.id, history); this.changed(); return history;
@@ -536,6 +607,18 @@ export class DaemonServer {
         this.nativeTracking.delete(id);
         const history = { messages: [], warnings: [], path: null, nativeSessionId: null };
         this.store.saveHistory(id, history); this.changed(); return history;
+      }
+      case 'nativeSessionDetected': {
+        const p = request.params, session = this.store.session(p.sessionId), tracking = this.nativeTracking.get(session.id);
+        const version = this.agentVersion(session.agent);
+        if (this.integration(session) !== p.provider || session.remote || session.latestRun?.id !== p.runId || !this.live.has(session.id) || this.live.get(session.id)?.closed || tracking?.runId !== p.runId || session.nativeSessionId && session.nativeSessionId !== tracking.hookNativeId || this.historyBusy.has(session.id) || !await matchesProject(p.cwd, this.store.project(session.projectId).path)) return { linked: false };
+        if (session.nativeSessionId === p.nativeSessionId) return { linked: true };
+        const transcript = p.provider === 'claude' ? (await this.nativeDiscovery.list('claude', this.store.project(session.projectId).path)).find(item => item.nativeSessionId === p.nativeSessionId)?.path : null;
+        if (p.provider === 'claude' && !transcript) return { linked: false };
+        // Recheck after path I/O: manual association/unlink always wins.
+        if (this.nativeTracking.get(session.id) !== tracking || this.store.session(session.id).nativeSessionId !== session.nativeSessionId || this.agentVersion(session.agent) !== version) return { linked: false };
+        this.store.saveHistory(session.id, { messages: [], warnings: [], path: transcript ?? null, nativeSessionId: p.nativeSessionId });
+        tracking.ambiguous = true; tracking.hookNativeId = p.nativeSessionId; this.changed(); return { linked: true };
       }
       case 'nativeHistories': return this.store.nativeHistories(request.params.sessionId, request.params);
       case 'discoverNativeHistories': return this.discoverHistories(request.params.sessionId, request.params);
@@ -597,7 +680,7 @@ export class DaemonServer {
       case 'importHistory': return this.importHistory(request.params.sessionId, request.params.path);
       case 'refreshHistory': {
         const session = this.store.session(request.params.sessionId);
-        if (!session.transcriptPath && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
+        if (!session.transcriptPath && !(['claude', 'opencode'].includes(this.integration(session)) && session.nativeSessionId) && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
         return this.importHistory(request.params.sessionId, session.transcriptPath);
       }
     }
@@ -618,6 +701,16 @@ export class DaemonServer {
   }
 
   private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
+  private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:') ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
+  private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
+    const project = this.store.project(session.projectId).path;
+    if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file);
+    const provider = this.integration(session);
+    if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project);
+    if (!file && provider === 'claude' && session.nativeSessionId) file = (await this.nativeDiscovery.list('claude', project)).find(item => item.nativeSessionId === session.nativeSessionId)?.path ?? null;
+    if (!file) throw new Error('请先关联原生记录文件');
+    return readHistory(file, provider, project);
+  }
   private assertAgentVersion(id: string, version: number): void {
     if (this.agentVersion(id) !== version) throw new Error('Agent 插件已更新，请重新读取或重试');
   }
@@ -627,14 +720,11 @@ export class DaemonServer {
     this.historyWrites.add(sessionId);
     try {
       const session = this.store.session(sessionId);
-      const projectPath = this.store.project(session.projectId).path;
       const version = this.agentVersion(session.agent);
-      const history = session.agent.startsWith('agent:')
-        ? await this.plugins.history(this.store.agent(session.agent), session, projectPath, file)
-        : await readHistory(file!, session.agent, projectPath);
+      const history = await this.integratedHistory(session, file);
       if (this.closing) throw new Error('后台正在退出');
       this.assertAgentVersion(session.agent, version);
-      this.nativeTracking.delete(sessionId);
+      if (this.nativeTracking.get(sessionId)?.hookNativeId !== history.nativeSessionId) this.nativeTracking.delete(sessionId);
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); this.historyWrites.delete(sessionId); }
   }
@@ -652,17 +742,20 @@ export class DaemonServer {
   private async discoverHistories(sessionId: string, pagination: HistoryQuery) {
     this.requireHistoryAvailable(sessionId);
     const session = this.store.session(sessionId);
-    if (session.agent === 'codex' || session.agent === 'claude') {
+    if (['codex', 'claude', 'opencode'].includes(this.integration(session)) && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.list)) {
       this.reserveHistory(sessionId);
       try {
-        const items = await this.nativeDiscovery.list(session.agent, this.store.project(session.projectId).path);
+        const version = this.agentVersion(session.agent);
+        const items = await this.nativeDiscovery.list(this.integration(session), this.store.project(session.projectId).path);
+        if (this.closing) throw new Error('后台正在退出');
+        this.assertAgentVersion(session.agent, version);
         const query = pagination.query.toLowerCase();
-        const filtered = items.filter(item => item.nativeSessionId.toLowerCase().includes(query));
+        const filtered = items.filter(item => `${item.nativeSessionId} ${item.title}`.toLowerCase().includes(query));
         const offset = pagination.cursor ? Number(pagination.cursor) : 0;
         if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('分页已失效，请刷新');
         const page = filtered.slice(offset, offset + pagination.limit);
         for (const item of page) if (!this.store.nativeHistory(sessionId, item.nativeSessionId)) this.store.saveHistoryEntry(sessionId, { messages: [], warnings: [], path: item.path, nativeSessionId: item.nativeSessionId });
-        return { items: page, nextCursor: offset + page.length < filtered.length ? String(offset + page.length) : null, warnings: ['发现本机原生记录；多个候选请选中后关联。扫描最多 4000 个目录项、最近 500 个文件。'] };
+        return { items: page, nextCursor: offset + page.length < filtered.length ? String(offset + page.length) : null, warnings: [] };
       } finally { this.historyBusy.delete(sessionId); }
     }
     if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return { items: [], nextCursor: null, warnings: ['此类型未提供会话发现；可导入多个原生记录文件或手动关联 ID'] };
@@ -678,16 +771,14 @@ export class DaemonServer {
   private async previewHistory(sessionId: string, nativeSessionId: string, refresh: boolean): Promise<History> {
     this.requireHistoryAvailable(sessionId);
     const cached = this.store.nativeHistory(sessionId, nativeSessionId);
-    if (cached && !refresh && (cached.messages.length || !cached.path)) return cached;
+    if (cached && !refresh && (cached.messages.length || !cached.path && !['claude', 'opencode'].includes(this.integration(this.store.session(sessionId))))) return cached;
     const session = this.store.session(sessionId);
     const agent = session.agent.startsWith('agent:') ? this.store.agent(session.agent) : null;
-    if (!agent && !cached?.path) throw new Error('此记录尚未导入，请先选择原生记录文件');
+    if (!agent && !cached?.path && !['claude', 'opencode'].includes(this.integration(session))) throw new Error('此记录尚未导入，请先选择原生记录文件');
     this.reserveHistory(sessionId);
     try {
       const version = this.agentVersion(session.agent);
-      const history = !agent ? await readHistory(cached!.path!, session.agent, this.store.project(session.projectId).path) : agent.plugin?.history
-        ? await this.plugins.history(agent, { ...session, nativeSessionId, transcriptPath: cached?.path ?? null }, this.store.project(session.projectId).path, cached?.path ?? null)
-        : { messages: [], warnings: ['此类型仅提供会话列表，没有文本读取能力'], path: null, nativeSessionId };
+      const history = agent && !agent.integration && !agent.plugin?.history ? { messages: [], warnings: ['此类型仅提供会话列表，没有文本读取能力'], path: null, nativeSessionId } : await this.integratedHistory({ ...session, nativeSessionId }, cached?.path ?? null);
       if (history.nativeSessionId !== nativeSessionId) throw new Error('插件返回的会话 ID 与选中会话不一致');
       if (this.closing) throw new Error('后台正在退出');
       this.assertAgentVersion(session.agent, version);
@@ -696,7 +787,7 @@ export class DaemonServer {
     } finally { this.historyBusy.delete(sessionId); }
   }
 
-  private async start(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
+  private async start(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     this.requireProjectAvailable(session.projectId);
     if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
@@ -708,7 +799,7 @@ export class DaemonServer {
     const count=[...reserved].filter(id=>!this.live.get(id)?.closed&&!!this.store.session(id).remote===ssh).length;
     if(count>=limit)throw new Error(`${ssh?'SSH 会话':'本机终端'}已达上限 ${limit}，请在设置中调整或停止一个${ssh?' SSH 会话':'本机终端'}`);
     this.starting.add(sessionId);
-    try { return await this.spawn(sessionId, resume, cols, rows); }
+    try { return await this.spawn(sessionId, resume, cols, rows, remoteOwner); }
     finally { this.starting.delete(sessionId); }
   }
 
@@ -716,13 +807,14 @@ export class DaemonServer {
     if (config.remote && typeof config.remote === 'object' && 'connectionId' in config.remote && typeof config.remote.connectionId === 'string') this.store.sshConnection(config.remote.connectionId);
     if (config.remote && (config.agent !== 'shell' || config.command.trim())) throw new Error('远程会话请选择默认终端；Agent 通过 MCP 操作此终端');
   }
-  private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
+  private async spawn(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     const projectPath = this.store.project(session.projectId).path;
     const version = this.agentVersion(session.agent);
-    const command = resume && session.agent.startsWith('agent:')
+    let command = resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
       : launchCommand(session, resume);
+    if (this.integration(session) === 'opencode') command = await openCodeLaunch(command, projectPath);
     const config = session.terminal ?? this.store.settings().terminal;
     let cwd: string;
     let selected: { file: string; args: string[] };
@@ -739,10 +831,13 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台无法再启动终端');
     if (this.agentOwners.get(sessionId)?.disposing) throw new Error('SSH 连接已取消，Agent 正在清理自己的连接');
     if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
-    const trackNative = !resume && !session.remote && (['codex', 'claude'].includes(session.agent) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
+    const provider = this.integration(session);
+    const trackNative = !resume && !session.remote && (['codex', 'claude', 'opencode'].includes(provider) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
     let baseline: NativeCandidate[] | null = [];
-    if (trackNative) { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
-    const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
+    // OpenCode hooks carry the exact native ID. Do not start another OpenCode
+    // process or poll its database just to launch an existing TUI.
+    if (trackNative && provider !== 'opencode') { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
+    const run = this.store.createRun(sessionId, command, cols, rows, selected.file, remoteOwner !== undefined);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: session.remote ? undefined : windowsPtyFor(process.platform, release()) });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const serialize = new SerializeAddon();
@@ -752,7 +847,7 @@ export class DaemonServer {
     let remote: LiveTerminal['remote'];
     try {
       if (session.remote) {
-        const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }), path.join(this.dataDirectory,'command-output',run.id));
+        const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: remoteOwner ?? 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }), path.join(this.dataDirectory,'command-output',run.id));
         const profile = session.remote.connectionId ? this.store.sshConnection(session.remote.connectionId) : null;
         const transport = profile ? new SshTerminal(profile, sessionId, session.remote.directory, cols, rows, {
           credentials: async () => (await this.challenge(profile,'credentials')).secret ?? {},
@@ -767,7 +862,7 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id } });
+      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
     }
     catch (error) {
       terminal.dispose();
@@ -777,13 +872,24 @@ export class DaemonServer {
     const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
+    if (remote && remoteOwner === 'agent') {
+      // Allow the resumed MCP to reclaim its exact connection while SSH is
+      // authenticating; never overwrite a client that has already reclaimed it.
+      const abort = new AbortController(); abort.abort();
+      this.agentOwners.set(sessionId,{id:randomUUID(),disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort});
+      this.restoredRuns.set(sessionId,{previousRunId:this.recoveryPending.get(sessionId)?.runId ?? null,runId:run.id});
+    }
     // Fresh TUI launches never inherit an old recovery ID, even without discovery support.
     if (!resume && !session.remote && session.agent !== 'shell') this.store.saveHistory(sessionId, { messages: [], warnings: [], path: null, nativeSessionId: null });
     if (trackNative) {
-      const peers = [...this.nativeTracking.keys()].filter(id => { const peer = this.store.session(id); return peer.projectId === session.projectId && peer.agent === session.agent; });
+      const peers = [...this.nativeTracking.keys()].filter(id => { const peer = this.store.session(id); return peer.projectId === session.projectId && this.integration(peer) === provider; });
       peers.forEach(id => { this.nativeTracking.get(id)!.ambiguous = true; });
-      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: peers.length > 0 || baseline === null });
+      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: provider === 'opencode' || peers.length > 0 || baseline === null });
       this.scheduleNativeScan();
+    } else if (resume && !session.remote && ['claude', 'opencode'].includes(provider)) {
+      // Resume keeps the selected ID; a later /new can still announce its exact
+      // replacement. Manual association/unlink during this run deletes tracking.
+      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set(), started: Date.now(), ambiguous: true, hookNativeId: session.nativeSessionId ?? undefined });
     }
     this.changed(); // Make connection startup visible and cancellable in the sidebar.
     this.pruneLogs();
@@ -816,7 +922,7 @@ export class DaemonServer {
 
   private async nativeCandidates(sessionId: string): Promise<NativeCandidate[] | null> {
     const session = this.store.session(sessionId), project = this.store.project(session.projectId).path;
-    if (!session.agent.startsWith('agent:')) return this.nativeDiscovery.list(session.agent, project);
+    if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return this.nativeDiscovery.list(this.integration(session), project);
     const version = this.agentVersion(session.agent);
     const page = await this.plugins.list(this.store.agent(session.agent), session, project, { cursor: null, limit: 50, query: '' });
     this.assertAgentVersion(session.agent, version);
@@ -840,14 +946,16 @@ export class DaemonServer {
       if (session.latestRun?.id !== tracking.runId || session.nativeSessionId) { this.nativeTracking.delete(sessionId); return; }
       const items = await this.nativeCandidates(sessionId);
       if (!items) return;
-      const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.projectId === session.projectId && item.agent === session.agent).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
+      const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.projectId === session.projectId && this.integration(item) === this.integration(session)).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
       const candidate = unambiguousNewHistory(items, tracking.baseline, tracking.started, claimed);
       if (!candidate) return;
       // Recheck after I/O so manual association, unlink, or a new run wins.
       const current = this.store.session(sessionId);
       if (this.nativeTracking.get(sessionId) !== tracking || current.latestRun?.id !== tracking.runId || current.nativeSessionId || this.historyBusy.has(sessionId)) return;
       this.store.saveHistory(sessionId, { messages: [], warnings: [], path: candidate.path, nativeSessionId: candidate.nativeSessionId });
-      this.nativeTracking.delete(sessionId); this.changed();
+      if (this.integration(session) === 'claude') { tracking.ambiguous = true; tracking.hookNativeId = candidate.nativeSessionId; }
+      else this.nativeTracking.delete(sessionId);
+      this.changed();
     } catch (error) { this.logError(error); }
   }
 
@@ -909,9 +1017,7 @@ export class DaemonServer {
       if (!session.remote && session.nativeSessionId && !this.historyBusy.has(sessionId)) {
         try {
           const version = this.agentVersion(session.agent);
-          const history = session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history && !this.closing
-            ? await this.plugins.history(this.store.agent(session.agent), session, this.store.project(session.projectId).path, session.transcriptPath)
-            : ['codex', 'claude'].includes(session.agent) && session.transcriptPath ? await readHistory(session.transcriptPath, session.agent, this.store.project(session.projectId).path) : null;
+          const history = !this.closing && (session.transcriptPath || this.integration(session) === 'opencode' || session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) ? await this.integratedHistory(session, session.transcriptPath) : null;
           this.assertAgentVersion(session.agent, version);
           if (history && history.nativeSessionId === session.nativeSessionId && this.store.session(sessionId).nativeSessionId === session.nativeSessionId && !this.historyBusy.has(sessionId)) this.store.saveHistory(sessionId, history);
         } catch (error) { this.logError(error); } // Keep a valid recovery ID if the transcript cannot be read.
@@ -965,19 +1071,22 @@ export class DaemonServer {
   private logError(error: unknown): void {
     try { const log = new RunLog(this.dataDirectory, 'daemon'); log.append(`${new Date().toISOString()} ${String(error)}\n`); } catch { /* Disk failure must not throw from PTY callbacks. */ }
   }
-  private async stopAll(): Promise<void> {
+  private async stopAll(restoreOnOpen = false): Promise<void> {
     this.closing = true;
     try {
+      if (restoreOnOpen) this.checkpointWorkspace();
       // Drain in-flight SSH startup before closing the local channels.
       const startupDeadline = Date.now() + 45000;
       while (this.starting.size && Date.now() < startupDeadline) await new Promise(resolve => setTimeout(resolve, 25));
       if (this.starting.size) throw new Error('远端连接尚未完成，请稍后再次退出；后台保留以便确认清理');
+      if (this.recovering) await this.recovering;
       await this.resources.close();
       await this.transfers.close();
       await this.git.close();
-      await this.plugins.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));
       for (const result of results) if (result.status === 'rejected') this.logError(result.reason);
+      await this.plugins.close();
+      await this.nativeDiscovery.opencode.close();
       const deadline = Date.now() + 5000;
       while (this.live.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
       if (this.live.size) throw new Error('部分终端尚未停止，请重试退出；后台已保留以便继续清理');
@@ -988,8 +1097,13 @@ export class DaemonServer {
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
-    for (const socket of this.clients.keys()) socket.terminate();
-    await new Promise<void>(resolve => this.ws.close(() => resolve()));
+    await new Promise<void>(resolve => {
+      // Keep the shutdown reply and close frame ordered on the wire. Immediate
+      // terminate() can reset a socket before its peer reads the final reply.
+      for (const socket of this.clients.keys()) socket.close(1000, 'Backend stopped');
+      const deadline=setTimeout(()=>{for(const socket of this.clients.keys())socket.terminate();},1000);
+      this.ws.close(()=>{clearTimeout(deadline);resolve();});
+    });
     await new Promise<void>(resolve => this.http.close(() => resolve()));
     rmSync(path.join(this.dataDirectory, 'runtime.json'), { force: true });
     this.store.close();

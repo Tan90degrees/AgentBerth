@@ -8,8 +8,61 @@ import { DaemonServer } from '../src/daemon/server';
 import { Store } from '../src/daemon/store';
 import type { Project, Run, RuntimeInfo, Session, Attachment } from '../src/shared/protocol';
 import { DaemonConnection } from '../src/main/connection';
+import { WebSocket } from 'ws';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+for(const keptFile of [null,'runtime.json','daemon.lock'])test(`lost shutdown reply ${keptFile ? `rejects leftover ${keptFile}` : 'accepts confirmed process and runtime cleanup'}`, {timeout:15000}, async t => {
+  const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-lost-reply-'));
+  const script=path.join(folder,'fixture.cjs'),runtimeFile=path.join(folder,'runtime.json'),lock=path.join(folder,'daemon.lock');
+  const wsFile=createRequire(path.resolve('package.json')).resolve('ws');
+  writeFileSync(script,`const fs=require('node:fs');const{WebSocketServer}=require(${JSON.stringify(wsFile)});const server=new WebSocketServer({host:'127.0.0.1',port:0});const token='a'.repeat(64);server.on('listening',()=>{fs.writeFileSync(${JSON.stringify(lock)},String(process.pid));fs.writeFileSync(${JSON.stringify(runtimeFile)},JSON.stringify({version:1,pid:process.pid,port:server.address().port,token}));});server.on('connection',(socket,request)=>{if(request.headers.authorization!=='Bearer '+token){socket.terminate();return;}socket.on('message',bytes=>{const message=JSON.parse(bytes);if(message.method==='state')socket.send(JSON.stringify({id:message.id,result:{apiVersion:40,sessions:[]}}));else if(message.method==='shutdown'){fs.writeFileSync(${JSON.stringify(path.join(folder,'checkpoint.json'))},JSON.stringify(message.params));if(${JSON.stringify(keptFile)}!=='runtime.json')fs.rmSync(${JSON.stringify(runtimeFile)});if(${JSON.stringify(keptFile)}!=='daemon.lock')fs.rmSync(${JSON.stringify(lock)});socket.terminate();process.exit(0);}});});`);
+  const child=spawn(process.execPath,[script],{stdio:'ignore',env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},windowsHide:true});
+  t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');rmSync(folder,{recursive:true,force:true,maxRetries:5});});
+  const deadline=Date.now()+5000;while(!existsSync(runtimeFile)){assert.ok(Date.now()<deadline);await wait(20);}
+  if(keptFile)await assert.rejects(shutdownDaemon(folder,true),/后台连接已断开/);else await shutdownDaemon(folder,true);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(folder,'checkpoint.json'),'utf8')),{restoreOnOpen:true});
+  assert.equal(existsSync(runtimeFile),keptFile==='runtime.json');assert.equal(existsSync(lock),keptFile==='daemon.lock');
+});
+
+test('daemon completes the WebSocket close handshake after delivering its shutdown reply', {timeout:5000}, async t => {
+  const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-close-'));
+  let closing:Promise<void>|undefined;
+  const server=new DaemonServer(folder,()=>{closing=server.close();});
+  const runtime=await server.listen();
+  const socket=new WebSocket(`ws://127.0.0.1:${runtime.port}/rpc`,{headers:{Authorization:`Bearer ${runtime.token}`}});
+  t.after(async()=>{socket.terminate();if(closing)await closing;else await server.close();rmSync(folder,{recursive:true,force:true,maxRetries:5});});
+  await new Promise<void>(resolve=>socket.once('open',resolve));
+  const events:unknown[]=[];
+  socket.on('message',data=>events.push(JSON.parse(data.toString())));
+  const closed=new Promise<number>(resolve=>socket.once('close',code=>resolve(code)));
+  const id=randomUUID();socket.send(JSON.stringify({id,method:'shutdown',params:{}}));
+  assert.equal(await closed,1000,'The final reply must use a graceful close, not a reset');
+  assert.deepEqual(events.at(-1),{id,result:null});
+  await closing;
+});
+
+test('shutdown waits for its reply write even when the transport is delayed', {timeout:5000}, async t => {
+  const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-ack-'));
+  let shutdowns=0;
+  const server=new DaemonServer(folder,()=>{shutdowns++;});
+  const client=await DaemonConnection.open(await server.listen(),()=>{});
+  t.after(async()=>{client.close(true);await server.close();rmSync(folder,{recursive:true,force:true,maxRetries:5});});
+  const socket=[...(server as any).clients.keys()][0];
+  const send=socket.send.bind(socket);
+  let release:(()=>void)|undefined;
+  socket.send=(data: string, callback: unknown)=>{release=()=>send(data,callback);};
+  const quitting=client.rpc('shutdown');
+  while(!release)await wait(5);
+  await wait(100); // Deliberately hold the reply beyond the former 50 ms timer.
+  assert.equal(shutdowns,0,'Shutdown ran before its response was written');
+  release();await quitting;
+  const deadline=Date.now()+1000;while(!shutdowns){assert.ok(Date.now()<deadline);await wait(5);}
+  assert.equal(shutdowns,1);
+});
 function stopped(pid: number): boolean {
   try { process.kill(pid, 0); return process.platform === 'linux' && /\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
   catch { return true; }

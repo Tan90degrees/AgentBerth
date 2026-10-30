@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { TerminalMcp, tools } from '../src/mcp/server';
 import { DaemonRpcError } from '../src/main/connection';
+import { API_VERSION } from '../src/shared/protocol';
 import type { Method, RemoteCommandResult, RemoteInfo } from '../src/shared/protocol';
 
 const sessionId=randomUUID(),runId=randomUUID(),id=randomUUID();
@@ -59,7 +60,7 @@ test('session and transfer actions share four discoverable names and all trusted
 
 test('running results and cache/parameter errors retain identity without offering hidden tools or replay',async()=>{
   let fault:DaemonRpcError|undefined;
-  const server=new TerminalMcp({rpc:async<T>(method:Method)=>{if(method==='state')return {apiVersion:36} as T;if(fault)throw fault;return command('running') as T;}});
+  const server=new TerminalMcp({rpc:async<T>(method:Method)=>{if(method==='state')return {apiVersion:API_VERSION} as T;if(fault)throw fault;return command('running') as T;}});
   const running=await invoke(server,'terminal_execute',{sessionId,runId,command:'long task'});assert.equal(running.value.harness.next.tool,'terminal_execute');assert.equal(running.value.harness.next.arguments.actionId,id);assert.equal(running.value.harness.next.arguments.waitFor,'completion');assert.ok(!('command'in running.value.harness.next.arguments));
   fault=new DaemonRpcError('Invalid arguments: cursor','INVALID_ARGUMENTS');const invalid=await invoke(server,'terminal_execute',{waitMs:0});assert.equal(invalid.value.error.code,'INVALID_ARGUMENTS');assert.equal(invalid.value.error.execution,'not_started');
   fault=new DaemonRpcError('lost','OUTCOME_UNKNOWN',{sessionId,runId,actionId:id});const unknown=await invoke(server,'terminal_execute',{sessionId,runId,command:'side effect',requestId:id});assert.equal(unknown.value.harness.next.tool,'terminal_execute');assert.equal(unknown.value.harness.next.arguments.actionId,id);assert.equal(unknown.value.harness.replayAllowed,false);

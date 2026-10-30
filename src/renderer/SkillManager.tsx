@@ -6,7 +6,10 @@ import { Dialog } from './Dialog';
 import { builtinSkillProviders } from '../shared/skills';
 
 export function SkillManager({ agents, projects, currentProjectId }: { agents: AgentDefinition[]; projects: Project[]; currentProjectId?: string }) {
-  const providers = [...builtinSkillProviders, ...agents.flatMap(agent => agent.skills ? [{ id: agent.id, name: agent.name, skills: agent.skills }] : [])];
+  const providers = [...builtinSkillProviders, ...agents.flatMap(agent => {
+    const skills = agent.skills ?? builtinSkillProviders.find(provider => provider.id === agent.integration)?.skills;
+    return skills ? [{ id: agent.id, name: agent.name, skills }] : [];
+  })];
   const [agentId, setAgentId] = useState('codex');
   const provider = providers.find(item => item.id === agentId) ?? providers[0];
   const [projectId, setProjectId] = useState<string>(currentProjectId || '');
