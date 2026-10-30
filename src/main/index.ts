@@ -1,5 +1,6 @@
 import { PetState } from './pet-state';
 import { petMenuTemplate } from './pet-menu';
+import { keepPetAboveWindows } from './pet-window';
 import { PetHooks } from './pet-hooks';
 import { petRequestSchema, petStatuses, petWindowSize } from '../shared/pet';
 import { statSync, writeFileSync } from 'node:fs';
@@ -195,15 +196,20 @@ function publishPet() {
 }
 async function openPetWindow() {
   if (quitting) return;
-  if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); return; }
+  if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop); return; }
   const width = Math.round(petWindowSize.width * pet.preferences.scale), height = Math.round(petWindowSize.height * pet.preferences.scale);
   let area = screen.getPrimaryDisplay().workArea, x = area.x + area.width - width - 20, y = area.y + area.height - height - 20;
   try {
     const saved = JSON.parse(readFileSync(path.join(dataDirectory, 'pet', 'position.json'), 'utf8'));
     if (Number.isSafeInteger(saved.x) && Number.isSafeInteger(saved.y)) { area = screen.getDisplayNearestPoint(saved).workArea; x = Math.min(Math.max(saved.x, area.x), area.x + area.width - width); y = Math.min(Math.max(saved.y, area.y), area.y + area.height - height); }
   } catch { /* First launch or unavailable monitor. */ }
-  const target = new BrowserWindow({ x, y, width, height, resizable: false, frame: false, transparent: true, hasShadow: false, alwaysOnTop: pet.preferences.alwaysOnTop, skipTaskbar: true, show: false, title: 'AgentBerth · 桌宠', icon: iconFile, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const target = new BrowserWindow({ x, y, width, height, resizable: false, frame: false, transparent: true, hasShadow: false, alwaysOnTop: pet.preferences.alwaysOnTop, skipTaskbar: true, show: false, title: 'AgentBerth · 桌宠', icon: iconFile, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
   petWindow = target;
+  const keepAbove = () => keepPetAboveWindows(target, pet.preferences.alwaysOnTop);
+  keepAbove();
+  target.on('show', keepAbove);
+  target.on('restore', keepAbove);
+  target.on('blur', keepAbove);
   target.on('moved', () => { try { const { x, y } = target.getBounds(); writeFileSync(path.join(dataDirectory, 'pet', 'position.json'), JSON.stringify({ x, y }), { mode: 0o600 }); } catch { /* Position failure must not affect a terminal. */ } });
   target.setMenuBarVisibility(false);
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -226,7 +232,7 @@ function petGuide(): string {
 async function savePetPreferences(preferences: unknown) {
   pet.save(preferences);
   if (pet.preferences.enabled) {
-    await openPetWindow(); petWindow?.setAlwaysOnTop(pet.preferences.alwaysOnTop);
+    await openPetWindow(); if (petWindow) keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop);
     petWindow?.setSize(Math.round(petWindowSize.width * pet.preferences.scale), Math.round(petWindowSize.height * pet.preferences.scale));
     if (petWindow) { const bounds = petWindow.getBounds(), area = screen.getDisplayMatching(bounds).workArea; petWindow.setPosition(Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width)), Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height))); }
   } else petWindow?.close();

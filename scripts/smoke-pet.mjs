@@ -73,6 +73,30 @@ try {
   };
   await openMenu();
   assert.deepEqual(await application.evaluate(() => globalThis.petSmokeMenu.items.find(item => item.label === '切换 Agent 会话').submenu.items.map(item => item.id).sort()), [a.id, b.id].sort());
+  console.log('Pet smoke: popup focus keeps the companion visible without stealing input');
+  await application.evaluate(async ({ BrowserWindow }) => {
+    const target = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet'));
+    const bounds = target.getBounds();
+    globalThis.petSmokePopup = new BrowserWindow({ ...bounds, title: 'Popup focus fixture', show: false });
+    await globalThis.petSmokePopup.loadURL('data:text/html,<input autofocus value="popup keeps keyboard focus">');
+    target.focus();
+    globalThis.petSmokePopup.show(); globalThis.petSmokePopup.focus();
+  });
+  await pet.waitForFunction(() => !document.hasFocus() && document.visibilityState === 'visible' && !!document.querySelector('.pet-character')?.complete);
+  const popupState = await application.evaluate(({ BrowserWindow }) => {
+    const target = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet'));
+    return { visible: target.isVisible(), top: target.isAlwaysOnTop(), throttled: target.webContents.getBackgroundThrottling(), focused: target.isFocused() };
+  });
+  assert.deepEqual(popupState, { visible: true, top: true, throttled: false, focused: false });
+  await chooseMenu('保持置顶');
+  assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet')).isAlwaysOnTop()), false);
+  await application.evaluate(({ BrowserWindow }) => {
+    const target = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet'));
+    target.emit('blur');
+    if (target.isAlwaysOnTop()) throw new Error('Blur must preserve disabled stacking');
+    globalThis.petSmokePopup.destroy(); delete globalThis.petSmokePopup;
+  });
+  await chooseMenu('保持置顶');
   await pet.waitForFunction(() => document.querySelector('.pet-character').complete && document.querySelector('.pet-character').naturalWidth === 288);
   await chooseMenu('切换 Agent 会话', a.id);
   await pet.waitForFunction(id => document.querySelector('.desktop-pet').dataset.sessionId === id, a.id);
