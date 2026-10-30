@@ -1267,7 +1267,10 @@ try {
   step('reimport the same type as one self-describing script, preserving its name and ID');
   const beforeImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
   const directScript = path.join(pluginBundle, 'standalone.cjs');
-  await writeFile(directScript, 'setTimeout(()=>{\n' + source + '\n},600);');
+  const describeCalls = path.join(folder, 'plugin-describe-calls.txt');
+  const countedSource = source.replace("if (request.method === 'describe') {", "if (request.method === 'describe') { await fs.appendFile(" + JSON.stringify(describeCalls) + ", 'describe\\n');");
+  assert.notEqual(countedSource, source);
+  await writeFile(directScript, 'setTimeout(()=>{\n' + countedSource + '\n},600);');
   await application.evaluate(({ dialog }, file) => { const original = dialog.showOpenDialog; dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; return { canceled: false, filePaths: [file] }; }; }, directScript);
   await settingsCategory(page, 'Agent');
   await page.getByRole('button', { name: '导入 Agent', exact: true }).click();
@@ -1277,6 +1280,7 @@ try {
   await page.getByRole('button', { name: '保存 Agent 类型', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   const afterImport = (await page.evaluate(() => window.berth.rpc('state'))).agents.find(item => item.name === 'Beta 插件');
+  assert.deepEqual((await readFile(describeCalls, 'utf8')).trim().split('\n'), ['describe', 'describe'], 'Import probes once; saving an update validates once in the daemon');
   assert.equal(afterImport.id, beforeImport.id);
   assert.equal(afterImport.plugin.runtime, 'node'); assert.equal(afterImport.plugin.sourceId, 'beta-smoke');
   await rm(pluginBundle, { recursive: true });

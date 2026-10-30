@@ -68,7 +68,10 @@ export function AgentManager({ agents, defaultAgent, used, disabled, busy, hotUp
       event.preventDefault(); setLocalError(''); onError(''); setWorking(true);
       try {
         const value = { ...editing.config, name: name.trim() };
-        if (editing.imported && value.plugin) await window.berth.rpc('probeAgentPlugin', value);
+        // Updates are validated atomically by updateAgent before activation.
+        // Only new imports need the separate probe; avoid launching the same
+        // adapter twice during an update (two independent timeout budgets).
+        if (editing.imported && value.plugin && !editing.id) await window.berth.rpc('probeAgentPlugin', value);
         const result = await onSave(value, editing.id);
         if (result) { if (editing.imported && value.plugin) setChecks(previous => ({ ...previous, [result.id]: '插件连接正常' })); setEditing(null); }
       } catch (reason) { setLocalError(reason instanceof Error ? reason.message : String(reason)); } finally { setWorking(false); }

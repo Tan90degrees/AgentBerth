@@ -84,6 +84,19 @@ try {
   await page.locator('.terminal-mount .xterm').waitFor();
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   const liveRun = async () => (await page.evaluate(id => window.berth.rpc('state').then(state => state.sessions.find(session => session.id === id).latestRun), session.id));
+  const waitTerminalText = async text => {
+    await page.getByRole('button', { name: '查找', exact: true }).click();
+    await page.getByLabel('查找终端文字', { exact: true }).fill(text);
+    const deadline = Date.now() + 12000;
+    while (true) {
+      await page.getByRole('button', { name: '下一个匹配', exact: true }).click();
+      if ((await page.getByRole('search').getByRole('status').innerText()).includes('已定位')) break;
+      assert.ok(Date.now() < deadline, 'Terminal fixture did not render: ' + text);
+      await page.waitForTimeout(50);
+    }
+    await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
+    await page.getByRole('button', { name: '到底部', exact: true }).click();
+  };
   const entry = name => page.getByRole('treeitem', { name, exact: true });
   await page.evaluate(() => { window.originalTerminal = document.querySelector('.terminal-mount .xterm'); });
   const sideTabs = page.getByRole('tablist', { name: '侧栏视图' }), mainTabs = page.getByRole('tablist', { name: '工作区内容' });
@@ -247,9 +260,11 @@ try {
   await entry('指南.md').waitFor();
   step('Ctrl-click a real terminal path opens the existing preview without restarting the PTY');
   await mainTabs.getByRole('tab', { name: '终端', exact: true }).click();
-  const printPath = `node -e "process.stdout.write(String.fromCharCode(27)+'[2J'+String.fromCharCode(27)+'[Hsrc/code.ts:2:1');setInterval(()=>{},1000)"`;
+  // Keep one live TUI throughout both navigation checks. Repaint after ConPTY
+  // resize, and split paths so searching cannot match the shell's command echo.
+  const printPath = `node -e "let p='src/'+'code.ts:2:1';const draw=()=>process.stdout.write(String.fromCharCode(27)+'[2J'+String.fromCharCode(27)+'[H'+p+String.fromCharCode(27)+'[2;1HRUNNING_'+Date.now());draw();setInterval(draw,150);process.stdin.on('data',()=>{p='./z-'+'page-.txt';draw()})"`;
   await page.evaluate(({ id, runId, command }) => window.berth.rpc('input', { sessionId: id, runId, data: command + '\r' }), { id: session.id, runId: run.id, command: printPath });
-  await page.waitForTimeout(700);
+  await waitTerminalText('src/code.ts:2:1');
   const screen = page.locator('[data-testid="terminal"] .xterm-screen');
   const box = await screen.boundingBox();
   const cols = await page.locator('.terminal-mount').getAttribute('data-cols');
@@ -275,17 +290,16 @@ try {
   await page.waitForFunction(() => document.querySelector('[aria-label="工作区内容"] [aria-selected="true"]')?.textContent === '预览');
   await preview.getByLabel('文件源码', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.originalTerminal === document.querySelector('.terminal-mount .xterm')), true);
-  await page.evaluate(({ id, runId }) => window.berth.rpc('input', { sessionId: id, runId, data: '\x03' }), { id: session.id, runId: run.id });
   step('consumed terminal navigation never reopens the picker when switching running sessions');
   await mainTabs.getByRole('tab', { name: '终端', exact: true }).click();
-  const ambiguousPath = `node -e "process.stdout.write(String.fromCharCode(27)+'[2J'+String.fromCharCode(27)+'[H./z-page-.txt');setInterval(()=>process.stdout.write(String.fromCharCode(27)+'[2;1HRUNNING_'+Date.now()),150)"`;
-  await page.waitForTimeout(200);
-  await page.evaluate(({ id, runId, command }) => window.berth.rpc('input', { sessionId: id, runId, data: command + '\r' }), { id: session.id, runId: run.id, command: ambiguousPath });
-  await page.waitForTimeout(700);
+  await page.evaluate(({ id, runId }) => window.berth.rpc('input', { sessionId: id, runId, data: 'next\r' }), { id: session.id, runId: run.id });
+  await waitTerminalText('./z-page-.txt');
   const pathBox = await screen.boundingBox();
   const pathX = pathBox.x + pathBox.width / Number(await page.locator('.terminal-mount').getAttribute('data-cols')) * 4;
   const pathY = pathBox.y + pathBox.height / Number(await page.locator('.terminal-mount').getAttribute('data-rows')) / 2;
-  await page.keyboard.down('Control'); await page.mouse.click(pathX, pathY); await page.keyboard.up('Control');
+  await page.mouse.move(pathX, pathY); await page.keyboard.down('Control');
+  await page.waitForFunction(() => document.querySelector('.xterm-screen')?.classList.contains('terminal-path-active'));
+  await page.mouse.click(pathX, pathY); await page.keyboard.up('Control');
   picker = page.getByRole('dialog', { name: '定位文件或目录', exact: true });
   await picker.getByRole('option').first().waitFor();
   assert.ok(await picker.getByRole('option').count() > 1);
