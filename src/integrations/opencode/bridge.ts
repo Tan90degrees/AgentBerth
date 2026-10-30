@@ -15,7 +15,7 @@ export function createBridge(directory: string, getInfo: (id: string, signal: Ab
   if (env.AGENTBERTH_AGENT !== 'opencode' || !data || !path.isAbsolute(data) || !sessionId || !runId || !uuid.test(sessionId) || !uuid.test(runId) || !directory || !path.isAbsolute(directory)) return null;
   const same = (a: string, b: string) => process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b);
   const metadata = new Map<string, Info>(), waiting = new Set<string>();
-  let active = idPattern.test(env.AGENTBERTH_NATIVE_SESSION_ID ?? '') ? env.AGENTBERTH_NATIVE_SESSION_ID! : '', stopped = false, failed = false;
+  let active = idPattern.test(env.AGENTBERTH_NATIVE_SESSION_ID ?? '') ? env.AGENTBERTH_NATIVE_SESSION_ID! : '', pendingPrompt = '', stopped = false, failed = false;
   let queue = Promise.resolve(), queued = 0, last = '', lastAt = 0;
   const remember = (value: any) => {
     const id = value?.id ?? value?.sessionID, folder = value?.directory ?? value?.location?.directory;
@@ -64,18 +64,34 @@ export function createBridge(directory: string, getInfo: (id: string, signal: Ab
     queued++; queue = queue.then(() => stopped ? undefined : action()).catch(() => {}).finally(() => { queued--; });
     return queue;
   };
-  const prompt = (id: string) => enqueue(async () => {
+  const selectPrompt = async (id: string) => {
     const owner = await root(id);
-    if (owner !== id) return;
+    if (owner !== id) { if (owner !== null) pendingPrompt = ''; return; }
+    pendingPrompt = '';
     if (active !== id) waiting.clear(); active = id; failed = false;
     await send('working');
+  };
+  const prompt = (id: string) => enqueue(async () => {
+    if (!idPattern.test(id)) return;
+    // Keep only a prompt's exact target when metadata is temporarily absent.
+    // Later events may retry verification; unrelated sessions cannot activate it.
+    pendingPrompt = id;
+    await selectPrompt(id);
   });
   const event = (value: any) => {
     if (!eventTypes.includes(value?.type)) return Promise.resolve();
     return enqueue(async () => {
       const type = value.type, p = value.properties ?? value.data ?? {};
-      if (type === 'session.created' || type === 'session.updated') { remember(p.info ?? p); return; }
+      if (type === 'session.created' || type === 'session.updated') {
+        const item = p.info ?? p; remember(item);
+        if (pendingPrompt && (item.id ?? item.sessionID) === pendingPrompt) await selectPrompt(pendingPrompt);
+        return;
+      }
       const id = p.sessionID ?? p.form?.sessionID;
+      if (pendingPrompt && id === pendingPrompt) {
+        if (type === 'session.deleted') pendingPrompt = '';
+        else await selectPrompt(pendingPrompt);
+      }
       if (typeof id !== 'string' || !active || await root(id) !== active) return;
       const own = id === active, key = id + ':' + (p.id ?? p.requestID ?? p.permissionID ?? p.form?.id ?? 'request');
       if (['permission.asked', 'permission.updated', 'question.asked', 'form.created'].includes(type)) { waiting.add(key); await send('waiting'); return; }
@@ -90,5 +106,5 @@ export function createBridge(directory: string, getInfo: (id: string, signal: Ab
       else if (type === 'session.idle' || type === 'session.execution.succeeded' || type === 'session.status' && status === 'idle') await send(waiting.size ? 'waiting' : failed ? 'error' : 'completed');
     });
   };
-  return { prompt, event, close: () => { stopped = true; metadata.clear(); waiting.clear(); }, drain: () => queue };
+  return { prompt, event, close: () => { stopped = true; pendingPrompt = ''; metadata.clear(); waiting.clear(); }, drain: () => queue };
 }

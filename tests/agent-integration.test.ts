@@ -91,11 +91,51 @@ test('OpenCode bridge tracks real state, child permissions and exact IDs without
   process.env.AGENTBERTH_AGENT = 'shell'; assert.equal(createBridge(folder, getInfo), null);
 });
 
+test('OpenCode retries exact prompted IDs after a transient lookup failure without binding background or child sessions', async t => {
+  const { folder, packets } = await endpoint(t);
+  const available = new Set<string>();
+  const bridge = createBridge(folder, async id => {
+    if (!available.has(id)) throw new Error('Metadata not ready');
+    return { id, directory: folder };
+  })!; t.after(() => bridge.close());
+  await bridge.prompt('late'); assert.equal(packets.length, 0);
+  await bridge.event({ type: 'session.created', properties: { info: { id: 'background', directory: folder } } });
+  assert.equal(packets.length, 0, 'Same-project background metadata must not select a session');
+  available.add('late');
+  await bridge.event({ type: 'session.status', properties: { sessionID: 'late', status: { type: 'busy' } } });
+  await bridge.event({ type: 'session.idle', properties: { sessionID: 'late' } });
+  assert.deepEqual(packets.map(packet => [packet.nativeSessionId, packet.status]), [['late', 'working'], ['late', 'completed']]);
+  await bridge.prompt('created');
+  await bridge.event({ type: 'session.created', data: { sessionID: 'created', location: { directory: folder } } });
+  await bridge.event({ type: 'session.execution.succeeded', data: { sessionID: 'created' } });
+  assert.deepEqual(packets.slice(-2).map(packet => [packet.nativeSessionId, packet.status]), [['created', 'working'], ['created', 'completed']]);
+  const count = packets.length;
+  await bridge.prompt('child');
+  available.add('parent');
+  await bridge.event({ type: 'session.updated', properties: { info: { id: 'child', parentID: 'parent', directory: folder } } });
+  await bridge.event({ type: 'session.idle', properties: { sessionID: 'child' } });
+  await bridge.event({ type: 'session.status', data: { sessionID: 'parent', status: { type: 'busy' } } });
+  await bridge.prompt('foreign');
+  await bridge.event({ type: 'session.created', data: { sessionID: 'foreign', location: { directory: path.dirname(folder) } } });
+  assert.equal(packets.length, count, 'Child and foreign events must not replace the confirmed root');
+  await bridge.prompt('older'); available.add('newer'); await bridge.prompt('newer');
+  await bridge.event({ type: 'session.created', properties: { info: { id: 'older', directory: folder } } });
+  await bridge.event({ type: 'session.idle', properties: { sessionID: 'older' } });
+  assert.equal(packets.at(-1).nativeSessionId, 'newer', 'A superseded pending prompt cannot steal the active session');
+  assert.equal(packets.at(-1).status, 'working');
+});
+
 test('bundled OpenCode 1.x and 2.x entrypoints implement their separate plugin contracts', async t => {
   const { folder, packets } = await endpoint(t);
   const v1 = (await import(pathToFileURL(path.resolve('dist/opencode-pet-v1.mjs')).href)).default;
-  const hooks = await v1({ directory: folder, client: { session: { get: async ({ path: value }: any) => ({ data: { id: value.id, directory: folder } }) } } });
-  hooks['chat.message']({ sessionID: 'v1' }); await until(() => packets.length === 1);
+  let firstLookup = true;
+  const hooks = await v1({ directory: folder, client: { session: { get: async ({ path: value }: any) => {
+    if (firstLookup) { firstLookup = false; throw new Error('Transient lookup failure'); }
+    return { data: { id: value.id, directory: folder } };
+  } } } });
+  hooks['chat.message']({ sessionID: 'v1' });
+  hooks.event({ event: { type: 'session.status', properties: { sessionID: 'v1', status: { type: 'busy' } } } });
+  await until(() => packets.length === 1);
   hooks.event({ event: { type: 'session.idle', properties: { sessionID: 'v1' } } }); await until(() => packets.length === 2); assert.equal(packets.at(-1).status, 'completed');
   const v2 = (await import(pathToFileURL(path.resolve('dist/opencode-pet-v2.mjs')).href)).default;
   assert.equal(v2.id, 'agentberth.desktop-pet'); let prompt: any, push: ((event: any) => void) | undefined;
