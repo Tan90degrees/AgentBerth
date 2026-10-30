@@ -10,8 +10,23 @@ import type { Project, Run, RuntimeInfo, Session, Attachment } from '../src/shar
 import { DaemonConnection } from '../src/main/connection';
 import { WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+for(const keptFile of [null,'runtime.json','daemon.lock'])test(`lost shutdown reply ${keptFile ? `rejects leftover ${keptFile}` : 'accepts confirmed process and runtime cleanup'}`, {timeout:15000}, async t => {
+  const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-lost-reply-'));
+  const script=path.join(folder,'fixture.cjs'),runtimeFile=path.join(folder,'runtime.json'),lock=path.join(folder,'daemon.lock');
+  const wsFile=createRequire(path.resolve('package.json')).resolve('ws');
+  writeFileSync(script,`const fs=require('node:fs');const{WebSocketServer}=require(${JSON.stringify(wsFile)});const server=new WebSocketServer({host:'127.0.0.1',port:0});const token='a'.repeat(64);server.on('listening',()=>{fs.writeFileSync(${JSON.stringify(lock)},String(process.pid));fs.writeFileSync(${JSON.stringify(runtimeFile)},JSON.stringify({version:1,pid:process.pid,port:server.address().port,token}));});server.on('connection',(socket,request)=>{if(request.headers.authorization!=='Bearer '+token){socket.terminate();return;}socket.on('message',bytes=>{const message=JSON.parse(bytes);if(message.method==='state')socket.send(JSON.stringify({id:message.id,result:{apiVersion:40,sessions:[]}}));else if(message.method==='shutdown'){fs.writeFileSync(${JSON.stringify(path.join(folder,'checkpoint.json'))},JSON.stringify(message.params));if(${JSON.stringify(keptFile)}!=='runtime.json')fs.rmSync(${JSON.stringify(runtimeFile)});if(${JSON.stringify(keptFile)}!=='daemon.lock')fs.rmSync(${JSON.stringify(lock)});socket.terminate();process.exit(0);}});});`);
+  const child=spawn(process.execPath,[script],{stdio:'ignore',env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},windowsHide:true});
+  t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');rmSync(folder,{recursive:true,force:true,maxRetries:5});});
+  const deadline=Date.now()+5000;while(!existsSync(runtimeFile)){assert.ok(Date.now()<deadline);await wait(20);}
+  if(keptFile)await assert.rejects(shutdownDaemon(folder,true),/后台连接已断开/);else await shutdownDaemon(folder,true);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(folder,'checkpoint.json'),'utf8')),{restoreOnOpen:true});
+  assert.equal(existsSync(runtimeFile),keptFile==='runtime.json');assert.equal(existsSync(lock),keptFile==='daemon.lock');
+});
 
 test('daemon completes the WebSocket close handshake after delivering its shutdown reply', {timeout:5000}, async t => {
   const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-close-'));

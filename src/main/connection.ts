@@ -90,7 +90,16 @@ export async function shutdownDaemon(directory: string, restoreOnOpen = false): 
   try {
     let state = await candidate.rpc<State>('state');
     if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
-    if (state.apiVersion >= 4) await candidate.rpc('shutdown', state.apiVersion >= 40 ? {restoreOnOpen} : {});
+    if (state.apiVersion >= 4) {
+      try { await candidate.rpc('shutdown', state.apiVersion >= 40 ? {restoreOnOpen} : {}); }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== '后台连接已断开') throw error;
+        // A fully stopped authenticated daemon may close before Windows delivers
+        // its final reply. Never replay shutdown; verify its completed cleanup.
+        await waitForExit(runtime.pid);
+        if (existsSync(path.join(directory,'runtime.json')) || existsSync(path.join(directory,'daemon.lock'))) throw error;
+      }
+    }
     else {
       // Older backends have stop + idle shutdown. Drain first, then use their
       // atomic idle gate; never forcibly abandon still-running process trees.
