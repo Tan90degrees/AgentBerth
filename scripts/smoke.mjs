@@ -1026,6 +1026,11 @@ try {
   await page.getByRole('search').getByRole('status').filter({ hasText: '已定位' }).waitFor();
   await page.getByRole('button', { name: '复制选中', exact: true }).click();
   await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === 'FLOW_DONE', 'Read-only output copy failed');
+  // Recovery notices never disappear on a timer: changing the terminal height
+  // during search can clear xterm's selection between finding and copying.
+  await page.getByLabel('工作区恢复状态', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '关闭恢复提示', exact: true }).click();
+  await page.getByLabel('工作区恢复状态', { exact: true }).waitFor({ state: 'hidden' });
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
   await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
   await assertTerminalGutter(page);

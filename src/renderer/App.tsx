@@ -179,7 +179,6 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   useEffect(() => { if(sshWindow)return;saveStored('berth.session', sessionId); setTerminalVisible(true); setRunOutput(null); }, [sessionId]);
   useEffect(() => { if (!error || modal || page === 'settings') return; const timer = setTimeout(() => setError(''), 12000); return () => clearTimeout(timer); }, [error, modal, page]);
   useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 2500); return () => clearTimeout(timer); }, [message]);
-  useEffect(() => { const recovery=state.recovery; if (!recovery || recovery.status !== 'completed' || recovery.errors.length) return; const timer=setTimeout(()=>setDismissedRecovery(recovery.id),5000); return ()=>clearTimeout(timer); }, [state.recovery?.id,state.recovery?.status,state.recovery?.errors.length]);
   useEffect(() => { if (!sshWindow&&!loading) saveStored('berth.settingsDraft', draftDirty ? JSON.stringify(settingsDraft) : null); }, [settingsDraft, state.settings, loading]);
   useEffect(() => { if (!loading && settingsDraft && !draftDirty) setSettingsDraft(null); }, [settingsDraft, draftDirty, loading]);
   useEffect(() => {
