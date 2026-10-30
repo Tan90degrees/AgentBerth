@@ -1097,8 +1097,13 @@ export class DaemonServer {
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
-    for (const socket of this.clients.keys()) socket.terminate();
-    await new Promise<void>(resolve => this.ws.close(() => resolve()));
+    await new Promise<void>(resolve => {
+      // Keep the shutdown reply and close frame ordered on the wire. Immediate
+      // terminate() can reset a socket before its peer reads the final reply.
+      for (const socket of this.clients.keys()) socket.close(1000, 'Backend stopped');
+      const deadline=setTimeout(()=>{for(const socket of this.clients.keys())socket.terminate();},1000);
+      this.ws.close(()=>{clearTimeout(deadline);resolve();});
+    });
     await new Promise<void>(resolve => this.http.close(() => resolve()));
     rmSync(path.join(this.dataDirectory, 'runtime.json'), { force: true });
     this.store.close();

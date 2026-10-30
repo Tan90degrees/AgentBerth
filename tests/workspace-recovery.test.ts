@@ -57,7 +57,7 @@ test('explicit full quit checkpoints running sessions; reopen resumes final nati
   assert.equal(readFileSync(marker,'utf8').trim(),'USER_INPUT_ONCE');
   phase='ordinary shutdown and empty restart';
   await shutdownDaemon(data);c.close(true);c=await connect();await c.rpc('restoreWorkspace');assert.equal((await completed(c)).recovery!.total,0,'Non-tray shutdown does not queue a restart');
-  } catch(error) { throw new Error(`Workspace recovery failed during ${phase}`,{cause:error}); }
+  } catch(error) { throw new Error(`Workspace recovery failed during ${phase}: ${error instanceof Error ? error.message : String(error)}`,{cause:error}); }
 });
 
 test('restore plan is consumed atomically; native association changes are allowed but launch configuration changes are detected', () => {

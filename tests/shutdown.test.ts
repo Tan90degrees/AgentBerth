@@ -8,8 +8,27 @@ import { DaemonServer } from '../src/daemon/server';
 import { Store } from '../src/daemon/store';
 import type { Project, Run, RuntimeInfo, Session, Attachment } from '../src/shared/protocol';
 import { DaemonConnection } from '../src/main/connection';
+import { WebSocket } from 'ws';
+import { randomUUID } from 'node:crypto';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+test('daemon completes the WebSocket close handshake after delivering its shutdown reply', {timeout:5000}, async t => {
+  const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-close-'));
+  let closing:Promise<void>|undefined;
+  const server=new DaemonServer(folder,()=>{closing=server.close();});
+  const runtime=await server.listen();
+  const socket=new WebSocket(`ws://127.0.0.1:${runtime.port}/rpc`,{headers:{Authorization:`Bearer ${runtime.token}`}});
+  t.after(async()=>{socket.terminate();if(closing)await closing;else await server.close();rmSync(folder,{recursive:true,force:true,maxRetries:5});});
+  await new Promise<void>(resolve=>socket.once('open',resolve));
+  const events:unknown[]=[];
+  socket.on('message',data=>events.push(JSON.parse(data.toString())));
+  const closed=new Promise<number>(resolve=>socket.once('close',code=>resolve(code)));
+  const id=randomUUID();socket.send(JSON.stringify({id,method:'shutdown',params:{}}));
+  assert.equal(await closed,1000,'The final reply must use a graceful close, not a reset');
+  assert.deepEqual(events.at(-1),{id,result:null});
+  await closing;
+});
 
 test('shutdown waits for its reply write even when the transport is delayed', {timeout:5000}, async t => {
   const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-ack-'));
