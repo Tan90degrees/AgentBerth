@@ -75,7 +75,7 @@ async function waitForExit(pid: number): Promise<void> {
 
 // Never launch a new daemon while quitting, and never signal a PID from an
 // unauthenticated or replaced runtime descriptor.
-export async function shutdownDaemon(directory: string): Promise<void> {
+export async function shutdownDaemon(directory: string, restoreOnOpen = false): Promise<void> {
   const runtime = runtimeFile(directory);
   if (!runtime) {
     const lock = path.join(directory, 'daemon.lock');
@@ -90,7 +90,7 @@ export async function shutdownDaemon(directory: string): Promise<void> {
   try {
     let state = await candidate.rpc<State>('state');
     if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
-    if (state.apiVersion >= 4) await candidate.rpc('shutdown');
+    if (state.apiVersion >= 4) await candidate.rpc('shutdown', state.apiVersion >= 40 ? {restoreOnOpen} : {});
     else {
       // Older backends have stop + idle shutdown. Drain first, then use their
       // atomic idle gate; never forcibly abandon still-running process trees.

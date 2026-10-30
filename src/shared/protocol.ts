@@ -3,7 +3,7 @@ import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 39;
+export const API_VERSION = 40;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -148,7 +148,8 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('probeAgentPlugin'), params: agentDefinitionSchema }),
   z.object({ id, method: z.literal('checkAgentPlugin'), params: z.object({ agentId: agentSchema }).strict() }),
   z.object({ id, method: z.literal('shutdownIdle'), params: z.object({}).strict() }),
-  z.object({ id, method: z.literal('shutdown'), params: z.object({}).strict() }),
+  z.object({ id, method: z.literal('shutdown'), params: z.object({ restoreOnOpen: z.boolean().default(false) }).strict() }),
+  z.object({ id, method: z.literal('restoreWorkspace'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: nativeSessionIdSchema }).strict() }),
   z.object({ id, method: z.literal('unlinkNativeSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('nativeSessionDetected'), params: z.object({ sessionId: id, runId: id, nativeSessionId: nativeSessionIdSchema, provider: z.enum(['claude', 'opencode']), cwd: z.string().min(1).max(4096) }).strict() }),
@@ -195,7 +196,8 @@ export interface GitDiff { path: string; staged: boolean; patch: string; binary:
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
 export interface Session { remote?: RemoteConfig | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
-export interface State { projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface WorkspaceRecovery { id: string; status: 'restoring' | 'completed'; total: number; restored: number; resumed: number; skipped: number; errors: {sessionId: string; title: string; message: string}[] }
+export interface State { recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }

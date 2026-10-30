@@ -31,6 +31,8 @@ import { RemoteActivity, remoteKeys } from './remote-activity';
 import { McpCallStats } from './mcp-metrics';
 import { RemoteOperationError } from '../shared/remote-errors';
 import { windowsPtyFor } from '../shared/desktop';
+import { restartConfiguration, shouldResume, type RestartEntry } from './recovery';
+import type { WorkspaceRecovery, State } from '../shared/protocol';
 
 interface LiveTerminal {
   run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal | SshTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
@@ -71,6 +73,10 @@ export class DaemonServer {
   private historyWrites = new Set<string>();
   private starting = new Set<string>();
   private editingProjects = new Set<string>();
+  private recoveryReport: WorkspaceRecovery | undefined;
+  private recovering: Promise<void> | null = null;
+  private recoveryPending = new Map<string, RestartEntry>();
+  private restoredRuns = new Map<string, {previousRunId:string|null;runId:string}>();
 
   constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery) {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
@@ -143,10 +149,62 @@ export class DaemonServer {
     }
   }
   private changed(): void {
-    const state = this.store.state(), valid = new Set(state.sessions.map(session => session.id));
+    const state = this.snapshot(), valid = new Set(state.sessions.map(session => session.id));
     for (const id of this.agentOwners.keys()) if (!valid.has(id)) this.agentOwners.delete(id);
+    for (const [id, restored] of this.restoredRuns) if (!state.sessions.some(session => session.id === id && session.latestRun?.id === restored.runId)) this.restoredRuns.delete(id);
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
+  }
+  private snapshot(): State { return {...this.store.state(), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private recoveryConfiguration(session: import('../shared/protocol').Session): string {
+    return restartConfiguration(session, this.store.project(session.projectId).path,
+      session.agent.startsWith('agent:') ? this.store.agent(session.agent) : undefined,
+      session.remote?.connectionId ? this.store.sshConnection(session.remote.connectionId) : undefined);
+  }
+  private checkpointWorkspace(): void {
+    const entries = new Map(this.recoveryPending);
+    for (const session of this.store.state().sessions) {
+      const live = this.live.get(session.id);
+      if ((!live && !this.starting.has(session.id)) || live?.closed || live?.stopping || this.agentOwners.get(session.id)?.disposing) continue;
+      entries.set(session.id, {sessionId:session.id,runId:session.latestRun?.id ?? null,cols:live?.terminal.cols ?? 100,rows:live?.terminal.rows ?? 30,
+        configuration:this.recoveryConfiguration(session),...(session.remote ? {remoteOwner:live?.remote?.activity.info.owner ?? 'user'} : {})});
+    }
+    this.store.saveRestartPlan([...entries.values()]);
+  }
+  private restoreWorkspace(): WorkspaceRecovery {
+    if (this.recoveryReport) return this.recoveryReport;
+    // Claim once, before any launch; reconnects and duplicate startup requests
+    // cannot replay a partially completed restoration.
+    let entries: RestartEntry[] = [], invalidPlan = false;
+    try { entries = this.store.takeRestartPlan(); }
+    catch (error) { invalidPlan = true; this.logError(error); }
+    const report: WorkspaceRecovery = {id:randomUUID(),status:'restoring',total:entries.length,restored:0,resumed:0,skipped:0,errors:[]};
+    if (invalidPlan) report.errors.push({sessionId:'',title:'恢复记录',message:'恢复记录无法读取，可手动启动会话；下次从托盘退出时会重新保存'});
+    this.recoveryReport = report;
+    this.recoveryPending = new Map(entries.map(entry => [entry.sessionId,entry]));
+    let next = 0;
+    const worker = async () => {
+      while (next < entries.length && !this.closing) {
+        const entry = entries[next++];
+        let title = entry.sessionId;
+        try {
+          const session = this.store.state().sessions.find(value => value.id === entry.sessionId);
+          if (!session || this.live.has(entry.sessionId) || this.starting.has(entry.sessionId)) { report.skipped++; continue; }
+          title = session.title;
+          if ((session.latestRun?.id ?? null) !== entry.runId || this.recoveryConfiguration(session) !== entry.configuration) { report.skipped++; continue; }
+          if (session.remote?.connectionId && entry.remoteOwner === 'agent' && !this.store.sshConnection(session.remote.connectionId).allowAgent) throw new Error('服务器已关闭 Agent 授权，请检查 SSH 设置后手动连接');
+          const resume = shouldResume(session, session.agent.startsWith('agent:') ? this.store.agent(session.agent) : undefined);
+          await this.start(session.id, resume, entry.cols, entry.rows, session.remote ? entry.remoteOwner ?? 'user' : undefined);
+          report.restored++; if (resume) report.resumed++;
+        } catch (error) {
+          report.errors.push({sessionId:entry.sessionId,title,message:error instanceof Error ? error.message : String(error)});
+        } finally { this.recoveryPending.delete(entry.sessionId); this.changed(); }
+      }
+    };
+    // Yield so the RPC returns immediately; SSH authentication never blocks the UI.
+    this.recovering = Promise.resolve().then(async () => { await Promise.all(Array.from({length:Math.min(3,entries.length)},worker)); })
+      .catch(error => this.logError(error)).finally(() => { report.status='completed';this.recovering=null;this.changed(); });
+    this.changed(); return report;
   }
 
   async listen(): Promise<RuntimeInfo> {
@@ -252,10 +310,12 @@ export class DaemonServer {
       }
       case 'remoteAliases': return this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent }));
       case 'remoteAgentRecover': {
+        if (client === this.sshProvider) return {recovered:[]};
         const recovered: string[] = [];
         for (const target of request.params.targets) {
           const owner = this.agentOwners.get(target.sessionId), live = this.live.get(target.sessionId);
-          if (owner?.abort.signal.aborted && live?.run.id === target.runId) { this.agentOwners.set(target.sessionId, client); recovered.push(target.sessionId); }
+          const restored = this.restoredRuns.get(target.sessionId);
+          if (owner?.abort.signal.aborted && live && (live.run.id === target.runId || restored?.runId === live.run.id && restored.previousRunId === target.runId)) { this.agentOwners.set(target.sessionId, client); recovered.push(target.sessionId); }
         }
         return { recovered };
       }
@@ -427,7 +487,8 @@ export class DaemonServer {
         const command=live.remote.activity.latestCommand();
         return { scope:'viewport', scrollbackLines:buffer.baseY, command:command?{id:command.id,status:command.status,sessionId:command.sessionId,runId:command.runId}:null, seq: screen.seq, cols: screen.cols, rows: screen.rows, text: lines.join('\n'), cursor: { x: buffer.cursorX, y: buffer.cursorY }, info: live.remote.activity.info };
       }
-      case 'state': return this.store.state();
+      case 'state': return this.snapshot();
+      case 'restoreWorkspace': return this.restoreWorkspace();
       case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed && !live.remote).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
       case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
       case 'gitDiff': return this.git.diff(this.store.project(request.params.projectId).path, request.params);
@@ -448,7 +509,7 @@ export class DaemonServer {
         finally { for (const item of affected) this.gitBusy.delete(item.id); }
       }
       case 'shutdown':
-        await this.stopAll();
+        await this.stopAll(request.params.restoreOnOpen);
         setTimeout(this.onShutdown, 50); // Acknowledge cleanup before closing the authenticated connection.
         return null;
       case 'shutdownIdle':
@@ -726,7 +787,7 @@ export class DaemonServer {
     } finally { this.historyBusy.delete(sessionId); }
   }
 
-  private async start(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
+  private async start(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     this.requireProjectAvailable(session.projectId);
     if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
@@ -738,7 +799,7 @@ export class DaemonServer {
     const count=[...reserved].filter(id=>!this.live.get(id)?.closed&&!!this.store.session(id).remote===ssh).length;
     if(count>=limit)throw new Error(`${ssh?'SSH 会话':'本机终端'}已达上限 ${limit}，请在设置中调整或停止一个${ssh?' SSH 会话':'本机终端'}`);
     this.starting.add(sessionId);
-    try { return await this.spawn(sessionId, resume, cols, rows); }
+    try { return await this.spawn(sessionId, resume, cols, rows, remoteOwner); }
     finally { this.starting.delete(sessionId); }
   }
 
@@ -746,7 +807,7 @@ export class DaemonServer {
     if (config.remote && typeof config.remote === 'object' && 'connectionId' in config.remote && typeof config.remote.connectionId === 'string') this.store.sshConnection(config.remote.connectionId);
     if (config.remote && (config.agent !== 'shell' || config.command.trim())) throw new Error('远程会话请选择默认终端；Agent 通过 MCP 操作此终端');
   }
-  private async spawn(sessionId: string, resume: boolean, cols: number, rows: number): Promise<Run> {
+  private async spawn(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     const projectPath = this.store.project(session.projectId).path;
     const version = this.agentVersion(session.agent);
@@ -776,7 +837,7 @@ export class DaemonServer {
     // OpenCode hooks carry the exact native ID. Do not start another OpenCode
     // process or poll its database just to launch an existing TUI.
     if (trackNative && provider !== 'opencode') { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
-    const run = this.store.createRun(sessionId, command, cols, rows, selected.file);
+    const run = this.store.createRun(sessionId, command, cols, rows, selected.file, remoteOwner !== undefined);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: session.remote ? undefined : windowsPtyFor(process.platform, release()) });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     const serialize = new SerializeAddon();
@@ -786,7 +847,7 @@ export class DaemonServer {
     let remote: LiveTerminal['remote'];
     try {
       if (session.remote) {
-        const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }), path.join(this.dataDirectory,'command-output',run.id));
+        const activity = new RemoteActivity({ sessionId, runId: run.id, host: session.remote.host, connection: 'connecting', owner: remoteOwner ?? 'user', phase: 'unknown', cwd: null, error: null }, this.store, data => this.broadcast({ event: 'remote', data }), data => this.broadcast({ event: 'remoteAction', data }), path.join(this.dataDirectory,'command-output',run.id));
         const profile = session.remote.connectionId ? this.store.sshConnection(session.remote.connectionId) : null;
         const transport = profile ? new SshTerminal(profile, sessionId, session.remote.directory, cols, rows, {
           credentials: async () => (await this.challenge(profile,'credentials')).secret ?? {},
@@ -811,6 +872,13 @@ export class DaemonServer {
     const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
+    if (remote && remoteOwner === 'agent') {
+      // Allow the resumed MCP to reclaim its exact connection while SSH is
+      // authenticating; never overwrite a client that has already reclaimed it.
+      const abort = new AbortController(); abort.abort();
+      this.agentOwners.set(sessionId,{id:randomUUID(),disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort});
+      this.restoredRuns.set(sessionId,{previousRunId:this.recoveryPending.get(sessionId)?.runId ?? null,runId:run.id});
+    }
     // Fresh TUI launches never inherit an old recovery ID, even without discovery support.
     if (!resume && !session.remote && session.agent !== 'shell') this.store.saveHistory(sessionId, { messages: [], warnings: [], path: null, nativeSessionId: null });
     if (trackNative) {
@@ -1003,20 +1071,22 @@ export class DaemonServer {
   private logError(error: unknown): void {
     try { const log = new RunLog(this.dataDirectory, 'daemon'); log.append(`${new Date().toISOString()} ${String(error)}\n`); } catch { /* Disk failure must not throw from PTY callbacks. */ }
   }
-  private async stopAll(): Promise<void> {
+  private async stopAll(restoreOnOpen = false): Promise<void> {
     this.closing = true;
     try {
+      if (restoreOnOpen) this.checkpointWorkspace();
       // Drain in-flight SSH startup before closing the local channels.
       const startupDeadline = Date.now() + 45000;
       while (this.starting.size && Date.now() < startupDeadline) await new Promise(resolve => setTimeout(resolve, 25));
       if (this.starting.size) throw new Error('远端连接尚未完成，请稍后再次退出；后台保留以便确认清理');
+      if (this.recovering) await this.recovering;
       await this.resources.close();
       await this.transfers.close();
       await this.git.close();
-      await this.plugins.close();
-      await this.nativeDiscovery.opencode.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));
       for (const result of results) if (result.status === 'rejected') this.logError(result.reason);
+      await this.plugins.close();
+      await this.nativeDiscovery.opencode.close();
       const deadline = Date.now() + 5000;
       while (this.live.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
       if (this.live.size) throw new Error('部分终端尚未停止，请重试退出；后台已保留以便继续清理');

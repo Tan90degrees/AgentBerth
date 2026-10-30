@@ -85,10 +85,14 @@ else {
       { label: '打开 AgentBerth', click: showWindow },
       { label: '显示桌宠', click: () => { pet.save({ ...pet.preferences, enabled: true }); void openPetWindow(); } },
       { type: 'separator' },
-      { label: '退出 AgentBerth（停止全部终端）', click: () => app.quit() },
+      { label: '退出 AgentBerth（停止终端，下次恢复）', click: () => app.quit() },
     ]));
     tray.on('double-click', showWindow);
-    try { await reconnect(); } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
+    try {
+      await reconnect();
+      const state = await connection!.rpc<import('../shared/protocol').State>('state');
+      if (state.apiVersion >= 40) await connection!.rpc('restoreWorkspace');
+    } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
   });
 }
 
@@ -103,7 +107,7 @@ function quitApplication(): Promise<void> {
     await petHooks?.close();
     await importingPlugins.close();
     if (connecting) await connecting.catch(() => {});
-    await shutdownDaemon(dataDirectory);
+    await shutdownDaemon(dataDirectory, true);
     connection?.close(true); connection = null;
     quitReady = true; tray?.destroy(); tray = null;
     // All owned workers and the daemon are gone; renderer/debugger unload must not delay explicit quit.
@@ -346,7 +350,7 @@ ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unkn
 });
 ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string, unknown>) => {
   trusted(event);
-  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
+  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['restoreWorkspace','registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;
