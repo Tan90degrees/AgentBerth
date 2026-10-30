@@ -67,7 +67,7 @@ try {
       let item = globalThis.petSmokeMenu.items.find(item => item.label === label);
       if (child !== undefined) item = item?.submenu?.items.find(item => item.label === child || item.id === child);
       if (!item || !item.enabled) throw new Error('Menu item unavailable: ' + label + '/' + child);
-      if (item.type === 'checkbox') item.checked = !item.checked;
+      // Electron's MenuItem.click already toggles checkbox/radio state.
       item.click(item, BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet')), {});
     }, { label, child });
   };
@@ -101,6 +101,7 @@ try {
   });
   assert.deepEqual(popupState, { visible: true, top: true, throttled: false });
   await chooseMenu('保持置顶');
+  await pet.waitForFunction(async () => !(await window.berth.pet({ action: 'state' })).preferences.alwaysOnTop);
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet')).isAlwaysOnTop()), false);
   await application.evaluate(({ BrowserWindow }) => {
     const target = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet'));
@@ -109,6 +110,7 @@ try {
     globalThis.petSmokePopup.destroy(); delete globalThis.petSmokePopup;
   });
   await chooseMenu('保持置顶');
+  await pet.waitForFunction(async () => (await window.berth.pet({ action: 'state' })).preferences.alwaysOnTop);
   await pet.waitForFunction(() => document.querySelector('.pet-character').complete && document.querySelector('.pet-character').naturalWidth === 288);
   await chooseMenu('切换 Agent 会话', a.id);
   await pet.waitForFunction(id => document.querySelector('.desktop-pet').dataset.sessionId === id, a.id);
