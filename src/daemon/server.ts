@@ -112,7 +112,7 @@ export class DaemonServer {
         const blocksIdleShutdown = !['resources','mcpMetrics','mcpRecordCall'].includes(result.data.method);
         client.pending++;
         if (blocksIdleShutdown) this.pendingWork++;
-        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value })).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败', ...(error instanceof RemoteOperationError?{errorCode:error.code,errorDetails:error.details}:{}) })).finally(() => {
+        void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value }, ['shutdown','shutdownIdle'].includes(result.data.method) ? this.onShutdown : undefined)).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败', ...(error instanceof RemoteOperationError?{errorCode:error.code,errorDetails:error.details}:{}) })).finally(() => {
           client.pending--;
           if (blocksIdleShutdown) this.pendingWork--;
         });
@@ -126,12 +126,14 @@ export class DaemonServer {
     const expected = Buffer.from(`Bearer ${this.token}`);
     return actual.length === expected.length && timingSafeEqual(actual, expected);
   }
-  private send(socket: WebSocket, message: unknown): void {
-    if (socket.readyState !== WebSocket.OPEN) return;
+  private send(socket: WebSocket, message: unknown, sent?: () => void): void {
+    if (socket.readyState !== WebSocket.OPEN) { sent?.(); return; }
     // A slow or closed UI must never stop output consumption by the daemon.
     // Two bounded image replies can overlap; a slow UI still has a finite budget.
-    if (socket.bufferedAmount > 16 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); return; }
-    socket.send(JSON.stringify(message));
+    if (socket.bufferedAmount > 16 * 1024 * 1024) { socket.close(1013, 'Reconnect to restore terminal'); sent?.(); return; }
+    // Full/idle shutdown must follow the actual response write, not a timer
+    // that can fire while a loaded Windows runner is still sending the reply.
+    socket.send(JSON.stringify(message), sent ? () => sent() : undefined);
   }
   private broadcast(event: ServerEvent): void {
     for (const [socket, client] of this.clients) {
@@ -510,13 +512,11 @@ export class DaemonServer {
       }
       case 'shutdown':
         await this.stopAll(request.params.restoreOnOpen);
-        setTimeout(this.onShutdown, 50); // Acknowledge cleanup before closing the authenticated connection.
         return null;
       case 'shutdownIdle':
         if (this.live.size || this.starting.size) throw new Error('请先停止全部终端，再更新后台');
         if (this.historyBusy.size || this.editingProjects.size || this.pendingWork > 1) throw new Error('后台正在处理数据，请稍后重试');
         this.closing = true;
-        setTimeout(this.onShutdown, 50);
         return null;
       case 'createProject': {
         const canonical = await directory(request.params.path);

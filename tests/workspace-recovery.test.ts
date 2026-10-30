@@ -22,6 +22,8 @@ test('explicit full quit checkpoints running sessions; reopen resumes final nati
   const connections:DaemonConnection[]=[];
   const connect=async()=>{const c=await connectDaemon(data,path.resolve('dist/daemon.cjs'),process.execPath,()=>{});connections.push(c);return c;};
   t.after(async()=>{await shutdownDaemon(data).catch(()=>{});for(const c of connections)c.close(true);rmSync(folder,{recursive:true,force:true,maxRetries:5});});
+  let phase='initial startup';
+  try {
   let c=await connect();
   await c.rpc('saveSettings',{...DEFAULT_SETTINGS,terminal:{profile:process.platform==='win32'?'cmd':'bash',executable:'',args:[]}});
   const project=await c.rpc<Project>('createProject',{name:'Fixture',path:folder});
@@ -29,6 +31,7 @@ test('explicit full quit checkpoints running sessions; reopen resumes final nati
   const agent=await c.rpc<Session>('createSession',{projectId:project.id,title:'Agent',agent:profile.id});
   const shell=await c.rpc<Session>('createSession',{projectId:project.id,title:'Shell',agent:'shell'});
   const stopped=await c.rpc<Session>('createSession',{projectId:project.id,title:'Stopped',agent:'shell'});
+  phase='start and stop fixture terminals';
   const [agentRun,shellRun]=await Promise.all([agent,shell].map(s=>c.rpc<Run>('start',{sessionId:s.id,cols:82,rows:26})));
   await c.rpc('start',{sessionId:stopped.id,cols:80,rows:24});await c.rpc('stop',{sessionId:stopped.id});
   await c.rpc('linkNativeSession',{sessionId:agent.id,nativeSessionId:'late_native_id'});
@@ -37,9 +40,11 @@ test('explicit full quit checkpoints running sessions; reopen resumes final nati
   // This is historical user input, not a saved startup command.
   await c.rpc('input',{sessionId:shell.id,runId:shellRun.id,data:`echo USER_INPUT_ONCE >> "${marker}"\r`});
   const deadline=Date.now()+5000;while(true){try{if(readFileSync(marker,'utf8').includes('USER_INPUT_ONCE'))break;}catch{}assert.ok(Date.now()<deadline);await wait(30);}
+  phase='checkpoint and full quit';
   await shutdownDaemon(data,true);c.close(true);
   // Native identity discovered during shutdown wins over anything in the checkpoint.
   const store=new Store(data);store.saveHistory(agent.id,{nativeSessionId:'final_native_id',path:null,messages:[],warnings:[]});store.close();
+  phase='reopen and restore';
   c=await connect();
   await Promise.all([c.rpc('restoreWorkspace'),c.rpc('restoreWorkspace')]);
   const state=await completed(c);assert.equal(state.recovery!.restored,2,JSON.stringify(state.recovery));assert.equal(state.recovery!.resumed,1);assert.deepEqual(state.recovery!.errors,[]);
@@ -50,7 +55,9 @@ test('explicit full quit checkpoints running sessions; reopen resumes final nati
   await c.rpc('restoreWorkspace');assert.equal((await c.rpc<Run[]>('runs',{sessionId:shell.id})).length,2);
   assert.equal((await c.rpc<State>('state')).sessions.find(session=>session.id===agent.id)!.latestRun!.id,restored.latestRun!.id);
   assert.equal(readFileSync(marker,'utf8').trim(),'USER_INPUT_ONCE');
+  phase='ordinary shutdown and empty restart';
   await shutdownDaemon(data);c.close(true);c=await connect();await c.rpc('restoreWorkspace');assert.equal((await completed(c)).recovery!.total,0,'Non-tray shutdown does not queue a restart');
+  } catch(error) { throw new Error(`Workspace recovery failed during ${phase}`,{cause:error}); }
 });
 
 test('restore plan is consumed atomically; native association changes are allowed but launch configuration changes are detected', () => {

@@ -10,6 +10,25 @@ import type { Project, Run, RuntimeInfo, Session, Attachment } from '../src/shar
 import { DaemonConnection } from '../src/main/connection';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+test('shutdown waits for its reply write even when the transport is delayed', {timeout:5000}, async t => {
+  const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-ack-'));
+  let shutdowns=0;
+  const server=new DaemonServer(folder,()=>{shutdowns++;});
+  const client=await DaemonConnection.open(await server.listen(),()=>{});
+  t.after(async()=>{client.close(true);await server.close();rmSync(folder,{recursive:true,force:true,maxRetries:5});});
+  const socket=[...(server as any).clients.keys()][0];
+  const send=socket.send.bind(socket);
+  let release:(()=>void)|undefined;
+  socket.send=(data: string, callback: unknown)=>{release=()=>send(data,callback);};
+  const quitting=client.rpc('shutdown');
+  while(!release)await wait(5);
+  await wait(100); // Deliberately hold the reply beyond the former 50 ms timer.
+  assert.equal(shutdowns,0,'Shutdown ran before its response was written');
+  release();await quitting;
+  const deadline=Date.now()+1000;while(!shutdowns){assert.ok(Date.now()<deadline);await wait(5);}
+  assert.equal(shutdowns,1);
+});
 function stopped(pid: number): boolean {
   try { process.kill(pid, 0); return process.platform === 'linux' && /\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
   catch { return true; }
