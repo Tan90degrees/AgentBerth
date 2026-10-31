@@ -68,7 +68,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [page, setPage] = useState<'workspace' | 'settings' | 'plugins'>('workspace');
   const [pluginTab,setPluginTab] = useState<PluginCenterTab>(()=>{const previous=readStored('berth.pluginTab');return previous==='agents'||previous==='skills'?previous:'installed';});
   useEffect(()=>{if(!sshWindow)saveStored('berth.pluginTab',pluginTab);},[pluginTab,sshWindow]);
-  const openPlugins = (tab:PluginCenterTab='installed')=>{setPluginTab(tab);setPage('plugins');setError('');};
+  const openPlugins = (tab?:PluginCenterTab)=>{if(tab)setPluginTab(tab);setPage('plugins');setError('');};
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
