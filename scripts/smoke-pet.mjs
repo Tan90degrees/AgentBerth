@@ -18,17 +18,27 @@ await writeFile(path.join(fixtureBin, process.platform === 'win32' ? 'opencode.c
 const env = { ...process.env, PATH: fixtureBin + path.delimiter + process.env.PATH, AGENTBERTH_DATA_DIR: dataDirectory, CLAUDE_CONFIG_DIR: path.join(folder, 'claude-home'), XDG_CONFIG_HOME: path.join(folder, 'config-home') }; delete env.ELECTRON_RUN_AS_NODE;
 let application;
 try {
+  console.log('Pet smoke: launching Electron');
   application = await electron.launch({ executablePath, args, env, timeout: 20000 });
-  const page = await application.firstWindow(); page.setDefaultTimeout(15000);
+  console.log('Pet smoke: waiting for main window');
+  const page = await application.firstWindow({timeout:20000}); page.setDefaultTimeout(15000);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.berth);
-  const rpc = (method, params) => page.evaluate(({ method, params }) => window.berth.rpc(method, params), { method, params });
+  console.log('Pet smoke: IPC ready; setting up fixtures');
+  const rpc = async (method, params) => {
+    let timer;
+    try{return await Promise.race([
+      page.evaluate(({method,params})=>window.berth.rpc(method,params),{method,params}),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Pet smoke RPC '+method+' exceeded 40 seconds')),40000);}),
+    ]);}finally{clearTimeout(timer);}
+  };
   await rpc('state', {});
   const project = await rpc('createProject', { name: 'Pet test', path: folder });
   const shell = await rpc('createSession', { projectId: project.id, title: 'Ordinary terminal', agent: 'shell', command: '' });
   await rpc('start', { sessionId: shell.id, cols: 80, rows: 24 });
   // Seed a failed remote locally without making a network connection.
+  console.log('Pet smoke: validating SSH fixture and Agent sessions');
   const profile = await page.evaluate(privateKeyPath => window.berth.saveSshConnection({ alias: 'pet-filter-fixture', hostname: '127.0.0.1', port: 22, username: 'fixture', authentication: 'key', privateKeyPath, allowAgent: false }, undefined, {}, false), path.join(folder, 'missing-fixture-key'));
   const remote = await rpc('createRemoteSession', { title: 'Excluded SSH', remote: { host: profile.alias, connectionId: profile.id, directory: '' } });
   await assert.rejects(rpc('start', { sessionId: remote.id, cols: 80, rows: 24 }), /无法读取私钥/);
