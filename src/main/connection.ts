@@ -148,7 +148,10 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   let spawnError: Error | null = null;
   child.once('error', error => { spawnError = error; });
   child.unref();
-  const deadline = Date.now() + 12000;
+  // On Windows a freshly unpacked Electron binary can require extra time for
+  // signature/antivirus scanning before its detached Node daemon starts.
+  // Bound startup, but do not misclassify a slow first launch as a failure.
+  const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     if (spawnError) throw spawnError;
     const next = runtimeFile(directory);
