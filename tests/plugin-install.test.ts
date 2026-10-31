@@ -8,6 +8,8 @@ import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import { Store } from '../src/daemon/store';
 import { nextSessionTitle } from '../src/renderer/labels';
+import { exportPluginKit, developmentPrompt } from '../src/main/plugin-files';
+import { readManifest } from '../src/extensions/packages';
 import type { AgentDefinition, Attachment, Project, Run, Session, State } from '../src/shared/protocol';
 
 async function temporary(t: any) { const folder = await mkdtemp(path.join(os.tmpdir(), 'berth 安装 plugin ')); t.after(() => rm(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })); return folder; }
@@ -50,3 +52,17 @@ test('automatic session names avoid existing names', () => {
   assert.equal(nextSessionTitle('Codex', ['Codex 会话', 'Codex 会话 2']), 'Codex 会话 3');
 });
 
+
+test('Cordis-only developer kit contains a valid Agent contribution package', async t=>{
+  const folder=await temporary(t);
+  const kit=await exportPluginKit(folder,path.resolve('.'));
+  const example=path.join(kit,'cordis-agent');
+  const manifest=await readManifest(example);
+  assert.equal(manifest.kind,'agent');
+  assert.deepEqual(manifest.dependencies,['agents']);
+  const source=await readFile(path.join(example,'index.cjs'),'utf8');
+  assert.match(source,/ctx\.berth\.agent/);
+  const guide=await readFile(path.join(kit,'CORDIS_PLUGIN_DEVELOPMENT.md'),'utf8');
+  assert.match(developmentPrompt(guide,kit),/Cordis/);
+  assert.match(developmentPrompt(guide,kit),/不要生成旧版 Agent JSON/);
+});
