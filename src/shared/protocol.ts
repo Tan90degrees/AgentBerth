@@ -234,7 +234,6 @@ export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
   extensions<T=ExtensionSnapshot>(request:ExtensionRequest):Promise<T>;
   installExtension(development?:boolean):Promise<ExtensionSnapshot|null>;
-  installAgentExtension():Promise<ExtensionSnapshot|null>;
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;
   onPet(listener: (state: import('./pet').PetSnapshot) => void): () => void;
   onPetSession(listener: (sessionId: string) => void): () => void;
@@ -255,7 +254,6 @@ export interface DesktopApi {
   chooseDirectory(): Promise<string | null>;
   chooseTranscript(): Promise<string | null>;
   chooseExecutable(): Promise<string | null>;
-  importAgentPlugin(): Promise<AgentDefinitionConfig | null>;
   exportPluginKit(): Promise<string | null>;
   pluginDevelopmentPrompt(folder?: string): Promise<string>;
   copyText(text: string): Promise<void>;
