@@ -124,8 +124,7 @@ export async function stopIdleDaemon(directory: string): Promise<void> {
     const state = await candidate.rpc<State>('state');
     if (state.sessions.some(session => ['running', 'stopping'].includes(session.latestRun?.status ?? ''))) throw new Error('请先停止全部终端，再更新后台');
     if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
-    if (state.apiVersion >= 2) await candidate.rpc('shutdownIdle');
-    else process.kill(runtime.pid, 'SIGTERM'); // Explicit upgrade of an authenticated, idle 0.1 daemon.
+    await candidate.rpc('shutdownIdle');
     await waitForExit(runtime.pid);
   } finally { candidate.close(true); }
 }
