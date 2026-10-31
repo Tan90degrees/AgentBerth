@@ -22,12 +22,12 @@ const command=(value:string)=>`exports.apply=(ctx,config)=>{ctx.berth.command({n
 test('sandboxed plugin view bridge works without Web Crypto and correlates parallel replies',async()=>{
   const script=extensionDocument('').split('<script>')[1]?.split('</script>')[0];
   assert.ok(script);
-  const requests:any[]=[],listeners=new Map<string,(event:any)=>void>();
+  const requests:any[]=[],listeners=new Set<(event:any)=>void>();
   const parent={postMessage:(data:unknown)=>{requests.push(data);}};
   const frame={
     window:{},parent,setTimeout,clearTimeout,
-    addEventListener:(event:string,listener:(event:any)=>void)=>{listeners.set(event,listener);},
-    removeEventListener:(event:string)=>{listeners.delete(event);},
+    addEventListener:(_event:string,listener:(event:any)=>void)=>{listeners.add(listener);},
+    removeEventListener:(_event:string,listener:(event:any)=>void)=>{listeners.delete(listener);},
   };
   // An iframe with sandbox="allow-scripts" has an opaque origin. Even if
   // crypto.randomUUID is unavailable, command dispatch must still succeed.
@@ -37,8 +37,9 @@ test('sandboxed plugin view bridge works without Web Crypto and correlates paral
   assert.equal(requests.length,2);
   assert.notEqual(requests[0].id,requests[1].id);
   assert.deepEqual(requests.map(request=>request.command),['info','info']);
-  listeners.get('message')!({source:parent,data:{kind:'agentberth-plugin-result',id:requests[1].id,result:'second'}});
-  listeners.get('message')!({source:parent,data:{kind:'agentberth-plugin-result',id:requests[0].id,result:'first'}});
+  const reply=(id:string,result:string)=>{for(const listener of [...listeners])listener({source:parent,data:{kind:'agentberth-plugin-result',id,result}});};
+  reply(requests[1].id,'second');
+  reply(requests[0].id,'first');
   assert.deepEqual(await Promise.all([first,second]),['first','second']);
 });
 
