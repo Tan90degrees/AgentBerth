@@ -51,6 +51,9 @@ try {
   await page.evaluate(()=>{window.__pluginSmokeMessages=[];window.addEventListener('message',event=>{if(typeof event.data?.kind==='string'&&event.data.kind.startsWith('agentberth-plugin-'))window.__pluginSmokeMessages.push({kind:event.data.kind,id:event.data.id,command:event.data.command,error:event.data.error});});});
   await page.getByRole('button',{name:'Plugin info',exact:true}).click();
   const frame=page.frameLocator('iframe[title="Plugin info"]');
+  // Explicitly verify the sandboxed view can reach its parent before calling
+  // an Agent command. The readiness probe may retry; the command never does.
+  await frame.locator('body').evaluate(()=>window.agentberth.ready());
   // Playwright can see a parsed button before its trailing inline script
   // installs onclick, especially under the slower Linux/Xvfb renderer.
   for(let i=0;i<100;i++){if(await frame.locator('#read').evaluate(button=>typeof button.onclick==='function'))break;await new Promise(resolve=>setTimeout(resolve,25));}
@@ -58,7 +61,7 @@ try {
   await frame.getByRole('button',{name:'Read plugin'}).click();
   try{await frame.locator('#result').filter({hasText:'Updated Agent'}).waitFor();}
   catch(error){
-    const diagnostic=await frame.locator('body').evaluate(()=>({result:document.querySelector('#result')?.textContent,bridge:typeof window.agentberth?.call,secure:window.isSecureContext,cryptoUuid:typeof crypto?.randomUUID})).catch(reason=>({frameError:String(reason)}));
+    const diagnostic=await frame.locator('body').evaluate(()=>({result:document.querySelector('#result')?.textContent,bridge:typeof window.agentberth?.call,secure:window.isSecureContext,cryptoUuid:typeof crypto?.randomUUID,frameUrl:location.href,frameConnected:window.parent!==window})).catch(reason=>({frameError:String(reason)}));
     const parentMessages=await page.evaluate(()=>window.__pluginSmokeMessages);
     const directCommand=await page.evaluate(()=>window.berth.extensions({action:'call',id:'example.smoke',command:'info'})).catch(reason=>({error:String(reason)}));
     throw new Error('Plugin iframe RPC failed: '+JSON.stringify({diagnostic,parentMessages,directCommand,pageErrors:errors}),{cause:error});
