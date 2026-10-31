@@ -2392,4 +2392,77 @@ textarea:focus-visible {
 .sidebar-rail button[aria-pressed="true"] {background:var(--hover);color:var(--text);}
 .rail-unread {position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--text-secondary);}
 .workspace-recovery{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0}.workspace-recovery small{display:block;color:var(--text-muted);margin-top:3px}.workspace-recovery details{margin-top:5px;overflow-wrap:anywhere}.workspace-recovery ul{max-height:140px;overflow:auto;padding-left:20px}
-.extension-manager>header,.extension-list>li>header,.extension-page>header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.extension-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.extension-manager p{color:var(--text-muted);font-size:13px}.extension-manager>input{width:100%;margin:10px 0}.extension-list{list-style:none;padding:0;display:grid;gap:12px}.extension-list>li{border:1px solid var(--border);border-radius:10px;padding:16px;overflow-wrap:anywhere}.extension-list small{display:block;color:var(--text-muted);margin-top:5px}.extension-status{font-size:11px;margin-left:9px;color:var(--text-muted)}.extension-status.active{color:#63b783}.extension-status.failed{color:var(--danger)}.extension-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:12px 0}.extension-fields label{display:flex;flex-direction:column;gap:5px}.extension-page{display:flex;flex-direction:column;flex:1;min-height:0;padding:12px}.extension-page>header{align-items:center;flex-shrink:0}.extension-page h2{font-size:15px}.extension-view{width:100%;height:100%;min-height:240px;border:0;flex:1;background:var(--surface)}
+/* Cordis extension management uses the same button geometry for every action. */
+.extension-manager>header,
+.extension-list>li>header,
+.extension-page>header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.extension-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.extension-manager .extension-button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.extension-manager .extension-button.primary { font-weight: 600; }
+.extension-manager .extension-button.subtle { border-color: var(--border); }
+.extension-manager .extension-button.danger { border-color: var(--danger-border); }
+.extension-manager .extension-button.primary:hover:not(:disabled) {
+  background: var(--primary);
+  filter: brightness(1.08);
+}
+.extension-manager .extension-button.subtle:hover:not(:disabled) { background: var(--hover); }
+.extension-manager .extension-button.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  filter: brightness(1.08);
+}
+.extension-manager p { color: var(--text-muted); font-size: 13px; }
+.extension-utilities {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.extension-utilities input {
+  flex: 1 1 220px;
+  min-width: 0;
+  width: auto;
+}
+.extension-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.extension-list>li {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.extension-list small { display: block; color: var(--text-muted); margin-top: 5px; }
+.extension-status { font-size: 11px; margin-left: 9px; color: var(--text-muted); }
+.extension-status.active { color: #63b783; }
+.extension-status.failed { color: var(--danger); }
+.extension-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(180px,1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.extension-fields label { display: flex; flex-direction: column; gap: 5px; }
+.extension-page { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 12px; }
+.extension-page>header { align-items: center; flex-shrink: 0; }
+.extension-page h2 { font-size: 15px; }
+.extension-view { width: 100%; height: 100%; min-height: 240px; border: 0; flex: 1; background: var(--surface); }
