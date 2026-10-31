@@ -3,14 +3,14 @@ import { z } from 'zod';
 export const extensionId = z.string().regex(/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/).max(100);
 export const configField = z.object({type:z.enum(['string','number','boolean']),title:z.string().min(1).max(100),description:z.string().max(500).optional(),default:z.union([z.string(),z.number(),z.boolean()]).optional(),minimum:z.number().optional(),maximum:z.number().optional(),enum:z.array(z.string()).max(100).optional()}).strict();
 export const extensionManifestSchema=z.object({
-  apiVersion:z.literal(1),id:extensionId,name:z.string().min(1).max(100),version:z.string().regex(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/),description:z.string().max(1000).default(''),
+  apiVersion:z.literal(1),id:extensionId,name:z.string().min(1).max(100),version:z.string().regex(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/),description:z.string().max(1000).default(''),kind:z.enum(['feature','agent']).default('feature'),
   entry:z.string().min(1).max(500).default('index.cjs'),desktopEntry:z.string().min(1).max(500).optional(),dependencies:z.array(extensionId).max(32).default([]),
   config:z.record(z.string().regex(/^[a-zA-Z][\w]*$/),configField).default({}),
   views:z.array(z.object({id:extensionId,title:z.string().min(1).max(100),location:z.enum(['sidebar','panel','settings']),entry:z.string().min(1).max(500)}).strict()).max(20).default([]),
 }).strict();
 export type ExtensionManifest=z.infer<typeof extensionManifestSchema>;
 export type ExtensionConfig=Record<string,string|number|boolean>;
-export interface ExtensionInfo {manifest:ExtensionManifest;generation:number;desktop?:{root:string;entry:string;dataDirectory:string};desktopError?:string;installed:boolean;enabled:boolean;status:'disabled'|'active'|'blocked'|'failed';builtin:boolean;development:boolean;error?:string;config:ExtensionConfig;commands:{name:string;description:string;inputSchema:Record<string,unknown>}[];views:ExtensionManifest['views'];}
+export interface ExtensionInfo {manifest:ExtensionManifest;generation:number;desktop?:{root:string;entry:string;dataDirectory:string};desktopError?:string;installed:boolean;enabled:boolean;status:'disabled'|'active'|'blocked'|'failed';builtin:boolean;development:boolean;isAgent:boolean;error?:string;config:ExtensionConfig;commands:{name:string;description:string;inputSchema:Record<string,unknown>}[];views:ExtensionManifest['views'];}
 export interface ExtensionSnapshot {apiVersion:1;plugins:ExtensionInfo[];revision:number;warnings?:string[];}
 export const extensionRequestSchema=z.discriminatedUnion('action',[
   z.object({action:z.literal('list')}).strict(),
