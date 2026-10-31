@@ -41,7 +41,9 @@ try {
     proc.once('error',reject);
   });
   await page.getByRole('button',{name:'仅退出界面',exact:true}).click({noWaitAfter:true});
-  await Promise.race([exited,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Desktop-only quit blocked by failed daemon')),12000))]);
+  let timeout;
+  try { await Promise.race([exited,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('Desktop-only quit blocked by failed daemon')),12000);})]); }
+  finally { clearTimeout(timeout); }
   console.log('Startup-failure smoke: legacy database preserved; actual startup error visible; desktop can exit without daemon');
 } finally {
   if(application){try{await application.close();}catch{}}
