@@ -4,7 +4,6 @@ import type { DesktopApi, ServerEvent, SshWindowState } from '../shared/protocol
 const api: DesktopApi = {
   extensions:request=>ipcRenderer.invoke('berth:extensions',request),
   installExtension:development=>ipcRenderer.invoke('berth:installExtension',development),
-  installAgentExtension:()=>ipcRenderer.invoke('berth:installAgentExtension'),
   pet: request => ipcRenderer.invoke('berth:pet', request),
   onPet: listener => {
     const callback = (_event: Electron.IpcRendererEvent, state: import('../shared/pet').PetSnapshot) => listener(state);
@@ -44,7 +43,6 @@ const api: DesktopApi = {
   skills: request => ipcRenderer.invoke('berth:skills', request),
   chooseDirectory: () => ipcRenderer.invoke('berth:directory'),
   chooseTranscript: () => ipcRenderer.invoke('berth:transcript'),
-  importAgentPlugin: () => ipcRenderer.invoke('berth:importPlugin'),
   exportPluginKit: () => ipcRenderer.invoke('berth:exportPluginKit'),
   pluginDevelopmentPrompt: folder => ipcRenderer.invoke('berth:pluginPrompt', folder),
   chooseExecutable: () => ipcRenderer.invoke('berth:executable'),
