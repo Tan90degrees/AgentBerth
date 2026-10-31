@@ -20,7 +20,7 @@ const command=(value:string)=>`exports.apply=(ctx,config)=>{ctx.berth.command({n
 
 
 test('sandboxed plugin view bridge works without Web Crypto and correlates parallel replies',async()=>{
-  const script=extensionDocument('').match(/<script>([\\s\\S]*?)<\\/script>/)?.[1];
+  const script=extensionDocument('').split('<script>')[1]?.split('</script>')[0];
   assert.ok(script);
   const requests:any[]=[],listeners=new Map<string,(event:any)=>void>();
   const parent={postMessage:(data:unknown)=>{requests.push(data);}};
