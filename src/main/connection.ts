@@ -148,15 +148,25 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   let spawnError: Error | null = null;
   child.once('error', error => { spawnError = error; });
   child.unref();
-  // On Windows a freshly unpacked Electron binary can require extra time for
-  // signature/antivirus scanning before its detached Node daemon starts.
-  // Bound startup, but do not misclassify a slow first launch as a failure.
+  // The spawned daemon writes its own startup error before exiting; match its
+  // PID to prevent a stale error from a previous launch masking the real cause.
+  const startupFailure = () => {
+    try {
+      const value = JSON.parse(readFileSync(path.join(directory, 'daemon-startup-error.json'), 'utf8'));
+      return value.pid === child.pid && typeof value.message === 'string' && value.message.length <= 8192 ? value.message : null;
+    } catch { return null; }
+  };
+  // Windows antivirus/signature checks can delay first launch of a packaged
+  // binary; stop immediately if the daemon exits instead of waiting 30 seconds.
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     if (spawnError) throw spawnError;
+    const failure = startupFailure();
+    if (failure) throw new Error(failure.replace(/^Error:\\s*/, ''));
     const next = runtimeFile(directory);
     if (next) { try { return await DaemonConnection.open(next, onEvent); } catch { /* Another client may be starting the daemon. */ } }
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error('后台进程启动后立即退出（退出码 '+String(child.exitCode)+'）。请查看数据目录中的 daemon-startup-error.json');
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error('后台启动失败，请查看数据目录中的 daemon.log');
+  throw new Error('后台启动超时。请查看数据目录中的 daemon-startup-error.json 或检查杀毒软件拦截情况。');
 }
