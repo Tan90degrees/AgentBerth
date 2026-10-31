@@ -234,6 +234,7 @@ export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
   extensions<T=ExtensionSnapshot>(request:ExtensionRequest):Promise<T>;
   installExtension(development?:boolean):Promise<ExtensionSnapshot|null>;
+  installAgentExtension():Promise<ExtensionSnapshot|null>;
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;
   onPet(listener: (state: import('./pet').PetSnapshot) => void): () => void;
   onPetSession(listener: (sessionId: string) => void): () => void;
