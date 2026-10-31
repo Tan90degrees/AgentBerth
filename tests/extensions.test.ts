@@ -23,7 +23,13 @@ test('sandboxed plugin view bridge works without Web Crypto and correlates paral
   const script=extensionDocument('').split('<script>')[1]?.split('</script>')[0];
   assert.ok(script);
   const requests:any[]=[],listeners=new Set<(event:any)=>void>();
-  const parent={postMessage:(data:unknown)=>{requests.push(data);}};
+  let handshakes=0;
+  const parent={postMessage:(data:any)=>{
+    if(data.kind==='agentberth-plugin-ready'){
+      handshakes++;
+      queueMicrotask(()=>{for(const listener of [...listeners])listener({source:parent,data:{kind:'agentberth-plugin-ready-ack'}});});
+    }else requests.push(data);
+  }};
   const frame={
     window:{},parent,setTimeout,clearTimeout,
     addEventListener:(_event:string,listener:(event:any)=>void)=>{listeners.add(listener);},
@@ -34,6 +40,8 @@ test('sandboxed plugin view bridge works without Web Crypto and correlates paral
   runInNewContext(script,frame);
   const bridge=(frame.window as any).agentberth;
   const first=bridge.call('info',{page:1}),second=bridge.call('info',{page:2});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(handshakes,1,'Both calls must share a single iframe handshake');
   assert.equal(requests.length,2);
   assert.notEqual(requests[0].id,requests[1].id);
   assert.deepEqual(requests.map(request=>request.command),['info','info']);
