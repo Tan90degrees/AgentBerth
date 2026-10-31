@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { runInNewContext } from 'node:vm';
 import { zipSync, strToU8 } from 'fflate';
 import { ExtensionRuntime, type ExtensionHost } from '../src/extensions/runtime';
 import { DesktopExtensions } from '../src/extensions/desktop';
 import { ExtensionMcp, extensionToolName } from '../src/extensions/mcp';
+import { extensionDocument } from '../src/extensions/view-document';
 import { stagePackage, packagePath } from '../src/extensions/packages';
 import { extensionManifestSchema, resolveExtensionConfig } from '../src/shared/extensions';
 
@@ -15,6 +17,30 @@ async function fixture(t:any){const root=await mkdtemp(path.join(os.tmpdir(),'be
 async function source(root:string,id:string,code:string,extra={}){const dir=path.join(root,id);await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'agentberth.extension.json'),JSON.stringify(manifest(id,extra)));await writeFile(path.join(dir,'index.cjs'),code);return dir;}
 const host=(extra:Partial<ExtensionHost>={}):ExtensionHost=>({mount:()=>{},beforeChange:async()=>{},call:async()=>null,agentsChanged:()=>{},changed:()=>{},...extra});
 const command=(value:string)=>`exports.apply=(ctx,config)=>{ctx.berth.command({name:'value',description:'Read value',inputSchema:{type:'object',properties:{},additionalProperties:false}},()=>(${value}));};`;
+
+
+test('sandboxed plugin view bridge works without Web Crypto and correlates parallel replies',async()=>{
+  const script=extensionDocument('').match(/<script>([\\s\\S]*?)<\\/script>/)?.[1];
+  assert.ok(script);
+  const requests:any[]=[],listeners=new Map<string,(event:any)=>void>();
+  const parent={postMessage:(data:unknown)=>{requests.push(data);}};
+  const frame={
+    window:{},parent,setTimeout,clearTimeout,
+    addEventListener:(event:string,listener:(event:any)=>void)=>{listeners.set(event,listener);},
+    removeEventListener:(event:string)=>{listeners.delete(event);},
+  };
+  // An iframe with sandbox="allow-scripts" has an opaque origin. Even if
+  // crypto.randomUUID is unavailable, command dispatch must still succeed.
+  runInNewContext(script,frame);
+  const bridge=(frame.window as any).agentberth;
+  const first=bridge.call('info',{page:1}),second=bridge.call('info',{page:2});
+  assert.equal(requests.length,2);
+  assert.notEqual(requests[0].id,requests[1].id);
+  assert.deepEqual(requests.map(request=>request.command),['info','info']);
+  listeners.get('message')!({source:parent,data:{kind:'agentberth-plugin-result',id:requests[1].id,result:'second'}});
+  listeners.get('message')!({source:parent,data:{kind:'agentberth-plugin-result',id:requests[0].id,result:'first'}});
+  assert.deepEqual(await Promise.all([first,second]),['first','second']);
+});
 
 test('Cordis lifecycle, live config, dependency teardown, persistence and uninstall preserve data',async t=>{
   const root=await fixture(t),directory=path.join(root,'runtime');let agents:any[]=[];
