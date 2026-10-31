@@ -97,10 +97,6 @@
     },
     "extraResources": [
       {
-        "from": "dist/check-plugin.cjs",
-        "to": "plugin-kit/check-plugin.cjs"
-      },
-      {
         "from": "docs",
         "to": "docs"
       },
