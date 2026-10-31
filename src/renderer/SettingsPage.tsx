@@ -75,7 +75,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {conflict && <p className="draft-notice" role="status">后台设置已更新，草稿已保留。保存将应用此处的值；取消修改可加载后台设置。</p>}
         {error && <div className="form-error" role="alert">{error.replace(/^Error: /, '')}</div>}
         {!visible.size && <div className="settings-no-results"><h3>没有匹配的设置</h3><p>试试“终端”“字体”或“SSH”，也可以查看全部设置。</p><button type="button" className="subtle" onClick={() => { setQuery(''); setCategory('all'); search.current?.focus(); }}>查看全部设置</button></div>}
-        {item('plugins', <ExtensionManager snapshot={extensions} onError={onError} onConfigureBuiltin={Object.fromEntries(Object.entries({workspace:'terminal',appearance:'appearance',agents:'agents','agent.codex':'agents','agent.claude':'agents','agent.opencode':'agents',ssh:'ssh',files:'preview',pet:'pet'} as Record<string,SettingsCategory>).map(([id,category])=>[id,()=>{setCategory(category);setQuery('');}]))}/>)}
+        {item('plugins', <ExtensionManager snapshot={extensions} onError={onError}/>)}
         {item('pet', visible.has('pet') ? <PetSettings projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion} /> : null)}
         {item('theme', <AppearanceControls />)}
         {item('preview', <PreviewSettings />)}
@@ -95,7 +95,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{!agentChoices.some(([id])=>id===draft.defaultAgent)&&<option value={draft.defaultAgent} disabled>已停用的默认接入（保留配置）</option>}{agentChoices.map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义 Agent 与内置接入平级，通过「Agent 接入」安装和管理其启动、历史与 Skills。旧版自定义命令仍保留在已有会话中。</p>{draft.defaultAgent === 'custom' && <><label>默认启动命令<input aria-label="默认启动命令" required pattern=".*\S.*" title="请填写至少一个非空白字符" maxLength={4096} value={draft.defaultCommand} disabled={disabled} onChange={event => change({ ...draft, defaultCommand: event.target.value })} placeholder="例如 my-agent --interactive" /></label><p className="form-hint">新建自定义命令会话时自动填入，仍可按会话单独修改。</p></>}</>)}
           {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event => change({ ...draft, maxSshTerminals: Number(event.target.value) })} /></label><p className="form-hint">与本机终端独立计数，支持 1–{TERMINAL_LIMIT_MAX}。保存立即应用，降低上限不停止已有会话。</p></>)}
         </form>
-        {item('agent-integrations', <ExtensionManager snapshot={extensions} mode="agents" onError={onError} onConfigureBuiltin={{'agent.codex':()=>setCategory('agents'),'agent.claude':()=>setCategory('agents'),'agent.opencode':()=>setCategory('agents')}} />)}
+        {item('agent-integrations', <ExtensionManager snapshot={extensions} mode="agents" onError={onError} />)}
         {item('skills', <SkillManager agents={agents} projects={projects} currentProjectId={currentProjectId} />)}
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
         {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
