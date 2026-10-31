@@ -22,7 +22,10 @@ try {
   const page=await application.firstWindow();page.setDefaultTimeout(15000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.getByRole('button',{name:'添加第一个项目'}).waitFor();daemonPid=JSON.parse(await readFile(path.join(root,'data','runtime.json'),'utf8')).pid;
   await page.evaluate(source=>window.berth.extensions({action:'install',path:source}),source);
-  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'插件',exact:true}).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.getByRole('heading',{name:'插件中心'}).waitFor();
+  assert.equal(await page.getByRole('navigation',{name:'设置分类'}).count(),0,'Core settings navigation must be separate from Plugins');
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).waitFor();
   const card=page.locator('[data-plugin-id="example.smoke"]');await card.getByText('已启用',{exact:true}).waitFor();
   // All plugin actions must share the same geometry; semantic color variants
   // must not regress to mixed borderless text links and full-sized buttons.
@@ -67,16 +70,21 @@ try {
     throw new Error('Plugin iframe RPC failed: '+JSON.stringify({diagnostic,parentMessages,directCommand,pageErrors:errors}),{cause:error});
   }
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-view.png`});
-  await page.getByRole('button',{name:'设置',exact:true}).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
   await card.getByRole('button',{name:'停用',exact:true}).click();await card.getByText('已停用',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Plugin info',exact:true}).count(),0);
   for(let i=0;i<100&&await nativeCount()!==0;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),0);
   await card.getByRole('button',{name:'启用',exact:true}).click();await card.getByText('已启用',{exact:true}).waitFor();
   const files=page.locator('[data-plugin-id="files"]');await files.getByRole('button',{name:'停用',exact:true}).click();await files.getByText('已停用',{exact:true}).waitFor();await page.locator('[data-plugin-id="git"]').getByText('等待依赖',{exact:true}).waitFor();await files.getByRole('button',{name:'启用',exact:true}).click();
-  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'Agent',exact:true}).click();
-  const integrationCard=page.locator('[data-setting-id="agent-integrations"]');
-  for(const id of ['agent.codex','agent.claude','agent.opencode','example.smoke'])await integrationCard.locator('[data-plugin-id="'+id+'"]').waitFor();
-  assert.equal(await page.locator('[data-setting-id="agent-types"]').count(),0,'Legacy Agent manager must be removed');
-  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'插件',exact:true}).click();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).click();
+  for(const id of ['agent.codex','agent.claude','agent.opencode','example.smoke'])await page.locator('.plugin-center-content [data-plugin-id="'+id+'"]').waitFor();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Skills/}).click();
+  await page.getByRole('heading',{name:'Skill 管理'}).waitFor();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();
+  assert.equal(await page.getByRole('navigation',{name:'插件分类'}).count(),0,'Plugin navigation must not be embedded in core settings');
+  assert.equal(await page.locator('[data-setting-id="agent-integrations"]').count(),0);
+  assert.equal(await page.locator('[data-setting-id="plugins"]').count(),0);
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-manager.png`});
   await card.getByRole('button',{name:'卸载',exact:true}).click();await card.getByText('未安装',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);console.log('Extension smoke: install, config, Agent+Skills, iframe bridge, native window cleanup and dependency lifecycle passed');
