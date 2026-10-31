@@ -447,6 +447,7 @@ export class DaemonServer {
       return this.extensions.change(p.action,p.id,'config' in p?p.config:undefined);
     }
     const feature=featureForMethod(request.method);if(feature)this.extensions.require(feature);
+    if(feature==='agents'&&'sessionId' in request.params&&typeof request.params.sessionId==='string')this.requireSessionAgent(this.store.session(request.params.sessionId));
     const extensionHandler=this.extensionRoutes.get(request.method);if(extensionHandler)return extensionHandler(request,client);
     switch (request.method) {
       case 'state': return this.snapshot();
@@ -564,10 +565,18 @@ export class DaemonServer {
     } finally { this.historyBusy.delete(sessionId); }
   }
 
+  private requireSessionAgent(session:import('../shared/protocol').Session){
+    if(session.remote||session.agent==='shell')return;
+    this.extensions.require('agents');
+    if(['codex','claude','opencode'].includes(session.agent))this.extensions.require('agent.'+session.agent);
+    const owner=this.extensionAgents.get(session.agent);
+    if(owner)this.extensions.require(owner);
+    else if(session.agent.startsWith('agent:')&&this.store.agent(session.agent).sourceId?.startsWith('ext.'))throw new Error('此 Agent 的接入插件未启用');
+  }
   private async start(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     this.extensions.require('workspace');
-    if(session.remote)this.extensions.require('ssh');else if(session.agent!=='shell'){this.extensions.require('agents');if(['codex','claude','opencode'].includes(session.agent))this.extensions.require('agent.'+session.agent);const owner=this.extensionAgents.get(session.agent);if(owner)this.extensions.require(owner);else if(session.agent.startsWith('agent:')&&this.store.agent(session.agent).sourceId?.startsWith('ext.'))throw new Error('此 Agent 的接入插件未启用');}
+    if(session.remote)this.extensions.require('ssh');else this.requireSessionAgent(session);
     this.requireProjectAvailable(session.projectId);
     if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
     if (this.historyWrites.has(sessionId)) throw new Error('会话正在关联对话记录，请稍后启动');

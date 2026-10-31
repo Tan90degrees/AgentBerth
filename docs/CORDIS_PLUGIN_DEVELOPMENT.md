@@ -53,7 +53,7 @@
 
 ## UI 与桌面入口
 
-HTML 视图置于无 Node 的 sandbox iframe，不能联网或直接访问工作台。用 `await window.agentberth.call(command, params)` 调用**自己的**命令；不要加载外部 JS/CSS。sidebar / panel 入口显示在侧边栏并在主区打开，settings 视图在插件卡片内展开。主程序校验消息来源，不允许视图指定其他插件 ID。
+HTML 视图通过独立本地协议加载，置于无 Node 的 sandbox iframe，不能联网或直接访问工作台。用 `await window.agentberth.call(command, params)` 调用**自己的**命令；不要加载外部 JS/CSS。sidebar / panel 入口显示在侧边栏并在主区打开，settings 视图在插件卡片内展开。主程序校验消息来源，不允许视图指定其他插件 ID。
 
 `desktopEntry` 同样导出 Cordis 插件，通过 `require('electron')` 使用桌面 API。上下文提供 `ctx.desktop = {id,dataDirectory,call}`，每次配置和代码更新会释放旧作用域再加载新作用域。示例：
 

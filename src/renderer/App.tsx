@@ -144,8 +144,9 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const actionSession = state.sessions.find(item => item.id === (modalTarget?.sessionId ?? sessionId));
   const actionProjectSessions = state.sessions.filter(item => item.projectId === actionProject?.id);
   const sessionDefinition = state.agents?.find(item => item.id === session?.agent);
-  const canHistory = features.agents && !!session && (['codex', 'claude', 'opencode'].includes(session.agent) || !!sessionDefinition?.integration || !!sessionDefinition?.plugin?.history);
-  const canResume = features.agents && !!session && (['codex', 'claude', 'opencode'].includes(session.agent) || !!sessionDefinition?.resumeCommand || !!sessionDefinition?.plugin?.resume);
+  const sessionAgentEnabled=features.agents&&!!session&&(!['codex','claude','opencode'].includes(session.agent)||extensionEnabled(state.extensions,'agent.'+session.agent));
+  const canHistory = sessionAgentEnabled && !!session && (['codex', 'claude', 'opencode'].includes(session.agent) || !!sessionDefinition?.integration || !!sessionDefinition?.plugin?.history);
+  const canResume = sessionAgentEnabled && !!session && (['codex', 'claude', 'opencode'].includes(session.agent) || !!sessionDefinition?.resumeCommand || !!sessionDefinition?.plugin?.resume);
   const recordOutput = session?.agent === 'shell';
   useEffect(() => { setViewingRun(null); if ((tab === 'runs' && !recordOutput) || (tab === 'history' && !canHistory && !canResume && !sessionDefinition?.plugin?.list)) setTab('terminal'); }, [sessionId, session?.agent, canHistory, canResume, sessionDefinition?.plugin?.list]);
   const running = useMemo(() => state.sessions.filter(active).length, [state.sessions]);

@@ -70,4 +70,4 @@ API 15 allows replacing an Agent definition while its terminals are running. Imp
 
 安装包与开发目录共用清单和注册 API。Agent 与 Skills 在同一贡献项定义；派生稳定 Agent ID，旧会话与原生历史继续保存。原有单文件配置/脚本由 agents 插件兼容，不伪装成 Cordis 或 DSH 的二进制兼容插件。
 
-配置写入采用临时文件 + rename，生命周期变更串行。依赖按拓扑顺序挂载、逆序释放；不终止相关插件的运行终端来强行更新。开发重载先校验清单/代码，再切换作用域，失败恢复旧后台模块与配置。动态 MCP 命令继承当前 RPC 调用方；不另开一个 Agent 身份。HTML 视图使用无 Node 的 sandbox iframe，只能桥接本插件命令；Node 与 Electron 插件属于用户信任代码，并非权限沙箱。
+配置写入采用临时文件 + rename，生命周期变更串行。依赖按拓扑顺序挂载、逆序释放；不终止相关插件的运行终端来强行更新。开发重载先校验清单/代码，再切换作用域，失败恢复旧后台模块与配置。动态 MCP 命令继承当前 RPC 调用方；不另开一个 Agent 身份。HTML 视图使用独立本地协议与无 Node 的 sandbox iframe，只能桥接本插件命令；Node 与 Electron 插件属于用户信任代码，并非权限沙箱。

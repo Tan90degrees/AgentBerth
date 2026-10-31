@@ -19,7 +19,7 @@ const command=(value:string)=>`exports.apply=(ctx,config)=>{ctx.berth.command({n
 test('Cordis lifecycle, live config, dependency teardown, persistence and uninstall preserve data',async t=>{
   const root=await fixture(t),directory=path.join(root,'runtime');let agents:any[]=[];
   const runtime=new ExtensionRuntime(directory,host({agentsChanged:value=>{agents=value;}}));await runtime.ready;t.after(()=>runtime.close());
-  const dir=await source(root,'example.agent',`exports.apply=(ctx,config)=>{ctx.berth.agent({id:'main',definition:{name:'Example',command:'example',skills:{project:'.example/skills'}}});ctx.berth.command({name:'value',description:'Get config',inputSchema:{type:'object',properties:{},additionalProperties:false}},()=>config.greeting);ctx.effect(()=>{globalThis.__extensionMounted=(globalThis.__extensionMounted||0)+1;return()=>{globalThis.__extensionMounted--;};});};`,{dependencies:['agents'],config:{greeting:{type:'string',title:'Greeting',default:'hello'}}});
+  const dir=await source(root,'example.agent',`exports.apply=(ctx,config)=>{ctx.berth.agent({id:'main',definition:{name:'Example',command:'example',skills:{project:'.example/skills'}}});ctx.berth.command({name:'value',description:'Get config',inputSchema:{$id:'example-config-command',type:'object',properties:{},additionalProperties:false}},()=>config.greeting);ctx.effect(()=>{globalThis.__extensionMounted=(globalThis.__extensionMounted||0)+1;return()=>{globalThis.__extensionMounted--;};});};`,{dependencies:['agents'],config:{greeting:{type:'string',title:'Greeting',default:'hello'}}});
   await runtime.install(dir);assert.equal(await runtime.call('example.agent','value',{}),'hello');assert.equal(agents[0].agent.definition.skills.project,'.example/skills');
   await runtime.change('configure','example.agent',{greeting:'updated'});assert.equal(await runtime.call('example.agent','value',{}),'updated');assert.equal((globalThis as any).__extensionMounted,1);
   await assert.rejects(runtime.change('configure','example.agent',{greeting:42}),/配置无效/);assert.equal(await runtime.call('example.agent','value',{}),'updated');
@@ -35,8 +35,9 @@ test('developer reload rolls back code and config, rejects cycles and never dele
   await writeFile(path.join(dir,'index.cjs'),`exports.apply=()=>{throw new Error('broken release');};`);
   await assert.rejects(runtime.change('reload','example.dev'),/恢复旧配置与代码/);assert.equal(await runtime.call('example.dev','value',{}),'v1');
   await writeFile(path.join(dir,'index.cjs'),command("'v2'"));await runtime.change('reload','example.dev');assert.equal(await runtime.call('example.dev','value',{}),'v2');
+  await runtime.change('disable','example.dev');await writeFile(path.join(dir,'index.cjs'),command("'v3'"));await runtime.change('enable','example.dev');assert.equal(await runtime.call('example.dev','value',{}),'v3');
   const a=await source(root,'cycle.a',command('1'),{dependencies:['cycle.b']});await runtime.install(a);const b=await source(root,'cycle.b',command('2'),{dependencies:['cycle.a']});await assert.rejects(runtime.install(b),/循环/);
-  await runtime.change('uninstall','example.dev');assert.match(await readFile(path.join(dir,'index.cjs'),'utf8'),/v2/);assert.ok(!(await readdir(path.join(root,'runtime','packages'))).some(name=>name.startsWith('.staging')));
+  await runtime.change('uninstall','example.dev');assert.match(await readFile(path.join(dir,'index.cjs'),'utf8'),/v3/);assert.ok(!(await readdir(path.join(root,'runtime','packages'))).some(name=>name.startsWith('.staging')));
 });
 
 test('active commands and host operations reject mutation without disposing the working plugin',async t=>{
@@ -82,6 +83,7 @@ test('real daemon removes feature routes and keeps contributed Agent identities 
   const project=await connection.rpc<any>('createProject',{name:'Fixture',path:root});const session=await connection.rpc<any>('createSession',{projectId:project.id,title:'Shell',agent:'shell'});await connection.rpc('start',{sessionId:session.id,cols:90,rows:20});
   const change=(request:any)=>connection.rpc<any>('extensions',{request});
   await assert.rejects(change({action:'disable',id:'workspace'}),/运行会话/);
+  const codex=await connection.rpc<any>('createSession',{projectId:project.id,title:'Disabled provider',agent:'codex'});await change({action:'disable',id:'agent.codex'});await assert.rejects(connection.rpc('history',{sessionId:codex.id}),/未启用/);await change({action:'enable',id:'agent.codex'});
   await change({action:'disable',id:'files'});await assert.rejects(connection.rpc('projectFiles',{projectId:project.id}),/未启用/);assert.equal((await connection.rpc<any>('state')).extensions.plugins.find((p:any)=>p.manifest.id==='git').status,'blocked');
   await change({action:'enable',id:'files'});await connection.rpc('projectFiles',{projectId:project.id});
   const dir=await source(root,'example.integration',`exports.apply=(ctx,c)=>ctx.berth.agent({id:'main',definition:{name:c.name,command:'fixture-agent',skills:{project:'.fixture/skills'}}});`,{dependencies:['agents'],config:{name:{type:'string',title:'Name',default:'Fixture Agent'}}});

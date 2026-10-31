@@ -7,7 +7,7 @@ export const useExtension=(id:string)=>extensionEnabled(useContext(ExtensionsCon
 export function ExtensionManager({snapshot,onError,onConfigureBuiltin}:{snapshot?:ExtensionSnapshot;onError:(error:string)=>void;onConfigureBuiltin?:(id:string)=>void}){
   const [current,setCurrent]=useState(snapshot),[busy,setBusy]=useState(''),[query,setQuery]=useState(''),[drafts,setDrafts]=useState<Record<string,ExtensionConfig>>({}),[message,setMessage]=useState('');
   useEffect(()=>setCurrent(snapshot),[snapshot]);
-  const perform=async(id:string,action:()=>Promise<ExtensionSnapshot|null>)=>{setBusy(id);setMessage('');try{const next=await action();if(next){setCurrent(next);setDrafts({});setMessage('插件已更新，即时生效');}}catch(error){onError(String(error));}finally{setBusy('');}};
+  const perform=async(id:string,action:()=>Promise<ExtensionSnapshot|null>)=>{setBusy(id);setMessage('');onError('');try{const next=await action();if(next){setCurrent(next);setDrafts({});setMessage('插件已更新，即时生效');}}catch(error){onError(String(error));}finally{setBusy('');}};
   const exportKit=async()=>{setBusy('$kit');try{const folder=await window.berth.exportPluginKit();if(folder){await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(folder));setMessage('开发套件已导出，开发指令已复制：'+folder);}}catch(error){onError(String(error));}finally{setBusy('');}};
   if(!current)return <p>更新空闲后台至 API 41 后可管理 Cordis 插件。</p>;
   return <section className="extension-manager" aria-label="插件管理">

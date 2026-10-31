@@ -19,6 +19,7 @@ export function loadModule(root:string,entry:string){
   try{for(const key of Object.keys(require.cache))if(key.startsWith(root+path.sep))delete require.cache[key];const loaded=require(entry),value=loaded.default??loaded;if(typeof value!=='function'&&typeof value?.apply!=='function')throw new Error('Cordis 插件须导出函数或 apply(ctx, config)');return value;}
   finally{dispose();}
 }
+export function clearModules(root:string){for(const key of Object.keys(hostRequire.cache))if(key.startsWith(root+path.sep))delete hostRequire.cache[key];}
 
 /** Settle an async apply before disposal: Cordis correctly waits for apply to
  * finish, so an outer Promise.race alone would leave disposal waiting forever. */

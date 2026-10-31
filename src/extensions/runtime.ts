@@ -1,6 +1,6 @@
 import { Context, Fiber, FiberState, type Plugin } from 'cordis';
 import Ajv from 'ajv';
-import { boundedPlugin, loadModule, shareCordis } from './modules';
+import { boundedPlugin, clearModules, loadModule, shareCordis } from './modules';
 import { watch, type FSWatcher } from 'node:fs';
 import { readFile, mkdir, writeFile, rename, rm, copyFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -25,7 +25,7 @@ export class ExtensionRuntime {
   private records=new Map<string,RecordEntry>();private mounted=new Map<string,Mounted>();private errors=new Map<string,string>();
   private modules=new Map<string,Plugin>();private notices=new Map<string,string>();private warnings:string[]=[];private changing=new Set<string>();
   private watchers=new Map<string,FSWatcher>();private timers=new Map<string,NodeJS.Timeout>();private generations=new Map<string,number>();private revision=0;private chain:Promise<unknown>=Promise.resolve();private closed=false;
-  private ajv=new Ajv({strict:true,allErrors:true});
+  private ajv=new Ajv({strict:true,allErrors:true,addUsedSchema:false});
   readonly ready:Promise<void>;
   constructor(readonly directory:string,private host:ExtensionHost){this.ready=this.initialize();}
   private async initialize(){
@@ -81,10 +81,10 @@ export class ExtensionRuntime {
     const record=this.records.get(id);if(!record)throw new Error('插件不存在');
     if(action==='enable'&&record.root&&!record.installed)throw new Error('请重新选择插件包安装');
     const previous={...record,config:{...record.config}},previousModules=new Map(this.modules);
-    const nextManifest=action==='reload'&&record.root?await readManifest(record.root):record.manifest;
+    const nextManifest=['reload','enable'].includes(action)&&record.root?await readManifest(record.root):record.manifest;
     this.validateDependencies(id,nextManifest);
     const nextConfig=resolveExtensionConfig(nextManifest,action==='configure'?config??{}:record.config);
-    const nextModule=action==='reload'&&record.root?this.load({...record,manifest:nextManifest}):undefined;
+    const nextModule=(action==='enable'||action==='reload'&&record.enabled)&&record.root?this.load({...record,manifest:nextManifest}):undefined;
     const affected=this.dependents(id);for(const key of affected)this.changing.add(key);
     try {
       this.assertIdle(affected);await this.host.beforeChange(affected);
@@ -102,6 +102,7 @@ export class ExtensionRuntime {
         throw new Error('插件更新失败，已恢复旧配置与代码：'+String(error));
       }
       if(action==='uninstall'&&record.root&&!record.development)await rm(record.root,{recursive:true,force:true});
+      if((action==='disable'||action==='uninstall')&&record.root){this.modules.delete(id);clearModules(record.root);clearTimeout(this.timers.get(id));this.timers.delete(id);}
       this.installWatchers();return this.snapshot();
     } finally {for(const key of affected)this.changing.delete(key);}
   });}
@@ -130,6 +131,6 @@ export class ExtensionRuntime {
   private assertIdle(ids:string[]){if(ids.some(id=>(this.mounted.get(id)?.pending??0)>0))throw new Error('插件仍有命令正在执行，完成后可重新配置、停用或卸载');}
   async call(id:string,name:string,params:Record<string,unknown>){await this.ready;this.require(id);const mounted=this.mounted.get(id)!,command=mounted.commands.get(name);if(!command)throw new Error('插件命令不存在');if(!command.validate(params))throw new Error('插件参数无效：'+this.ajv.errorsText(command.validate.errors));mounted.pending++;try{const value=await command.execute(params);if(Buffer.byteLength(JSON.stringify(value??null))>128*1024)throw new Error('插件结果超过 128 KiB，请返回摘要或分页');return value;}finally{mounted.pending--;}}
   async view(id:string,viewId:string){await this.ready;this.require(id);const record=this.records.get(id)!,view=record.manifest.views.find(v=>v.id===viewId);if(!record.root||!view)throw new Error('插件视图不存在');const file=packagePath(record.root,view.entry);if(!(await realpath(file)).startsWith(await realpath(record.root)+path.sep))throw new Error('视图不能引用包外文件');const text=await readFile(file,'utf8');if(Buffer.byteLength(text)>2*1024*1024)throw new Error('插件视图超过 2 MiB');return text;}
-  private installWatchers(){for(const watcher of this.watchers.values())watcher.close();this.watchers.clear();for(const [id,record] of this.records)if(record.root&&record.development&&record.installed){try{const watcher=watch(record.root,{recursive:true},()=>{clearTimeout(this.timers.get(id));this.timers.set(id,setTimeout(()=>{this.timers.delete(id);void this.change('reload',id).catch(error=>{this.notices.set(id,String(error));this.publish();});},350));});watcher.on('error',()=>{this.notices.set(id,'开发目录监听失效，请重新加载');this.publish();});this.watchers.set(id,watcher);}catch{this.notices.set(id,'无法监听开发目录，请使用重新加载');}}}
+  private installWatchers(){for(const watcher of this.watchers.values())watcher.close();this.watchers.clear();for(const [id,record] of this.records)if(record.root&&record.development&&record.installed&&record.enabled){try{const watcher=watch(record.root,{recursive:true},()=>{clearTimeout(this.timers.get(id));this.timers.set(id,setTimeout(()=>{this.timers.delete(id);void this.change('reload',id).catch(error=>{this.notices.set(id,String(error));this.publish();});},350));});watcher.on('error',()=>{this.notices.set(id,'开发目录监听失效，请重新加载');this.publish();});this.watchers.set(id,watcher);}catch{this.notices.set(id,'无法监听开发目录，请使用重新加载');}}}
   async close(){this.closed=true;await this.ready;for(const timer of this.timers.values())clearTimeout(timer);for(const watcher of this.watchers.values())watcher.close();await this.chain.catch(()=>{});await this.dispose([...this.mounted.keys()]);}
 }

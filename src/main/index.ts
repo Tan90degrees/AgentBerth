@@ -12,7 +12,7 @@ import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
 import { legacyProfile } from './profile';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, nativeImage, nativeTheme, safeStorage, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, nativeImage, nativeTheme, safeStorage, shell, Tray, protocol } from 'electron';
 import path from 'node:path';
 import { release } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -24,9 +24,11 @@ import { installAgentFile, exportPluginKit, developmentPrompt } from './plugin-f
 import { AgentPlugins } from '../daemon/plugins';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
 import { extensionEnabled, extensionRequestSchema, type ExtensionSnapshot } from '../shared/extensions';
+import { extensionDocument } from '../extensions/view-document';
 import { mount as mountPetDesktop } from '../plugins/pet/desktop';
 import { DesktopExtensions } from '../extensions/desktop';
 
+protocol.registerSchemesAsPrivileged([{scheme:'agentberth-plugin',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 nativeTheme.themeSource = 'dark';
 
 let window: BrowserWindow | null = null;
@@ -76,6 +78,7 @@ else {
     if (process.platform === 'win32') app.setAppUserModelId('dev.agentberth.desktop');
     pet = new PetState(path.join(dataDirectory, 'pet'), publishPet);
     pet.loadImages(petStatuses);
+    protocol.handle('agentberth-plugin',async request=>{try{const url=new URL(request.url),parts=url.pathname.split('/').filter(Boolean);if(request.method!=='GET'||url.hostname!=='view'||parts.length!==2||!connection?.connected)return new Response('View unavailable',{status:404});const [id,view]=parts;const parsed=extensionRequestSchema.parse({action:'view',id,view});const html=await connection.rpc<string>('extensions',{request:parsed});return new Response(extensionDocument(html),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"}});}catch{return new Response('插件视图加载失败，请检查插件状态并重新打开',{status:404});}});
     createWindow();
     const icon = nativeImage.createFromPath(iconFile);
     if (icon.isEmpty()) throw new Error('应用图标资源未正确打包');
@@ -181,7 +184,7 @@ function secureWindow(target: BrowserWindow, detached = false) {
   target.setMenuBarVisibility(false);
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   target.webContents.on('will-navigate', event => { event.preventDefault(); });
-  target.webContents.on('will-frame-navigate',event=>{if(!event.isMainFrame&&!['about:blank','about:srcdoc'].includes(event.url))event.preventDefault();});
+  target.webContents.on('will-frame-navigate',event=>{if(!event.isMainFrame&&!['about:blank','about:srcdoc'].includes(event.url)&&!event.url.startsWith('agentberth-plugin://view/'))event.preventDefault();});
   const owner = target.webContents.id;
   target.webContents.on('destroyed', () => terminalSubscriptions.release(owner));
   target.on('restore', () => refreshWindow(target));
