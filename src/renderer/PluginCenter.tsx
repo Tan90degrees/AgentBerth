@@ -1,4 +1,4 @@
-import { useContext, type ReactNode } from 'react';
+import { useContext } from 'react';
 import { ExtensionManager, ExtensionsContext } from './ExtensionManager';
 import { SkillManager } from './SkillManager';
 import type { AgentDefinition, Project } from '../shared/protocol';
