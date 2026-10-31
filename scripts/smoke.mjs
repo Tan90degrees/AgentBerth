@@ -300,9 +300,10 @@ try {
   await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
   await settingsCategory(page, 'Agent');
-  await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).click();
-  await page.getByText('完整开发指令已复制，可直接粘贴给 Agent', { exact: true }).waitFor();
-  assert.ok((await application.evaluate(({ clipboard }) => clipboard.readText())).includes('describe'));
+  await page.getByRole('button', { name: '导出插件开发套件并复制指令', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).count(), 0);
+  const cordisPrompt = await page.evaluate(() => window.berth.pluginDevelopmentPrompt());
+  assert.ok(cordisPrompt.includes('Cordis') && cordisPrompt.includes('不要生成旧版 Agent JSON'), 'Developer help must use the Cordis-only plugin architecture');
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: true } }));
   await page.locator('.sidebar-bottom').getByText('后台已连接', { exact: true }).waitFor();
   await settingsCategory(page, '常用设置');
