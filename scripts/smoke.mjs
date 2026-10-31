@@ -1057,9 +1057,13 @@ try {
   await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
   step('select an installed Agent provider as the default');
   await openSettings(page);
-  await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
-  await page.getByRole('button', { name: '保存设置', exact: true }).click();
-  await page.getByText('设置已保存', { exact: true }).waitFor();
+  const defaultAgentField = page.getByLabel('默认 Agent', { exact: true });
+  if (await defaultAgentField.inputValue() !== 'opencode') {
+    await defaultAgentField.selectOption('opencode');
+    await page.getByRole('button', { name: '保存设置', exact: true }).click();
+    await page.getByText('设置已保存', { exact: true }).waitFor();
+  }
+  assert.equal(await defaultAgentField.inputValue(), 'opencode');
   await page.locator('.projects .project-item').click();
   step('create OpenCode without starting, link ID and import native export through IPC');
   await menuAction(page, '新建会话', 'project');
