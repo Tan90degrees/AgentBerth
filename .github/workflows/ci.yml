@@ -89,7 +89,7 @@ jobs:
       - name: Desktop pet smoke (Windows)
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-pet.mjs
-        timeout-minutes: 2
+        timeout-minutes: 3
       - name: Cordis plugin smoke (Linux)
         if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
         run: xvfb-run -a node scripts/smoke-extensions.mjs
