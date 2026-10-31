@@ -162,7 +162,7 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   while (Date.now() < deadline) {
     if (spawnError) throw spawnError;
     const failure = startupFailure();
-    if (failure) throw new Error(failure.replace(/^Error:\\s*/, ''));
+    if (failure) throw new Error(failure.replace(/^Error:\s*/, ''));
     const next = runtimeFile(directory);
     if (next) { try { return await DaemonConnection.open(next, onEvent); } catch { /* Another client may be starting the daemon. */ } }
     if (child.exitCode !== null || child.signalCode !== null) throw new Error('后台进程启动后立即退出（退出码 '+String(child.exitCode)+'）。请查看数据目录中的 daemon-startup-error.json');
