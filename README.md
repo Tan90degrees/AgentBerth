@@ -6,7 +6,7 @@
 
 ## 当前能力
 
-- **Cordis 插件工作台**：设置 → 插件统一安装、实时配置、启停、重载和卸载。SSH/MCP、桌宠、文件预览、Git、资源、Agent 与 Skills 等能力按依赖装配；开发目录保存自动重载，更新失败保留旧版。自定义 Agent 与其 Skills 在同一插件注册，仅支持 Cordis 插件包，不再支持旧版单文件接入。插件配置通过独立弹窗完成。参见 [插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)，应用内可导出模板与 Agent 开发指令。
+- **Cordis 插件工作台**：左侧 **插件中心** 独立页面统一安装、实时配置、启停、重载和卸载。SSH/MCP、桌宠、文件预览、Git、资源、Agent 与 Skills 等能力按依赖装配；开发目录保存自动重载，更新失败保留旧版。自定义 Agent 与其 Skills 在同一插件注册，仅支持 Cordis 插件包，不再支持旧版单文件接入。插件配置通过独立弹窗完成。参见 [插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)，应用内可导出模板与 Agent 开发指令。
 
 - 预览支持 193 种内置语法，覆盖 JSON / YAML / TOML、常见编程语言与配置类型；可手动选择语言或自动识别。源码与 Markdown 代码块均在 Worker 中高亮。
 - 全局设置的“文件预览”可调整字号（10–28 px）、选择或自定义本机字体，自动保存，独立于终端设置。
@@ -24,7 +24,7 @@
 - **资源占用**：会话、项目与工作台三级 CPU/内存紧凑显示，包含子进程，前台轻量采样。[统计口径](docs/resources.md)。
 - 原生历史可保留多条会话 ID，支持搜索、分页、预览、关联与解除；运行中可修改关联，插件可用可选 list 接口分页发现会话。
 - 自定义 Agent 支持运行中更新 Cordis 插件：安装相同 ID 的新版插件包可热更新，校验失败保留旧版，不重启工作台和终端。
-- 自定义 Agent 与 Codex、Claude Code、OpenCode 平级，在「Agent → Agent 接入」统一安装、配置、启停和卸载 Cordis 插件。可导出开发套件与复制开发指令，参见 [Cordis 插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)。
+- 自定义 Agent 与 Codex、Claude Code、OpenCode 平级，在「插件中心 → Agent 接入」统一安装、配置、启停和卸载 Cordis 插件。可导出开发套件与复制开发指令，参见 [Cordis 插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)。
 
 - 单侧栏按项目展开/收拢会话，搜索覆盖项目与会话；可拖拽调宽，宽度与收拢状态自动保存，方向键微调、双击恢复默认宽度。
 
