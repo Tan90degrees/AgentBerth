@@ -20,7 +20,6 @@ import { fileURLToPath } from 'node:url';
 import { connectDaemon, shutdownDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
 import { requestSchema, type Method, type ServerEvent } from '../shared/protocol';
 import { exportPluginKit, developmentPrompt } from './plugin-files';
-import { AgentPlugins } from '../daemon/plugins';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
 import { extensionEnabled, extensionRequestSchema, type ExtensionSnapshot } from '../shared/extensions';
 import { extensionDocument } from '../extensions/view-document';
@@ -47,7 +46,6 @@ let quitReady = false;
 let exitPromise: Promise<void> | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let restarting = false;
-let importingPlugins = new AgentPlugins();
 const terminalSubscriptions = new TerminalSubscriptions(async (method, sessionId) => {
   if (!connection) throw new Error('后台连接已断开');
   return connection.rpc(method, { sessionId });
@@ -107,7 +105,6 @@ function quitApplication(): Promise<void> {
   tray?.setToolTip('AgentBerth · 正在停止终端并退出');
   exitPromise = (async () => {
     await desktopExtensions.close();
-    await importingPlugins.close();
     if (connecting) await connecting.catch(() => {});
     await shutdownDaemon(dataDirectory, true);
     connection?.close(true); connection = null;
@@ -117,7 +114,6 @@ function quitApplication(): Promise<void> {
   })().catch(error => {
     console.error('AgentBerth 退出未完成：', error);
     quitting = false;
-    importingPlugins = new AgentPlugins();
     void desktopExtensions.update(extensionSnapshot).catch(error=>console.error('桌面插件恢复失败',error));
     tray?.setToolTip('AgentBerth · 退出失败，请重试');
     showWindow();
@@ -486,12 +482,12 @@ ipcMain.handle('berth:restart', async event => {
 ipcMain.handle('berth:exportPluginKit', async event => {
   trusted(event);
   const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { title: '选择插件开发目录的保存位置', properties: ['openDirectory', 'createDirectory'] });
-  return result.canceled ? null : exportPluginKit(result.filePaths[0], resourceRoot, path.join(resourceRoot, app.isPackaged ? 'plugin-kit' : 'dist', 'check-plugin.cjs'));
+  return result.canceled ? null : exportPluginKit(result.filePaths[0], resourceRoot);
 });
 ipcMain.handle('berth:pluginPrompt', async (event, folder?: string) => {
   trusted(event);
   if (folder !== undefined && (typeof folder !== 'string' || folder.length > 4096 || /[\r\n\x00]/.test(folder))) throw new Error('插件目录无效');
-  return developmentPrompt(readFileSync(path.join(resourceRoot, 'docs', 'AGENT_PLUGIN_DEVELOPMENT.md'), 'utf8'), folder);
+  return developmentPrompt(readFileSync(path.join(resourceRoot, 'docs', 'CORDIS_PLUGIN_DEVELOPMENT.md'), 'utf8'), folder);
 });
 
 ipcMain.handle('berth:appInfo', event => {
