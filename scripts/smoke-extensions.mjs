@@ -24,6 +24,18 @@ try {
   await page.evaluate(source=>window.berth.extensions({action:'install',path:source}),source);
   await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'插件',exact:true}).click();
   const card=page.locator('[data-plugin-id="example.smoke"]');await card.getByText('已启用',{exact:true}).waitFor();
+  // All plugin actions must share the same geometry; semantic color variants
+  // must not regress to mixed borderless text links and full-sized buttons.
+  const actionStyles=await card.locator(':scope > header .extension-actions button').evaluateAll(buttons=>buttons.map(button=>{
+    const style=getComputedStyle(button);
+    return {height:Math.round(button.getBoundingClientRect().height),radius:style.borderRadius,fontSize:style.fontSize,borderWidth:style.borderTopWidth,classes:button.className};
+  }));
+  assert.equal(actionStyles.length,3,'Installed extension exposes enable/disable, reload and uninstall');
+  assert.ok(actionStyles.every(({classes})=>classes.includes('extension-button')),JSON.stringify(actionStyles));
+  assert.equal(new Set(actionStyles.map(({height,radius,fontSize,borderWidth})=>[height,radius,fontSize,borderWidth].join(':'))).size,1,JSON.stringify(actionStyles));
+  assert.equal(actionStyles[0].height>=34,true,'Plugin actions should meet the common minimum height');
+  assert.equal(actionStyles[2].classes.includes('danger'),true,'Uninstall must use the destructive action variant');
+  assert.equal(await page.locator('.extension-utilities .extension-button').count(),1,'Development kit action belongs with search tools');
   await page.waitForFunction(()=>window.berth.rpc('state').then(s=>s.agents.some(a=>a.name==='Plugin Agent')));
   const nativeCount=()=>application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().filter(w=>w.getTitle().startsWith('Plugin native ')).length);
   for(let i=0;i<100&&await nativeCount()!==1;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),1);
