@@ -6,7 +6,12 @@ export function ExtensionView({plugin,viewId,onError}:{plugin:ExtensionInfo;view
   // Attach the message bridge before paint: a fast iframe can otherwise send
   // its first command before the passive effect subscribes to window messages.
   useLayoutEffect(()=>{let pending=0,alive=true;const receive=async(event:MessageEvent)=>{
-    if(event.source!==frame.current?.contentWindow||event.data?.kind!=='agentberth-plugin-call')return;
+    if(!alive||event.source!==frame.current?.contentWindow)return;
+    if(event.data?.kind==='agentberth-plugin-ready'){
+      frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-ready-ack'},'*');
+      return;
+    }
+    if(event.data?.kind!=='agentberth-plugin-call')return;
     const {id,command,params}=event.data;if(typeof id!=='string'||typeof command!=='string')return;
     const reject=()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,error:'插件视图请求过多或参数无效'},'*');
     try{if(pending>=8||params!==undefined&&(!params||typeof params!=='object'||Array.isArray(params))||JSON.stringify(params??{}).length>65536){reject();return;}}catch{reject();return;}pending++;
