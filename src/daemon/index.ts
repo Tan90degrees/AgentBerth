@@ -6,6 +6,19 @@ const dataDirectory = process.argv[2];
 if (!dataDirectory || !path.isAbsolute(dataDirectory)) throw new Error('An absolute data directory is required');
 mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
 const lock = path.join(dataDirectory, 'daemon.lock');
+const startupError = path.join(dataDirectory, 'daemon-startup-error.json');
+function reportStartupError(error: unknown, descriptor?: number): never {
+  // The desktop launcher reads errors from exactly the process it spawned.
+  // A prior boot's error cannot be mistaken for a new daemon startup.
+  try { writeFileSync(startupError, JSON.stringify({ pid: process.pid, message: String(error), time: new Date().toISOString() }), { mode: 0o600 }); }
+  catch { /* Preserve the original startup error even on a read-only volume. */ }
+  console.error('AgentBerth daemon startup failed:', error);
+  if (descriptor !== undefined) {
+    try { closeSync(descriptor); } catch { /* Already closed. */ }
+    try { rmSync(lock, { force: true }); } catch { /* Preserve the original error. */ }
+  }
+  process.exit(1);
+}
 function acquireLock(): number {
   try { return openSync(lock, 'wx', 0o600); }
   catch (error) {
@@ -20,9 +33,14 @@ function acquireLock(): number {
     throw new Error('后台已在运行');
   }
 }
-const descriptor = acquireLock();
+let descriptor: number;
+try { descriptor = acquireLock(); }
+catch (error) { reportStartupError(error); }
 writeFileSync(descriptor, String(process.pid));
-const server = new DaemonServer(dataDirectory, () => { void shutdown(); });
+rmSync(startupError, { force: true });
+let server: DaemonServer;
+try { server = new DaemonServer(dataDirectory, () => { void shutdown(); }); }
+catch (error) { reportStartupError(error, descriptor); }
 let quitting = false;
 async function shutdown() {
   if (quitting) return;
@@ -34,4 +52,4 @@ async function shutdown() {
 }
 process.on('SIGTERM', () => { void shutdown(); });
 process.on('SIGINT', () => { void shutdown(); });
-void server.listen().catch(error => { console.error(error); closeSync(descriptor); rmSync(lock, { force: true }); process.exit(1); });
+void server.listen().catch(error => reportStartupError(error, descriptor));
