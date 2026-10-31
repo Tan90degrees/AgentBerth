@@ -2,7 +2,7 @@
 
 适用：AgentBerth 0.17 / 后台 API 41。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
 
-用户只需在 **设置 → 插件 → 安装插件包** 选择 ZIP，或用 **加载开发目录** 选择目录。插件自动启用，配置在同一页面实时应用。开发目录保存后自动重载；失败保留上一版代码与配置，页面显示错误。无需修改 Agent 的配置来安装工作台插件。
+用户只需在 **设置 → 插件 → 安装插件包** 选择 ZIP，或用 **加载开发目录** 选择目录；自定义 Agent 也在 **Agent → Agent 接入** 中安装，与 Codex、Claude Code、OpenCode 平级。插件自动启用，点击插件卡片的 **配置** 按钮打开独立弹窗，保存后即时生效。开发目录保存后自动重载；失败保留上一版代码与配置，页面显示错误。无需修改 Agent 的配置来安装工作台插件。
 
 ## 给开发 Agent 的任务
 
@@ -31,7 +31,7 @@
 | `config` | 配置字段，支持 string / number / boolean、default、title、description、minimum、maximum、enum |
 | `views` | `{id,title,location,entry}`；location 为 sidebar、panel 或 settings；HTML 须自包含 |
 
-内置插件 ID：`workspace`、`appearance`、`agents`、`agent.codex`、`agent.claude`、`agent.opencode`、`ssh`、`files`、`git`、`resources`、`pet`。核心仅保留配置存储、传输、插件管理和应用生命周期。工作台 RPC 随插件作用域注册与注销。已有单文件 Agent 适配器作为 `agents` 插件的兼容能力保留，不要求迁移现有会话。
+内置插件 ID：`workspace`、`appearance`、`agents`、`agent.codex`、`agent.claude`、`agent.opencode`、`ssh`、`files`、`git`、`resources`、`pet`。核心仅保留配置存储、传输、插件管理和应用生命周期。工作台 RPC 随插件作用域注册与注销。新架构不支持旧版 Agent 单文件导入和旧版数据升级。首次使用前必须退出旧版本并清除原数据目录；系统不会自动迁移或删除旧数据。
 
 ## 后台 SDK
 
@@ -49,11 +49,11 @@
 
 命令名用小写 snake_case，不能把 `agentId` 用作业务参数；它由 MCP 保留为调用方标识。inputSchema 必须为 object。返回 JSON，最多 128 KiB，长结果应分页。MCP 工具名为 `extension_<稳定ID摘要>_<命令名>`；不要硬编码摘要，从 tools/list 获取。启停后支持 tools/list_changed 的客户端自动刷新，不支持的客户端需刷新或重连。SDK 不会为命令错误自动重放。
 
-`definition` 与原有 Agent 配置一致：`name`、`command`、可选 `resumeCommand`、`integration: claude|opencode`、`skills:{project,user}`、`plugin`。Skills 的项目路径必须为相对目录，用户路径为绝对路径或 `~/`；仅声明 CLI 真正使用的位置。历史脚本、分页列表、私有恢复协议见 [兼容适配器指南](AGENT_PLUGIN_DEVELOPMENT.md)。使用 `__dirname` 指向包内历史适配脚本；`plugin.runtime: node` 使用应用自带运行时。注册 ID 在更新中保持不变，应用为其派生稳定 Agent ID，已有会话和默认项不因重载变更。
+`definition` 与原有 Agent 配置一致：`name`、`command`、可选 `resumeCommand`、`integration: claude|opencode`、`skills:{project,user}`、`plugin`。Skills 的项目路径必须为相对目录，用户路径为绝对路径或 `~/`；仅声明 CLI 真正使用的位置。历史脚本应作为 Cordis 插件包内的资源，通过 `plugin` 字段声明，不再使用独立的 Agent 类型导入入口。使用 `__dirname` 指向包内历史适配脚本；`plugin.runtime: node` 使用应用自带运行时。注册 ID 在更新中保持不变，应用为其派生稳定 Agent ID，已有会话和默认项不因重载变更。
 
 ## UI 与桌面入口
 
-HTML 视图通过独立本地协议加载，置于无 Node 的 sandbox iframe，不能联网或直接访问工作台。用 `await window.agentberth.call(command, params)` 调用**自己的**命令；不要加载外部 JS/CSS。sidebar / panel 入口显示在侧边栏并在主区打开，settings 视图在插件卡片内展开。主程序校验消息来源，不允许视图指定其他插件 ID。
+HTML 视图通过独立本地协议加载，置于无 Node 的 sandbox iframe，不能联网或直接访问工作台。用 `await window.agentberth.call(command, params)` 调用**自己的**命令；不要加载外部 JS/CSS。sidebar / panel 入口显示在侧边栏并在主区打开，settings 视图在插件配置弹窗中展示，不再内嵌到设置页的插件卡片。主程序校验消息来源，不允许视图指定其他插件 ID。
 
 `desktopEntry` 同样导出 Cordis 插件，通过 `require('electron')` 使用桌面 API。上下文提供 `ctx.desktop = {id,dataDirectory,call}`，每次配置和代码更新会释放旧作用域再加载新作用域。示例：
 
