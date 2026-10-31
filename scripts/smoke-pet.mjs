@@ -200,7 +200,16 @@ try {
   assert.deepEqual(merged.permissions, { allow: ['Read'] }); assert.equal(merged.hooks.Stop.length, 1);
   await page.getByLabel('桌宠适配 Agent', { exact: true }).selectOption('opencode');
   await page.getByRole('button', { name: '安装/更新适配', exact: true }).click();
-  await page.getByRole('status', { name: '适配安装结果', exact: true }).filter({ hasText: '适配已安装；' }).waitFor();
+  await page.waitForFunction(() => {
+    const host=document.querySelector('.pet-settings');
+    return !!host?.querySelector('[aria-label="适配安装结果"]')?.textContent?.includes('适配已安装；')
+      || !!host?.querySelector('[role="alert"]')?.textContent?.trim();
+  }, null, { timeout: 20000 });
+  const hookStatus = await page.locator('.pet-settings').evaluate(host=>({
+    success:host.querySelector('[aria-label="适配安装结果"]')?.textContent?.includes('适配已安装；')??false,
+    error:host.querySelector('[role="alert"]')?.textContent?.trim()??'',
+  }));
+  assert.equal(hookStatus.success,true,'OpenCode hook auto-detection must succeed: '+hookStatus.error);
   const installedPlugin = path.join(folder, '.opencode', 'plugins', 'agentberth-pet.js');
   assert.match(await readFile(installedPlugin, 'utf8'), /OpenCode major: 1/);
   await page.evaluate(projectId => window.berth.pet({ action: 'installHook', provider: 'opencode', projectId, opencodeVersion: '2' }), project.id);
