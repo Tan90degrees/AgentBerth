@@ -2,10 +2,9 @@ import { ExtensionManager, ExtensionsContext } from './ExtensionManager';
 import { extensionEnabled } from '../shared/extensions';
 import { PetSettings } from './DesktopPet';
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
+import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition } from '../shared/protocol';
 import { agentLabels } from './labels';
 import { SkillManager } from './SkillManager';
-import { AgentManager } from './AgentManager';
 import { TerminalFields } from './TerminalFields';
 import { AppearanceControls } from './AppearanceControls';
 import { PreviewSettings } from './PreviewSettings';
@@ -15,15 +14,16 @@ import { SshConnections } from './SshConnections';
 import { filterSettings, settingsCatalog, settingsCategories, type SettingsCategory, type SettingsEntry } from './settings-catalog';
 import { readStored, saveStored } from './storage';
 
-export function SettingsPage({ projects, currentProjectId, connected, apiVersion, agents, usedAgents, onSaveAgent, onDeleteAgent, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
+export function SettingsPage({ projects, currentProjectId, connected, apiVersion, agents, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
   projects: import('../shared/protocol').Project[]; currentProjectId?: string;
-  connected: boolean; apiVersion: number; agents: AgentDefinition[]; usedAgents: string[]; onSaveAgent: (value: AgentDefinitionConfig, id?: string) => Promise<AgentDefinition | undefined>; onDeleteAgent: (id: string) => Promise<unknown>;
+  connected: boolean; apiVersion: number; agents: AgentDefinition[];
   settings: Settings; draft: Settings; onChange: (value: Settings) => void; onDiscard: () => void; conflict: boolean; onError: (error: string) => void; error: string;
   platform: string; disabled: boolean; busy: boolean; restartDisabled: boolean; onSave: (value: Settings) => Promise<boolean>; onRestart: () => void; running: number;
 }) {
   const extensions=useContext(ExtensionsContext);
-  const owners:Record<string,string>={theme:'appearance',pet:'pet',preview:'files',shell:'workspace','terminal-font':'workspace','local-limit':'workspace','default-agent':'agents','agent-types':'agents',skills:'agents',connections:'ssh',mcp:'ssh','ssh-limit':'ssh'};
-  const agentChoices=Object.entries(agentLabels(agents)).filter(([id])=>!['codex','claude','opencode'].includes(id)||extensionEnabled(extensions,'agent.'+id));
+  const owners:Record<string,string>={theme:'appearance',pet:'pet',preview:'files',shell:'workspace','terminal-font':'workspace','local-limit':'workspace','default-agent':'agents','agent-integrations':'agents',skills:'agents',connections:'ssh',mcp:'ssh','ssh-limit':'ssh'};
+  const agentChoices=Object.entries(agentLabels(agents)).filter(([id])=>id==='shell'||featuresAgentAvailable(id));
+  function featuresAgentAvailable(id:string){if(id==='custom')return false;if(['codex','claude','opencode'].includes(id))return extensionEnabled(extensions,'agents')&&extensionEnabled(extensions,'agent.'+id);return extensionEnabled(extensions,'agents')&&!!agents.find(agent=>agent.id===id&&agent.sourceId?.startsWith('ext.'));}
   const [saveState,setSaveState]=useState<'idle'|'pending'|'success'|'error'>('idle');
   const [saved, setSaved] = useState(false), [query, setQuery] = useState('');
   const [category, setCategory] = useState<SettingsCategory>(() => settingsCategories.find(item => item.id === readStored('berth.settingsCategory'))?.id ?? 'common');
@@ -92,10 +92,10 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           {item('shell', <><TerminalFields value={draft.terminal} platform={platform} disabled={disabled} onError={onError} onChange={terminal => change({ ...draft, terminal: terminal! })} /><p className="form-hint">用于下一次启动，运行中的终端保持不变。单个会话可覆盖默认终端。</p></>)}
           {item('terminal-font', <><label>终端字号<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label><p className="form-hint">10–24 px。文件预览的字体和字号独立设置。</p></>)}
           {item('local-limit', <><label>本机终端上限<input aria-label="本机终端上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxActiveTerminals} disabled={disabled} onChange={event => change({ ...draft, maxActiveTerminals: Number(event.target.value) })} /></label><p className="form-hint">启动中和运行中均占名额；降低上限不会停止已有终端。</p></>)}
-          {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{!agentChoices.some(([id])=>id===draft.defaultAgent)&&<option value={draft.defaultAgent} disabled>已停用的默认接入（保留配置）</option>}{agentChoices.map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义类型的启动命令由导入文件提供。</p>{draft.defaultAgent === 'custom' && <><label>默认启动命令<input aria-label="默认启动命令" required pattern=".*\S.*" title="请填写至少一个非空白字符" maxLength={4096} value={draft.defaultCommand} disabled={disabled} onChange={event => change({ ...draft, defaultCommand: event.target.value })} placeholder="例如 my-agent --interactive" /></label><p className="form-hint">新建自定义命令会话时自动填入，仍可按会话单独修改。</p></>}</>)}
+          {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{!agentChoices.some(([id])=>id===draft.defaultAgent)&&<option value={draft.defaultAgent} disabled>已停用的默认接入（保留配置）</option>}{agentChoices.map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义 Agent 与内置接入平级，通过「Agent 接入」安装和管理其启动、历史与 Skills。旧版自定义命令仍保留在已有会话中。</p>{draft.defaultAgent === 'custom' && <><label>默认启动命令<input aria-label="默认启动命令" required pattern=".*\S.*" title="请填写至少一个非空白字符" maxLength={4096} value={draft.defaultCommand} disabled={disabled} onChange={event => change({ ...draft, defaultCommand: event.target.value })} placeholder="例如 my-agent --interactive" /></label><p className="form-hint">新建自定义命令会话时自动填入，仍可按会话单独修改。</p></>}</>)}
           {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event => change({ ...draft, maxSshTerminals: Number(event.target.value) })} /></label><p className="form-hint">与本机终端独立计数，支持 1–{TERMINAL_LIMIT_MAX}。保存立即应用，降低上限不停止已有会话。</p></>)}
         </form>
-        {item('agent-types', <AgentManager hotUpdates={apiVersion >= 15} agents={agents} used={usedAgents} defaultAgent={settings.defaultAgent} disabled={disabled} busy={busy} error={error} onError={onError} onSave={onSaveAgent} onDelete={onDeleteAgent} />)}
+        {item('agent-integrations', <ExtensionManager snapshot={extensions} mode="agents" onError={onError} onConfigureBuiltin={{'agent.codex':()=>setCategory('agents'),'agent.claude':()=>setCategory('agents'),'agent.opencode':()=>setCategory('agents')}} />)}
         {item('skills', <SkillManager agents={agents} projects={projects} currentProjectId={currentProjectId} />)}
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
         {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
