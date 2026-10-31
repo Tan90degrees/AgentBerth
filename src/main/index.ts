@@ -20,8 +20,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { connectDaemon, shutdownDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
 import { requestSchema, type Method, type ServerEvent } from '../shared/protocol';
-import { installAgentFile, exportPluginKit, developmentPrompt } from './plugin-files';
-import { stageLegacyAgentExtension } from './legacy-agent-extension';
+import { exportPluginKit, developmentPrompt } from './plugin-files';
 import { AgentPlugins } from '../daemon/plugins';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
 import { extensionEnabled, extensionRequestSchema, type ExtensionSnapshot } from '../shared/extensions';
@@ -354,16 +353,6 @@ function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (![window, sshWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问本地接口');
 }
 ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();return connection!.rpc('extensions',{request});});
-ipcMain.handle('berth:installAgentExtension',async event=>{
-  trusted(event);
-  if(quitting)throw new Error('应用正在退出');
-  const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,{title:'导入自定义 Agent（Cordis 插件）',properties:['openFile'],filters:[{name:'Agent 配置或脚本',extensions:['json','cjs','mjs','js']}]});
-  if(result.canceled)return null;
-  const definition=await installAgentFile(result.filePaths[0],dataDirectory,importingPlugins);
-  const staged=await stageLegacyAgentExtension(definition);
-  try{if(!connection)await reconnect();return await connection!.rpc('extensions',{request:{action:'install',path:staged.root,development:false}});}
-  finally{await staged.cleanup();}
-});
 ipcMain.handle('berth:installExtension',async(event,development:unknown=false)=>{
   trusted(event);if(typeof development!=='boolean')throw new Error('无效插件安装方式');
   const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,development?{title:'加载插件开发目录',properties:['openDirectory']}:{title:'安装 AgentBerth 插件包',properties:['openFile'],filters:[{name:'AgentBerth 插件包',extensions:['zip']}]});
@@ -495,12 +484,6 @@ ipcMain.handle('berth:restart', async event => {
   catch (error) { if (!connection?.connected) { connection = null; emit({ event: 'connection', data: { connected: false, error: String(error) } }); } throw error; }
 });
 
-ipcMain.handle('berth:importPlugin', async event => {
-  trusted(event);
-  if (quitting) throw new Error('应用正在退出');
-  const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { title: '导入 Agent 配置或脚本', properties: ['openFile'], filters: [{ name: 'Agent 配置或脚本', extensions: ['json', 'cjs', 'mjs', 'js'] }] });
-  return result.canceled ? null : installAgentFile(result.filePaths[0], dataDirectory, importingPlugins);
-});
 ipcMain.handle('berth:exportPluginKit', async event => {
   trusted(event);
   const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { title: '选择插件开发目录的保存位置', properties: ['openDirectory', 'createDirectory'] });
