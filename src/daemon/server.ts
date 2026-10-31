@@ -109,11 +109,24 @@ export class DaemonServer {
         if((ids.includes('agents')||ids.some(id=>id.startsWith('agent.')))&&this.historyBusy.size)throw new Error('会话历史正在读取，请完成后再停用接入插件');
       },
       call:async(method,params)=>{const caller=this.extensionCaller.getStore();if(!caller&&/^(remote|ssh|mcp)/i.test(method))throw new Error('SSH 操作必须由明确的调用会话发起');const request=requestSchema.parse({id:randomUUID(),method,params});return this.dispatch(request,caller??{id:'extension',disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort:new AbortController()});},
-      validateAgent:(pluginId,agent)=>{const sourceId='ext.'+createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex').slice(0,32);if(this.store.agents().some(value=>value.sourceId!==sourceId&&value.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('Agent 名称已被其他接入使用：'+agent.definition.name);},
+      validateAgent:(pluginId,agent)=>{
+        const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex'),sourceId='ext.'+hash.slice(0,32);
+        const trustedLegacy=!!agent.legacySourceId&&pluginId==='agent.imported.'+createHash('sha256').update(agent.legacySourceId).digest('hex').slice(0,24);
+        if(agent.legacySourceId&&!trustedLegacy)throw new Error('旧版 Agent 来源与接入插件 ID 不一致');
+        if(this.store.agents().some(value=>value.sourceId!==sourceId&&(!trustedLegacy||value.sourceId!==agent.legacySourceId)&&value.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('Agent 名称已被其他接入使用：'+agent.definition.name);
+      },
       agentsChanged:values=>{
         const names=new Set<string>();for(const {agent} of values){const name=agent.definition.name.toLocaleLowerCase();if(names.has(name))throw new Error('插件 Agent 名称重复：'+agent.definition.name);names.add(name);}
         const next=new Map<string,string>();
-        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const id=`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition=agentDefinitionSchema.parse({...agent.definition,sourceId:'ext.'+hash.slice(0,32)}),previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
+        for(const {pluginId,agent} of values){
+          const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex'),sourceId='ext.'+hash.slice(0,32);
+          const trustedLegacy=agent.legacySourceId&&pluginId==='agent.imported.'+createHash('sha256').update(agent.legacySourceId).digest('hex').slice(0,24);
+          const existing=this.store.agents().find(value=>value.sourceId===sourceId||(trustedLegacy&&value.sourceId===agent.legacySourceId));
+          const id=existing?.id??`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;
+          const definition=agentDefinitionSchema.parse({...agent.definition,sourceId});
+          if(JSON.stringify(existing&&(({id,...value})=>value)(existing))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}
+          next.set(id,pluginId);
+        }
         this.extensionAgents=next;
       },changed:()=>this.changed(),
     });
