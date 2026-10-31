@@ -170,7 +170,7 @@ function emit(event: ServerEvent) {
       target.webContents.send('berth:event', { event: 'terminalActivity', data: { sessionId, runId, seq } });
     } else if ((event.event !== 'output' && event.event !== 'resize') || (visible && subscribed)) target.webContents.send('berth:event', event);
   }
-  if (event.event === 'connection' && !event.data.connected && !quitting && !restarting && !exitPromise) {
+  if (event.event === 'connection' && !event.data.connected && !event.data.error && !quitting && !restarting && !exitPromise) {
     connection = null;
     if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; void reconnect().catch(error => emit({ event: 'connection', data: { connected: false, error: String(error) } })); }, 2000);
   }
