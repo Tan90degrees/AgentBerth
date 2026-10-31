@@ -2,7 +2,7 @@ import type { Context } from 'cordis';
 import type { AgentDefinitionConfig } from '../shared/protocol';
 
 export interface ExtensionCommand {name:string;description:string;inputSchema:Record<string,unknown>}
-export interface AgentContribution {id:string;definition:AgentDefinitionConfig}
+export interface AgentContribution {id:string;definition:AgentDefinitionConfig;/** Adopt legacy agent identity when importing the same source; preserve sessions. */legacySourceId?:string}
 export interface WorkbenchPluginApi {
   readonly id:string;
   readonly dataDirectory:string;
