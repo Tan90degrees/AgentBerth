@@ -79,8 +79,11 @@ test('desktop Cordis mirrors only changed plugin scopes',async t=>{
 
 test('real daemon removes feature routes and keeps contributed Agent identities across config and restart',async t=>{
   const {DaemonServer}=await import('../src/daemon/server');const {DaemonConnection}=await import('../src/main/connection');
-  const root=await fixture(t),directory=path.join(root,'data');let server=new DaemonServer(directory);let connection=await DaemonConnection.open(await server.listen(),()=>{});
-  t.after(async()=>{connection.close();await server.close();});
+  // The SQLite database must be closed before removing its directory on Windows.
+  // fixture(t) registers deletion before the daemon teardown hook and can leave
+  // the SQLite WAL/SHM locked, keeping the test runner alive after a hook failure.
+  const root=await mkdtemp(path.join(os.tmpdir(),'berth-extensions-')),directory=path.join(root,'data');let server=new DaemonServer(directory);let connection=await DaemonConnection.open(await server.listen(),()=>{});
+  t.after(async()=>{try{connection.close();await server.close();}finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:150});}});
   const project=await connection.rpc<any>('createProject',{name:'Fixture',path:root});const session=await connection.rpc<any>('createSession',{projectId:project.id,title:'Shell',agent:'shell'});await connection.rpc('start',{sessionId:session.id,cols:90,rows:20});
   const change=(request:any)=>connection.rpc<any>('extensions',{request});
   await assert.rejects(change({action:'disable',id:'workspace'}),/运行会话/);
