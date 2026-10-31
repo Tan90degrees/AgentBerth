@@ -29,11 +29,22 @@ try {
   for(let i=0;i<100&&await nativeCount()!==1;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),1);
   await card.getByLabel('Smoke extension Agent name').fill('Updated Agent');await card.getByRole('button',{name:'应用配置',exact:true}).click();
   await page.waitForFunction(()=>window.berth.rpc('state').then(s=>s.agents.some(a=>a.name==='Updated Agent')));
-  await page.getByRole('button',{name:'Plugin info',exact:true}).click();const frame=page.frameLocator('iframe[title="Plugin info"]');await frame.getByRole('button',{name:'Read plugin'}).click();
+  // Observe plugin messages independently of the React bridge so a failure
+  // distinguishes iframe initialization from parent dispatch or daemon RPC.
+  await page.evaluate(()=>{window.__pluginSmokeMessages=[];window.addEventListener('message',event=>{if(typeof event.data?.kind==='string'&&event.data.kind.startsWith('agentberth-plugin-'))window.__pluginSmokeMessages.push({kind:event.data.kind,id:event.data.id,command:event.data.command,error:event.data.error});});});
+  await page.getByRole('button',{name:'Plugin info',exact:true}).click();
+  const frame=page.frameLocator('iframe[title="Plugin info"]');
+  // Playwright can see a parsed button before its trailing inline script
+  // installs onclick, especially under the slower Linux/Xvfb renderer.
+  for(let i=0;i<100;i++){if(await frame.locator('#read').evaluate(button=>typeof button.onclick==='function'))break;await new Promise(resolve=>setTimeout(resolve,25));}
+  assert.equal(await frame.locator('#read').evaluate(button=>typeof button.onclick==='function'),true,'Plugin view must finish initializing before the first click');
+  await frame.getByRole('button',{name:'Read plugin'}).click();
   try{await frame.locator('#result').filter({hasText:'Updated Agent'}).waitFor();}
   catch(error){
     const diagnostic=await frame.locator('body').evaluate(()=>({result:document.querySelector('#result')?.textContent,bridge:typeof window.agentberth?.call,secure:window.isSecureContext,cryptoUuid:typeof crypto?.randomUUID})).catch(reason=>({frameError:String(reason)}));
-    throw new Error('Plugin iframe RPC failed: '+JSON.stringify({diagnostic,pageErrors:errors}),{cause:error});
+    const parentMessages=await page.evaluate(()=>window.__pluginSmokeMessages);
+    const directCommand=await page.evaluate(()=>window.berth.extensions({action:'call',id:'example.smoke',command:'info'})).catch(reason=>({error:String(reason)}));
+    throw new Error('Plugin iframe RPC failed: '+JSON.stringify({diagnostic,parentMessages,directCommand,pageErrors:errors}),{cause:error});
   }
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-view.png`});
   await page.getByRole('button',{name:'设置',exact:true}).click();
