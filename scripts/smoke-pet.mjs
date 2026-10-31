@@ -33,7 +33,11 @@ try {
       new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Pet smoke RPC '+method+' exceeded 40 seconds')),40000);}),
     ]);}finally{clearTimeout(timer);}
   };
-  await rpc('state', {});
+  try { await rpc('state', {}); }
+  catch (error) {
+    const log = await readFile(path.join(dataDirectory, 'daemon.log'), 'utf8').catch(reason => 'daemon.log unavailable: '+String(reason));
+    throw new Error('Packaged pet fixture could not start its daemon: '+String(error)+'\n'+log.slice(-12000),{cause:error});
+  }
   const project = await rpc('createProject', { name: 'Pet test', path: folder });
   const shell = await rpc('createSession', { projectId: project.id, title: 'Ordinary terminal', agent: 'shell', command: '' });
   await rpc('start', { sessionId: shell.id, cols: 80, rows: 24 });
