@@ -30,16 +30,21 @@ try {
     const style=getComputedStyle(button);
     return {height:Math.round(button.getBoundingClientRect().height),radius:style.borderRadius,fontSize:style.fontSize,borderWidth:style.borderTopWidth,classes:button.className};
   }));
-  assert.equal(actionStyles.length,3,'Installed extension exposes enable/disable, reload and uninstall');
+  assert.equal(actionStyles.length,4,'Installed extension exposes configure, enable/disable, reload and uninstall');
   assert.ok(actionStyles.every(({classes})=>classes.includes('extension-button')),JSON.stringify(actionStyles));
   assert.equal(new Set(actionStyles.map(({height,radius,fontSize,borderWidth})=>[height,radius,fontSize,borderWidth].join(':'))).size,1,JSON.stringify(actionStyles));
   assert.equal(actionStyles[0].height>=34,true,'Plugin actions should meet the common minimum height');
-  assert.equal(actionStyles[2].classes.includes('danger'),true,'Uninstall must use the destructive action variant');
+  assert.equal(actionStyles.at(-1).classes.includes('danger'),true,'Uninstall must use the destructive action variant');
   assert.equal(await page.locator('.extension-utilities .extension-button').count(),1,'Development kit action belongs with search tools');
   await page.waitForFunction(()=>window.berth.rpc('state').then(s=>s.agents.some(a=>a.name==='Plugin Agent')));
   const nativeCount=()=>application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().filter(w=>w.getTitle().startsWith('Plugin native ')).length);
   for(let i=0;i<100&&await nativeCount()!==1;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),1);
-  await card.getByLabel('Smoke extension Agent name').fill('Updated Agent');await card.getByRole('button',{name:'应用配置',exact:true}).click();
+  assert.equal(await card.getByLabel('Smoke extension Agent name').count(),0,'Plugin configuration must not be embedded in settings');
+  await card.getByRole('button',{name:'配置',exact:true}).click();
+  const configDialog=page.getByRole('dialog',{name:'配置插件 · Smoke extension'});
+  await configDialog.getByLabel('Smoke extension Agent name').fill('Updated Agent');
+  await configDialog.getByRole('button',{name:'保存配置'}).click();
+  await configDialog.waitFor({state:'hidden'});
   await page.waitForFunction(()=>window.berth.rpc('state').then(s=>s.agents.some(a=>a.name==='Updated Agent')));
   // Observe plugin messages independently of the React bridge so a failure
   // distinguishes iframe initialization from parent dispatch or daemon RPC.
@@ -64,6 +69,11 @@ try {
   for(let i=0;i<100&&await nativeCount()!==0;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),0);
   await card.getByRole('button',{name:'启用',exact:true}).click();await card.getByText('已启用',{exact:true}).waitFor();
   const files=page.locator('[data-plugin-id="files"]');await files.getByRole('button',{name:'停用',exact:true}).click();await files.getByText('已停用',{exact:true}).waitFor();await page.locator('[data-plugin-id="git"]').getByText('等待依赖',{exact:true}).waitFor();await files.getByRole('button',{name:'启用',exact:true}).click();
+  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'Agent',exact:true}).click();
+  const integrationCard=page.locator('[data-setting-id="agent-integrations"]');
+  for(const id of ['agent.codex','agent.claude','agent.opencode','example.smoke'])await integrationCard.locator('[data-plugin-id="'+id+'"]').waitFor();
+  assert.equal(await page.locator('[data-setting-id="agent-types"]').count(),0,'Legacy Agent manager must be removed');
+  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'插件',exact:true}).click();
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-manager.png`});
   await card.getByRole('button',{name:'卸载',exact:true}).click();await card.getByText('未安装',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);console.log('Extension smoke: install, config, Agent+Skills, iframe bridge, native window cleanup and dependency lifecycle passed');
