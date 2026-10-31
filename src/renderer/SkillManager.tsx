@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { ExtensionsContext } from './ExtensionManager';
+import { extensionEnabled } from '../shared/extensions';
+import { useContext, useEffect, useRef, useState } from 'react';
 import type { AgentDefinition, Project } from '../shared/protocol';
 import type { SkillItem, SkillLocation, SkillPage } from '../shared/skills';
 import { AsyncButton } from './AsyncButton';
@@ -6,12 +8,13 @@ import { Dialog } from './Dialog';
 import { builtinSkillProviders } from '../shared/skills';
 
 export function SkillManager({ agents, projects, currentProjectId }: { agents: AgentDefinition[]; projects: Project[]; currentProjectId?: string }) {
-  const providers = [...builtinSkillProviders, ...agents.flatMap(agent => {
+  const extensions=useContext(ExtensionsContext);
+  const providers = [...builtinSkillProviders.filter(p=>extensionEnabled(extensions,'agent.'+p.id)), ...agents.flatMap(agent => {
     const skills = agent.skills ?? builtinSkillProviders.find(provider => provider.id === agent.integration)?.skills;
     return skills ? [{ id: agent.id, name: agent.name, skills }] : [];
   })];
   const [agentId, setAgentId] = useState('codex');
-  const provider = providers.find(item => item.id === agentId) ?? providers[0];
+  const provider = providers.find(item => item.id === agentId) ?? providers[0] ?? builtinSkillProviders[0];
   const [projectId, setProjectId] = useState<string>(currentProjectId || '');
   const [page, setPage] = useState<SkillPage | null>(null), [query, setQuery] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
@@ -22,13 +25,14 @@ export function SkillManager({ agents, projects, currentProjectId }: { agents: A
   const location: SkillLocation = { agentId: provider.id, projectId: provider.skills.project ? projectId || null : null };
   const key = JSON.stringify([location, provider.skills]);
   useEffect(() => {
+    if(!providers.length){setBusy(false);return;}
     const token = ++generation.current;
     setPage(null); setError(''); setNotice('');
     setBusy(true);
     void window.berth.skills({ action: 'list', location }).then(result => { if (token === generation.current && 'items' in result) setPage(result); })
       .catch(reason => { if (token === generation.current) setError(String(reason)); }).finally(() => { if (token === generation.current) setBusy(false); });
     return () => { generation.current++; };
-  }, [key, revision]);
+  }, [key, revision, providers.map(p=>p.id).join(',')]);
   async function mutate(action: 'toggle' | 'remove', item: SkillItem) {
     setBusy(true); setError('');
     try {
@@ -37,6 +41,7 @@ export function SkillManager({ agents, projects, currentProjectId }: { agents: A
       setNotice(action === 'remove' ? '已移出技能目录，原文件保留在同级的 .agentberth-trash 目录。' : item.enabled ? '已移出加载目录；运行中的 Agent 是否立即生效取决于其自身实现。' : '已放回加载目录；可在 Agent 中检查是否已发现。');
     } finally { setBusy(false); }
   }
+  if(!providers.length)return <section className="settings-card"><h2>Skill 管理</h2><p>启用 Agent 接入插件后，其 Skills 会自动出现在这里。</p></section>;
   const items = page?.items.filter(item => `${item.name} ${item.description} ${item.folder}`.toLowerCase().includes(query.toLowerCase())) ?? [];
   return <section className="settings-card skill-manager"><h2>Skill 管理</h2><p className="form-hint">选择 Agent 类型和作用范围，管理已接入的 Skills。新增能力可更新原 Agent 插件，实际加载和热更新由 Agent 决定。</p>
     <div className="skill-filters"><label>Agent 类型<select aria-label="Skill Agent 类型" value={provider.id} disabled={busy || !!editor} onChange={event => setAgentId(event.target.value)}>{providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>

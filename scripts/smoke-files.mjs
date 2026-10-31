@@ -342,7 +342,7 @@ try {
     return agent;
   }, { projectId: project.id, source: skillSource });
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', { name: '设置分类', exact: true }).getByRole('button', { name: 'Skills', exact: true }).click();
+  await page.getByRole('navigation', { name: '设置分类', exact: true }).getByRole('button', { name: 'Agent', exact: true }).click();
   await page.getByLabel('Skill Agent 类型', { exact: true }).selectOption(skillAgent.id);
   const skillRow = page.locator('.skill-row').filter({ has: page.getByText('smoke-skill', { exact: true }) });
   await skillRow.getByRole('button', { name: '查看 / 编辑', exact: true }).waitFor();

@@ -1,4 +1,4 @@
-import { readFile, realpath, stat, mkdir, copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, realpath, stat, mkdir, copyFile, mkdtemp, rm, cp } from 'node:fs/promises';
 import path from 'node:path';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -81,9 +81,11 @@ export async function exportPluginKit(directory: string, resourceRoot: string, c
     for (const name of ['claude-profile.json', 'opencode-profile.json']) await copyFile(path.join(resourceRoot, 'examples', name), path.join(destination, name));
     await copyFile(path.join(resourceRoot, 'docs', 'AGENT_PLUGIN_DEVELOPMENT.md'), path.join(destination, 'AGENT_PLUGIN_DEVELOPMENT.md'));
     await copyFile(checkerFile, path.join(destination, 'check-plugin.cjs'));
+    await copyFile(path.join(resourceRoot,'docs','CORDIS_PLUGIN_DEVELOPMENT.md'),path.join(destination,'CORDIS_PLUGIN_DEVELOPMENT.md'));
+    await cp(path.join(resourceRoot,'examples','cordis-agent'),path.join(destination,'cordis-agent'),{recursive:true});
     return destination;
   } catch (error) { await rm(destination, { recursive: true, force: true }); throw error; }
 }
 export function developmentPrompt(guide: string, folder?: string): string {
-  return `请为我的 Agent CLI 制作 AgentBerth 可导入文件。先询问我要适配的 CLI、启动命令，以及原生历史／恢复和 Skill 管理的需求。${folder ? `\n开发目录：${folder}\n请先读取该目录的 AGENT_PLUGIN_DEVELOPMENT.md 和模板，直接在此目录完成实现。交付前使用同目录 check-plugin.cjs 检查协议，并用含多条会话的测试项目检查分页、按 ID 读取和恢复格式；工具不需要 npm install。` : '\n下面是完整开发指南，请按此指南交付一个可导入的文件。'}\n要求：Claude Code / OpenCode 配置优先声明 integration: claude 或 opencode 继承内置历史、桌宠和 Skill 目录，提供实际恢复命令，无需重写历史读取器。仅启动时交付 JSON 配置；需要历史／恢复时优先交付单个自描述脚本，describe 提供 id、name、command 和 capabilities。用户只需导入配置文件或脚本、设置名称、保存，不能要求启用扩展、找 Node 路径或手写参数；有额外资源时才使用清单目录。需要多会话历史时实现可选 list，按项目分页、搜索；不得按当前关联 ID 把列表过滤成一条，history 必须按选中 ID 读取。实现并测试预览、运行中关联和解除关联。需要 Skill 管理时，在同一配置或 describe 返回 skills.project（项目相对目录）及 skills.user（~/ 开头或绝对目录），只声明实际加载的位置；工作台负责 SKILL.md 导入、编辑、启停和移除，无需另写管理脚本。只实现实际需要的能力。不要记录 TUI 屏幕或使用终端输出冒充对话历史。不得替用户登录或执行真实 Agent 命令。完成后运行指南中的测试，明确未检查的能力，说明导入文件位置。\n\n${guide}`;
+  return `新版工作台能力优先用 Cordis 插件：阅读开发套件中的 CORDIS_PLUGIN_DEVELOPMENT.md 与 cordis-agent 示例，将 Agent 和 Skills 在同一插件注册，通过设置 → 插件安装 ZIP 或加载开发目录。不要为兼容旧格式而创建另一套插件生命周期。以下原指南用于单文件兼容接入及原生历史脚本。\n\n请为我的 Agent CLI 制作 AgentBerth 可导入文件。先询问我要适配的 CLI、启动命令，以及原生历史／恢复和 Skill 管理的需求。${folder ? `\n开发目录：${folder}\n请先读取该目录的 AGENT_PLUGIN_DEVELOPMENT.md 和模板，直接在此目录完成实现。交付前使用同目录 check-plugin.cjs 检查协议，并用含多条会话的测试项目检查分页、按 ID 读取和恢复格式；工具不需要 npm install。` : '\n下面是完整开发指南，请按此指南交付一个可导入的文件。'}\n要求：Claude Code / OpenCode 配置优先声明 integration: claude 或 opencode 继承内置历史、桌宠和 Skill 目录，提供实际恢复命令，无需重写历史读取器。仅启动时交付 JSON 配置；需要历史／恢复时优先交付单个自描述脚本，describe 提供 id、name、command 和 capabilities。用户只需导入配置文件或脚本、设置名称、保存，不能要求启用扩展、找 Node 路径或手写参数；有额外资源时才使用清单目录。需要多会话历史时实现可选 list，按项目分页、搜索；不得按当前关联 ID 把列表过滤成一条，history 必须按选中 ID 读取。实现并测试预览、运行中关联和解除关联。需要 Skill 管理时，在同一配置或 describe 返回 skills.project（项目相对目录）及 skills.user（~/ 开头或绝对目录），只声明实际加载的位置；工作台负责 SKILL.md 导入、编辑、启停和移除，无需另写管理脚本。只实现实际需要的能力。不要记录 TUI 屏幕或使用终端输出冒充对话历史。不得替用户登录或执行真实 Agent 命令。完成后运行指南中的测试，明确未检查的能力，说明导入文件位置。\n\n${guide}`;
 }

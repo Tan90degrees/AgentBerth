@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
+import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest } from './extensions';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 40;
+export const API_VERSION = 41;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -97,6 +98,7 @@ export const gitDiffSchema = z.object({ projectId: id, path: z.string().min(1).m
 export type GitDiffRequest = z.infer<typeof gitDiffSchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
+  z.object({id,method:z.literal('extensions'),params:z.object({request:extensionRequestSchema}).strict()}),
   z.object({ id, method: z.literal('sshConnections'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('saveSshConnection'), params: z.object({ connectionId: id.optional(), config: sshConnectionSchema }).strict() }),
   z.object({ id, method: z.literal('deleteSshConnection'), params: z.object({ connectionId: id }).strict() }),
@@ -197,7 +199,7 @@ export interface Run { id: string; sessionId: string; pid: number | null; status
 export interface Session { remote?: RemoteConfig | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface WorkspaceRecovery { id: string; status: 'restoring' | 'completed'; total: number; restored: number; resumed: number; skipped: number; errors: {sessionId: string; title: string; message: string}[] }
-export interface State { recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface State { extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }
@@ -230,6 +232,8 @@ export interface RuntimeInfo { version: number; pid: number; port: number; token
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
+  extensions<T=ExtensionSnapshot>(request:ExtensionRequest):Promise<T>;
+  installExtension(development?:boolean):Promise<ExtensionSnapshot|null>;
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;
   onPet(listener: (state: import('./pet').PetSnapshot) => void): () => void;
   onPetSession(listener: (sessionId: string) => void): () => void;

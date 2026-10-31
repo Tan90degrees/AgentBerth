@@ -23,6 +23,9 @@ import { requestSchema, type Method, type ServerEvent } from '../shared/protocol
 import { installAgentFile, exportPluginKit, developmentPrompt } from './plugin-files';
 import { AgentPlugins } from '../daemon/plugins';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
+import { extensionEnabled, extensionRequestSchema, type ExtensionSnapshot } from '../shared/extensions';
+import { mount as mountPetDesktop } from '../plugins/pet/desktop';
+import { DesktopExtensions } from '../extensions/desktop';
 
 nativeTheme.themeSource = 'dark';
 
@@ -52,6 +55,13 @@ const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirnam
 const iconFile = path.join(resourceRoot, 'assets', process.platform === 'win32' ? 'app.ico' : 'app.png');
 if (!app.commandLine.hasSwitch('user-data-dir')) { const profile = legacyProfile(app.getPath('appData')); mkdirSync(profile, { recursive: true }); app.setPath('userData', profile); }
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
+let extensionSnapshot:ExtensionSnapshot|undefined;
+let desktopState:import('../shared/protocol').State|undefined;
+const requireExtension=(id:string)=>{if(!extensionEnabled(extensionSnapshot,id))throw new Error('此功能插件未启用，请在设置 → 插件中启用');};
+const desktopExtensions=new DesktopExtensions({
+  pet:ctx=>mountPetDesktop(ctx,{dataDirectory,createHooks:()=>new PetHooks(dataDirectory,hook=>{const accepted=pet.accept(hook);if(accepted&&hook.provider&&hook.nativeSessionId&&hook.cwd&&connection?.connected)void connection.rpc('nativeSessionDetected',{sessionId:hook.sessionId,runId:hook.runId,provider:hook.provider,nativeSessionId:hook.nativeSessionId,cwd:hook.cwd}).catch(()=>{});return accepted;}),setHooks:value=>{petHooks=value;},enabled:()=>pet.preferences.enabled,open:openPetWindow,publish:publishPet,destroy:()=>{petWindow?.destroy();petWindow=null;}}),
+  ssh:ctx=>{ctx.effect(()=>()=>{sshWindow?.destroy();sshWindow=null;publishSshWindow();});},
+},error=>console.error('桌面插件启动失败：',error),async(method,params={})=>{if(!connection?.connected)throw new Error('后台未连接');const request=requestSchema.parse({id:randomUUID(),method,params});return connection.rpc(request.method,request.params);});
 const sshVault = new SshVault(path.join(dataDirectory,'ssh-secrets.json'), safeStorage);
 if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must be an absolute path');
 
@@ -66,36 +76,26 @@ else {
     if (process.platform === 'win32') app.setAppUserModelId('dev.agentberth.desktop');
     pet = new PetState(path.join(dataDirectory, 'pet'), publishPet);
     pet.loadImages(petStatuses);
-    petHooks = new PetHooks(dataDirectory, hook => {
-      const accepted = pet.accept(hook);
-      if (accepted && hook.provider && hook.nativeSessionId && hook.cwd && connection?.connected) {
-        void connection.rpc('nativeSessionDetected', { sessionId: hook.sessionId, runId: hook.runId, provider: hook.provider, nativeSessionId: hook.nativeSessionId, cwd: hook.cwd }).catch(() => { /* History remains manually recoverable. */ });
-      }
-      return accepted;
-    });
-    try { await petHooks.start(); } catch (error) { console.error('桌宠 hook 启动失败', error); }
     createWindow();
-    if (pet.preferences.enabled) void openPetWindow();
-    setInterval(publishPet, 30_000).unref();
     const icon = nativeImage.createFromPath(iconFile);
     if (icon.isEmpty()) throw new Error('应用图标资源未正确打包');
     tray = new Tray(iconFile);
     tray.setToolTip('AgentBerth · 会话后台运行');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开 AgentBerth', click: showWindow },
-      { label: '显示桌宠', click: () => { pet.save({ ...pet.preferences, enabled: true }); void openPetWindow(); } },
-      { type: 'separator' },
-      { label: '退出 AgentBerth（停止终端，下次恢复）', click: () => app.quit() },
-    ]));
+    refreshTrayMenu();
     tray.on('double-click', showWindow);
     try {
       await reconnect();
       const state = await connection!.rpc<import('../shared/protocol').State>('state');
-      if (state.apiVersion >= 40) await connection!.rpc('restoreWorkspace');
+      if (state.apiVersion >= 40 && extensionEnabled(state.extensions,'workspace')) await connection!.rpc('restoreWorkspace');
     } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
   });
 }
 
+function refreshTrayMenu(){tray?.setContextMenu(Menu.buildFromTemplate([
+  {label:'打开 AgentBerth',click:showWindow},
+  ...(extensionEnabled(extensionSnapshot,'pet')?[{label:'显示桌宠',click:()=>{pet.save({...pet.preferences,enabled:true});void openPetWindow().catch(console.error);}}]:[]),
+  {type:'separator'}, {label:'退出 AgentBerth（停止终端，下次恢复）',click:()=>app.quit()},
+]));}
 function refreshWindow(target = window) { if (connection?.connected && !quitting && target && !target.isDestroyed()) target.webContents.send('berth:event', { event: 'connection', data: { connected: true } }); }
 function showWindow() { if (!window) createWindow(); if (window?.isMinimized()) window.restore(); window?.show(); window?.focus(); }
 function quitApplication(): Promise<void> {
@@ -104,7 +104,7 @@ function quitApplication(): Promise<void> {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   tray?.setToolTip('AgentBerth · 正在停止终端并退出');
   exitPromise = (async () => {
-    await petHooks?.close();
+    await desktopExtensions.close();
     await importingPlugins.close();
     if (connecting) await connecting.catch(() => {});
     await shutdownDaemon(dataDirectory, true);
@@ -138,9 +138,16 @@ async function answerSshChallenge(challenge: SshChallenge): Promise<void> {
 }
 async function registerSshProvider(): Promise<void> {
   const state = await connection!.rpc<import('../shared/protocol').State>('state');
-  if (state.apiVersion >= 22) await connection!.rpc('registerSshProvider');
+  if (state.apiVersion >= 22 && extensionEnabled(state.extensions,'ssh')) await connection!.rpc('registerSshProvider');
 }
+function withDesktopDiagnostics(state:import('../shared/protocol').State){const errors=desktopExtensions.diagnostics();return {...state,...(state.extensions?{extensions:{...state.extensions,plugins:state.extensions.plugins.map(plugin=>({...plugin,desktopError:errors[plugin.manifest.id]}))}}:{})};}
+function publishDesktopDiagnostics(){if(!desktopState)return;const event={event:'state',data:withDesktopDiagnostics(desktopState)};for(const target of [window,sshWindow])if(target&&!target.isDestroyed())target.webContents.send('berth:event',event);}
 function emit(event: ServerEvent) {
+  if(event.event==='state'){
+    const sshWasEnabled=extensionEnabled(extensionSnapshot,'ssh');extensionSnapshot=event.data.extensions;
+    desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
+    if(!sshWasEnabled&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
+  }
   if (event.event === 'state') pet?.update(event.data);
   if (event.event === 'connection') pet?.connection(event.data.connected);
   if (event.event === 'sshChallenge') { void answerSshChallenge(event.data); return; }
@@ -174,6 +181,7 @@ function secureWindow(target: BrowserWindow, detached = false) {
   target.setMenuBarVisibility(false);
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   target.webContents.on('will-navigate', event => { event.preventDefault(); });
+  target.webContents.on('will-frame-navigate',event=>{if(!event.isMainFrame&&!['about:blank','about:srcdoc'].includes(event.url))event.preventDefault();});
   const owner = target.webContents.id;
   target.webContents.on('destroyed', () => terminalSubscriptions.release(owner));
   target.on('restore', () => refreshWindow(target));
@@ -199,6 +207,7 @@ function publishPet() {
   }, 60);
 }
 async function openPetWindow() {
+  requireExtension('pet');
   if (quitting) return;
   if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop); return; }
   const width = Math.round(petWindowSize.width * pet.preferences.scale), height = Math.round(petWindowSize.height * pet.preferences.scale);
@@ -265,6 +274,7 @@ function openPetMenu() {
   })).popup({ window: petWindow });
 }
 ipcMain.handle('berth:pet', async (event, raw: unknown) => {
+  requireExtension('pet');
   if (![window, sshWindow, petWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问桌宠');
   if (quitting || !pet) throw new Error('应用尚未就绪');
   const request = petRequestSchema.parse(raw);
@@ -338,7 +348,14 @@ function createWindow() {
 function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (![window, sshWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问本地接口');
 }
+ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();return connection!.rpc('extensions',{request});});
+ipcMain.handle('berth:installExtension',async(event,development:unknown=false)=>{
+  trusted(event);if(typeof development!=='boolean')throw new Error('无效插件安装方式');
+  const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,development?{title:'加载插件开发目录',properties:['openDirectory']}:{title:'安装 AgentBerth 插件包',properties:['openFile'],filters:[{name:'AgentBerth 插件包',extensions:['zip']}]});
+  if(result.canceled)return null;if(!connection)await reconnect();return connection!.rpc('extensions',{request:{action:'install',path:result.filePaths[0],development}});
+});
 ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unknown) => {
+  if(action!=='state')requireExtension('ssh');
   trusted(event);
   if (quitting || typeof action !== 'string' || !['state','open','dock','select'].includes(action)) throw new Error('SSH 窗口操作无效');
   if (sessionId !== undefined && (typeof sessionId !== 'string' || (sessionId !== '' && !/^[a-f0-9-]{36}$/i.test(sessionId)))) throw new Error('SSH 会话无效');
@@ -367,6 +384,7 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   return connection!.rpc(method, request.data.params);
 });
 ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {
+  requireExtension('ssh');
   trusted(event);
   if (quitting || typeof alias !== 'string' || !alias || alias.length > 100) throw new Error('SSH 连接别名无效');
   if (connecting) await connecting;
@@ -374,6 +392,7 @@ ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {
   return connection!.rpc('remoteOpen', {alias, owner:'user'});
 });
 ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, connectionId: unknown, rawSecret: unknown, remember: unknown) => {
+  requireExtension('ssh');
   trusted(event);
   const config = sshConnectionSchema.safeParse(rawConfig), secret = sshSecretSchema.safeParse(rawSecret ?? {});
   if (!config.success || !secret.success || (connectionId !== undefined && (typeof connectionId !== 'string' || !/^[a-f0-9-]{36}$/.test(connectionId))) || typeof remember !== 'boolean') throw new Error('SSH 连接配置无效');
@@ -398,17 +417,20 @@ ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown)
   await connection!.rpc('deleteSshConnection',{connectionId}); sshVault.delete(connectionId);
 });
 ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:appearance',(event,mode:unknown)=>{trusted(event);if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
+ipcMain.handle('berth:appearance',(event,mode:unknown)=>{trusted(event);requireExtension('appearance');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
 nativeTheme.on('updated',()=>{for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
 ipcMain.handle('berth:mcpConfig', (event, provider: unknown = 'claude') => {
+  requireExtension('ssh');
   trusted(event); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');
   const args = [app.isPackaged ? path.join(process.resourcesPath, 'mcp', 'mcp.cjs') : path.join(__dirname, 'mcp.cjs'), dataDirectory];
   return JSON.stringify(provider === 'opencode' ? { mcp: { agentberth: { type: 'local', command: [process.execPath, ...args], environment: { ELECTRON_RUN_AS_NODE: '1' }, enabled: true } } } : { mcpServers: { agentberth: { command: process.execPath, args, env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2);
 });
 const skillManager = new SkillManager();
 ipcMain.handle('berth:skills', async (event, input: unknown) => {
+  requireExtension('agents');
   trusted(event);
   const request = skillRequestSchema.parse(input);
+  if(['codex','claude','opencode'].includes(request.location.agentId))requireExtension('agent.'+request.location.agentId);
   let projectPath: string | undefined;
   let integration = ['claude', 'opencode'].includes(request.location.agentId) ? request.location.agentId as 'claude' | 'opencode' : undefined;
   let skills = builtinSkillProviders.find(agent => agent.id === request.location.agentId)?.skills;

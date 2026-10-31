@@ -1,3 +1,4 @@
+import { useExtension } from './ExtensionManager';
 import { memo, useEffect, useSyncExternalStore } from 'react';
 import type { ResourceSnapshot, ResourceUsage } from '../shared/protocol';
 
@@ -20,7 +21,9 @@ export function memoryLabel(bytes:number|null):string{
   if(bytes>=1024**3)return `${(bytes/1024**3).toFixed(1)}G`;return `${Math.round(bytes/1024**2)}M`;
 }
 export const ResourceBadge=memo(function ResourceBadge({scope,id,runId,full=false}:{scope:'session'|'project'|'workspace';id?:string;runId?:string;full?:boolean}){
+  const enabled=useExtension('resources');
   const value=useSyncExternalStore(subscribe,()=>snapshot);
+  if(!enabled)return null;
   let usage:ResourceUsage|undefined=scope==='workspace'?value?.workspace:scope==='project'?value?.projects[id??'']:value?.sessions[id??''];
   if(scope==='session'&&value?.sessions[id??'']?.runId!==runId)usage=undefined;
   const cpu=usage?.cpuPercent==null?'—':`${usage.cpuPercent<10?usage.cpuPercent.toFixed(1):Math.round(usage.cpuPercent)}%`,memory=memoryLabel(usage?.memoryBytes??null);

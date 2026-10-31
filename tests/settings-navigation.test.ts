@@ -23,7 +23,7 @@ test('common/category filters keep management separate and capability-gated sett
   const entries=settingsCatalog([],28);
   assert.deepEqual(filterSettings(entries,'','common').map(value=>value.id),['theme','shell','terminal-font','local-limit','default-agent','ssh-limit']);
   assert.deepEqual(filterSettings(entries,'','terminal').map(value=>value.id),['shell','terminal-font','local-limit']);
-  assert.deepEqual(filterSettings(entries,'','agents').map(value=>value.id),['default-agent','agent-types']);
+  assert.deepEqual(filterSettings(entries,'','agents').map(value=>value.id),['default-agent','skills','agent-types']);
   assert.deepEqual(filterSettings(entries,'','ssh').map(value=>value.id),['ssh-limit','connections']);
   assert.ok(!settingsCatalog([],20).some(value=>['connections','mcp'].includes(value.id)));
   assert.ok(settingsCatalog([],21).some(value=>value.id==='mcp'));

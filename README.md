@@ -6,6 +6,8 @@
 
 ## 当前能力
 
+- **Cordis 插件工作台**：设置 → 插件统一安装、实时配置、启停、重载和卸载。SSH/MCP、桌宠、文件预览、Git、资源、Agent 与 Skills 等能力按依赖装配；开发目录保存自动重载，更新失败保留旧版。自定义 Agent 与其 Skills 在同一插件注册，既有单文件接入继续兼容。参见 [插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)，应用内可导出模板与 Agent 开发指令。
+
 - 预览支持 193 种内置语法，覆盖 JSON / YAML / TOML、常见编程语言与配置类型；可手动选择语言或自动识别。源码与 Markdown 代码块均在 Worker 中高亮。
 - 全局设置的“文件预览”可调整字号（10–28 px）、选择或自定义本机字体，自动保存，独立于终端设置。
 - 终端路径只在按住 Ctrl（macOS 也可 ⌘）时出现下划线与点击手势；普通拖选、双击和 TUI 鼠标操作保留原行为。
@@ -52,8 +54,8 @@
 
 | 文件 | 使用方式 |
 |---|---|
-| `AgentBerth-0.16.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `AgentBerth-0.16.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `AgentBerth-0.17.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.17.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 

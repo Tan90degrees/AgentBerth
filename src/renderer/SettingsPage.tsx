@@ -1,5 +1,7 @@
+import { ExtensionManager, ExtensionsContext } from './ExtensionManager';
+import { extensionEnabled } from '../shared/extensions';
 import { PetSettings } from './DesktopPet';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
 import { agentLabels } from './labels';
 import { SkillManager } from './SkillManager';
@@ -19,11 +21,14 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
   settings: Settings; draft: Settings; onChange: (value: Settings) => void; onDiscard: () => void; conflict: boolean; onError: (error: string) => void; error: string;
   platform: string; disabled: boolean; busy: boolean; restartDisabled: boolean; onSave: (value: Settings) => Promise<boolean>; onRestart: () => void; running: number;
 }) {
+  const extensions=useContext(ExtensionsContext);
+  const owners:Record<string,string>={theme:'appearance',pet:'pet',preview:'files',shell:'workspace','terminal-font':'workspace','local-limit':'workspace','default-agent':'agents','agent-types':'agents',skills:'agents',connections:'ssh',mcp:'ssh','ssh-limit':'ssh'};
+  const agentChoices=Object.entries(agentLabels(agents)).filter(([id])=>!['codex','claude','opencode'].includes(id)||extensionEnabled(extensions,'agent.'+id));
   const [saveState,setSaveState]=useState<'idle'|'pending'|'success'|'error'>('idle');
   const [saved, setSaved] = useState(false), [query, setQuery] = useState('');
   const [category, setCategory] = useState<SettingsCategory>(() => settingsCategories.find(item => item.id === readStored('berth.settingsCategory'))?.id ?? 'common');
   const search = useRef<HTMLInputElement>(null), content = useRef<HTMLDivElement>(null), form = useRef<HTMLFormElement>(null);
-  const entries = useMemo(() => settingsCatalog(agents, apiVersion), [agents, apiVersion]);
+  const entries = useMemo(() => settingsCatalog(agents, apiVersion).filter(entry=>!owners[entry.id]||extensionEnabled(extensions,owners[entry.id])), [agents, apiVersion, extensions]);
   const visible = useMemo(() => new Set(filterSettings(entries, query, category).map(entry => entry.id)), [entries, query, category]);
   const categories = settingsCategories.filter(value => value.id === 'all' || value.id === 'common' || entries.some(entry => entry.category === value.id));
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
@@ -32,7 +37,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
   const change = (value: Settings) => { onChange(value); setSaved(false);setSaveState('idle'); };
   useEffect(() => { saveStored('berth.settingsCategory', category); content.current?.scrollTo(0, 0); }, [category]);
   useEffect(() => window.berth.onPetSettings(() => { setQuery(''); setCategory('pet'); content.current?.scrollTo(0, 0); }), []);
-  useEffect(() => { if (!categories.some(item => item.id === category)) setCategory('common'); }, [category, apiVersion]);
+  useEffect(() => { if (!categories.some(item => item.id === category)) setCategory('common'); }, [category, apiVersion, extensions]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (document.querySelector('[role="dialog"]')) return;
@@ -70,6 +75,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {conflict && <p className="draft-notice" role="status">后台设置已更新，草稿已保留。保存将应用此处的值；取消修改可加载后台设置。</p>}
         {error && <div className="form-error" role="alert">{error.replace(/^Error: /, '')}</div>}
         {!visible.size && <div className="settings-no-results"><h3>没有匹配的设置</h3><p>试试“终端”“字体”或“SSH”，也可以查看全部设置。</p><button type="button" className="subtle" onClick={() => { setQuery(''); setCategory('all'); search.current?.focus(); }}>查看全部设置</button></div>}
+        {item('plugins', <ExtensionManager snapshot={extensions} onError={onError} onConfigureBuiltin={id=>{const category=({workspace:'terminal',appearance:'appearance',agents:'agents','agent.codex':'agents','agent.claude':'agents','agent.opencode':'agents',ssh:'ssh',files:'preview',pet:'pet'} as Record<string,SettingsCategory>)[id];if(category){setCategory(category);setQuery('');}}}/>)}
         {item('pet', visible.has('pet') ? <PetSettings projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion} /> : null)}
         {item('theme', <AppearanceControls />)}
         {item('preview', <PreviewSettings />)}
@@ -86,7 +92,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           {item('shell', <><TerminalFields value={draft.terminal} platform={platform} disabled={disabled} onError={onError} onChange={terminal => change({ ...draft, terminal: terminal! })} /><p className="form-hint">用于下一次启动，运行中的终端保持不变。单个会话可覆盖默认终端。</p></>)}
           {item('terminal-font', <><label>终端字号<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label><p className="form-hint">10–24 px。文件预览的字体和字号独立设置。</p></>)}
           {item('local-limit', <><label>本机终端上限<input aria-label="本机终端上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxActiveTerminals} disabled={disabled} onChange={event => change({ ...draft, maxActiveTerminals: Number(event.target.value) })} /></label><p className="form-hint">启动中和运行中均占名额；降低上限不会停止已有终端。</p></>)}
-          {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{Object.entries(agentLabels(agents)).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义类型的启动命令由导入文件提供。</p>{draft.defaultAgent === 'custom' && <><label>默认启动命令<input aria-label="默认启动命令" required pattern=".*\S.*" title="请填写至少一个非空白字符" maxLength={4096} value={draft.defaultCommand} disabled={disabled} onChange={event => change({ ...draft, defaultCommand: event.target.value })} placeholder="例如 my-agent --interactive" /></label><p className="form-hint">新建自定义命令会话时自动填入，仍可按会话单独修改。</p></>}</>)}
+          {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{!agentChoices.some(([id])=>id===draft.defaultAgent)&&<option value={draft.defaultAgent} disabled>已停用的默认接入（保留配置）</option>}{agentChoices.map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义类型的启动命令由导入文件提供。</p>{draft.defaultAgent === 'custom' && <><label>默认启动命令<input aria-label="默认启动命令" required pattern=".*\S.*" title="请填写至少一个非空白字符" maxLength={4096} value={draft.defaultCommand} disabled={disabled} onChange={event => change({ ...draft, defaultCommand: event.target.value })} placeholder="例如 my-agent --interactive" /></label><p className="form-hint">新建自定义命令会话时自动填入，仍可按会话单独修改。</p></>}</>)}
           {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event => change({ ...draft, maxSshTerminals: Number(event.target.value) })} /></label><p className="form-hint">与本机终端独立计数，支持 1–{TERMINAL_LIMIT_MAX}。保存立即应用，降低上限不停止已有会话。</p></>)}
         </form>
         {item('agent-types', <AgentManager hotUpdates={apiVersion >= 15} agents={agents} used={usedAgents} defaultAgent={settings.defaultAgent} disabled={disabled} busy={busy} error={error} onError={onError} onSave={onSaveAgent} onDelete={onDeleteAgent} />)}

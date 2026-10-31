@@ -33,6 +33,17 @@ import { RemoteOperationError } from '../shared/remote-errors';
 import { windowsPtyFor } from '../shared/desktop';
 import { restartConfiguration, shouldResume, type RestartEntry } from './recovery';
 import type { WorkspaceRecovery, State } from '../shared/protocol';
+import { ExtensionRuntime } from '../extensions/runtime';
+import { mount as mountWorkspace } from '../plugins/workspace';
+import { mount as mountSsh } from '../plugins/ssh';
+import { mount as mountAgents } from '../plugins/agents';
+import { mount as mountGit } from '../plugins/git';
+import { mount as mountFiles } from '../plugins/files';
+import { mount as mountResources } from '../plugins/resources';
+import { featureForMethod } from '../extensions/builtins';
+import type { Context } from 'cordis';
+import { createHash } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 interface LiveTerminal {
   run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal | SshTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
@@ -40,9 +51,13 @@ interface LiveTerminal {
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null; finishing: Promise<void> | null;
 }
-interface Client { id: string; disposing: boolean; subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
+export interface Client { id: string; disposing: boolean; subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
+  private extensions:ExtensionRuntime;
+  private extensionRoutes=new Map<string,(request:Request,client:Client)=>Promise<unknown>>();
+  private extensionCaller=new AsyncLocalStorage<Client>();
+  private extensionAgents=new Map<string,string>();
   private sshProvider: Client | null = null;
   private sshChallenges = new Map<string, { client: Client; resolve: (value: {secret?: SshSecret; accepted?: boolean}) => void; reject: (error: Error) => void }>();
   private agentOwners = new Map<string, Client>();
@@ -66,6 +81,7 @@ export class DaemonServer {
   private closing = false;
   private logs: string;
   private nativeDiscovery = new NativeDiscovery();
+  private agentsMounted=false;
   private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string }>();
   private nativeTimer: NodeJS.Timeout | null = null;
   private nativeScanning: Promise<void> | null = null;
@@ -81,6 +97,26 @@ export class DaemonServer {
   constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery) {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
     this.store = new Store(dataDirectory);
+    this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
+      mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
+      beforeChange:async ids=>{
+        const sessions=this.store.state().sessions;
+        for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)){
+          if(ids.includes('workspace')||ids.includes('ssh')&&session.remote||ids.includes('agents')&&!session.remote&&session.agent!=='shell'||ids.includes('agent.'+session.agent)||ids.some(id=>this.extensionAgents.get(session.agent)===id))throw new Error(`插件仍有运行会话“${session.title}”，请先停止该会话；其他插件无需停止`);
+        }
+        if(ids.includes('git')&&this.gitBusy.size)throw new Error('Git 操作正在进行，请完成后再停用插件');
+        if(ids.includes('ssh')&&this.transfers.busy)throw new Error('文件传输正在进行，请完成后再停用 SSH 插件');
+        if((ids.includes('agents')||ids.some(id=>id.startsWith('agent.')))&&this.historyBusy.size)throw new Error('会话历史正在读取，请完成后再停用接入插件');
+      },
+      call:async(method,params)=>{const caller=this.extensionCaller.getStore();if(!caller&&/^(remote|ssh|mcp)/i.test(method))throw new Error('SSH 操作必须由明确的调用会话发起');const request=requestSchema.parse({id:randomUUID(),method,params});return this.dispatch(request,caller??{id:'extension',disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort:new AbortController()});},
+      validateAgent:(pluginId,agent)=>{const sourceId='ext.'+createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex').slice(0,32);if(this.store.agents().some(value=>value.sourceId!==sourceId&&value.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('Agent 名称已被其他接入使用：'+agent.definition.name);},
+      agentsChanged:values=>{
+        const names=new Set<string>();for(const {agent} of values){const name=agent.definition.name.toLocaleLowerCase();if(names.has(name))throw new Error('插件 Agent 名称重复：'+agent.definition.name);names.add(name);}
+        const next=new Map<string,string>();
+        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const id=`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition={...agent.definition,sourceId:'ext.'+hash.slice(0,32)},previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
+        this.extensionAgents=next;
+      },changed:()=>this.changed(),
+    });
     this.transfers=new RemoteTransfers(this.store,async endpoint=>endpoint.kind==='local'?localTransferFs():sftpTransferFs(await this.remote(endpoint.sessionId,endpoint.runId).transport.sftp()),data=>this.broadcast({event:'remoteTransfer',data}),data=>this.broadcast({event:'remoteAction',data}),endpoint=>{
       if(endpoint.kind==='local')return 'local';
       const profile=this.store.sshConnection(this.store.session(endpoint.sessionId).remote!.connectionId!);
@@ -157,7 +193,120 @@ export class DaemonServer {
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
   }
-  private snapshot(): State { return {...this.store.state(), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private snapshot(): State { const state=this.store.state();return {...state,extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  workspacePluginPort() {
+    const self=this;
+    return {
+      attach:self.attach.bind(self),
+      broadcast:self.broadcast.bind(self),
+      changed:self.changed.bind(self),
+      get closing(){return self.closing;},
+      get editingProjects(){return self.editingProjects;},
+      flushOutput:self.flushOutput.bind(self),
+      get gitBusy(){return self.gitBusy;},
+      get historyBusy(){return self.historyBusy;},
+      get live(){return self.live;},
+      get logs(){return self.logs;},
+      removeLogs:self.removeLogs.bind(self),
+      requireIdle:self.requireIdle.bind(self),
+      requireProjectAvailable:self.requireProjectAvailable.bind(self),
+      restoreWorkspace:self.restoreWorkspace.bind(self),
+      start:self.start.bind(self),
+      stop:self.stop.bind(self),
+      get store(){return self.store;},
+      terminal:self.terminal.bind(self),
+      validateRemote:self.validateRemote.bind(self)
+    };
+  }
+  sshPluginPort() {
+    const self=this;
+    return {
+      get agentOwners(){return self.agentOwners;},
+      aliasTarget:self.aliasTarget.bind(self),
+      assertOwnSession:self.assertOwnSession.bind(self),
+      authorizeRemote:self.authorizeRemote.bind(self),
+      broadcast:self.broadcast.bind(self),
+      changed:self.changed.bind(self),
+      get live(){return self.live;},
+      get mcpStats(){return self.mcpStats;},
+      get mcpStatsTimer(){return self.mcpStatsTimer;},
+      set mcpStatsTimer(value){self.mcpStatsTimer=value;},
+      get openingAliases(){return self.openingAliases;},
+      recoverReadTarget:self.recoverReadTarget.bind(self),
+      remote:self.remote.bind(self),
+      remoteProject:self.remoteProject.bind(self),
+      removeLogs:self.removeLogs.bind(self),
+      requireIdle:self.requireIdle.bind(self),
+      get restoredRuns(){return self.restoredRuns;},
+      runRemoteCommand:self.runRemoteCommand.bind(self),
+      screen:self.screen.bind(self),
+      get sshChallenges(){return self.sshChallenges;},
+      get sshProvider(){return self.sshProvider;},
+      set sshProvider(value){self.sshProvider=value;},
+      start:self.start.bind(self),
+      get starting(){return self.starting;},
+      stop:self.stop.bind(self),
+      get store(){return self.store;},
+      terminal:self.terminal.bind(self),
+      get transfers(){return self.transfers;},
+      validateRemote:self.validateRemote.bind(self)
+    };
+  }
+  agentsPluginPort() {
+    const self=this;
+    return {
+      agentVersion:self.agentVersion.bind(self),
+      get agentVersions(){return self.agentVersions;},
+      assertAgentVersion:self.assertAgentVersion.bind(self),
+      changed:self.changed.bind(self),
+      get closing(){return self.closing;},
+      discoverHistories:self.discoverHistories.bind(self),
+      get historyBusy(){return self.historyBusy;},
+      importHistory:self.importHistory.bind(self),
+      integration:self.integration.bind(self),
+      get live(){return self.live;},
+      get nativeDiscovery(){return self.nativeDiscovery;},
+      get nativeTracking(){return self.nativeTracking;},
+      get plugins(){return self.plugins;},
+      previewHistory:self.previewHistory.bind(self),
+      requireHistoryAvailable:self.requireHistoryAvailable.bind(self),
+      get store(){return self.store;}
+    };
+  }
+  gitPluginPort() {
+    const self=this;
+    return {
+      get closing(){return self.closing;},
+      get git(){return self.git;},
+      get gitBusy(){return self.gitBusy;},
+      requireProjectAvailable:self.requireProjectAvailable.bind(self),
+      get store(){return self.store;}
+    };
+  }
+  filesPluginPort() {
+    const self=this;
+    return {
+      get files(){return self.files;},
+      get store(){return self.store;}
+    };
+  }
+  resourcesPluginPort() {
+    const self=this;
+    return {
+      get live(){return self.live;},
+      get resources(){return self.resources;},
+      get store(){return self.store;}
+    };
+  }
+  registerExtensionRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.extensionRoutes.has(method))throw new Error('插件接口重复：'+method);this.extensionRoutes.set(method,handler);return()=>{this.extensionRoutes.delete(method);};});}
+  private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
+    const mounts:Record<string,(ctx:Context,server:DaemonServer)=>void>={workspace:mountWorkspace,ssh:mountSsh,agents:mountAgents,git:mountGit,files:mountFiles,resources:mountResources};mounts[id]?.(ctx,this);
+    if(id==='resources'){this.resources=new ResourceSampler();ctx.effect(()=>()=>this.resources.close());}
+    if(id==='git'){this.git=new GitWorkspace();ctx.effect(()=>()=>this.git.close());}
+    if(id==='files'){const readonlyGit=new GitWorkspace();this.files=new ProjectFiles(readonlyGit);ctx.effect(()=>()=>readonlyGit.close());}
+    if(id==='agents'){if(this.agentsMounted)this.nativeDiscovery=new NativeDiscovery();this.agentsMounted=true;this.plugins=new AgentPlugins();ctx.effect(()=>async()=>{if(this.nativeTimer)clearTimeout(this.nativeTimer);this.nativeTimer=null;await this.nativeScanning;this.nativeTracking.clear();await this.plugins.close();await this.nativeDiscovery.opencode.close();});}
+    if(id==='ssh')ctx.effect(()=>async()=>{if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;this.sshProvider=null;for(const challenge of this.sshChallenges.values())challenge.reject(new Error('SSH 插件已停用'));this.sshChallenges.clear();await this.transfers.close();});
+  }
   private recoveryConfiguration(session: import('../shared/protocol').Session): string {
     return restartConfiguration(session, this.store.project(session.projectId).path,
       session.agent.startsWith('agent:') ? this.store.agent(session.agent) : undefined,
@@ -210,6 +359,7 @@ export class DaemonServer {
   }
 
   async listen(): Promise<RuntimeInfo> {
+    await this.extensions.ready;
     await new Promise<void>((resolve, reject) => {
       this.http.once('error', reject);
       this.http.listen(0, '127.0.0.1', () => { this.http.removeListener('error', reject); resolve(); });
@@ -288,228 +438,18 @@ export class DaemonServer {
   }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
     if (this.closing) throw new Error('后台正在退出');
+    if(request.method==='extensions'){
+      const p=request.params.request;
+      if(p.action==='list')return this.extensions.snapshot();
+      if(p.action==='install')return this.extensions.install(p.path,p.development);
+      if(p.action==='call')return this.extensionCaller.run(client,()=>this.extensions.call(p.id,p.command,p.params));
+      if(p.action==='view')return this.extensions.view(p.id,p.view);
+      return this.extensions.change(p.action,p.id,'config' in p?p.config:undefined);
+    }
+    const feature=featureForMethod(request.method);if(feature)this.extensions.require(feature);
+    const extensionHandler=this.extensionRoutes.get(request.method);if(extensionHandler)return extensionHandler(request,client);
     switch (request.method) {
-      case 'sshConnections': return this.store.sshConnections();
-      case 'registerSshProvider': {
-        if (this.sshProvider && this.sshProvider !== client) throw new Error('SSH 登录提供端已连接');
-        this.sshProvider = client; return null;
-      }
-      case 'sshChallengeReply': {
-        const pending = this.sshChallenges.get(request.params.challengeId);
-        if (!pending || pending.client !== client) throw new Error('登录请求已过期');
-        pending.resolve(request.params); return null;
-      }
-      case 'saveSshConnection': {
-        if (request.params.connectionId) for (const session of this.store.state().sessions) if (session.remote?.connectionId === request.params.connectionId) this.requireIdle(session.id);
-        const profile = this.store.saveSshConnection(request.params.config, request.params.connectionId); this.changed(); return profile;
-      }
-      case 'deleteSshConnection': this.store.deleteSshConnection(request.params.connectionId); return null;
-      case 'mcpMetrics': return this.mcpStats.snapshot();
-      case 'mcpRecordCall': {
-        this.mcpStats.record(request.params);
-        if(!this.mcpStatsTimer)this.mcpStatsTimer=setTimeout(()=>{this.mcpStatsTimer=null;this.broadcast({event:'mcpMetrics',data:this.mcpStats.snapshot()});},150);
-        return null;
-      }
-      case 'remoteAliases': return this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent }));
-      case 'remoteAgentRecover': {
-        if (client === this.sshProvider) return {recovered:[]};
-        const recovered: string[] = [];
-        for (const target of request.params.targets) {
-          const owner = this.agentOwners.get(target.sessionId), live = this.live.get(target.sessionId);
-          const restored = this.restoredRuns.get(target.sessionId);
-          if (owner?.abort.signal.aborted && live && (live.run.id === target.runId || restored?.runId === live.run.id && restored.previousRunId === target.runId)) { this.agentOwners.set(target.sessionId, client); recovered.push(target.sessionId); }
-        }
-        return { recovered };
-      }
-      case 'remoteAgentClose': {
-        if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
-        const sessions = this.store.state().sessions.filter(session => this.agentOwners.get(session.id) === client);
-        for (const session of sessions) {
-          const activity=this.live.get(session.id)?.remote?.activity;
-          if(activity&&(!this.starting.has(session.id)||activity.controlChosen))activity.assertManage(client);
-          const work = this.store.unresolvedRemoteAction(session.id);
-          if (work && (work.status === 'running' || request.params.deleteHistory)) throw new RemoteOperationError('CLEANUP_BLOCKED', '此上下文仍有运行中或结果不明的任务；继续查询原任务，完成或明确取消后再清理。不要为了清理重放命令。', { sessionId: session.id, runId: work.runId, ...(work.kind === 'transfer' ? { transferId: work.id } : { actionId: work.id }) });
-        }
-        client.disposing = true;
-        try {
-          const opening = [...this.openingAliases].filter(([key]) => key.startsWith(client.id + ':')).map(([,promise]) => promise);
-          await Promise.all(sessions.map(session => this.stop(session.id)));
-          await Promise.allSettled(opening);
-          const closed = sessions.map(session => session.id), deleted: string[] = [];
-          if (request.params.deleteHistory) for (const session of sessions) {
-            if (this.live.has(session.id) || this.starting.has(session.id)) continue;
-            this.removeLogs(this.store.deleteSession(session.id)); deleted.push(session.id);
-          }
-          this.changed();
-          return { closed, deleted, retained: closed.filter(id => !deleted.includes(id)) };
-        } finally { client.disposing = false; }
-      }
-      case 'remoteAgentSessions': {
-        const state = this.store.state();
-        return { connections: this.store.sshConnections().map(profile => ({ alias: profile.alias, allowAgent: profile.allowAgent })), sessions: state.sessions.filter(session => this.agentOwners.get(session.id) === client).map(session => ({ sessionId: session.id, runId: session.latestRun?.id ?? null, title: session.title, project: state.projects.find(project => project.id === session.projectId)?.name, remote: session.remote, status: session.latestRun?.status ?? 'not-started', info: this.live.get(session.id)?.remote?.activity.info ?? null })) };
-      }
-      case 'remoteResolve': {
-        const {session} = this.aliasTarget(request.params.alias, client);
-        if (!session) throw new RemoteOperationError('SESSION_NOT_OPEN','此连接尚未打开，请先调用 terminal_open',{alias:request.params.alias});
-        const live = this.terminal(session.id);
-        return { sessionId: session.id, runId: live.run.id };
-      }
-      case 'remoteOpen': {
-        if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
-        const {profile, session: previous} = this.aliasTarget(request.params.alias, client, request.params.owner === 'user');
-        if (request.params.owner === 'agent' && !profile.allowAgent) throw new Error('此连接未允许 Agent 打开，请在 SSH 设置中修改');
-        const key = `${client.id}:${profile.id}:${previous?.title ?? profile.alias}`;
-        const pending = this.openingAliases.get(key);
-        if (pending) return pending;
-        if (previous && this.live.has(previous.id)) {
-          const live = this.terminal(previous.id);
-          return { sessionId: previous.id, runId: live.run.id, info: live.remote!.activity.info };
-        }
-        const opening = (async () => {
-          const project = previous ? null : this.remoteProject();
-          const session = previous ?? this.store.createSession(project!.id, profile.alias, 'shell', '', null, { connectionId: profile.id, host: profile.alias, directory: '' });
-          if(request.params.owner === 'agent') this.agentOwners.set(session.id, client);
-          const run = await this.start(session.id, false, 100, 30);
-          const activity = this.remote(session.id,run.id).activity;
-          const info = activity.controlChosen ? {...activity.info} : activity.control(request.params.owner);
-          if (request.params.owner === 'agent') this.remote(session.id,run.id).activity.assertManage(client);
-          if (client.abort.signal.aborted) this.remote(session.id,run.id).activity.release(client);
-          this.changed(); return { sessionId: session.id, runId: run.id, info };
-        })();
-        this.openingAliases.set(key, opening);
-        try { return await opening; }
-        finally { if (this.openingAliases.get(key) === opening) this.openingAliases.delete(key); }
-      }
-      case 'sshHosts': return sshHosts();
-      case 'remoteManage': {
-        const params=request.params;
-        if(params.action==='create'){
-          if(client.disposing)throw new Error('Agent 上下文正在清理，请等待完成');
-          const profile=this.store.sshConnections().find(item=>item.alias.toLowerCase()===params.alias!.toLowerCase());
-          if(!profile)throw new Error('服务器别名不存在，请先填写服务器信息');
-          if(!profile.allowAgent)throw new Error('此服务器未允许 Agent 打开');
-          const title=params.title??profile.alias;
-          const key=`${client.id}:${profile.id}:${title}`;
-          const previous=this.store.state().sessions.find(item=>item.remote?.connectionId===profile.id&&item.title===title&&this.agentOwners.get(item.id)===client);
-          if(previous&&(previous.remote?.directory??'')!==(params.directory??''))throw new Error('同名 SSH 会话使用不同目录，请选择不同会话名称或停止后编辑');
-          const pending=this.openingAliases.get(key);if(pending)return pending;
-          const opening=(async()=>{
-            const session=previous??this.store.createSession(this.remoteProject().id,title,'shell','',null,{connectionId:profile.id,host:profile.alias,directory:params.directory??''});
-            this.agentOwners.set(session.id,client);
-            const existing=this.live.get(session.id);if(existing)return {sessionId:session.id,runId:existing.run.id,info:existing.remote!.activity.info};
-            const run=await this.start(session.id,false,100,30),activity=this.remote(session.id,run.id).activity;
-            const info=activity.controlChosen?{...activity.info}:activity.control('agent');
-            this.remote(session.id,run.id).activity.assertManage(client);
-            if(client.abort.signal.aborted)this.remote(session.id,run.id).activity.release(client);
-            this.changed();return {sessionId:session.id,runId:run.id,info};
-          })();
-          this.openingAliases.set(key,opening);try{return await opening;}finally{this.openingAliases.delete(key);}
-        }
-        const session=params.alias?this.aliasTarget(params.alias,client).session:this.store.session(params.sessionId!);
-        if(!session)throw new RemoteOperationError('SESSION_NOT_OPEN','当前 Agent 尚未创建此服务器的会话',{alias:params.alias});
-        this.assertOwnSession(session.id,client);
-        if(!session.remote?.connectionId||!this.store.sshConnection(session.remote.connectionId).allowAgent)throw new Error('此 SSH 会话未允许 Agent 管理');
-        const live=this.live.get(session.id);
-        if(params.runId&&session.latestRun?.id!==params.runId)throw new Error('终端运行实例已变化，请重新读取会话列表');
-        if(live){if(params.sessionId&&!params.runId)throw new Error('管理运行中的会话请同时提供 runId');live.remote!.activity.assertManage(client);}
-        if(params.action==='close'){await this.stop(session.id);return this.store.session(session.id);}
-        if(params.action==='delete'){
-          this.requireIdle(session.id);this.removeLogs(this.store.deleteSession(session.id));this.changed();return {deleted:true,sessionId:session.id};
-        }
-        if(params.action==='reconnect'){
-          if(!live)throw new Error('SSH 会话已停止，请调用 terminal_open');
-          await live.remote!.transport.reconnect();live.remote!.activity.assertManage(client);this.changed();
-          return {sessionId:session.id,runId:live.run.id,info:live.remote!.activity.info};
-        }
-        if(params.title===undefined&&params.directory===undefined)throw new Error('请提供会话名称或远端目录');
-        const remote={...session.remote,directory:params.directory??session.remote.directory};
-        if(remote.directory!==session.remote.directory)this.requireIdle(session.id);
-        const updated=this.store.updateSession(session.id,params.title??session.title,'shell','',null,remote);this.changed();return updated;
-      }
-      case 'remoteTransferStart': {
-        for(const endpoint of [request.params.source,request.params.destination])this.authorizeRemote(endpoint,client);
-        const {source,destination}=request.params;
-        if(source.kind==='remote'&&destination.kind==='remote'&&path.posix.normalize(source.path)===path.posix.normalize(destination.path)){
-          const a=this.store.sshConnection(this.store.session(source.sessionId).remote!.connectionId!),b=this.store.sshConnection(this.store.session(destination.sessionId).remote!.connectionId!);
-          if(a.hostname.toLowerCase()===b.hostname.toLowerCase()&&a.port===b.port&&a.username===b.username)throw new Error('同一服务器的源路径和目标路径相同');
-        }
-        return this.transfers.start(request.params);
-      }
-      case 'remoteTransferStatus': return this.transfers.wait(request.params.requestId,request.params.timeoutMs,client.abort.signal);
-      case 'remoteTransferCancel': {
-        const transfer=this.transfers.get(request.params.requestId);
-        if(transfer.status!=='running')return transfer;
-        if(request.params.owner==='agent')for(const endpoint of [transfer.spec.source,transfer.spec.destination])this.authorizeRemote(endpoint,client,false);
-        return this.transfers.cancel(request.params.requestId);
-      }
-      case 'remoteTransfers': this.store.session(request.params.sessionId);return this.transfers.list(request.params.sessionId);
-      case 'createRemoteSession': {
-        this.validateRemote({...request.params, agent:'shell', command:''});
-        const session = this.store.createSession(this.remoteProject().id, request.params.title, 'shell', '', null, request.params.remote);
-        this.changed(); return session;
-      }
-      case 'remoteInfo': return this.live.get(request.params.sessionId)?.remote?.activity.info ?? null;
-      case 'remoteActions': return this.store.remoteActions(request.params.sessionId, request.params.before);
-      case 'remoteControl': return this.remote(request.params.sessionId, request.params.runId).activity.control(request.params.owner);
-      case 'remoteReconnect': { const live=this.terminal(request.params.sessionId,request.params.runId); await this.remote(request.params.sessionId,request.params.runId).transport.reconnect(); this.store.setPid(live.run.id,live.pty.pid);live.run=this.store.run(live.run.id);this.changed();return null; }
-      case 'remoteExecute': {
-        this.assertOwnSession(request.params.sessionId,client);
-        const remote = this.remote(request.params.sessionId, request.params.runId);
-        return remote.activity.execute(client, request.params.requestId, request.params.command, text => remote.transport.writeManaged(request.params.requestId,request.params.command,text), request.params.atPrompt);
-      }
-      case 'remoteCommand': return this.runRemoteCommand(client,request.params);
-      case 'remoteReadOutput': {
-        const started=performance.now(),p=request.params,remote=this.remote(p.sessionId,p.runId);
-        this.recoverReadTarget(p.sessionId,client);
-        const actionId=p.actionId??remote.activity.latestOutputCommand()?.id;
-        if(!actionId)throw new RemoteOperationError('NO_COMMAND_OUTPUT','当前没有已捕获的命令结果；普通命令使用 terminal_execute，交互程序使用 terminal_interact。不要重跑此前结果未知的输入。',{sessionId:p.sessionId,runId:p.runId});
-        if(p.search&&p.waitFor==='completion')await remote.activity.wait(actionId,p.timeoutMs,client.abort.signal);
-        const value=p.search?remote.activity.result(actionId,p.cursor,p.maxChars,p.mode,p.search):await remote.activity.readOutput(actionId,p.cursor,p.maxChars,p.timeoutMs,p.waitFor,client.abort.signal,p.mode);
-        return {...value,requestMs:performance.now()-started};
-      }
-      case 'remoteKeys': {
-        this.assertOwnSession(request.params.sessionId,client);
-        const remote = this.remote(request.params.sessionId, request.params.runId), { key, text, enter } = request.params;
-        if(text!==undefined&&enter&&text.trim()&&remote.activity.info.phase==='idle'&&remote.activity.info.commandTracking==='posix'){
-          return this.runRemoteCommand(client,{sessionId:request.params.sessionId,runId:request.params.runId,command:text,requestId:randomUUID(),atPrompt:false,waitMs:5000,waitFor:'completion',maxChars:32768,mode:'summary'});
-        }
-        remote.activity.keys(client, key ? remoteKeys[key] : text! + (enter ? '\r' : ''), key ? `按键 ${key}` : `输入文本（${text!.length} 字符${enter?'，回车':''}）`, data => remote.transport.write(data)); return {inputKind:'interactive',info:{...remote.activity.info}};
-      }
-      case 'remoteWait': {
-        const remote=this.remote(request.params.sessionId,request.params.runId);this.recoverReadTarget(request.params.sessionId,client);
-        return remote.activity.wait(request.params.actionId,request.params.timeoutMs,client.abort.signal);
-      }
-      case 'remoteScreen': {
-        const live = this.terminal(request.params.sessionId, request.params.runId);
-        if (!live.remote) throw new Error('此会话不是远程终端');
-        this.recoverReadTarget(request.params.sessionId,client);
-        const screen = await this.screen(live,false);
-        const buffer = live.terminal.buffer.active, lines: string[] = [];
-        for (let row = buffer.baseY; row < buffer.baseY + live.terminal.rows; row++) lines.push(buffer.getLine(row)?.translateToString(true) ?? '');
-        const command=live.remote.activity.latestCommand();
-        return { scope:'viewport', scrollbackLines:buffer.baseY, command:command?{id:command.id,status:command.status,sessionId:command.sessionId,runId:command.runId}:null, seq: screen.seq, cols: screen.cols, rows: screen.rows, text: lines.join('\n'), cursor: { x: buffer.cursorX, y: buffer.cursorY }, info: live.remote.activity.info };
-      }
       case 'state': return this.snapshot();
-      case 'restoreWorkspace': return this.restoreWorkspace();
-      case 'resources': return this.resources.sample([...this.live.entries()].filter(([,live])=>!live.closed && !live.remote).map(([sessionId,live])=>({sessionId,projectId:this.store.session(sessionId).projectId,runId:live.run.id,pid:live.pty.pid})),request.params.appPids);
-      case 'gitStatus': return this.git.status(this.store.project(request.params.projectId).path);
-      case 'gitDiff': return this.git.diff(this.store.project(request.params.projectId).path, request.params);
-      case 'projectFiles': return this.files.list(this.store.project(request.params.projectId).path, request.params.path, request.params.offset, request.params.limit);
-      case 'findProjectFiles': return this.files.search(this.store.project(request.params.projectId).path, request.params.query);
-      case 'previewFile': return this.files.preview(this.store.project(request.params.projectId).path, request.params.path);
-      case 'gitOperation': {
-        const params = request.params, project = this.store.project(params.projectId);
-        this.requireProjectAvailable(project.id);
-        const status = await this.git.status(project.path);
-        if (this.closing) throw new Error('后台正在退出');
-        const within = (a: string,b: string) => { const relative=path.relative(a,b);return relative!== '..' && !relative.startsWith('..'+path.sep) && !path.isAbsolute(relative); };
-        const affected = this.store.state().projects.filter(item => within(status.root,item.path) || within(item.path,status.root));
-        for (const item of affected) this.requireProjectAvailable(item.id);
-        for (const item of affected) if (this.gitBusy.has(item.id)) throw new Error('此仓库正在执行 Git 操作，请稍后重试');
-        for (const item of affected) this.gitBusy.add(item.id);
-        try { return await this.git.operate(project.path,params); }
-        finally { for (const item of affected) this.gitBusy.delete(item.id); }
-      }
       case 'shutdown':
         await this.stopAll(request.params.restoreOnOpen);
         return null;
@@ -518,172 +458,9 @@ export class DaemonServer {
         if (this.historyBusy.size || this.editingProjects.size || this.pendingWork > 1) throw new Error('后台正在处理数据，请稍后重试');
         this.closing = true;
         return null;
-      case 'createProject': {
-        const canonical = await directory(request.params.path);
-        if (this.closing) throw new Error('后台正在退出');
-        const project = this.store.createProject(request.params.name, canonical); this.changed(); return project;
-      }
-      case 'updateProject': {
-        const { projectId, name } = request.params;
-        this.requireProjectAvailable(projectId);
-        if (this.gitBusy.has(projectId)) throw new Error('Git 操作期间请等待完成后再修改项目');
-        this.editingProjects.add(projectId);
-        try {
-          const previous = this.store.project(projectId);
-          const canonical = await directory(request.params.path);
-          if (this.closing) throw new Error('后台正在退出');
-          if (!sameDirectory(previous.path, canonical)) for (const id of this.store.projectSessionIds(projectId)) this.requireIdle(id);
-          const project = this.store.updateProject(projectId, name, canonical); this.changed(); return project;
-        } finally { this.editingProjects.delete(projectId); }
-      }
-      case 'deleteProject': {
-        const id = request.params.projectId;
-        this.requireProjectAvailable(id);
-        if (this.gitBusy.has(id)) throw new Error('Git 操作期间请等待完成后再删除项目');
-        for (const sessionId of this.store.projectSessionIds(id)) this.requireIdle(sessionId);
-        this.removeLogs(this.store.deleteProject(id)); this.changed(); return null;
-      }
-      case 'createSession': {
-        this.requireProjectAvailable(request.params.projectId);
-        if (request.params.agent === 'custom' && (!request.params.command.trim() || /[\r\n\x00]/.test(request.params.command))) throw new Error('请填写单行启动命令');
-        this.validateRemote(request.params);
-        const session = this.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote);
-        this.changed(); return session;
-      }
-      case 'updateSession': {
-        const { sessionId, title, agent, command, terminal, remote } = request.params;
-        const previous = this.store.session(sessionId);
-        this.requireProjectAvailable(previous.projectId);
-        if (this.historyBusy.has(sessionId)) throw new Error('会话正在读取对话记录，请稍后编辑');
-        this.validateRemote(request.params);
-        const launchChanged = JSON.stringify(remote) !== JSON.stringify(previous.remote ?? null) || agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal);
-        if (launchChanged) this.requireIdle(sessionId);
-        if (agent === 'custom' && !command.trim()) throw new Error('请填写单行启动命令');
-        const session = this.store.updateSession(sessionId, title, agent, command, terminal, remote); this.changed(); return session;
-      }
-      case 'deleteSession': {
-        const id = request.params.sessionId;
-        this.requireProjectAvailable(this.store.session(id).projectId); this.requireIdle(id);
-        this.removeLogs(this.store.deleteSession(id)); this.changed(); return null;
-      }
-      case 'saveSettings': {
-        await resolveTerminal(request.params.terminal);
-        if (this.closing) throw new Error('后台正在退出');
-        const settings = this.store.saveSettings(request.params); this.changed(); return settings;
-      }
-      case 'createAgent':
-      case 'updateAgent': {
-        const { params } = request;
-        const { agentId, ...config } = 'agentId' in params ? params : { ...params, agentId: undefined };
-        const previous = agentId ? this.store.agent(agentId) : null;
-        const version = agentId ? this.agentVersion(agentId) : 0;
-        const identity = previous?.sourceId ?? previous?.plugin?.sourceId;
-        if (identity && identity !== (config.sourceId ?? config.plugin?.sourceId)) throw new Error('插件 ID 与当前类型不一致，请导入同一类型的更新文件');
-        if (config.plugin) {
-          if (!path.isAbsolute(config.plugin.executable)) throw new Error('插件程序须使用完整路径');
-          if (config.plugin.runtime === 'node') { if (!statSync(config.plugin.executable).isFile()) throw new Error('插件入口文件不存在'); }
-          else await resolveTerminal({ profile: 'custom', executable: config.plugin.executable, args: config.plugin.args });
-          if (previous && JSON.stringify(previous.plugin) !== JSON.stringify(config.plugin)) await this.plugins.check({ id: agentId!, ...config });
-        }
-        if (this.closing) throw new Error('后台正在退出');
-        if (agentId) { this.store.agent(agentId); this.assertAgentVersion(agentId, version); }
-        const agent = this.store.saveAgent(config, agentId);
-        this.agentVersions.set(agent.id, version + 1);
-        this.changed(); return agent;
-      }
-      case 'probeAgentPlugin': return this.plugins.check({ id: 'preview', ...request.params });
-      case 'checkAgentPlugin': return this.plugins.check(this.store.agent(request.params.agentId));
-      case 'deleteAgent': this.store.deleteAgent(request.params.agentId); this.agentVersions.delete(request.params.agentId); this.changed(); return null;
-      case 'linkNativeSession': {
-        const session = this.store.session(request.params.sessionId);
-        this.requireHistoryAvailable(session.id);
-        if (!['codex', 'claude', 'opencode'].includes(this.integration(session)) && !(session.agent.startsWith('agent:') && (this.store.agent(session.agent).resumeCommand || this.store.agent(session.agent).plugin?.resume || this.store.agent(session.agent).plugin?.history || this.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
-        const history = this.store.nativeHistory(session.id, request.params.nativeSessionId) ?? { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
-        this.nativeTracking.delete(session.id);
-        this.store.saveHistory(session.id, history); this.changed(); return history;
-      }
-      case 'unlinkNativeSession': {
-        const id = request.params.sessionId; this.requireHistoryAvailable(id);
-        this.nativeTracking.delete(id);
-        const history = { messages: [], warnings: [], path: null, nativeSessionId: null };
-        this.store.saveHistory(id, history); this.changed(); return history;
-      }
-      case 'nativeSessionDetected': {
-        const p = request.params, session = this.store.session(p.sessionId), tracking = this.nativeTracking.get(session.id);
-        const version = this.agentVersion(session.agent);
-        if (this.integration(session) !== p.provider || session.remote || session.latestRun?.id !== p.runId || !this.live.has(session.id) || this.live.get(session.id)?.closed || tracking?.runId !== p.runId || session.nativeSessionId && session.nativeSessionId !== tracking.hookNativeId || this.historyBusy.has(session.id) || !await matchesProject(p.cwd, this.store.project(session.projectId).path)) return { linked: false };
-        if (session.nativeSessionId === p.nativeSessionId) return { linked: true };
-        const transcript = p.provider === 'claude' ? (await this.nativeDiscovery.list('claude', this.store.project(session.projectId).path)).find(item => item.nativeSessionId === p.nativeSessionId)?.path : null;
-        if (p.provider === 'claude' && !transcript) return { linked: false };
-        // Recheck after path I/O: manual association/unlink always wins.
-        if (this.nativeTracking.get(session.id) !== tracking || this.store.session(session.id).nativeSessionId !== session.nativeSessionId || this.agentVersion(session.agent) !== version) return { linked: false };
-        this.store.saveHistory(session.id, { messages: [], warnings: [], path: transcript ?? null, nativeSessionId: p.nativeSessionId });
-        tracking.ambiguous = true; tracking.hookNativeId = p.nativeSessionId; this.changed(); return { linked: true };
-      }
-      case 'nativeHistories': return this.store.nativeHistories(request.params.sessionId, request.params);
-      case 'discoverNativeHistories': return this.discoverHistories(request.params.sessionId, request.params);
-      case 'nativeHistory': return this.previewHistory(request.params.sessionId, request.params.nativeSessionId, request.params.refresh);
-      case 'renameSession': this.store.rename(request.params.sessionId, request.params.title); this.changed(); return null;
-      case 'archiveSession':
-        this.requireIdle(request.params.sessionId);
-        this.store.archive(request.params.sessionId); this.changed(); return null;
-      case 'start': return this.start(request.params.sessionId, request.params.resume, request.params.cols, request.params.rows);
-      case 'stop': await this.stop(request.params.sessionId); return null;
-      case 'attach': client.activity.delete(request.params.sessionId); client.subscriptions.add(request.params.sessionId); return this.attach(request.params.sessionId);
-      case 'detach': client.activity.delete(request.params.sessionId); client.subscriptions.delete(request.params.sessionId); return null;
-      case 'input': {
-        if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
-        const live = this.terminal(request.params.sessionId, request.params.runId);
-        if (live.remote?.activity.info.owner === 'agent') throw new Error('Agent 正在操作，请先点击“接管”');
-        const { data, binary } = request.params;
-        live.remote?.activity.input(data);
-        live.pty.write(binary ? Buffer.from(data, 'latin1') : data); return null;
-      }
-      case 'resize': {
-        if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
-        const live = this.terminal(request.params.sessionId, request.params.runId);
-        const { cols, rows } = request.params;
-        this.flushOutput(live);
-        // Reserve the sequence now, before later output is queued. Resize the
-        // PTY and headless grid between writes, then send the same boundary to
-        // every attached renderer before any new-size output is delivered.
-        const seq = ++live.seq;
-        return new Promise<null>((resolve, reject) => live.terminal.write('', () => {
-          if (live.closed) { reject(new Error('终端已结束，请重新启动')); return; }
-          try {
-            live.pty.resize(cols, rows); live.terminal.resize(cols, rows);
-            live.committedSeq = seq;
-            this.broadcast({ event: 'resize', data: { sessionId: live.run.sessionId, runId: live.run.id, seq, cols, rows } });
-            resolve(null);
-          } catch (error) { reject(error); }
-        }));
-      }
-      case 'runs': return this.store.session(request.params.sessionId).agent === 'shell' ? this.store.runs(request.params.sessionId).filter(run => run.recordOutput) : [];
-      case 'deleteRun': {
-        const run = this.store.run(request.params.runId);
-        this.requireProjectAvailable(this.store.session(run.sessionId).projectId);
-        if (this.live.get(run.sessionId)?.run.id === run.id) throw new Error('请先停止终端，再删除运行记录');
-        this.store.deleteRun(run.id); this.removeLogs([run.id]); this.changed(); return null;
-      }
-      case 'clearFinishedRuns': {
-        const id = request.params.sessionId;
-        this.requireProjectAvailable(this.store.session(id).projectId);
-        this.removeLogs(this.store.clearFinishedRuns(id)); this.changed(); return null;
-      }
-      case 'output': {
-        const run = this.store.run(request.params.runId), live = this.live.get(run.sessionId);
-        if (!run.recordOutput || this.store.session(run.sessionId).agent !== 'shell') throw new Error('仅普通终端保留运行输出；Agent 请使用原生对话历史');
-        if (live?.run.id === run.id) this.flushOutput(live);
-        return new RunLog(this.logs, request.params.runId).read();
-      }
-      case 'history': return this.store.history(request.params.sessionId);
-      case 'importHistory': return this.importHistory(request.params.sessionId, request.params.path);
-      case 'refreshHistory': {
-        const session = this.store.session(request.params.sessionId);
-        if (!session.transcriptPath && !(['claude', 'opencode'].includes(this.integration(session)) && session.nativeSessionId) && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
-        return this.importHistory(request.params.sessionId, session.transcriptPath);
-      }
+
     }
+    throw new Error('对应插件未启用或接口尚未注册，请在设置 → 插件中检查');
   }
 
   private async runRemoteCommand(client:Client,p:Extract<Request,{method:'remoteCommand'}>['params']) {
@@ -789,6 +566,8 @@ export class DaemonServer {
 
   private async start(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
+    this.extensions.require('workspace');
+    if(session.remote)this.extensions.require('ssh');else if(session.agent!=='shell'){this.extensions.require('agents');if(['codex','claude','opencode'].includes(session.agent))this.extensions.require('agent.'+session.agent);const owner=this.extensionAgents.get(session.agent);if(owner)this.extensions.require(owner);else if(session.agent.startsWith('agent:')&&this.store.agent(session.agent).sourceId?.startsWith('ext.'))throw new Error('此 Agent 的接入插件未启用');}
     this.requireProjectAvailable(session.projectId);
     if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
     if (this.historyWrites.has(sessionId)) throw new Error('会话正在关联对话记录，请稍后启动');
@@ -1097,6 +876,7 @@ export class DaemonServer {
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
+    await this.extensions.close();
     await new Promise<void>(resolve => {
       // Keep the shutdown reply and close frame ordered on the wire. Immediate
       // terminate() can reset a socket before its peer reads the final reply.
