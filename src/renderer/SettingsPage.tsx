@@ -75,7 +75,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {conflict && <p className="draft-notice" role="status">后台设置已更新，草稿已保留。保存将应用此处的值；取消修改可加载后台设置。</p>}
         {error && <div className="form-error" role="alert">{error.replace(/^Error: /, '')}</div>}
         {!visible.size && <div className="settings-no-results"><h3>没有匹配的设置</h3><p>试试“终端”“字体”或“SSH”，也可以查看全部设置。</p><button type="button" className="subtle" onClick={() => { setQuery(''); setCategory('all'); search.current?.focus(); }}>查看全部设置</button></div>}
-        {item('plugins', <ExtensionManager snapshot={extensions} onError={onError}/>)}
+        {item('plugins', visible.has('plugins') ? <ExtensionManager snapshot={extensions} onError={onError}/> : null)}
         {item('pet', visible.has('pet') ? <PetSettings projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion} /> : null)}
         {item('theme', <AppearanceControls />)}
         {item('preview', <PreviewSettings />)}
@@ -95,7 +95,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{!agentChoices.some(([id])=>id===draft.defaultAgent)&&<option value={draft.defaultAgent} disabled>已停用的默认接入（保留配置）</option>}{agentChoices.map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义 Agent 与内置接入平级，通过「Agent 接入」安装和管理其启动、历史与 Skills。</p></>)}
           {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event => change({ ...draft, maxSshTerminals: Number(event.target.value) })} /></label><p className="form-hint">与本机终端独立计数，支持 1–{TERMINAL_LIMIT_MAX}。保存立即应用，降低上限不停止已有会话。</p></>)}
         </form>
-        {item('agent-integrations', <ExtensionManager snapshot={extensions} mode="agents" onError={onError} />)}
+        {item('agent-integrations', visible.has('agent-integrations') ? <ExtensionManager snapshot={extensions} mode="agents" onError={onError} /> : null)}
         {item('skills', <SkillManager agents={agents} projects={projects} currentProjectId={currentProjectId} />)}
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
         {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
