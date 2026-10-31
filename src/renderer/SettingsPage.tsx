@@ -99,7 +99,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {item('skills', <SkillManager agents={agents} projects={projects} currentProjectId={currentProjectId} />)}
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
         {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
-        {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再更新后台。` : '安装新版本后，可更新后台以加载新功能。项目、会话和设置会保留。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>更新后台</button></section>)}
+        {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再重启后台。` : '重启当前版本后台服务。不会迁移旧版数据，旧版安装必须先清理数据目录。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>重启后台</button></section>)}
         {item('about', <AboutCard connected={connected} apiVersion={apiVersion} running={running} onError={onError} />)}
       </div>
     </div>
