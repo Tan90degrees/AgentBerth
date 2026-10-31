@@ -63,6 +63,10 @@ jobs:
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
+      - name: Legacy database startup and exit (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/smoke-startup-failure.mjs
+        timeout-minutes: 2
       - name: File preview smoke (Linux)
         if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
         run: xvfb-run -a node scripts/smoke-files.mjs
@@ -76,6 +80,10 @@ jobs:
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
+      - name: Legacy database startup and exit (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-startup-failure.mjs
+        timeout-minutes: 2
       - name: File preview smoke (Windows)
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-files.mjs
@@ -156,6 +164,9 @@ jobs:
         id: packaged-extensions-smoke
         if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
         run: node scripts/smoke-extensions.mjs --packaged
+        timeout-minutes: 2
+      - name: Test packaged legacy database startup and exit
+        run: node scripts/smoke-startup-failure.mjs --packaged
         timeout-minutes: 2
       - name: Write checksums and build information
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
