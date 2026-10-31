@@ -3,7 +3,7 @@ import { release } from 'node:os';
 import { windowsPtyFor } from '../shared/desktop';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
@@ -16,7 +16,15 @@ export class Store {
 
   constructor(private directory: string) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path.join(directory, 'berth.sqlite'));
+    const database=path.join(directory,'berth.sqlite');
+    const existing=existsSync(database);
+    this.db=new DatabaseSync(database);
+    // Schema 6 is the first Cordis-only data format. Old data is intentionally
+    // not migrated: refuse startup before executing any schema changes.
+    if(existing&&Number(this.db.prepare('PRAGMA user_version').get()!.user_version)!==6){
+      this.db.close();
+      throw new Error('检测到旧版 AgentBerth 数据。新架构不支持原地升级，请退出应用并清除旧数据目录后重新启动。');
+    }
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
@@ -28,12 +36,14 @@ export class Store {
         id TEXT PRIMARY KEY, projectId TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
         agent TEXT NOT NULL, command TEXT NOT NULL, nativeSessionId TEXT, transcriptPath TEXT,
         createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
+        remote TEXT, terminal TEXT,
         history TEXT NOT NULL DEFAULT '{"messages":[],"warnings":[],"path":null,"nativeSessionId":null}'
       );
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id), pid INTEGER,
         status TEXT NOT NULL, startedAt TEXT NOT NULL, endedAt TEXT, exitCode INTEGER,
         command TEXT NOT NULL, error TEXT, snapshot TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL DEFAULT 0,
+        shell TEXT NOT NULL DEFAULT '', recordOutput INTEGER NOT NULL DEFAULT 1,
         cols INTEGER NOT NULL DEFAULT 100, rows INTEGER NOT NULL DEFAULT 30
       );
       CREATE INDEX IF NOT EXISTS runs_by_session ON runs(sessionId, startedAt DESC);
@@ -52,23 +62,11 @@ export class Store {
       sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
       sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
     ); CREATE INDEX IF NOT EXISTS remote_actions_by_session ON remote_actions(sessionId, sequence);`);
-    if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'remote')) this.db.exec('ALTER TABLE sessions ADD COLUMN remote TEXT');
     this.db.exec(`CREATE TABLE IF NOT EXISTS remote_requests (
       id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
     )`);
-    // Additive migration preserves 0.1 projects, native history and saved screens.
-    if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'terminal')) this.db.exec('ALTER TABLE sessions ADD COLUMN terminal TEXT');
-    if (!this.db.prepare('PRAGMA table_info(runs)').all().some(row => row.name === 'shell')) this.db.exec("ALTER TABLE runs ADD COLUMN shell TEXT NOT NULL DEFAULT ''");
-    if (!this.db.prepare('PRAGMA table_info(runs)').all().some(row => row.name === 'recordOutput')) {
-      this.db.exec('ALTER TABLE runs ADD COLUMN recordOutput INTEGER NOT NULL DEFAULT 1');
-      this.db.exec("UPDATE runs SET recordOutput = 0 WHERE sessionId IN (SELECT id FROM sessions WHERE agent != 'shell')");
-    }
-    if (Number(this.db.prepare('PRAGMA user_version').get()!.user_version) < 5) {
-      this.db.exec(`INSERT OR IGNORE INTO native_histories (projectId, agent, nativeSessionId, title, updatedAt, history)
-        SELECT projectId, agent, nativeSessionId, title, updatedAt, history FROM sessions WHERE nativeSessionId IS NOT NULL ORDER BY updatedAt DESC`);
-    }
     this.db.exec('CREATE TABLE IF NOT EXISTS ssh_connections (id TEXT PRIMARY KEY, value TEXT NOT NULL, fingerprint TEXT)');
-    this.db.exec('PRAGMA user_version = 5');
+    this.db.exec('PRAGMA user_version = 6');
     for (const table of ['remote_actions', 'remote_requests']) for (const row of this.db.prepare(`SELECT id,value FROM ${table}`).all()) { const a = JSON.parse(String(row.value)); if (a.status === 'running') this.db.prepare(`UPDATE ${table} SET value=? WHERE id=?`).run(JSON.stringify({ ...a, status: 'unknown', endedAt: new Date().toISOString() }), row.id); }
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
