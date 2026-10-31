@@ -2494,3 +2494,12 @@ textarea:focus-visible {
 .plugin-center-content .extension-manager .dialog{width:min(600px,92vw);max-height:85vh;}
 @media(max-width:900px){.plugin-center{padding:18px 18px 12px;gap:15px;}.plugin-center-tabs button{padding:10px;}.plugin-center-tabs small{display:none;}.plugin-center-summary{gap:12px;padding:10px;}}
 @media(max-width:580px){.plugin-center-heading{align-items:flex-start;}.plugin-center-summary{width:100%;justify-content:space-around;}.plugin-center-content .extension-list{grid-template-columns:minmax(0,1fr);}}
+
+/* Recoverable startup failure: remain usable even when the daemon never starts. */
+.startup-failure{gap:14px;align-items:center;max-width:100%;padding:36px 28px;text-align:center;}
+.startup-failure h2{font-size:20px;}
+.startup-failure p{max-width:680px;line-height:1.7;color:var(--text-secondary);}
+.startup-failure code{display:block;max-width:min(760px,100%);padding:13px 16px;border:1px solid var(--border);border-radius:8px;background:var(--surface-muted);white-space:pre-wrap;overflow-wrap:anywhere;text-align:left;line-height:1.7;}
+.startup-failure .startup-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;}
+.startup-failure .startup-actions button{min-height:36px;padding:8px 14px;border-radius:7px;}
+.startup-failure small{color:var(--text-muted);max-width:640px;line-height:1.65;}
