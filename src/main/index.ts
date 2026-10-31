@@ -11,7 +11,6 @@ import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
-import { legacyProfile } from './profile';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, nativeImage, nativeTheme, safeStorage, shell, Tray, protocol } from 'electron';
 import path from 'node:path';
 import { release } from 'node:os';
@@ -55,7 +54,7 @@ const terminalSubscriptions = new TerminalSubscriptions(async (method, sessionId
 });
 const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
 const iconFile = path.join(resourceRoot, 'assets', process.platform === 'win32' ? 'app.ico' : 'app.png');
-if (!app.commandLine.hasSwitch('user-data-dir')) { const profile = legacyProfile(app.getPath('appData')); mkdirSync(profile, { recursive: true }); app.setPath('userData', profile); }
+if (!app.commandLine.hasSwitch('user-data-dir')) { const profile = path.join(app.getPath('appData'),'AgentBerth'); mkdirSync(profile, { recursive: true }); app.setPath('userData', profile); }
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
 let extensionSnapshot:ExtensionSnapshot|undefined;
 let desktopState:import('../shared/protocol').State|undefined;
