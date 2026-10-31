@@ -81,7 +81,7 @@ export class TerminalMcp {
   private async dispatch(method: string, params: unknown): Promise<unknown> {
     if (method === 'initialize') {
       const requested = (params as { protocolVersion?: string })?.protocolVersion;
-      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {}, resources:{} }, serverInfo: { name: 'agentberth-terminal', title:'AgentBerth shared SSH terminal', version: '0.16.0' }, instructions };
+      return { protocolVersion: ['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(requested ?? '') ? requested : '2025-11-25', capabilities: { tools: {}, resources:{} }, serverInfo: { name: 'agentberth-terminal', title:'AgentBerth shared SSH terminal', version: '0.17.0' }, instructions };
     }
     if (method === 'ping') return {};
     if (method === 'tools/list') return { tools };

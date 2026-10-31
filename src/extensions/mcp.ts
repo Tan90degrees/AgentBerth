@@ -7,6 +7,12 @@ export const extensionToolName=(id:string,command:string)=>'extension_'+createHa
 export class ExtensionMcp {
   constructor(private base:{request(method:string,params?:unknown):Promise<unknown>},private rpc:(method:string,params?:Record<string,unknown>)=>Promise<unknown>){}
   async request(method:string,params?:unknown):Promise<any>{
+    if(method==='initialize'){
+      const base=await this.base.request(method,params) as Record<string,any>;let state:State|undefined;
+      try{state=await this.rpc('state') as State;}catch{/* Discovery remains available while the desktop is offline. */}
+      const guide='Tools belong to enabled AgentBerth Cordis plugins. Refresh tools/list on list_changed. Plugin errors never trigger automatic command replay. Keep an optional agentId stable for each independent subagent.';
+      return {...base,serverInfo:{name:'agentberth',title:'AgentBerth plugin workbench',version:'0.17.0'},capabilities:{...base.capabilities,tools:{...base.capabilities?.tools,listChanged:true}},instructions:(extensionEnabled(state?.extensions,'ssh')?String(base.instructions??'')+'\n\n':'')+guide};
+    }
     if(!['tools/list','tools/call','resources/list','resources/read'].includes(method))return this.base.request(method,params);
     let state:State;
     try{state=await this.rpc('state') as State;}catch{return this.base.request(method,params);}

@@ -119,7 +119,7 @@ function quitApplication(): Promise<void> {
     console.error('AgentBerth 退出未完成：', error);
     quitting = false;
     importingPlugins = new AgentPlugins();
-    void petHooks?.start().catch(hookError => console.error('桌宠 hook 恢复失败', hookError));
+    void desktopExtensions.update(extensionSnapshot).catch(error=>console.error('桌面插件恢复失败',error));
     tray?.setToolTip('AgentBerth · 退出失败，请重试');
     showWindow();
     dialog.showErrorBox('AgentBerth 退出未完成', `${String(error)}\n请再次从托盘选择退出，确保后台及全部终端停止。`);
@@ -327,6 +327,7 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
 function sshWindowState(): SshWindowState { return { detached: !!sshWindow && !sshWindow.isDestroyed(), sessionId: sshWindowSession }; }
 function publishSshWindow() {
   const state = sshWindowState();
+  if(quitting)return state;
   for (const target of [window, sshWindow]) if (target && !target.isDestroyed()) target.webContents.send('berth:sshWindowState', state);
   return state;
 }

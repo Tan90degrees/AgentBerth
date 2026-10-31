@@ -967,7 +967,8 @@ try {
   await page.getByRole('button',{name:'展开侧栏',exact:true}).waitFor();
   assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),48,'Collapsed state must survive restart');
   await page.getByRole('button',{name:'展开侧栏',exact:true}).click();
-  assert.equal(Number(await page.getByRole('separator').getAttribute('aria-valuenow')), sidebarWidth);
+  assert.equal(Number(await page.getByRole('separator',{name:'调整侧栏宽度',exact:true}).getAttribute('aria-valuenow')), sidebarWidth);
+  assert.equal(await page.getByRole('button',{name:'SSH 面板',exact:true}).getAttribute('aria-expanded'),'false','Plugin teardown on tray exit must not reopen the SSH dock on next launch');
   assert.equal(await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).getAttribute('aria-expanded'), 'false');
   await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).click();
   assert.equal(after.settings.terminal.profile, 'custom');
