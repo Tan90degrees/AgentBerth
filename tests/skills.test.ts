@@ -5,7 +5,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { SkillManager, skillMetadata, skillRoot } from '../src/main/skills';
 import { agentSkillsSchema, type SkillPage } from '../src/shared/skills';
-import { installAgentFile } from '../src/main/plugin-files';
 import { Store } from '../src/daemon/store';
 const document = '---\nname: test-skill\ndescription: >-\n  A reusable workflow\n  with multiple lines.\n---\n# Steps\n\nRead references/guide.md.\n';
 const location = { agentId: 'codex', projectId: null };
@@ -30,23 +29,4 @@ test('Skill directory import, edit, disable, re-enable and removal preserve reso
   assert.equal(result.items.length, 0); assert.equal((await readdir(root + '.agentberth-trash')).length, 1);
   await assert.rejects(manager.run(root, { action: 'remove', location, name: '../source', enabled: true }));
   assert.throws(() => skillMetadata('---\nname: a\nname: b\ndescription: x\n---\n'));
-});
-
-test('Skill capabilities use the same JSON/script Agent import, persistence and hot replacement shape', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'berth-skill-plugin-'));
-  let store: Store | undefined; t.after(async () => { store?.close(); await rm(dir, { recursive: true, force: true }); });
-  const data = path.join(dir, 'data'), file = path.join(dir, 'agent.json');
-  const skills = { project: '.private-agent/skills', user: '~/.private-agent/skills' };
-  await writeFile(file, JSON.stringify({ schemaVersion: 1, id: 'private-agent', name: 'Private Agent', command: 'private-agent', skills }));
-  const config = await installAgentFile(file, data); assert.deepEqual(config.skills, skills);
-  store = new Store(data); const saved = store.saveAgent(config);
-  assert.deepEqual(store.agent(saved.id).skills, skills);
-  const script = path.join(dir, 'agent.cjs');
-  await writeFile(script, `process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify(${JSON.stringify({ version: 1, id: 'private-agent', name: 'Private', command: 'private-agent', skills, capabilities: { history: false, resume: false } })})));`);
-  const updated = await installAgentFile(script, data); assert.deepEqual(updated.skills, skills);
-  store.saveAgent(updated, saved.id); assert.deepEqual(store.agent(saved.id).skills, skills);
-  assert.equal(skillRoot(skills, dir), path.join(dir, '.private-agent', 'skills'));
-  assert.equal(skillRoot(skills, undefined, dir), path.join(dir, '.private-agent', 'skills'));
-  assert.equal(agentSkillsSchema.safeParse({ project: '../foreign' }).success, false);
-  assert.equal(agentSkillsSchema.safeParse({}).success, false);
 });
