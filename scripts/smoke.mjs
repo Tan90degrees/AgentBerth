@@ -300,12 +300,17 @@ try {
   await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
   await settingsCategory(page, 'Agent');
+  assert.equal(await page.locator('[data-setting-id="plugins"]').count(),0,'Core settings must not manage plugins');
+  await page.getByRole('button',{name:'前往 Agent 插件',exact:true}).click();
+  await page.getByRole('heading',{name:'插件中心'}).waitFor();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).getAttribute('aria-current').then(value=>assert.equal(value,'page'));
   await page.getByRole('button', { name: '导出插件开发套件并复制指令', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '复制 Agent 开发指令', exact: true }).count(), 0);
   const cordisPrompt = await page.evaluate(() => window.berth.pluginDevelopmentPrompt());
   assert.ok(cordisPrompt.includes('Cordis') && cordisPrompt.includes('不要生成旧版 Agent JSON'), 'Developer help must use the Cordis-only plugin architecture');
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: true } }));
   await page.locator('.sidebar-bottom').getByText('后台已连接', { exact: true }).waitFor();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();
   await settingsCategory(page, '常用设置');
   if (process.platform === 'win32') {
     step('auto-detect PowerShell 7 and launch its real executable');
