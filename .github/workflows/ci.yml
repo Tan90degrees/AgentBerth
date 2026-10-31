@@ -63,6 +63,10 @@ jobs:
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
+      - name: Legacy database startup and exit (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/smoke-startup-failure.mjs
+        timeout-minutes: 2
       - name: File preview smoke (Linux)
         if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
         run: xvfb-run -a node scripts/smoke-files.mjs
@@ -76,6 +80,10 @@ jobs:
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
+      - name: Legacy database startup and exit (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-startup-failure.mjs
+        timeout-minutes: 2
       - name: File preview smoke (Windows)
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-files.mjs
@@ -89,6 +97,14 @@ jobs:
       - name: Desktop pet smoke (Windows)
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-pet.mjs
+        timeout-minutes: 3
+      - name: Cordis plugin smoke (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        run: xvfb-run -a node scripts/smoke-extensions.mjs
+        timeout-minutes: 2
+      - name: Cordis plugin smoke (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        run: node scripts/smoke-extensions.mjs
         timeout-minutes: 2
       - uses: actions/upload-artifact@v4
         if: always()
@@ -144,6 +160,14 @@ jobs:
         if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
         run: node scripts/smoke-pet.mjs --packaged
         timeout-minutes: 2
+      - name: Test packaged Cordis plugins
+        id: packaged-extensions-smoke
+        if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
+        run: node scripts/smoke-extensions.mjs --packaged
+        timeout-minutes: 2
+      - name: Test packaged legacy database startup and exit
+        run: node scripts/smoke-startup-failure.mjs --packaged
+        timeout-minutes: 2
       - name: Write checksums and build information
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
@@ -151,6 +175,7 @@ jobs:
           PACKAGED_WORKBENCH_RESULT: ${{ steps.packaged-smoke.outcome }}
           PACKAGED_FILES_RESULT: ${{ steps.packaged-files-smoke.outcome }}
           PACKAGED_PET_RESULT: ${{ steps.packaged-pet-smoke.outcome }}
+          PACKAGED_EXTENSIONS_RESULT: ${{ steps.packaged-extensions-smoke.outcome }}
           INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
         run: |
           $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.zip' }
@@ -161,8 +186,8 @@ jobs:
           }
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success') { 'success' } else { 'failure' }
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; pet = $env:PACKAGED_PET_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success' -and $env:PACKAGED_EXTENSIONS_RESULT -eq 'success') { 'success' } else { 'failure' }
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; pet = $env:PACKAGED_PET_RESULT; extensions = $env:PACKAGED_EXTENSIONS_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}

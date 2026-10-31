@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
-import { PROTOCOL_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
+import { PROTOCOL_VERSION, API_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
 import type { RemoteErrorDetails } from '../shared/remote-errors';
 
 export class DaemonRpcError extends Error {
@@ -124,8 +124,7 @@ export async function stopIdleDaemon(directory: string): Promise<void> {
     const state = await candidate.rpc<State>('state');
     if (state.sessions.some(session => ['running', 'stopping'].includes(session.latestRun?.status ?? ''))) throw new Error('请先停止全部终端，再更新后台');
     if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
-    if (state.apiVersion >= 2) await candidate.rpc('shutdownIdle');
-    else process.kill(runtime.pid, 'SIGTERM'); // Explicit upgrade of an authenticated, idle 0.1 daemon.
+    await candidate.rpc('shutdownIdle');
     await waitForExit(runtime.pid);
   } finally { candidate.close(true); }
 }
@@ -134,9 +133,10 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   const runtime = runtimeFile(directory);
   if (runtime) {
     let candidate: DaemonConnection | null = null;
-    try { candidate = await DaemonConnection.open(runtime, onEvent); await candidate.rpc('state'); return candidate; }
-    catch {
+    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION)throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
+    catch (error) {
       candidate?.close();
+      if(String(error).includes('运行中的后台版本与当前架构不同'))throw error;
       try { process.kill(runtime.pid, 0); throw new Error('后台进程仍在运行但无法连接，请稍后重试'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
     }
@@ -148,12 +148,25 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   let spawnError: Error | null = null;
   child.once('error', error => { spawnError = error; });
   child.unref();
-  const deadline = Date.now() + 12000;
+  // The spawned daemon writes its own startup error before exiting; match its
+  // PID to prevent a stale error from a previous launch masking the real cause.
+  const startupFailure = () => {
+    try {
+      const value = JSON.parse(readFileSync(path.join(directory, 'daemon-startup-error.json'), 'utf8'));
+      return value.pid === child.pid && typeof value.message === 'string' && value.message.length <= 8192 ? value.message : null;
+    } catch { return null; }
+  };
+  // Windows antivirus/signature checks can delay first launch of a packaged
+  // binary; stop immediately if the daemon exits instead of waiting 30 seconds.
+  const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     if (spawnError) throw spawnError;
+    const failure = startupFailure();
+    if (failure) throw new Error(failure.replace(/^Error:\s*/, ''));
     const next = runtimeFile(directory);
     if (next) { try { return await DaemonConnection.open(next, onEvent); } catch { /* Another client may be starting the daemon. */ } }
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error('后台进程启动后立即退出（退出码 '+String(child.exitCode)+'）。请查看数据目录中的 daemon-startup-error.json');
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error('后台启动失败，请查看数据目录中的 daemon.log');
+  throw new Error('后台启动超时。请查看数据目录中的 daemon-startup-error.json 或检查杀毒软件拦截情况。');
 }

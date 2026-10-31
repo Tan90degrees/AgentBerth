@@ -1,9 +1,9 @@
+import { ExtensionsContext } from './ExtensionManager';
+import { extensionEnabled } from '../shared/extensions';
 import { PetSettings } from './DesktopPet';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition, type AgentDefinitionConfig } from '../shared/protocol';
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition } from '../shared/protocol';
 import { agentLabels } from './labels';
-import { SkillManager } from './SkillManager';
-import { AgentManager } from './AgentManager';
 import { TerminalFields } from './TerminalFields';
 import { AppearanceControls } from './AppearanceControls';
 import { PreviewSettings } from './PreviewSettings';
@@ -13,17 +13,21 @@ import { SshConnections } from './SshConnections';
 import { filterSettings, settingsCatalog, settingsCategories, type SettingsCategory, type SettingsEntry } from './settings-catalog';
 import { readStored, saveStored } from './storage';
 
-export function SettingsPage({ projects, currentProjectId, connected, apiVersion, agents, usedAgents, onSaveAgent, onDeleteAgent, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
-  projects: import('../shared/protocol').Project[]; currentProjectId?: string;
-  connected: boolean; apiVersion: number; agents: AgentDefinition[]; usedAgents: string[]; onSaveAgent: (value: AgentDefinitionConfig, id?: string) => Promise<AgentDefinition | undefined>; onDeleteAgent: (id: string) => Promise<unknown>;
+export function SettingsPage({ projects, currentProjectId, onOpenPlugins, connected, apiVersion, agents, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
+  projects: import('../shared/protocol').Project[]; currentProjectId?: string; onOpenPlugins: (tab:'installed'|'agents'|'skills') => void;
+  connected: boolean; apiVersion: number; agents: AgentDefinition[];
   settings: Settings; draft: Settings; onChange: (value: Settings) => void; onDiscard: () => void; conflict: boolean; onError: (error: string) => void; error: string;
   platform: string; disabled: boolean; busy: boolean; restartDisabled: boolean; onSave: (value: Settings) => Promise<boolean>; onRestart: () => void; running: number;
 }) {
+  const extensions=useContext(ExtensionsContext);
+  const owners:Record<string,string>={theme:'appearance',pet:'pet',preview:'files',shell:'workspace','terminal-font':'workspace','local-limit':'workspace','default-agent':'agents',connections:'ssh',mcp:'ssh','ssh-limit':'ssh'};
+  const agentChoices=Object.entries(agentLabels(agents)).filter(([id])=>id==='shell'||featuresAgentAvailable(id));
+  function featuresAgentAvailable(id:string){if(id==='custom')return false;if(['codex','claude','opencode'].includes(id))return extensionEnabled(extensions,'agents')&&extensionEnabled(extensions,'agent.'+id);return extensionEnabled(extensions,'agents')&&!!agents.find(agent=>agent.id===id&&agent.sourceId?.startsWith('ext.'));}
   const [saveState,setSaveState]=useState<'idle'|'pending'|'success'|'error'>('idle');
   const [saved, setSaved] = useState(false), [query, setQuery] = useState('');
   const [category, setCategory] = useState<SettingsCategory>(() => settingsCategories.find(item => item.id === readStored('berth.settingsCategory'))?.id ?? 'common');
   const search = useRef<HTMLInputElement>(null), content = useRef<HTMLDivElement>(null), form = useRef<HTMLFormElement>(null);
-  const entries = useMemo(() => settingsCatalog(agents, apiVersion), [agents, apiVersion]);
+  const entries = useMemo(() => settingsCatalog(agents, apiVersion).filter(entry=>!owners[entry.id]||extensionEnabled(extensions,owners[entry.id])), [agents, apiVersion, extensions]);
   const visible = useMemo(() => new Set(filterSettings(entries, query, category).map(entry => entry.id)), [entries, query, category]);
   const categories = settingsCategories.filter(value => value.id === 'all' || value.id === 'common' || entries.some(entry => entry.category === value.id));
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
@@ -32,7 +36,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
   const change = (value: Settings) => { onChange(value); setSaved(false);setSaveState('idle'); };
   useEffect(() => { saveStored('berth.settingsCategory', category); content.current?.scrollTo(0, 0); }, [category]);
   useEffect(() => window.berth.onPetSettings(() => { setQuery(''); setCategory('pet'); content.current?.scrollTo(0, 0); }), []);
-  useEffect(() => { if (!categories.some(item => item.id === category)) setCategory('common'); }, [category, apiVersion]);
+  useEffect(() => { if (!categories.some(item => item.id === category)) setCategory('common'); }, [category, apiVersion, extensions]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (document.querySelector('[role="dialog"]')) return;
@@ -52,7 +56,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
     </div>;
   };
   return <section className="settings-page settings-workbench" aria-label="应用设置">
-    <header className="settings-toolbar"><div className="settings-title"><h1>设置</h1><span>应用于整个工作台</span></div>
+    <header className="settings-toolbar"><div className="settings-title"><h1>核心设置</h1><span>工作台全局偏好 · 插件独立管理</span></div>
       <div className="settings-search"><svg aria-hidden="true" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input ref={search} aria-label="搜索设置" placeholder="搜索设置，例如：字体、终端、SSH…" value={query} onChange={event => { setQuery(event.target.value); setCategory('all'); content.current?.scrollTo(0, 0); }} onKeyDown={event => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery(''); } }} />{query ? <button className="icon-button" aria-label="清除设置搜索" onClick={() => { setQuery(''); search.current?.focus(); }}>×</button> : <kbd>Ctrl+F</kbd>}</div>
     </header>
     <div className="settings-layout">
@@ -86,14 +90,12 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           {item('shell', <><TerminalFields value={draft.terminal} platform={platform} disabled={disabled} onError={onError} onChange={terminal => change({ ...draft, terminal: terminal! })} /><p className="form-hint">用于下一次启动，运行中的终端保持不变。单个会话可覆盖默认终端。</p></>)}
           {item('terminal-font', <><label>终端字号<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label><p className="form-hint">10–24 px。文件预览的字体和字号独立设置。</p></>)}
           {item('local-limit', <><label>本机终端上限<input aria-label="本机终端上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxActiveTerminals} disabled={disabled} onChange={event => change({ ...draft, maxActiveTerminals: Number(event.target.value) })} /></label><p className="form-hint">启动中和运行中均占名额；降低上限不会停止已有终端。</p></>)}
-          {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{Object.entries(agentLabels(agents)).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义类型的启动命令由导入文件提供。</p>{draft.defaultAgent === 'custom' && <><label>默认启动命令<input aria-label="默认启动命令" required pattern=".*\S.*" title="请填写至少一个非空白字符" maxLength={4096} value={draft.defaultCommand} disabled={disabled} onChange={event => change({ ...draft, defaultCommand: event.target.value })} placeholder="例如 my-agent --interactive" /></label><p className="form-hint">新建自定义命令会话时自动填入，仍可按会话单独修改。</p></>}</>)}
+          {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event => change({ ...draft, defaultAgent: event.target.value as Settings['defaultAgent'] })}>{!agentChoices.some(([id])=>id===draft.defaultAgent)&&<option value={draft.defaultAgent} disabled>已停用的默认接入（保留配置）</option>}{agentChoices.map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label><p className="form-hint">用于新建会话。自定义 Agent 与内置接入平级，统一在插件中心管理。</p><button type="button" className="subtle" onClick={() => onOpenPlugins('agents')}>前往 Agent 插件</button></>)}
           {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event => change({ ...draft, maxSshTerminals: Number(event.target.value) })} /></label><p className="form-hint">与本机终端独立计数，支持 1–{TERMINAL_LIMIT_MAX}。保存立即应用，降低上限不停止已有会话。</p></>)}
         </form>
-        {item('agent-types', <AgentManager hotUpdates={apiVersion >= 15} agents={agents} used={usedAgents} defaultAgent={settings.defaultAgent} disabled={disabled} busy={busy} error={error} onError={onError} onSave={onSaveAgent} onDelete={onDeleteAgent} />)}
-        {item('skills', <SkillManager agents={agents} projects={projects} currentProjectId={currentProjectId} />)}
         {item('connections', <SshConnections disabled={!connected || busy} onError={onError} />)}
         {item('mcp', <McpSettings metricsSupported={apiVersion>=33} disabled={!connected} onError={onError} />)}
-        {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再更新后台。` : '安装新版本后，可更新后台以加载新功能。项目、会话和设置会保留。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>更新后台</button></section>)}
+        {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再重启后台。` : '重启当前版本后台服务。不会迁移旧版数据，旧版安装必须先清理数据目录。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>重启后台</button></section>)}
         {item('about', <AboutCard connected={connected} apiVersion={apiVersion} running={running} onError={onError} />)}
       </div>
     </div>

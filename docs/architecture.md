@@ -62,3 +62,12 @@ Resource badges subscribe to a separate external store, so three-second samples 
 ## Plugin hot updates
 
 API 15 allows replacing an Agent definition while its terminals are running. Imported bundles are immutable copies, validated before activation; stable source identity is preserved and concurrent updates use a per-Agent generation lease. Existing session commands and PTYs are untouched. Subsequent adapter calls resolve the current definition. History import/preview/discovery and asynchronous resume check the captured generation before returning or committing; superseded results cannot overwrite caches or start an old resume command. History UI remounts its discovery state when the adapter changes. Failed activation leaves the prior definition intact.
+
+
+## Cordis 插件宿主（0.17 / API 41）
+
+宿主保留 SQLite、WebSocket/IPC、插件配置与应用生命周期。`src/extensions/runtime.ts` 为后台建立真正的 Cordis Context/Fiber，`src/plugins/*` 将原来的功能分发从核心服务器拆出，注册/注销接口由 ctx.effect 管理。主进程 `DesktopExtensions` 按插件 generation 镜像桌面作用域；停用或更新时释放桌宠 Hook、窗口与监听器，无关插件更新不重建其他窗口或视图。
+
+安装包与开发目录共用清单和注册 API。Agent 与 Skills 在同一贡献项定义；派生稳定 Agent ID，旧会话与原生历史继续保存。原有单文件配置/脚本由 agents 插件兼容，不伪装成 Cordis 或 DSH 的二进制兼容插件。
+
+配置写入采用临时文件 + rename，生命周期变更串行。依赖按拓扑顺序挂载、逆序释放；不终止相关插件的运行终端来强行更新。开发重载先校验清单/代码，再切换作用域，失败恢复旧后台模块与配置。动态 MCP 命令继承当前 RPC 调用方；不另开一个 Agent 身份。HTML 视图使用独立本地协议与无 Node 的 sandbox iframe，只能桥接本插件命令；Node 与 Electron 插件属于用户信任代码，并非权限沙箱。

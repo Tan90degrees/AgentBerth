@@ -3,7 +3,7 @@ import { TerminalMcp } from './server';
 import { boundedToolText } from './result-limits';
 import { errorReply, ToolArgumentError } from './harness';
 
-export interface AgentContext { server: TerminalMcp; disconnect(): void }
+export interface AgentContext { server: Pick<TerminalMcp,'request'>; disconnect(): void }
 /** MCP has no universal subagent identity. Named contexts use separate daemon
  * sockets, target memory and writer leases even inside one shared MCP process. */
 export class AgentMcp {
@@ -35,6 +35,7 @@ export class AgentMcp {
     return { ...reply, content: reply.content.map((item: any) => {
       if (item.type !== 'text') return item;
       let value; try { value = JSON.parse(item.text); } catch { return item; }
+      if(!value||typeof value!=='object'||Array.isArray(value))return {...item,text:boundedToolText({result:value,agentId})};
       // Preserve identity on trusted continuation pointers, never rewrite remote text.
       for (const pointer of [value.continuation, value.details, value.harness?.next, value.harness?.lifecycle?.onTaskComplete]) if (pointer?.tool && pointer.arguments) pointer.arguments.agentId = agentId;
       value.agentId = agentId;

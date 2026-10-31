@@ -867,20 +867,6 @@ textarea:focus-visible {
   line-height: 1.9;
   margin-bottom: 18px
 }
-.upgrade-notice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
-  background: var(--warning-soft);
-  border-bottom: 1px solid var(--warning-border);
-  color: var(--warning);
-  padding: 12px 28px;
-  font-size: 12px
-}
-.upgrade-notice .subtle {
-  padding: 6px 10px
-}
 .panel-toolbar {
   flex-wrap: wrap
 }
@@ -2392,3 +2378,128 @@ textarea:focus-visible {
 .sidebar-rail button[aria-pressed="true"] {background:var(--hover);color:var(--text);}
 .rail-unread {position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--text-secondary);}
 .workspace-recovery{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0}.workspace-recovery small{display:block;color:var(--text-muted);margin-top:3px}.workspace-recovery details{margin-top:5px;overflow-wrap:anywhere}.workspace-recovery ul{max-height:140px;overflow:auto;padding-left:20px}
+/* Cordis extension management uses the same button geometry for every action. */
+.extension-manager>header,
+.extension-list>li>header,
+.extension-page>header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.extension-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.extension-manager .extension-button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.extension-manager .extension-button.primary { font-weight: 600; }
+.extension-manager .extension-button.subtle { border-color: var(--border); }
+.extension-manager .extension-button.danger { border-color: var(--danger-border); }
+.extension-manager .extension-button.primary:hover:not(:disabled) {
+  background: var(--primary);
+  filter: brightness(1.08);
+}
+.extension-manager .extension-button.subtle:hover:not(:disabled) { background: var(--hover); }
+.extension-manager .extension-button.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  filter: brightness(1.08);
+}
+.extension-manager p { color: var(--text-muted); font-size: 13px; }
+.extension-utilities {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.extension-utilities input {
+  flex: 1 1 220px;
+  min-width: 0;
+  width: auto;
+}
+.extension-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.extension-list>li {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.extension-list small { display: block; color: var(--text-muted); margin-top: 5px; }
+.extension-status { font-size: 11px; margin-left: 9px; color: var(--text-muted); }
+.extension-status.active { color: #63b783; }
+.extension-status.failed { color: var(--danger); }
+.extension-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(180px,1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.extension-fields label { display: flex; flex-direction: column; gap: 5px; }
+.extension-page { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 12px; }
+.extension-page>header { align-items: center; flex-shrink: 0; }
+.extension-page h2 { font-size: 15px; }
+.extension-view { width: 100%; height: 100%; min-height: 240px; border: 0; flex: 1; background: var(--surface); }
+
+/* Plugin configuration is always an accessible modal, not a settings card. */
+.extension-config-dialog { display:flex; flex-direction:column; gap:12px; max-height:min(70vh,640px); overflow:auto; }
+.extension-config-dialog>label { display:flex; flex-direction:column; align-items:stretch; gap:6px; margin-top:0; }
+.extension-config-dialog>label>input[type=checkbox] { width:auto; align-self:flex-start; }
+.extension-config-dialog small { font-size:11px; color:var(--text-muted); }
+.extension-config-dialog .extension-dialog-view { display:flex; flex-direction:column; min-height:220px; gap:8px; }
+.extension-config-dialog .extension-dialog-view h3 { font-size:13px; }
+.extension-config-dialog .extension-view { min-height:240px; }
+.extension-manager .dialog { width:min(600px,92vw); max-height:85vh; }
+.extension-manager .dialog .dialog-fields { max-width:100%; min-width:0; border:0; padding:0; margin:0; }
+
+/* DSH-inspired separation: Plugins is a full workspace page, Settings is only core preferences. */
+.plugins-host {display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;overflow:hidden;background:var(--surface);}
+.plugins-host[hidden]{display:none!important;}
+.plugin-center{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;max-width:1180px;width:100%;margin:0 auto;padding:28px 36px 24px;gap:22px;}
+.plugin-center-heading{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:24px;flex-shrink:0;}
+.plugin-center-heading h1{font-size:25px;letter-spacing:-.5px;margin:7px 0 9px;}
+.plugin-center-heading p{max-width:680px;color:var(--text-muted);font-size:12px;line-height:1.75;}
+.plugin-center-summary{display:flex;align-items:center;gap:22px;padding:13px 18px;border:1px solid var(--border);border-radius:10px;background:var(--surface-muted);}
+.plugin-center-summary span{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:55px;}
+.plugin-center-summary strong{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;}
+.plugin-center-summary small{font-size:11px;color:var(--text-muted);}
+.plugin-center-tabs{display:flex;gap:6px;padding:5px;border:1px solid var(--border);background:var(--surface-muted);border-radius:10px;flex-shrink:0;}
+.plugin-center-tabs button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:11px 15px;border:1px solid transparent;border-radius:7px;text-align:left;color:var(--text-muted);}
+.plugin-center-tabs button:hover:not(.selected){background:var(--hover);}
+.plugin-center-tabs button.selected{background:var(--surface);border-color:var(--border);box-shadow:0 1px 4px #00000014;color:var(--text);}
+.plugin-center-tabs strong{font-size:13px;font-weight:600;}
+.plugin-center-tabs small{font-size:11px;line-height:1.45;color:var(--text-muted);}
+.plugin-center-content{overflow-y:auto;flex:1;min-height:0;padding:4px 3px 22px;}
+.plugin-center-content .extension-manager{display:flex;flex-direction:column;gap:14px;}
+.plugin-center-content .extension-manager>header{gap:12px;}
+.plugin-center-content .extension-manager>header h2{font-size:16px;}
+.plugin-center-content .extension-manager>header p{margin-top:5px;}
+.plugin-center-content .extension-list{grid-template-columns:repeat(auto-fill,minmax(min(100%,410px),1fr));align-content:start;}
+.plugin-center-content .extension-list>li{display:flex;flex-direction:column;gap:12px;background:var(--surface-muted);}
+.plugin-center-content .extension-list>li>header{align-items:flex-start;}
+.plugin-center-content .extension-actions{justify-content:flex-start;}
+.plugin-center-content .skill-manager{margin:0;}
+.plugin-center-content .extension-manager .dialog{width:min(600px,92vw);max-height:85vh;}
+@media(max-width:900px){.plugin-center{padding:18px 18px 12px;gap:15px;}.plugin-center-tabs button{padding:10px;}.plugin-center-tabs small{display:none;}.plugin-center-summary{gap:12px;padding:10px;}}
+@media(max-width:580px){.plugin-center-heading{align-items:flex-start;}.plugin-center-summary{width:100%;justify-content:space-around;}.plugin-center-content .extension-list{grid-template-columns:minmax(0,1fr);}}
+
+/* Recoverable startup failure: remain usable even when the daemon never starts. */
+.startup-failure{gap:14px;align-items:center;max-width:100%;padding:36px 28px;text-align:center;}
+.startup-failure h2{font-size:20px;}
+.startup-failure p{max-width:680px;line-height:1.7;color:var(--text-secondary);}
+.startup-failure code{display:block;max-width:min(760px,100%);padding:13px 16px;border:1px solid var(--border);border-radius:8px;background:var(--surface-muted);white-space:pre-wrap;overflow-wrap:anywhere;text-align:left;line-height:1.7;}
+.startup-failure .startup-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;}
+.startup-failure .startup-actions button{min-height:36px;padding:8px 14px;border-radius:7px;}
+.startup-failure small{color:var(--text-muted);max-width:640px;line-height:1.65;}

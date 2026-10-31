@@ -179,6 +179,7 @@ export async function copyTransfer(spec:TransferSpec,source:TransferFs,destinati
 interface ActiveTransfer {value:RemoteTransfer;abort:AbortController;done:Promise<void>}
 export class RemoteTransfers {
   private active=new Map<string,ActiveTransfer>();
+  get busy(){return this.active.size>0;}
   constructor(private store:Pick<Store,'remoteAction'|'saveRemoteAction'|'remoteTransfers'>,private endpoint:(endpoint:TransferEndpoint)=>Promise<TransferFs>,private publish:(value:RemoteTransfer)=>void,private action:(value:RemoteAction)=>void,private scope:(endpoint:TransferEndpoint)=>string=endpoint=>endpoint.kind==='local'?'local':endpoint.sessionId) {}
   get(id:string):RemoteTransfer {
     const live=this.active.get(id);if(live)return structuredClone(live.value);

@@ -10,20 +10,21 @@ test('settings search covers Chinese labels, English terms and imported Agent na
   assert.deepEqual(ids('ssh 上限'),['ssh-limit']);
   assert.deepEqual(ids('预览 字体'),['preview']);
   assert.ok(ids('font').includes('preview')); assert.ok(ids('font').includes('terminal-font'));
-  assert.ok(ids('AIDER dev').includes('agent-types')); assert.ok(ids('AIDER dev').includes('default-agent'));
+  assert.deepEqual(ids('AIDER dev'),['default-agent']);
   assert.deepEqual(ids('复制 诊断'),['about']);
-  assert.ok(ids('自定义agent').includes('agent-types'));
+  assert.ok(!ids('自定义agent').includes('agent-types'));
+  assert.ok(!entries.some(entry=>['plugins','agent-integrations','skills'].includes(entry.id)),'Plugin lifecycle and Skills are separate from core settings');
   assert.deepEqual(ids('终端 密码'),[]); // All terms must match the same setting entry.
   assert.deepEqual(ids('诊断'),['about']);
   assert.deepEqual(ids('definitely absent'),[]);
   assert.deepEqual(filterSettings(entries,'pwsh','ssh'),[]);
 });
 
-test('common/category filters keep management separate and capability-gated settings searchable only when available', () => {
+test('common/category filters keep core preferences separate from plugin lifecycle and capability-gated settings searchable only when available', () => {
   const entries=settingsCatalog([],28);
   assert.deepEqual(filterSettings(entries,'','common').map(value=>value.id),['theme','shell','terminal-font','local-limit','default-agent','ssh-limit']);
   assert.deepEqual(filterSettings(entries,'','terminal').map(value=>value.id),['shell','terminal-font','local-limit']);
-  assert.deepEqual(filterSettings(entries,'','agents').map(value=>value.id),['default-agent','agent-types']);
+  assert.deepEqual(filterSettings(entries,'','agents').map(value=>value.id),['default-agent']);
   assert.deepEqual(filterSettings(entries,'','ssh').map(value=>value.id),['ssh-limit','connections']);
   assert.ok(!settingsCatalog([],20).some(value=>['connections','mcp'].includes(value.id)));
   assert.ok(settingsCatalog([],21).some(value=>value.id==='mcp'));
