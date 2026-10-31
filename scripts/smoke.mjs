@@ -948,6 +948,7 @@ try {
   assert.throws(() => process.kill(original.pid, 0), /ESRCH/);
   await assert.rejects(stat(path.join(folder, 'data', 'runtime.json')), /ENOENT/);
   await assert.rejects(stat(path.join(folder, 'data', 'daemon.lock')), /ENOENT/);
+  await assert.rejects(stat(path.join(folder, 'data', 'pet-hook.json')), /ENOENT/, 'Shutdown state events must not remount disposed desktop plugins');
   step('reopen workbench and automatically restore only previously running sessions');
   application = await electron.launch({ executablePath, args: launchArgs, env, timeout: 20000 });
   page = await application.firstWindow({ timeout: 20000 });

@@ -148,7 +148,7 @@ function publishDesktopDiagnostics(){if(!desktopState)return;const event={event:
 function emit(event: ServerEvent) {
   if(event.event==='state'){
     const sshWasEnabled=extensionEnabled(extensionSnapshot,'ssh');extensionSnapshot=event.data.extensions;
-    desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
+    desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};if(!quitting)void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
     if(!sshWasEnabled&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
   }
   if (event.event === 'state') pet?.update(event.data);
