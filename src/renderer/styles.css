@@ -867,20 +867,6 @@ textarea:focus-visible {
   line-height: 1.9;
   margin-bottom: 18px
 }
-.upgrade-notice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
-  background: var(--warning-soft);
-  border-bottom: 1px solid var(--warning-border);
-  color: var(--warning);
-  padding: 12px 28px;
-  font-size: 12px
-}
-.upgrade-notice .subtle {
-  padding: 6px 10px
-}
 .panel-toolbar {
   flex-wrap: wrap
 }
@@ -2466,3 +2452,14 @@ textarea:focus-visible {
 .extension-page>header { align-items: center; flex-shrink: 0; }
 .extension-page h2 { font-size: 15px; }
 .extension-view { width: 100%; height: 100%; min-height: 240px; border: 0; flex: 1; background: var(--surface); }
+
+/* Plugin configuration is always an accessible modal, not a settings card. */
+.extension-config-dialog { display:flex; flex-direction:column; gap:12px; max-height:min(70vh,640px); overflow:auto; }
+.extension-config-dialog>label { display:flex; flex-direction:column; align-items:stretch; gap:6px; margin-top:0; }
+.extension-config-dialog>label>input[type=checkbox] { width:auto; align-self:flex-start; }
+.extension-config-dialog small { font-size:11px; color:var(--text-muted); }
+.extension-config-dialog .extension-dialog-view { display:flex; flex-direction:column; min-height:220px; gap:8px; }
+.extension-config-dialog .extension-dialog-view h3 { font-size:13px; }
+.extension-config-dialog .extension-view { min-height:240px; }
+.extension-manager .dialog { width:min(600px,92vw); max-height:85vh; }
+.extension-manager .dialog .dialog-fields { max-width:100%; min-width:0; border:0; padding:0; margin:0; }
