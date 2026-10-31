@@ -29,7 +29,12 @@ try {
   for(let i=0;i<100&&await nativeCount()!==1;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),1);
   await card.getByLabel('Smoke extension Agent name').fill('Updated Agent');await card.getByRole('button',{name:'应用配置',exact:true}).click();
   await page.waitForFunction(()=>window.berth.rpc('state').then(s=>s.agents.some(a=>a.name==='Updated Agent')));
-  await page.getByRole('button',{name:'Plugin info',exact:true}).click();const frame=page.frameLocator('iframe[title="Plugin info"]');await frame.getByRole('button',{name:'Read plugin'}).click();await frame.locator('#result').filter({hasText:'Updated Agent'}).waitFor();
+  await page.getByRole('button',{name:'Plugin info',exact:true}).click();const frame=page.frameLocator('iframe[title="Plugin info"]');await frame.getByRole('button',{name:'Read plugin'}).click();
+  try{await frame.locator('#result').filter({hasText:'Updated Agent'}).waitFor();}
+  catch(error){
+    const diagnostic=await frame.locator('body').evaluate(()=>({result:document.querySelector('#result')?.textContent,bridge:typeof window.agentberth?.call,secure:window.isSecureContext,cryptoUuid:typeof crypto?.randomUUID})).catch(reason=>({frameError:String(reason)}));
+    throw new Error('Plugin iframe RPC failed: '+JSON.stringify({diagnostic,pageErrors:errors}),{cause:error});
+  }
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-view.png`});
   await page.getByRole('button',{name:'设置',exact:true}).click();
   await card.getByRole('button',{name:'停用',exact:true}).click();await card.getByText('已停用',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Plugin info',exact:true}).count(),0);
