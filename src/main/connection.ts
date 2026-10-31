@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
-import { PROTOCOL_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
+import { PROTOCOL_VERSION, API_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
 import type { RemoteErrorDetails } from '../shared/remote-errors';
 
 export class DaemonRpcError extends Error {
@@ -133,9 +133,10 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   const runtime = runtimeFile(directory);
   if (runtime) {
     let candidate: DaemonConnection | null = null;
-    try { candidate = await DaemonConnection.open(runtime, onEvent); await candidate.rpc('state'); return candidate; }
-    catch {
+    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION)throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
+    catch (error) {
       candidate?.close();
+      if(String(error).includes('运行中的后台版本与当前架构不同'))throw error;
       try { process.kill(runtime.pid, 0); throw new Error('后台进程仍在运行但无法连接，请稍后重试'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
     }
