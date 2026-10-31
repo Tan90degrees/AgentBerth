@@ -261,5 +261,6 @@ export interface DesktopApi {
   openExternal(url: string): Promise<void>;
   openProject(path: string): Promise<void>;
   reconnect(): Promise<void>;
+  quitDesktop(): Promise<void>;
   restartBackend(): Promise<void>;
 }
