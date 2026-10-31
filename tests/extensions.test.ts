@@ -63,7 +63,7 @@ test('MCP catalog follows plugin lifecycle and custom commands stay on the calle
   const base={request:async(method:string)=>method==='tools/list'?{tools:[{name:'terminal_execute'}]}:{base:true,instructions:'SSH_GUIDE'}};
   const mcp=new ExtensionMcp(base,async(method,params)=>{calls.push([method,params]);return method==='state'?{extensions:snapshot}:123;});
   const name=extensionToolName('example.tools','value');assert.deepEqual((await mcp.request('tools/list')).tools.map((t:any)=>t.name),[name]);
-  const init=await mcp.request('initialize');assert.equal(init.capabilities.tools.listChanged,true);assert.ok(!init.instructions.includes('SSH_GUIDE'));
+  const init=await mcp.request('initialize');assert.equal(init.capabilities.tools.listChanged,true);assert.equal(init.serverInfo.name,'agentberth-terminal');assert.ok(!init.instructions.includes('SSH_GUIDE'));
   const result=await mcp.request('tools/call',{name,arguments:{x:1}});assert.equal(result.content[0].text,'123');assert.equal(calls.at(-1)[1].request.id,'example.tools');assert.deepEqual(calls.at(-1)[1].request.params,{x:1});
   assert.equal((await mcp.request('tools/call',{name:'terminal_execute'})).isError,true);await assert.rejects(mcp.request('resources/read'),/未启用/);
   snapshot.plugins.push({manifest:manifest('ssh'),status:'active',commands:[]});assert.equal((await mcp.request('tools/list')).tools.length,2);
@@ -89,6 +89,7 @@ test('real daemon removes feature routes and keeps contributed Agent identities 
   await change({action:'enable',id:'files'});await connection.rpc('projectFiles',{projectId:project.id});
   const dir=await source(root,'example.integration',`exports.apply=(ctx,c)=>ctx.berth.agent({id:'main',definition:{name:c.name,command:'fixture-agent',skills:{project:'.fixture/skills'}}});`,{dependencies:['agents'],config:{name:{type:'string',title:'Name',default:'Fixture Agent'}}});
   await change({action:'install',path:dir});let agent=(await connection.rpc<any>('state')).agents.find((a:any)=>a.name==='Fixture Agent');assert.ok(agent.id);
+  const versions=(server as any).agentVersions as Map<string,number>,revision=versions.get(agent.id);await change({action:'disable',id:'resources'});await change({action:'enable',id:'resources'});assert.equal(versions.get(agent.id),revision,'Unrelated plugins must not invalidate in-flight Agent history reads');
   const owned=await connection.rpc<any>('createSession',{projectId:project.id,title:'Plugin Agent',agent:agent.id});
   await change({action:'configure',id:'example.integration',config:{name:'Renamed Fixture'}});assert.equal((await connection.rpc<any>('state')).agents.find((a:any)=>a.name==='Renamed Fixture').id,agent.id);
   await assert.rejects(connection.rpc('deleteAgent',{agentId:agent.id}),/卸载接入插件/);

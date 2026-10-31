@@ -13,7 +13,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
-import { PROTOCOL_VERSION, requestSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
+import { PROTOCOL_VERSION, requestSchema, agentDefinitionSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
 import { ResourceSampler } from './resources';
 import { GitWorkspace } from './git';
@@ -113,7 +113,7 @@ export class DaemonServer {
       agentsChanged:values=>{
         const names=new Set<string>();for(const {agent} of values){const name=agent.definition.name.toLocaleLowerCase();if(names.has(name))throw new Error('插件 Agent 名称重复：'+agent.definition.name);names.add(name);}
         const next=new Map<string,string>();
-        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const id=`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition={...agent.definition,sourceId:'ext.'+hash.slice(0,32)},previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
+        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const id=`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition=agentDefinitionSchema.parse({...agent.definition,sourceId:'ext.'+hash.slice(0,32)}),previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
         this.extensionAgents=next;
       },changed:()=>this.changed(),
     });
