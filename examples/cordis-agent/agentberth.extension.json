@@ -2,6 +2,7 @@
   "apiVersion": 1,
   "id": "example.claude-profile",
   "name": "自定义 Claude 接入示例",
+  "kind": "agent",
   "version": "1.0.0",
   "description": "一次安装同时提供 Agent、原生历史、桌宠身份、Skills 和插件面板。CLI 需自行安装。",
   "dependencies": ["agents"],
