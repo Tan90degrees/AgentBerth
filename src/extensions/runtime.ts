@@ -10,7 +10,7 @@ import { extensionManifestSchema, resolveExtensionConfig, type ExtensionConfig, 
 import { agentDefinitionSchema } from '../shared/protocol';
 import type { WorkbenchPlugin, WorkbenchPluginApi, ExtensionCommand, AgentContribution } from './sdk';
 
-interface RecordEntry {manifest:ExtensionManifest;installed:boolean;enabled:boolean;config:ExtensionConfig;root?:string;development?:boolean}
+interface RecordEntry {manifest:ExtensionManifest;installed:boolean;enabled:boolean;config:ExtensionConfig;root?:string;development?:boolean;agentContribution?:boolean}
 interface Mounted {fiber:Fiber;pending:number;commands:Map<string,{description:ExtensionCommand;execute:(p:Record<string,unknown>)=>unknown;validate:ReturnType<Ajv['compile']>}>;agents:Map<string,AgentContribution>}
 export interface ExtensionHost {
   mount(id:string,ctx:Context,config:ExtensionConfig):unknown|Promise<unknown>;
@@ -40,7 +40,7 @@ export class ExtensionRuntime {
   private async persist(){const file=path.join(this.directory,'plugins.json');await writeFile(file+'.tmp',JSON.stringify([...this.records.values()],null,2),{mode:0o600});await rename(file+'.tmp',file);}
   snapshot():ExtensionSnapshot {return {apiVersion:1,revision:this.revision,plugins:[...this.records.values()].map(record=>{
     const active=this.mounted.get(record.manifest.id),failure=this.errors.get(record.manifest.id),error=failure??this.notices.get(record.manifest.id)??(record.enabled&&record.installed&&!active?'依赖尚未启用或存在循环：'+record.manifest.dependencies.filter(id=>!this.active(id)).join('、'):undefined);
-    return {manifest:record.manifest,generation:this.generations.get(record.manifest.id)??0,...(active&&record.root&&record.manifest.desktopEntry?{desktop:{root:record.root,entry:packagePath(record.root,record.manifest.desktopEntry),dataDirectory:path.join(this.directory,'data',record.manifest.id)}}:{}),installed:record.installed,enabled:record.enabled,status:failure?'failed':!record.installed||!record.enabled?'disabled':active?.fiber.state===FiberState.ACTIVE?'active':'blocked',builtin:!record.root,development:!!record.development,error,config:record.config,commands:[...(active?.commands.values()??[])].map(c=>c.description),views:active?record.manifest.views:[]};
+    return {manifest:record.manifest,generation:this.generations.get(record.manifest.id)??0,...(active&&record.root&&record.manifest.desktopEntry?{desktop:{root:record.root,entry:packagePath(record.root,record.manifest.desktopEntry),dataDirectory:path.join(this.directory,'data',record.manifest.id)}}:{}),installed:record.installed,enabled:record.enabled,status:failure?'failed':!record.installed||!record.enabled?'disabled':active?.fiber.state===FiberState.ACTIVE?'active':'blocked',builtin:!record.root,development:!!record.development,isAgent:record.manifest.kind==='agent'||!!record.agentContribution||!!active?.agents.size,error,config:record.config,commands:[...(active?.commands.values()??[])].map(c=>c.description),views:active?record.manifest.views:[]};
   }),warnings:this.warnings};}
   active(id:string){return !this.errors.has(id)&&this.mounted.get(id)?.fiber.state===FiberState.ACTIVE;}
   require(id:string){if(this.changing.has(id))throw new Error('插件正在更新，请稍后重试；操作尚未执行');if(!this.active(id))throw new Error(`插件“${this.records.get(id)?.manifest.name??id}”未启用，请在设置 → 插件中启用`);}
@@ -72,7 +72,7 @@ export class ExtensionRuntime {
         else await this.host.mount(id,ctx,record.config);
         ctx.provide('extension_'+id.replaceAll(/[.-]/g,'_'),{});
       }};
-      try{const fiber=this.context.isolate('berth').plugin(plugin,{});this.mounted.set(id,{fiber,commands,agents,pending:0});let timer:NodeJS.Timeout|undefined;try{await Promise.race([fiber.await(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('插件启动超过 5 秒，请检查依赖和异步初始化')),5000);})]);}finally{clearTimeout(timer);}if(fiber.state!==FiberState.ACTIVE)throw new Error(`插件 ${id} 启动失败`);this.host.agentsChanged([...this.mounted].flatMap(([pluginId,p])=>[...p.agents.values()].map(agent=>({pluginId,agent}))));this.generations.set(id,(this.generations.get(id)??0)+1);changed=true;}
+      try{const fiber=this.context.isolate('berth').plugin(plugin,{});this.mounted.set(id,{fiber,commands,agents,pending:0});let timer:NodeJS.Timeout|undefined;try{await Promise.race([fiber.await(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('插件启动超过 5 秒，请检查依赖和异步初始化')),5000);})]);}finally{clearTimeout(timer);}if(fiber.state!==FiberState.ACTIVE)throw new Error(`插件 ${id} 启动失败`);if(agents.size)record.agentContribution=true;this.host.agentsChanged([...this.mounted].flatMap(([pluginId,p])=>[...p.agents.values()].map(agent=>({pluginId,agent}))));this.generations.set(id,(this.generations.get(id)??0)+1);changed=true;}
       catch(error){const mount=this.mounted.get(id);await mount?.fiber.dispose();this.mounted.delete(id);this.errors.set(id,error instanceof Error?error.message:String(error));}
     }}this.publish();
   }
@@ -119,7 +119,7 @@ export class ExtensionRuntime {
       // Reload from its final location so relative imports and assets keep working.
       const loaded=this.load({manifest:staged.manifest,root,installed:true,enabled:true,config});
       changed=true;await this.dispose(affected);for(const key of affected){this.errors.delete(key);this.notices.delete(key);}
-      this.modules.set(id,loaded);this.records.set(id,{manifest:staged.manifest,installed:true,enabled:true,config,root,development});
+      this.modules.set(id,loaded);this.records.set(id,{manifest:staged.manifest,installed:true,enabled:true,config,root,development,agentContribution:previous?.agentContribution});
       await this.reconcile();const failed=affected.find(key=>this.errors.has(key));if(failed)throw new Error(this.errors.get(failed));
       await this.persist();this.installWatchers();
     } catch(error) {
