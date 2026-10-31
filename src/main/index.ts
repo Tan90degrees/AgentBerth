@@ -147,9 +147,9 @@ function withDesktopDiagnostics(state:import('../shared/protocol').State){const 
 function publishDesktopDiagnostics(){if(!desktopState)return;const event={event:'state',data:withDesktopDiagnostics(desktopState)};for(const target of [window,sshWindow])if(target&&!target.isDestroyed())target.webContents.send('berth:event',event);}
 function emit(event: ServerEvent) {
   if(event.event==='state'){
-    const sshWasEnabled=extensionEnabled(extensionSnapshot,'ssh');extensionSnapshot=event.data.extensions;
+    const sshWasEnabled=extensionEnabled(extensionSnapshot,'ssh'),sshGeneration=extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation;extensionSnapshot=event.data.extensions;
     desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};if(!quitting)void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
-    if(!sshWasEnabled&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
+    if(!quitting&&(!sshWasEnabled||sshGeneration!==extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation)&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
   }
   if (event.event === 'state') pet?.update(event.data);
   if (event.event === 'connection') pet?.connection(event.data.connected);
