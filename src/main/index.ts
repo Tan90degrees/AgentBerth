@@ -94,10 +94,21 @@ else {
 function refreshTrayMenu(){tray?.setContextMenu(Menu.buildFromTemplate([
   {label:'打开 AgentBerth',click:showWindow},
   ...(extensionEnabled(extensionSnapshot,'pet')?[{label:'显示桌宠',click:()=>{pet.save({...pet.preferences,enabled:true});void openPetWindow().catch(console.error);}}]:[]),
-  {type:'separator'}, {label:'退出 AgentBerth（停止终端，下次恢复）',click:()=>app.quit()},
+  {type:'separator'},
+  {label:'仅退出界面（后台任务继续运行）',click:quitDesktopOnly},
+  {label:'退出 AgentBerth（停止终端，下次恢复）',click:()=>app.quit()},
 ]));}
 function refreshWindow(target = window) { if (connection?.connected && !quitting && target && !target.isDestroyed()) target.webContents.send('berth:event', { event: 'connection', data: { connected: true } }); }
 function showWindow() { if (!window) createWindow(); if (window?.isMinimized()) window.restore(); window?.show(); window?.focus(); }
+function quitDesktopOnly(): void {
+  // The daemon is a separate process. Never block emergency UI exit on a
+  // broken database, daemon lock, or an in-flight backend startup.
+  quitReady = true;
+  quitting = true;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  tray?.destroy(); tray = null;
+  app.exit(0);
+}
 function quitApplication(): Promise<void> {
   if (exitPromise) return exitPromise;
   quitting = true;
@@ -462,6 +473,7 @@ ipcMain.handle('berth:openProject', async (event, folder: string) => {
   if (error) throw new Error(error);
 });
 ipcMain.handle('berth:reconnect', async event => { trusted(event); if (!connection) await reconnect(); });
+ipcMain.handle('berth:quitDesktop', event => { trusted(event); quitDesktopOnly(); });
 ipcMain.handle('berth:restart', async event => {
   trusted(event);
   if (connecting) await connecting;
