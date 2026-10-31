@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import type { ExtensionInfo } from '../shared/extensions';
 
 export function ExtensionView({plugin,viewId,onError}:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void}){
   const frame=useRef<HTMLIFrameElement>(null);
-  useEffect(()=>{let pending=0,alive=true;const receive=async(event:MessageEvent)=>{
+  // Attach the message bridge before paint: a fast iframe can otherwise send
+  // its first command before the passive effect subscribes to window messages.
+  useLayoutEffect(()=>{let pending=0,alive=true;const receive=async(event:MessageEvent)=>{
     if(event.source!==frame.current?.contentWindow||event.data?.kind!=='agentberth-plugin-call')return;
     const {id,command,params}=event.data;if(typeof id!=='string'||typeof command!=='string')return;
     const reject=()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,error:'插件视图请求过多或参数无效'},'*');
