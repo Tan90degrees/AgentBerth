@@ -51,6 +51,7 @@ const api: DesktopApi = {
   openExternal: url => ipcRenderer.invoke('berth:external', url),
   openProject: folder => ipcRenderer.invoke('berth:openProject', folder),
   reconnect: () => ipcRenderer.invoke('berth:reconnect'),
+  quitDesktop: () => ipcRenderer.invoke('berth:quitDesktop'),
   restartBackend: () => ipcRenderer.invoke('berth:restart'),
 };
 contextBridge.exposeInMainWorld('berth', api);
