@@ -18,7 +18,7 @@ export function developmentPrompt(guide:string,folder?:string):string{
     '不要生成旧版 Agent JSON 配置、自描述单文件导入或独立 Agent 类型管理器，不做旧版兼容。',
     '先询问需要适配的 CLI、启动和恢复命令、原生历史能力及 Skill 的真实目录。不假设私有历史协议，不读取 TUI 屏幕伪造对话。',
     '为所有副作用提供 Cordis 清理函数，稳定保留插件 ID 和 Agent contribution ID。按指南验证启停、配置、热更新和卸载。',
-    folder?'插件开发目录：'+folder:'在设置 → 插件（或 Agent → Agent 接入）安装 ZIP 或加载开发目录。',
+    folder?'插件开发目录：'+folder:'在插件中心 → 已安装插件（或 Agent 接入）安装 ZIP 或加载开发目录。',
     guide,
   ].join('\n\n');
 }
