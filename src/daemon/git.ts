@@ -1,6 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, open, readlink, realpath, stat } from 'node:fs/promises';
+import { lstat, mkdir, open, readlink, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitRemoteBranch, GitResult, GitStatus } from '../shared/protocol';
 import { resolveExecutable } from './executables';
@@ -84,6 +84,80 @@ export class GitWorkspace {
       child.on('close',code=>{ clearTimeout(timer); controller.signal.removeEventListener('abort',abort); void (async()=>{ if(killing)await killing; if(failure)throw failure; const out=Buffer.concat(stdout).toString('utf8'),err=Buffer.concat(stderr).toString('utf8');if(code===null||!allowedExitCodes.includes(code))throw new GitCommandError(code,err+'\n'+out);return out+(network && err ? '\n'+err : ''); })().then(resolve,reject); });
     }).finally(()=>this.active.delete(controller));
     this.active.set(controller,task);return task;
+  }
+  async worktrees(cwd:string):Promise<GitWorktree[]>{
+    const status=await this.status(cwd);this.requireRepository(status);
+    const canonical=await realpath(cwd),relative=path.relative(status.root,canonical);
+    if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))throw new Error('项目目录不在 Git 仓库内');
+    const output=await this.command(status.root,['worktree','list','--porcelain','-z']);
+    const records:{path:string;head:string|null;branch:string|null;detached:boolean;locked:boolean;prunable:boolean}[]=[];
+    let current:{path:string;head:string|null;branch:string|null;detached:boolean;locked:boolean;prunable:boolean}|null=null;
+    const commit=()=>{if(current){records.push(current);current=null;}};
+    for(const token of output.split('\0')){
+      if(!token){commit();continue;}
+      if(token.startsWith('worktree ')){commit();current={path:path.resolve(token.slice(9)),head:null,branch:null,detached:false,locked:false,prunable:false};continue;}
+      if(!current)continue;
+      if(token.startsWith('HEAD '))current.head=token.slice(5);
+      else if(token.startsWith('branch '))current.branch=token.slice(7).replace(/^refs\/heads\//,'');
+      else if(token==='detached')current.detached=true;
+      else if(token==='locked'||token.startsWith('locked '))current.locked=true;
+      else if(token==='prunable'||token.startsWith('prunable '))current.prunable=true;
+    }
+    commit();
+    return records.map((item,index)=>({...item,main:index===0,workingPath:path.resolve(item.path,relative)}));
+  }
+  async resolveWorktree(cwd:string,workingPath:string|null|undefined):Promise<string>{
+    const canonical=await realpath(cwd);
+    if(!workingPath)return canonical;
+    const expected=process.platform==='win32'?path.resolve(workingPath).toLowerCase():path.resolve(workingPath);
+    const item=(await this.worktrees(canonical)).find(value=>(process.platform==='win32'?value.workingPath.toLowerCase():value.workingPath)===expected);
+    if(!item||item.prunable)throw new Error('所选 Worktree 已不存在或不属于当前项目，请重新选择工作区');
+    return realpath(item.workingPath);
+  }
+  async createWorktree(cwd:string,branch:string,createBranch=true,baseRef?:string):Promise<GitWorktree>{
+    const status=await this.status(cwd);this.requireRepository(status);
+    if(status.operation||status.conflicts)throw new Error('仓库存在未完成的 Git 操作或冲突，请处理后再创建 Worktree');
+    const key=process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory;
+    if(this.locks.has(key))throw new Error('此仓库正在执行 Git 操作，请稍后重试');
+    this.locks.add(key);
+    try{
+      await this.command(status.root,['check-ref-format','--branch',branch]);
+      const branches=(await this.command(status.root,['for-each-ref','--format=%(refname:short)','refs/heads/'])).split(/\r?\n/).filter(Boolean);
+      if(createBranch&&branches.includes(branch))throw new Error(`本地分支 ${branch} 已存在；请选择已有分支，或换一个新分支名称`);
+      if(!createBranch&&!branches.includes(branch))throw new Error(`本地分支 ${branch} 不存在，请刷新后选择已有分支`);
+      if(baseRef){
+        const resolved=(await this.command(status.root,['rev-parse','--verify','--quiet',baseRef+'^{commit}'],false,undefined,[0,1])).trim();
+        if(!/^[a-f0-9]{40,64}$/.test(resolved))throw new Error('起始分支或提交不存在');
+      }
+      const slug=branch.replaceAll('/','-').replace(/[^a-zA-Z0-9._-]/g,'-').replace(/^-+|-+$/g,'')||'worktree';
+      const stem=`${path.basename(status.root)}-${slug}`;
+      let target=path.resolve(path.dirname(status.root),stem);
+      for(let suffix=2;suffix<=100;suffix++){
+        try{await lstat(target);target=path.resolve(path.dirname(status.root),`${stem}-${suffix}`);}
+        catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')break;throw error;}
+      }
+      try{await lstat(target);throw new Error('自动生成的 Worktree 目录已被占用，请先清理后重试');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      await mkdir(path.dirname(target),{recursive:true});
+      const args=['worktree','add',...(createBranch?['-b',branch]:[]),target,...(createBranch?(baseRef?[baseRef]:[]):[branch])];
+      await this.command(status.root,args,true);
+      this.statuses.clear();
+      const created=(await this.worktrees(cwd)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?target.toLowerCase():target));
+      if(!created)throw new Error('Git 已创建 Worktree，但刷新列表失败；请刷新 Git 状态');
+      return created;
+    }finally{this.locks.delete(key);this.statuses.clear();}
+  }
+  async removeWorktree(cwd:string,worktreePath:string):Promise<void>{
+    const status=await this.status(cwd);this.requireRepository(status);
+    const worktree=(await this.worktrees(cwd)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?path.resolve(worktreePath).toLowerCase():path.resolve(worktreePath)));
+    if(!worktree)throw new Error('Worktree 不属于当前 Git 仓库，或已经被删除');
+    if(worktree.main)throw new Error('主工作区不能作为 Worktree 删除');
+    if(worktree.prunable)throw new Error('该 Worktree 已失效，请在终端执行 git worktree prune 清理元数据');
+    if(worktree.locked)throw new Error('该 Worktree 已锁定，请先在终端解除锁定');
+    const key=process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory;
+    if(this.locks.has(key))throw new Error('此仓库正在执行 Git 操作，请稍后重试');
+    this.locks.add(key);
+    try{await this.command(status.root,['worktree','remove',worktree.path],true);this.statuses.clear();}
+    finally{this.locks.delete(key);this.statuses.clear();}
   }
   status(cwd: string): Promise<GitStatus> {
     const pending=this.statuses.get(cwd);if(pending)return pending;
