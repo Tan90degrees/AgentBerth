@@ -5,8 +5,8 @@ import { AboutCard } from './AboutCard';
 import { filterSettings, settingsCatalog, settingsCategories, type SettingsCategory, type SettingsEntry } from './settings-catalog';
 import { readStored, saveStored } from './storage';
 
-export function SettingsPage({ projects, currentProjectId, onOpenPlugins, connected, apiVersion, agents, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
-  projects: import('../shared/protocol').Project[]; currentProjectId?: string; onOpenPlugins: (tab:'installed'|'agents'|'skills') => void;
+export function SettingsPage({ projects, currentProjectId, connected, apiVersion, agents, settings, draft, onChange, onDiscard, conflict, onError, error, platform, disabled, busy, restartDisabled, onSave, onRestart, running }: {
+  projects: import('../shared/protocol').Project[]; currentProjectId?: string;
   connected: boolean; apiVersion: number; agents: AgentDefinition[];
   settings: Settings; draft: Settings; onChange: (value: Settings) => void; onDiscard: () => void; conflict: boolean; onError: (error: string) => void; error: string;
   platform: string; disabled: boolean; busy: boolean; restartDisabled: boolean; onSave: (value: Settings) => Promise<boolean>; onRestart: () => void; running: number;
