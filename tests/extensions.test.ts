@@ -125,8 +125,22 @@ test('real daemon removes feature routes and keeps contributed Agent identities 
   const codex=await connection.rpc<any>('createSession',{projectId:project.id,title:'Disabled provider',agent:'codex'});await change({action:'disable',id:'agent.codex'});await assert.rejects(connection.rpc('history',{sessionId:codex.id}),/未启用/);await change({action:'enable',id:'agent.codex'});
   await change({action:'disable',id:'files'});await assert.rejects(connection.rpc('projectFiles',{projectId:project.id}),/未启用/);assert.equal((await connection.rpc<any>('state')).extensions.plugins.find((p:any)=>p.manifest.id==='git').status,'blocked');
   await change({action:'enable',id:'files'});await connection.rpc('projectFiles',{projectId:project.id});
+  await change({action:'bundle',id:'files',enabled:false});
+  let bundle=(await connection.rpc<any>('state')).extensions.plugins;
+  for(const id of ['files','git'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'disabled','Files and Git must disable together');
+  await change({action:'bundle',id:'files',enabled:true});
+  bundle=(await connection.rpc<any>('state')).extensions.plugins;
+  for(const id of ['files','git'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'active','Files and Git must enable together');
+
   const dir=await source(root,'example.integration',`exports.apply=(ctx,c)=>ctx.berth.agent({id:'main',definition:{name:c.name,command:'fixture-agent',skills:{project:'.fixture/skills'}}});`,{dependencies:['agents'],config:{name:{type:'string',title:'Name',default:'Fixture Agent'}}});
   await change({action:'install',path:dir});let agent=(await connection.rpc<any>('state')).agents.find((a:any)=>a.name==='Fixture Agent');assert.ok(agent.id);
+  await change({action:'bundle',id:'agents',enabled:false});
+  bundle=(await connection.rpc<any>('state')).extensions.plugins;
+  for(const id of ['agents','agent.codex','agent.claude','agent.opencode','pet'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'disabled','Agents, adapters and pet must disable together');
+  await change({action:'enable',id:'example.integration'}); // Restores its installed prerequisites without asking the user.
+  bundle=(await connection.rpc<any>('state')).extensions.plugins;
+  for(const id of ['agents','agent.codex','agent.claude','agent.opencode','pet','example.integration'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'active','Enabling an Agent integration must restore its bundled prerequisites');
+
   const versions=(server as any).agentVersions as Map<string,number>,revision=versions.get(agent.id);await change({action:'disable',id:'resources'});await change({action:'enable',id:'resources'});assert.equal(versions.get(agent.id),revision,'Unrelated plugins must not invalidate in-flight Agent history reads');
   const owned=await connection.rpc<any>('createSession',{projectId:project.id,title:'Plugin Agent',agent:agent.id});
   await change({action:'configure',id:'example.integration',config:{name:'Renamed Fixture'}});assert.equal((await connection.rpc<any>('state')).agents.find((a:any)=>a.name==='Renamed Fixture').id,agent.id);
