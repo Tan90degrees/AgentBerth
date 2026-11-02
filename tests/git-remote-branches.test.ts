@@ -111,11 +111,12 @@ test('remote-based Worktrees track the selected remote even when automatic track
   await git(b, 'add', '.'); await git(b, 'commit', '-m', 'remote worktree');
   await git(b, 'push', '-u', 'origin', 'feature/worktree-remote'); await operation('fetch');
   await git(a, 'config', 'branch.autoSetupMerge', 'false');
+  await git(a, 'config', 'core.autocrlf', 'true'); // Exercise Windows checkout conversion on every platform.
   const selected = await select('feature/worktree-remote');
   const before = await git(a, 'rev-parse', 'HEAD');
   const worktree = await service.createWorktree(a, 'local/worktree-remote', true, selected.ref);
   assert.equal(worktree.branch, 'local/worktree-remote');
-  assert.equal(await readFile(path.join(worktree.workingPath, 'remote-worktree.txt'), 'utf8'), 'remote content\n');
+  assert.equal((await readFile(path.join(worktree.workingPath, 'remote-worktree.txt'), 'utf8')).replace(/\r\n/g, '\n'), 'remote content\n');
   assert.equal(await git(worktree.workingPath, 'rev-parse', 'HEAD'), selected.head);
   assert.equal(await git(worktree.workingPath, 'rev-parse', '--abbrev-ref', '@{upstream}'), 'origin/feature/worktree-remote');
   assert.equal(await git(a, 'branch', '--show-current'), 'main'); assert.equal(await git(a, 'rev-parse', 'HEAD'), before);

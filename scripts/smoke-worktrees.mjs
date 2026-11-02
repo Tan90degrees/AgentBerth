@@ -41,6 +41,9 @@ export async function checkWorktrees(page,{folder,root,project,session,run,packa
   await outer.getByRole('button',{name:'新建 Worktree…',exact:true}).click();
   await create().getByLabel('分支来源',{exact:true}).selectOption('remote');
   await create().getByRole('button',{name:'获取远端分支',exact:true}).click();
+  // Fetch includes several real Git processes; Windows runners can exceed the normal UI timeout.
+  await page.waitForFunction(()=>document.querySelector('.worktree-create-form button[aria-label="获取远端分支"]')?.getAttribute('aria-busy')==='false',null,{timeout:60000});
+  assert.equal(await create().getByRole('alert').count(),0,await create().innerText());
   const remoteSelect=create().getByLabel('远端分支',{exact:true});
   await remoteSelect.locator('option').filter({hasText:'origin/feature/remote-worktree'}).waitFor({state:'attached'});
   await remoteSelect.selectOption({label:'origin/feature/remote-worktree'});
@@ -55,7 +58,7 @@ export async function checkWorktrees(page,{folder,root,project,session,run,packa
   await outer.getByRole('button',{name:'创建会话',exact:true}).click();await outer.waitFor({state:'hidden'});
   const createdSession=await page.evaluate(()=>window.berth.rpc('state').then(s=>s.sessions.find(s=>s.title==='Remote Worktree shell')));assert.equal(createdSession.worktreePath,created.workingPath);
   assert.equal(await git(created.workingPath,'rev-parse','--abbrev-ref','@{upstream}'),'origin/feature/remote-worktree');
-  assert.equal(await readFile(path.join(created.workingPath,'from-remote.txt'),'utf8'),'WORKTREE_REMOTE_CONTENT\n');
+  assert.equal((await readFile(path.join(created.workingPath,'from-remote.txt'),'utf8')).replace(/\r\n/g,'\n'),'WORKTREE_REMOTE_CONTENT\n');
   const started=await page.evaluate(id=>window.berth.rpc('start',{sessionId:id,cols:160,rows:25}),createdSession.id);
   const expected=created.workingPath;
   const command=process.platform==='win32'?`if((Get-Location).Path -eq '${expected.replaceAll("'","''")}'){Write-Output ('WORKTREE_'+'CWD_OK')}\r`:`if test "$PWD" = '${expected.replaceAll("'","'\\''")}'; then printf 'WORKTREE_%s_OK\\n' CWD; fi\r`;
