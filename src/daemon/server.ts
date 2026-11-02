@@ -72,6 +72,7 @@ export class DaemonServer {
   private mcpStats=new McpCallStats();
   private mcpStatsTimer:NodeJS.Timeout|null=null;
   private gitBusy = new Set<string>();
+  private worktreeBusy = new Set<string>();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
   private ws = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
   private clients = new Map<WebSocket, Client>();
@@ -202,6 +203,7 @@ export class DaemonServer {
       get editingProjects(){return self.editingProjects;},
       flushOutput:self.flushOutput.bind(self),
       get gitBusy(){return self.gitBusy;},
+      get worktreeBusy(){return self.worktreeBusy;},
       get git(){return self.git;},
       get historyBusy(){return self.historyBusy;},
       get live(){return self.live;},
@@ -278,6 +280,7 @@ export class DaemonServer {
       get closing(){return self.closing;},
       get git(){return self.git;},
       get gitBusy(){return self.gitBusy;},
+      get worktreeBusy(){return self.worktreeBusy;},
       changed:self.changed.bind(self),
       requireIdle:self.requireIdle.bind(self),
       removeLogs:self.removeLogs.bind(self),
@@ -483,7 +486,7 @@ export class DaemonServer {
   private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:')||['codex','claude','opencode'].includes(session.agent) ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
   private async sessionProjectPath(session: import('../shared/protocol').Session): Promise<string> {
     const projectPath = this.store.project(session.projectId).path;
-    return session.remote ? projectPath : this.git.resolveWorktree(projectPath, session.worktreePath ?? null);
+    return session.remote || !session.worktreePath ? projectPath : this.git.resolveWorktree(projectPath, session.worktreePath);
   }
   private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
     const project = await this.sessionProjectPath(session);
@@ -602,7 +605,7 @@ export class DaemonServer {
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     const project = this.store.project(session.projectId);
-    const projectPath = session.remote ? project.path : await this.git.resolveWorktree(project.path, session.worktreePath ?? null);
+    const projectPath = session.remote || !session.worktreePath ? project.path : await this.git.resolveWorktree(project.path, session.worktreePath);
     const version = this.agentVersion(session.agent);
     let command = resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
