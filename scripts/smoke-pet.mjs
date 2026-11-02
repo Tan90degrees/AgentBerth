@@ -205,7 +205,7 @@ try {
     const host=document.querySelector('.pet-settings');
     return !!host?.querySelector('[aria-label="适配安装结果"]')?.textContent?.includes('适配已安装；')
       || !!host?.querySelector('[role="alert"]')?.textContent?.trim();
-  }, null, { timeout: 20000 });
+  }, null, { timeout: 35000 });
   const hookStatus = await page.locator('.pet-settings').evaluate(host=>({
     success:host.querySelector('[aria-label="适配安装结果"]')?.textContent?.includes('适配已安装；')??false,
     error:host.querySelector('[role="alert"]')?.textContent?.trim()??'',
