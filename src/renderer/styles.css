@@ -2536,8 +2536,8 @@ textarea:focus-visible {
   min-width: 0;
 }
 .worktree-row.selected {
-  border-color: var(--accent);
-  background: var(--surface-hover);
+  border-color: var(--focus);
+  background: var(--surface-muted);
 }
 .worktree-select {
   display: flex;
