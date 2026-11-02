@@ -1,7 +1,7 @@
-import { checkWorktrees } from './smoke-worktrees.mjs';
+import { cleanupSmoke } from './smoke-cleanup.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -30,16 +30,9 @@ const git = async (...args) => execute('git', ['-c', 'commit.gpgsign=false', '-C
 await git('init', '--initial-branch=main'); await git('config', 'user.name', 'File Smoke'); await git('config', 'user.email', 'smoke@example.invalid');
 await git('add', '.gitignore', 'README.md', 'src/code.ts'); await git('add', '-f', 'tracked.log'); await git('commit', '-m', 'fixture');
 await mkdir('test-results', { recursive: true });
-let application, daemonPid;
+let application, daemonPid, failure;
 const step = message => console.log(`File smoke: ${message}`);
 async function coreSettings(page,category){await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:category,exact:true}).click();}
-async function closeApplication(app) {
-  if (!app) return;
-  const process = app.process(); let onExit, timer;
-  const exited = process.exitCode !== null || process.signalCode !== null ? Promise.resolve() : new Promise(resolve => { onExit = resolve; process.once('exit', onExit); });
-  try { await Promise.race([exited, app.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('File smoke application did not exit')), 20000); })]); }
-  finally { clearTimeout(timer); if (onExit) process.removeListener('exit', onExit); }
-}
 try {
   step('launch and keep a real terminal running throughout file navigation');
   const args = [...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--user-data-dir=' + path.join(folder, 'profile')];
@@ -377,20 +370,17 @@ try {
   await sideTabs.getByRole('tab', { name: '会话', exact: true }).click();
   assert.equal(await page.locator('.file-browser').count(), 0); await page.locator('.terminal-mount .xterm').waitFor();
   assert.equal((await liveRun()).pid, run.pid);
-  await checkWorktrees(page,{folder,root,project,session,run,packaged});
   await page.evaluate(id => window.berth.rpc('deleteProject', { projectId: id }), other.id);
   assert.deepEqual(errors, []);
   step('all file preview checks passed');
 } catch (error) {
+  failure = error;
   if (application) {
     const windows = application.windows();
     if (windows[0]) { await windows[0].screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}files-failed.png` }).catch(() => {}); console.error((await windows[0].locator('body').innerText().catch(() => '')).slice(-10000)); }
   }
   throw error;
 } finally {
-  try { await closeApplication(application); }
-  finally {
-    if (daemonPid) { try { process.kill(daemonPid, 0); process.kill(daemonPid, 'SIGTERM'); } catch {} }
-    await rm(folder, { recursive: true, force: true, maxRetries: 5 });
-  }
+  try { await cleanupSmoke(application, daemonPid, folder); }
+  catch (error) { if (failure) console.error('File smoke cleanup:', error); else throw error; }
 }

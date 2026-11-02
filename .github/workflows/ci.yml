@@ -80,6 +80,10 @@ jobs:
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
+      - name: Worktree smoke (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        run: xvfb-run -a node scripts/smoke-worktrees.mjs
+        timeout-minutes: 3
       - name: Legacy database startup and exit (Windows)
         if: runner.os == 'Windows'
         run: node scripts/smoke-startup-failure.mjs
@@ -94,6 +98,10 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
         run: xvfb-run -a node scripts/smoke-pet.mjs
         timeout-minutes: 2
+      - name: Worktree smoke (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        run: node scripts/smoke-worktrees.mjs
+        timeout-minutes: 3
       - name: Desktop pet smoke (Windows)
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-pet.mjs
@@ -155,6 +163,11 @@ jobs:
         timeout-minutes: 5
         env:
           DEBUG: pw:browser
+      - name: Test packaged Worktree creation and remote branches
+        id: packaged-worktrees-smoke
+        if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
+        run: node scripts/smoke-worktrees.mjs --packaged
+        timeout-minutes: 3
       - name: Test packaged desktop pet and hooks
         id: packaged-pet-smoke
         if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
@@ -174,6 +187,7 @@ jobs:
         env:
           PACKAGED_WORKBENCH_RESULT: ${{ steps.packaged-smoke.outcome }}
           PACKAGED_FILES_RESULT: ${{ steps.packaged-files-smoke.outcome }}
+          PACKAGED_WORKTREES_RESULT: ${{ steps.packaged-worktrees-smoke.outcome }}
           PACKAGED_PET_RESULT: ${{ steps.packaged-pet-smoke.outcome }}
           PACKAGED_EXTENSIONS_RESULT: ${{ steps.packaged-extensions-smoke.outcome }}
           INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
@@ -186,8 +200,8 @@ jobs:
           }
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success' -and $env:PACKAGED_EXTENSIONS_RESULT -eq 'success') { 'success' } else { 'failure' }
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; pet = $env:PACKAGED_PET_RESULT; extensions = $env:PACKAGED_EXTENSIONS_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_WORKTREES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success' -and $env:PACKAGED_EXTENSIONS_RESULT -eq 'success') { 'success' } else { 'failure' }
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; worktrees = $env:PACKAGED_WORKTREES_RESULT; pet = $env:PACKAGED_PET_RESULT; extensions = $env:PACKAGED_EXTENSIONS_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}

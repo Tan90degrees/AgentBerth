@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
+import { cleanupSmoke } from './smoke-cleanup.mjs';
 const execute=promisify(execFile);
 const git=async(cwd,...args)=>(await execute('git',['-c','commit.gpgsign=false','-C',cwd,...args],{windowsHide:true})).stdout.trim();
 
@@ -74,15 +75,18 @@ export async function checkWorktrees(page,{folder,root,project,session,run,packa
 }
 
 if(process.argv[1]&&fileURLToPath(import.meta.url)===path.resolve(process.argv[1])){
+  const packaged=process.argv.includes('--packaged');
+  if(packaged&&process.platform!=='win32')throw new Error('Packaged worktree smoke requires Windows');
   const folder=await mkdtemp(path.join(os.tmpdir(),'berth-worktree-smoke-')),root=path.join(folder,'project');await mkdir(root);await mkdir('test-results',{recursive:true});
   await git(root,'init','--initial-branch=main');await git(root,'config','user.name','Worktree smoke');await git(root,'config','user.email','smoke@example.invalid');await writeFile(path.join(root,'base.txt'),'base');await git(root,'add','.');await git(root,'commit','-m','initial');
-  let app,daemonPid;
+  await Promise.all(Array.from({length:205},(_,i)=>writeFile(path.join(root,`untracked-${i}.txt`),'large source-control list\n')));
+  let app,daemonPid,failure;
   try{
-    const args=[...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),path.resolve('.'),'--user-data-dir='+path.join(folder,'profile'),'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader'];if(process.platform==='linux'&&process.getuid?.()===0)args.push('--no-sandbox');const env={...process.env,AGENTBERTH_DATA_DIR:path.join(folder,'data')};delete env.ELECTRON_RUN_AS_NODE;
-    app=await electron.launch({args,env,timeout:20000});const page=await app.firstWindow();page.setDefaultTimeout(12000);await page.getByRole('button',{name:'添加第一个项目'}).waitFor();
+    const args=[...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged?[]:[path.resolve('.')]),'--user-data-dir='+path.join(folder,'profile'),'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader'];if(process.platform==='linux'&&process.getuid?.()===0)args.push('--no-sandbox');const env={...process.env,AGENTBERTH_DATA_DIR:path.join(folder,'data')};delete env.ELECTRON_RUN_AS_NODE;
+    app=await electron.launch({executablePath:packaged?path.resolve('release/win-unpacked/AgentBerth.exe'):undefined,args,env,timeout:20000});const page=await app.firstWindow();page.setDefaultTimeout(12000);await page.getByRole('button',{name:'添加第一个项目'}).waitFor();
     daemonPid=JSON.parse(await readFile(path.join(folder,'data','runtime.json'),'utf8')).pid;
     const project=await page.evaluate(root=>window.berth.rpc('createProject',{name:'Worktree fixture',path:root}),root),session=await page.evaluate(projectId=>window.berth.rpc('createSession',{projectId,title:'Original shell',agent:'shell'}),project.id),run=await page.evaluate(sessionId=>window.berth.rpc('start',{sessionId,cols:120,rows:25}),session.id);
-    page.on('pageerror',error=>console.error(error));await checkWorktrees(page,{folder,root,project,session,run});
-  }catch(error){if(app){const page=await app.firstWindow();console.error(await page.locator('body').innerText());await page.screenshot({path:'test-results/worktree-failure.png'}).catch(()=>{});}throw error;}
-  finally{if(app)await app.close();if(daemonPid){try{process.kill(daemonPid,'SIGTERM');}catch{}}await rm(folder,{recursive:true,force:true,maxRetries:8,retryDelay:100});}
+    page.on('pageerror',error=>console.error(error));await checkWorktrees(page,{folder,root,project,session,run,packaged});
+  }catch(error){failure=error;if(app){const page=await app.firstWindow();console.error(await page.locator('body').innerText());await page.screenshot({path:`test-results/${packaged?'packaged-':''}worktree-failure.png`}).catch(()=>{});}console.error('Worktree smoke failure:',error);console.error('Daemon log:',await readFile(path.join(folder,'data','daemon.log'),'utf8').then(text=>text.slice(-6000)).catch(()=>''));throw error;}
+  finally{try{await cleanupSmoke(app,daemonPid,folder);}catch(error){if(failure)console.error('Worktree smoke cleanup:',error);else throw error;}}
 }
