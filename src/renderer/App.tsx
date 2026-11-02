@@ -60,7 +60,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   useEffect(() => { setFileTarget(current => current?.projectId === projectId ? current : null); }, [projectId, fileTarget?.projectId]);
   const [gitPreview, setGitPreview] = useState<GitDiffRequest | null>(null);
   const openPreview = useCallback(() => { setGitPreview(null); setTab('preview'); }, []);
-  const openDiff = useCallback((path: string, staged: boolean, projectPath = false) => { setPage('workspace'); setFilesActivated(true); setTab('preview'); setGitPreview({ projectId, path, staged, projectPath }); }, [projectId]);
+  const openDiff = useCallback((path: string, staged: boolean, projectPath = false) => { setPage('workspace'); setFilesActivated(true); setTab('preview'); setGitPreview({ projectId, worktreePath: null, path, staged, projectPath }); }, [projectId]);
   const openGit = (value: Project) => { setSidebarCollapsed(false);setProjectId(value.id); setSidebarView('git'); setPage('workspace'); };
   useEffect(() => { setGitPreview(null); }, [projectId]);
   const openPath = useCallback((query: string) => { setSidebarCollapsed(false);setPage('workspace'); setSidebarView('files'); setFilesActivated(true); setFileTarget({ projectId, query, nonce: ++fileTargetSequence.current }); }, [projectId]);
