@@ -183,14 +183,15 @@ try {
   await page.getByRole('button', { name: '切换为深色模式' }).click();
   step('preview typography persists across files and supports custom installed fonts');
   assert.equal(await page.getByRole('button', { name: '预览字体设置', exact: true }).count(), 0);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:'文件预览',exact:true}).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.locator('[data-plugin-id="files"]').getByRole('button',{name:'配置',exact:true}).click();
   let fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByLabel('预览字号', { exact: true }).fill('18');
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('consolas');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('berth.previewAppearance')).size === 18);
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('custom');
   await fonts.getByLabel('自定义预览字体', { exact: true }).fill('Courier New');
+  await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();
   await page.getByRole('tablist', { name: '侧栏视图' }).getByRole('tab', { name: '文件', exact: true }).click();
   for (const [file, language] of [['config.json', 'json'], ['config.yaml', 'yaml'], ['main.scala', 'scala']]) {
     await entry(file).click();
@@ -201,10 +202,11 @@ try {
   await preview.getByLabel('预览高亮语言', { exact: true }).selectOption('plaintext');
   await page.waitForFunction(() => document.querySelector('.preview-document:not([hidden]) .source-code code')?.dataset.language === 'plaintext');
   assert.equal(await preview.locator('.source-code [class*="hljs-"]').count(), 0);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:'文件预览',exact:true}).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.locator('[data-plugin-id="files"]').getByRole('button',{name:'配置',exact:true}).click();
   fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByRole('button', { name: '恢复默认预览字体', exact: true }).click();
+  await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();
   await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
   step('source control sidebar previews separate index/worktree diffs, stages selections, unstages and commits without restarting the terminal');
   await sideTabs.getByRole('tab', { name: 'Git', exact: true }).click();
@@ -354,7 +356,8 @@ try {
     return agent;
   }, { projectId: project.id, source: skillSource });
   await page.locator('.sidebar-settings').getByRole('button', { name: '插件', exact: true }).click();
-  await page.getByRole('navigation', { name: '插件分类' }).getByRole('button', { name: /Skills/ }).click();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).click();
+  await page.locator('[data-plugin-id="agents"]').getByRole('button',{name:'配置',exact:true}).click();
   await page.getByLabel('Skill Agent 类型', { exact: true }).selectOption(skillAgent.id);
   const skillRow = page.locator('.skill-row').filter({ has: page.getByText('smoke-skill', { exact: true }) });
   await skillRow.getByRole('button', { name: '查看 / 编辑', exact: true }).waitFor();
@@ -369,6 +372,7 @@ try {
   await skillRow.getByRole('button', { name: '移除', exact: true }).click();
   await page.getByRole('dialog', { name: '移除 Skill', exact: true }).getByRole('button', { name: '移除 Skill', exact: true }).click();
   await skillRow.waitFor({ state: 'hidden' });
+  await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();
   await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
   const current = await liveRun(); assert.equal(current.id, run.id); assert.equal(current.pid, run.pid); assert.equal(current.status, 'running');
   await mainTabs.getByRole('tab', { name: '终端', exact: true }).click();
