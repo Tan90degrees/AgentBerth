@@ -76,7 +76,7 @@ test('diff handles binary, nested project scope, empty files and oversized text;
   await assert.rejects(act('stage', { paths: ['.git/config'] }), /路径无效/);
   await assert.rejects(act('stage', { paths: ['nested'] }), /状态已变化/);
   await assert.rejects(act('commit', { message: 'nothing' }), /没有已暂存/);
-  await assert.rejects(service.diff(root, { projectId: 'fixture', path: '../outside', staged: false, projectPath: false }), /路径无效/);
+  await assert.rejects(service.diff(root, { projectId: 'fixture', worktreePath: null, path: '../outside', staged: false, projectPath: false }), /路径无效/);
 });
 
 test('unified diff line numbers distinguish file headers, additions, removals and multiple hunks', () => {
