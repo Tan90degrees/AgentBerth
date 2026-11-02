@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentDefinition, Project } from '../shared/protocol';
 import type { SkillItem, SkillLocation, SkillPage } from '../shared/skills';
 import { AsyncButton } from './AsyncButton';
