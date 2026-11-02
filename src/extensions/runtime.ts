@@ -46,7 +46,7 @@ export class ExtensionRuntime {
     return {manifest:record.manifest,generation:this.generations.get(record.manifest.id)??0,...(active&&record.root&&record.manifest.desktopEntry?{desktop:{root:record.root,entry:packagePath(record.root,record.manifest.desktopEntry),dataDirectory:path.join(this.directory,'data',record.manifest.id)}}:{}),installed:record.installed,enabled:record.enabled,status:failure?'failed':!record.installed||!record.enabled?'disabled':active?.fiber.state===FiberState.ACTIVE?'active':'blocked',builtin:!record.root,development:!!record.development,isAgent:record.manifest.kind==='agent'||!!record.agentContribution||!!active?.agents.size,error,config:record.config,commands:[...(active?.commands.values()??[])].map(c=>c.description),views:active?record.manifest.views:[]};
   }),warnings:this.warnings};}
   active(id:string){return !this.errors.has(id)&&this.mounted.get(id)?.fiber.state===FiberState.ACTIVE;}
-  require(id:string){if(this.changing.has(id))throw new Error('插件正在更新，请稍后重试；操作尚未执行');if(!this.active(id))throw new Error(`插件“${this.records.get(id)?.manifest.name??id}”未启用，请在设置 → 插件中启用`);}
+  require(id:string){if(this.changing.has(id))throw new Error('插件正在更新，请稍后重试；操作尚未执行');if(!this.active(id))throw new Error(`插件“${this.records.get(id)?.manifest.name??id}”未启用，请在插件中心启用`);}
   private load(record:RecordEntry):Plugin {
     return loadModule(record.root!,packagePath(record.root!,record.manifest.entry));
   }
@@ -80,6 +80,22 @@ export class ExtensionRuntime {
     }}this.publish();
   }
   private serialize<T>(action:()=>Promise<T>):Promise<T>{const task=this.chain.catch(()=>{}).then(async()=>{await this.ready;if(this.closed)throw new Error('插件宿主已关闭');return action();});this.chain=task;return task;}
+  /** An installed plugin never asks users to toggle a prerequisite manually.
+   * Missing third-party packages remain discoverable without silently installing
+   * unknown code. Existing dependencies are activated inside the same change. */
+  private activateDependencies(manifest:ExtensionManifest){
+    const previous=new Map<string,boolean>();
+    const visit=(id:string,seen:Set<string>)=>{
+      if(seen.has(id))return;seen.add(id);
+      const record=this.records.get(id);
+      if(!record||!record.installed)return;
+      const family=id==='agents'?['agents','agent.codex','agent.claude','agent.opencode','pet']:id==='files'?['files','git']:[id];
+      for(const part of family){const member=this.records.get(part);if(member?.installed){if(!previous.has(part))previous.set(part,member.enabled);member.enabled=true;}}
+      for(const dependency of record.manifest.dependencies)visit(dependency,seen);
+    };
+    for(const dependency of manifest.dependencies)visit(dependency,new Set());
+    return previous;
+  }
   /** One user-facing switch owns every tightly coupled built-in submodule. */
   async bundle(root:'agents'|'files',enabled:boolean){
     return this.serialize(async()=>{
@@ -113,6 +129,7 @@ export class ExtensionRuntime {
     const record=this.records.get(id);if(!record)throw new Error('插件不存在');
     if(action==='enable'&&record.root&&!record.installed)throw new Error('请重新选择插件包安装');
     const previous={...record,config:{...record.config}},previousModules=new Map(this.modules);
+    let activated=new Map<string,boolean>();
     const nextManifest=['reload','enable'].includes(action)&&record.root?await readManifest(record.root):record.manifest;
     this.validateDependencies(id,nextManifest);
     const nextConfig=resolveExtensionConfig(nextManifest,action==='configure'?config??{}:record.config);
@@ -122,14 +139,14 @@ export class ExtensionRuntime {
       this.assertIdle(affected);await this.host.beforeChange(affected);
       await this.dispose(affected);for(const key of affected){this.errors.delete(key);this.notices.delete(key);}
       record.manifest=nextManifest;record.config=nextConfig;if(nextModule)this.modules.set(id,nextModule);
-      if(action==='enable'){record.installed=true;record.enabled=true;}
+      if(action==='enable'){record.installed=true;record.enabled=true;activated=this.activateDependencies(nextManifest);}
       if(action==='disable'||action==='uninstall')record.enabled=false;
       if(action==='uninstall')record.installed=false;
       try {
         await this.reconcile();const failed=affected.find(key=>this.errors.has(key));if(failed)throw new Error(this.errors.get(failed));
         await this.persist();
       } catch(error) {
-        await this.dispose(affected);this.records.set(id,previous);this.modules=previousModules;
+        await this.dispose(affected);this.records.set(id,previous);for(const [key,enabled] of activated){const entry=this.records.get(key);if(entry)entry.enabled=enabled;}this.modules=previousModules;
         for(const key of affected)this.errors.delete(key);await this.reconcile();
         throw new Error('插件更新失败，已恢复旧配置与代码：'+String(error));
       }
@@ -141,7 +158,7 @@ export class ExtensionRuntime {
   async install(source:string,development=false){return this.serialize(async()=>{
     const base=path.join(this.directory,'packages'),staged=await stagePackage(source,base,development);
     const id=staged.manifest.id,previous=this.records.get(id),previousModules=new Map(this.modules),affected=this.dependents(id);
-    let root=staged.root,changed=false;
+    let root=staged.root,changed=false,activated=new Map<string,boolean>();
     try {
       if(builtinExtensions.some(p=>p.id===id))throw new Error('外部插件不能覆盖内置插件 ID');
       this.validateDependencies(id,staged.manifest);
@@ -151,11 +168,11 @@ export class ExtensionRuntime {
       // Reload from its final location so relative imports and assets keep working.
       const loaded=this.load({manifest:staged.manifest,root,installed:true,enabled:true,config});
       changed=true;await this.dispose(affected);for(const key of affected){this.errors.delete(key);this.notices.delete(key);}
-      this.modules.set(id,loaded);this.records.set(id,{manifest:staged.manifest,installed:true,enabled:true,config,root,development,agentContribution:previous?.agentContribution});
+      this.modules.set(id,loaded);this.records.set(id,{manifest:staged.manifest,installed:true,enabled:true,config,root,development,agentContribution:previous?.agentContribution});activated=this.activateDependencies(staged.manifest);
       await this.reconcile();const failed=affected.find(key=>this.errors.has(key));if(failed)throw new Error(this.errors.get(failed));
       await this.persist();this.installWatchers();
     } catch(error) {
-      if(changed){await this.dispose(affected);if(previous)this.records.set(id,previous);else this.records.delete(id);this.modules=previousModules;for(const key of affected)this.errors.delete(key);await this.reconcile();}
+      if(changed){await this.dispose(affected);if(previous)this.records.set(id,previous);else this.records.delete(id);for(const [key,enabled] of activated){const entry=this.records.get(key);if(entry)entry.enabled=enabled;}this.modules=previousModules;for(const key of affected)this.errors.delete(key);await this.reconcile();}
       if(!development&&root!==staged.root)await rm(root,{recursive:true,force:true});throw error;
     } finally {for(const key of affected)this.changing.delete(key);await staged.cleanup();}
     if(previous?.root&&!previous.development&&previous.root!==root)await rm(previous.root,{recursive:true,force:true});return this.snapshot();
