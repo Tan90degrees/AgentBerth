@@ -34,12 +34,12 @@ import { windowsPtyFor } from '../shared/desktop';
 import { restartConfiguration, shouldResume, type RestartEntry } from './recovery';
 import type { WorkspaceRecovery, State } from '../shared/protocol';
 import { ExtensionRuntime } from '../extensions/runtime';
-import { mount as mountWorkspace } from '../plugins/workspace';
-import { mount as mountSsh } from '../plugins/ssh';
-import { mount as mountAgents } from '../plugins/agents';
-import { mount as mountGit } from '../plugins/git';
-import { mount as mountFiles } from '../plugins/files';
-import { mount as mountResources } from '../plugins/resources';
+import { mount as mountWorkspace } from '../core/workspace';
+import { mount as mountSsh } from '../core/ssh';
+import { mount as mountAgents } from '../core/agents';
+import { mount as mountGit } from '../core/git';
+import { mount as mountFiles } from '../core/files';
+import { mount as mountResources } from '../core/resources';
 import { Context } from 'cordis';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -55,7 +55,7 @@ export interface Client { id: string; disposing: boolean; subscriptions: Set<str
 export class DaemonServer {
   private extensions:ExtensionRuntime;
   private coreContext=new Context();
-  private extensionRoutes=new Map<string,(request:Request,client:Client)=>Promise<unknown>>();
+  private coreRoutes=new Map<string,(request:Request,client:Client)=>Promise<unknown>>();
   private extensionCaller=new AsyncLocalStorage<Client>();
   private extensionAgents=new Map<string,string>();
   private sshProvider: Client | null = null;
@@ -192,7 +192,7 @@ export class DaemonServer {
     this.broadcast({ event: 'state', data: state });
   }
   private snapshot(): State { const state=this.store.state();return {...state,extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
-  workspacePluginPort() {
+  workspaceCorePort() {
     const self=this;
     return {
       attach:self.attach.bind(self),
@@ -216,7 +216,7 @@ export class DaemonServer {
       validateRemote:self.validateRemote.bind(self)
     };
   }
-  sshPluginPort() {
+  sshCorePort() {
     const self=this;
     return {
       get agentOwners(){return self.agentOwners;},
@@ -250,7 +250,7 @@ export class DaemonServer {
       validateRemote:self.validateRemote.bind(self)
     };
   }
-  agentsPluginPort() {
+  agentsCorePort() {
     const self=this;
     return {
       agentVersion:self.agentVersion.bind(self),
@@ -271,7 +271,7 @@ export class DaemonServer {
       get store(){return self.store;}
     };
   }
-  gitPluginPort() {
+  gitCorePort() {
     const self=this;
     return {
       get closing(){return self.closing;},
@@ -281,14 +281,14 @@ export class DaemonServer {
       get store(){return self.store;}
     };
   }
-  filesPluginPort() {
+  filesCorePort() {
     const self=this;
     return {
       get files(){return self.files;},
       get store(){return self.store;}
     };
   }
-  resourcesPluginPort() {
+  resourcesCorePort() {
     const self=this;
     return {
       get live(){return self.live;},
@@ -296,7 +296,7 @@ export class DaemonServer {
       get store(){return self.store;}
     };
   }
-  registerExtensionRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.extensionRoutes.has(method))throw new Error('插件接口重复：'+method);this.extensionRoutes.set(method,handler);return()=>{this.extensionRoutes.delete(method);};});}
+  registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
     const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
       'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'}}},
@@ -444,7 +444,7 @@ export class DaemonServer {
       if(p.action==='view')return this.extensions.view(p.id,p.view);
       return this.extensions.change(p.action,p.id,'config' in p?p.config:undefined);
     }
-    const extensionHandler=this.extensionRoutes.get(request.method);if(extensionHandler)return extensionHandler(request,client);
+    const coreHandler=this.coreRoutes.get(request.method);if(coreHandler)return coreHandler(request,client);
     switch (request.method) {
       case 'state': return this.snapshot();
       case 'shutdown':
