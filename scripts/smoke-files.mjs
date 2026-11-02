@@ -31,6 +31,7 @@ await git('add', '.gitignore', 'README.md', 'src/code.ts'); await git('add', '-f
 await mkdir('test-results', { recursive: true });
 let application, daemonPid;
 const step = message => console.log(`File smoke: ${message}`);
+async function coreSettings(page,category){await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:category,exact:true}).click();}
 async function closeApplication(app) {
   if (!app) return;
   const process = app.process(); let onExit, timer;
