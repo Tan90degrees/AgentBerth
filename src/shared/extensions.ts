@@ -21,7 +21,8 @@ export const extensionRequestSchema=z.discriminatedUnion('action',[
   z.object({action:z.literal('view'),id:extensionId,view:extensionId}).strict(),
 ]);
 export type ExtensionRequest=z.infer<typeof extensionRequestSchema>;
-export function extensionEnabled(snapshot:ExtensionSnapshot|undefined,id:string):boolean {return !snapshot||snapshot.plugins.some(p=>p.manifest.id===id&&p.status==='active');}
+export const CORE_CAPABILITIES=new Set(['workspace','agents','agent-registry','ssh','mcp','files','git','resources','appearance','skills','worktrees']);
+export function extensionEnabled(snapshot:ExtensionSnapshot|undefined,id:string):boolean {return CORE_CAPABILITIES.has(id)||!snapshot||snapshot.plugins.some(p=>p.manifest.id===id&&p.status==='active');}
 export function resolveExtensionConfig(manifest:ExtensionManifest,input:ExtensionConfig):ExtensionConfig {
   const result:ExtensionConfig={};
   for(const name of Object.keys(input))if(!Object.hasOwn(manifest.config,name))throw new Error(`未知插件配置：${name}`);
