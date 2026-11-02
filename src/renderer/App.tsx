@@ -40,7 +40,7 @@ function Icon({ kind }: { kind: 'folder' | 'terminal' | 'plus' | 'arrow' | 'hist
 }
 export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [state, setState] = useState<State>({ projects: [], sessions: [], maxActiveTerminals: DEFAULT_SETTINGS.maxActiveTerminals, maxSshTerminals: DEFAULT_SETTINGS.maxSshTerminals, platform: '', settings: structuredClone(DEFAULT_SETTINGS), apiVersion: API_VERSION });
-  const features=Object.fromEntries(['workspace','agents','ssh','pet','files','git','resources','appearance'].map(id=>[id,extensionEnabled(state.extensions,id)]));
+  const features={workspace:true,agents:true,ssh:true,pet:extensionEnabled(state.extensions,'pet'),files:true,git:true,resources:true,appearance:true};
   const [extensionView,setExtensionView]=useState<{pluginId:string;viewId:string}|null>(null);
   const selectedExtension=state.extensions?.plugins.find(p=>p.manifest.id===extensionView?.pluginId&&p.status==='active');
   useEffect(()=>{if(!features.files&&sidebarView==='files'||!features.git&&sidebarView==='git')setSidebarView('sessions');if(!features.files&&tab==='preview')setTab('terminal');if(!features.ssh)setSshOpen(false);if(!features.git)setGitPreview(null);if(!features.workspace){setPage('plugins');}if(extensionView&&!selectedExtension)setExtensionView(null);},[features.files,features.git,features.ssh,features.workspace,selectedExtension?.manifest.id]);
@@ -150,7 +150,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const actionSession = state.sessions.find(item => item.id === (modalTarget?.sessionId ?? sessionId));
   const actionProjectSessions = state.sessions.filter(item => item.projectId === actionProject?.id);
   const sessionDefinition = state.agents?.find(item => item.id === session?.agent);
-  const sessionAgentEnabled=features.agents&&!!session&&(!['codex','claude','opencode'].includes(session.agent)||extensionEnabled(state.extensions,'agent.'+session.agent));
+  const sessionAgentEnabled=!!session&&(!['codex','claude','opencode'].includes(session.agent)||extensionEnabled(state.extensions,'agent.'+session.agent));
   const canHistory = sessionAgentEnabled && !!session && (['codex', 'claude', 'opencode'].includes(session.agent) || !!sessionDefinition?.integration || !!sessionDefinition?.plugin?.history);
   const canResume = sessionAgentEnabled && !!session && (['codex', 'claude', 'opencode'].includes(session.agent) || !!sessionDefinition?.resumeCommand || !!sessionDefinition?.plugin?.resume);
   const recordOutput = session?.agent === 'shell';
@@ -241,7 +241,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     setTitle(value.title); setAgent(value.agent); setCommand(value.command); setTerminal(value.terminal); setStartNow(value.startNow); setRemote(value.remote ?? null);
     initialForm.current = JSON.stringify({ ...value, remote: value.remote ?? null }); openModal(value.remote ? editing ? 'editSshSession' : 'sshSession' : editing ? 'editSession' : 'session', target);
   }
-  function newSession(id = projectId) { const selected=state.settings.defaultAgent;const fallback=selected==='custom'||!features.agents||['codex','claude','opencode'].includes(selected)&&!extensionEnabled(state.extensions,'agent.'+selected)||selected.startsWith('agent:')&&!state.agents?.some(item=>item.id===selected&&item.sourceId?.startsWith('ext.'));sessionForm({ title: '', agent: fallback?'shell':selected, command: state.settings.defaultAgent === 'custom' ? state.settings.defaultCommand : state.agents?.find(item => item.id === state.settings.defaultAgent)?.command ?? '', terminal: null, startNow: true }, false, { projectId: id }); }
+  function newSession(id = projectId) { const selected=state.settings.defaultAgent;const fallback=selected==='custom'||['codex','claude','opencode'].includes(selected)&&!extensionEnabled(state.extensions,'agent.'+selected)||selected.startsWith('agent:')&&!state.agents?.some(item=>item.id===selected&&item.sourceId?.startsWith('ext.'));sessionForm({ title: '', agent: fallback?'shell':selected, command: state.settings.defaultAgent === 'custom' ? state.settings.defaultCommand : state.agents?.find(item => item.id === state.settings.defaultAgent)?.command ?? '', terminal: null, startNow: true }, false, { projectId: id }); }
   function newSshSession() { sessionForm({title:'', agent:'shell', command:'', terminal:null, startNow:true, remote:{host:'',directory:''}}); }
   function editSession(value = session) { if (value) sessionForm({ title: value.title, agent: value.agent, command: value.command, terminal: value.terminal, startNow: false, remote: value.remote ?? null }, true, { projectId: value.projectId, sessionId: value.id }); }
   function copySession(value = session) { if (value) sessionForm({ title: value.title.slice(0, 90) + ' · 副本', agent: value.agent, command: value.command, terminal: value.terminal, startNow: false, remote: value.remote ?? null }, false, { projectId: value.projectId }); }
