@@ -2596,3 +2596,5 @@ textarea:focus-visible {
 .worktree-create-form footer { display: flex; justify-content: flex-end; gap: 7px; }
 .worktree-picker { padding: 2px 0 8px; }
 .worktree-picker > button { align-self: flex-start; }
+
+.worktree-fetch {display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}.worktree-fetch label {flex:1;min-width:160px}.worktree-fetch button {margin-bottom:0}

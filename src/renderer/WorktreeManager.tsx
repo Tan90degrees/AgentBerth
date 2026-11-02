@@ -1,127 +1,144 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
+import { Dialog } from './Dialog';
+import { AsyncButton } from './AsyncButton';
 import type { GitStatus, GitWorktree, Project } from '../shared/protocol';
 
 function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
-  const [branches, setBranches] = useState<string[]>([]);
+  const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const alive = useRef(true);
-  const generation = useRef(0);
-
+  const alive = useRef(true), generation = useRef(0);
   const refresh = useCallback(async () => {
     if (!enabled || !visible) return;
     const token = ++generation.current;
     setLoading(true);
     try {
-      const items = await window.berth.rpc<GitWorktree[]>('gitWorktrees', { projectId: project.id });
-      let names: string[] = [];
-      try {
-        const status = await window.berth.rpc<GitStatus>('gitStatus', { projectId: project.id });
-        if (status.kind === 'repository') names = status.branches;
-      } catch { /* The worktree list remains useful if branch metadata is temporarily unavailable. */ }
+      const [items, metadata] = await Promise.all([
+        window.berth.rpc<GitWorktree[]>('gitWorktrees', { projectId: project.id }),
+        window.berth.rpc<GitStatus>('gitStatus', { projectId: project.id }),
+      ]);
       if (alive.current && generation.current === token) {
-        setWorktrees(items);
-        setBranches(names);
-        setError('');
+        setWorktrees(items); setStatus(metadata.kind === 'repository' ? metadata : null);
+        setError(metadata.kind === 'repository' ? '' : metadata.message ?? '无法读取分支，请刷新重试');
       }
     } catch (reason) {
       if (alive.current && generation.current === token) {
-        setWorktrees([]);
-        setBranches([]);
-        setError(String(reason).replace(/^Error: /, ''));
+        setStatus(null); setError(String(reason).replace(/^Error: /, ''));
       }
-    } finally {
-      if (alive.current && generation.current === token) setLoading(false);
-    }
+    } finally { if (alive.current && generation.current === token) setLoading(false); }
   }, [project.id, enabled, visible]);
-
   useEffect(() => {
     alive.current = true;
     if (enabled && visible) void refresh();
     const update = () => { if (visible) void refresh(); };
     window.addEventListener('berth:worktree-refresh', update);
-    return () => {
-      generation.current++;
-      window.removeEventListener('berth:worktree-refresh', update);
-    };
+    return () => { generation.current++; window.removeEventListener('berth:worktree-refresh', update); };
   }, [refresh, enabled, visible]);
-
   useEffect(() => () => { alive.current = false; generation.current++; }, []);
-
+  const changed = () => {
+    window.dispatchEvent(new Event('berth:worktree-refresh'));
+    window.dispatchEvent(new Event('berth:git-refresh'));
+  };
   const create = useCallback(async (branch: string, createBranch: boolean, baseRef?: string) => {
     const item = await window.berth.rpc<GitWorktree>('gitCreateWorktree', {
       projectId: project.id, branch, createBranch, ...(baseRef ? { baseRef } : {}),
     });
-    window.dispatchEvent(new Event('berth:worktree-refresh'));
-    window.dispatchEvent(new Event('berth:git-refresh'));
-    await refresh();
-    return item;
+    changed(); await refresh(); return item;
   }, [project.id, refresh]);
-
   const remove = useCallback(async (item: GitWorktree, deleteSessions: boolean) => {
     await window.berth.rpc('gitRemoveWorktree', { projectId: project.id, path: item.path, deleteSessions });
-    window.dispatchEvent(new Event('berth:worktree-refresh'));
-    window.dispatchEvent(new Event('berth:git-refresh'));
-    await refresh();
+    changed(); await refresh();
   }, [project.id, refresh]);
-
-  return { worktrees, branches, loading, error, refresh, create, remove };
+  const fetchRemote = useCallback(async (remote: string) => {
+    const current = await window.berth.rpc<GitStatus>('gitStatus', { projectId: project.id });
+    if (current.kind !== 'repository') throw new Error(current.message ?? '无法读取仓库');
+    await window.berth.rpc('gitOperation', { projectId: project.id, action: 'fetch', remote,
+      expected: { root: current.root, branch: current.branch, head: current.head } });
+    changed(); await refresh();
+  }, [project.id, refresh]);
+  return { worktrees, status, loading, error, refresh, create, remove, fetchRemote };
 }
 
-function WorktreeCreateForm({
-  branches, worktrees, disabled, onCreate, onCancel, onCreated,
-}: {
-  branches: string[];
-  worktrees: GitWorktree[];
-  disabled: boolean;
+function WorktreeCreateDialog({ status, worktrees, disabled, error, onFetch, onCreate, onCancel, onCreated }: {
+  status: GitStatus | null; worktrees: GitWorktree[]; disabled: boolean; error: string;
+  onFetch: (remote: string) => Promise<void>;
   onCreate: (branch: string, createBranch: boolean, baseRef?: string) => Promise<GitWorktree | null>;
-  onCancel: () => void;
-  onCreated: (item: GitWorktree) => void;
+  onCancel: () => void; onCreated: (item: GitWorktree) => void;
 }) {
-  const [mode, setMode] = useState<'new' | 'existing'>('new');
-  const [branch, setBranch] = useState('');
-  const [baseRef, setBaseRef] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<'new' | 'existing' | 'remote'>('new');
+  const [branch, setBranch] = useState(''), [baseRef, setBaseRef] = useState(''), [remoteKey, setRemoteKey] = useState('');
+  const [remote, setRemote] = useState(status?.remotes.includes('origin') ? 'origin' : status?.remotes[0] ?? '');
+  const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(false), [localError, setLocalError] = useState('');
+  const [returnFocus] = useState(() => document.activeElement as HTMLElement | null);
+  const branches = status?.branches ?? [], remoteBranches = status?.remoteBranches ?? [];
+  const key = (item: (typeof remoteBranches)[number]) => JSON.stringify([item.remote, item.ref]);
+  const source = remoteBranches.find(item => key(item) === remoteKey);
   const checkedOut = new Set(worktrees.map(item => item.branch).filter((value): value is string => !!value));
   const available = branches.filter(name => !checkedOut.has(name));
+  const locked = disabled || busy || fetching;
   async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!branch.trim()) return;
-    setBusy(true);
+    event.preventDefault(); event.stopPropagation();
+    if (locked || !branch.trim()) return;
+    if (mode === 'remote' && !source) { setLocalError('请选择远端分支；列表变化后请重新选择'); return; }
+    if (mode === 'existing' && !available.includes(branch)) { setLocalError('该本地分支已被占用，请重新选择'); return; }
+    setBusy(true); setLocalError('');
     try {
-      const item = await onCreate(branch.trim(), mode === 'new', mode === 'new' ? baseRef || undefined : undefined);
+      const item = await onCreate(branch.trim(), mode !== 'existing', mode === 'remote' ? source!.ref : mode === 'new' ? baseRef || undefined : undefined);
       if (item) onCreated(item);
-    } finally { setBusy(false); }
+    } catch (reason) { setLocalError(String(reason)); }
+    finally { setBusy(false); }
   }
-  return <form className="worktree-create-form" onSubmit={event => void submit(event)}>
-    <label>分支来源
-      <select value={mode} disabled={disabled || busy} onChange={event => { setMode(event.target.value as 'new' | 'existing'); setBranch(''); }}>
-        <option value="new">创建新分支</option>
-        <option value="existing">使用已有本地分支</option>
-      </select>
-    </label>
-    {mode === 'new' ? <>
-      <label>新分支名称
-        <input autoFocus value={branch} maxLength={255} placeholder="feature/my-task" disabled={disabled || busy} onChange={event => setBranch(event.target.value)} />
-      </label>
-      <label>起始分支（可选）
-        <select value={baseRef} disabled={disabled || busy} onChange={event => setBaseRef(event.target.value)}>
-          <option value="">当前 HEAD</option>
-          {branches.map(name => <option key={name} value={name}>{name}</option>)}
+  const suggested = (name: string) => {
+    if (!branches.includes(name)) return name;
+    let value = name + '-worktree', suffix = 2;
+    while (branches.includes(value)) value = name + '-worktree-' + suffix++;
+    return value;
+  };
+  return createPortal(<Dialog title="创建 Worktree" onClose={onCancel} returnFocus={returnFocus} busy={busy || fetching} dirty={!!branch.trim()} error={localError || error}>
+    <form className="worktree-create-form" onSubmit={event => void submit(event)}>
+      <label>分支来源
+        <select aria-label="分支来源" value={mode} disabled={locked} onChange={event => { setMode(event.target.value as typeof mode); setBranch(''); setRemoteKey(''); setLocalError(''); }}>
+          <option value="new">创建新分支</option><option value="existing">使用已有本地分支</option><option value="remote">从远端分支创建</option>
         </select>
       </label>
-    </> : <label>选择本地分支
-      <select autoFocus value={branch} disabled={disabled || busy || !available.length} onChange={event => setBranch(event.target.value)}>
-        <option value="">{available.length ? '选择尚未被 Worktree 使用的分支' : '没有可用分支'}</option>
-        {available.map(name => <option key={name} value={name}>{name}</option>)}
-      </select>
-    </label>}
-    <footer>
-      <button type="button" className="subtle" disabled={busy} onClick={onCancel}>取消</button>
-      <button className="primary" disabled={disabled || busy || !branch.trim()}>创建 Worktree</button>
-    </footer>
-  </form>;
+      {mode === 'existing' ? <label>选择本地分支
+        <select aria-label="选择本地分支" autoFocus value={branch} disabled={locked || !available.length} onChange={event => setBranch(event.target.value)}>
+          <option value="">{available.length ? '选择尚未被 Worktree 使用的分支' : '没有可用分支'}</option>
+          {available.map(name => <option key={name} value={name}>{name}</option>)}
+        </select>
+      </label> : <>
+        {mode === 'remote' && <label>远端分支
+          <select aria-label="远端分支" value={remoteKey} disabled={locked} onChange={event => {
+            const item = remoteBranches.find(item => key(item) === event.target.value);
+            setRemoteKey(event.target.value); setBranch(item ? suggested(item.branch) : ''); if (item) setRemote(item.remote);
+          }}>
+            <option value="">{remoteBranches.length ? '选择远端分支' : '暂无远端分支，请先获取远端更新'}</option>
+            {(status?.remotes ?? []).map(name => <optgroup key={name} label={name}>{remoteBranches.filter(item => item.remote === name).map(item => <option key={key(item)} value={key(item)}>{item.remote}/{item.branch}</option>)}</optgroup>)}
+          </select>
+        </label>}
+        <label>{mode === 'remote' ? '本地分支名称' : '新分支名称'}
+          <input autoFocus={mode === 'new'} required value={branch} maxLength={255} placeholder="feature/my-task" disabled={locked} onChange={event => setBranch(event.target.value)} />
+        </label>
+        {mode === 'new' && <label>起始分支（可选）
+          <select aria-label="起始分支（可选）" value={baseRef} disabled={locked} onChange={event => setBaseRef(event.target.value)}>
+            <option value="">当前 HEAD</option>
+            <optgroup label="本地分支">{branches.map(name => <option key={name} value={'refs/heads/' + name}>{name}</option>)}</optgroup>
+            <optgroup label="远端分支">{remoteBranches.map(item => <option key={key(item)} value={item.ref}>{item.remote}/{item.branch}</option>)}</optgroup>
+          </select>
+        </label>}
+      </>}
+      <div className="worktree-fetch">
+        <label>获取远端<select aria-label="获取 Worktree 远端" value={remote} disabled={locked || !status?.remotes.length} onChange={event => setRemote(event.target.value)}>
+          {!status?.remotes.length && <option value="">未配置远端</option>}{status?.remotes.map(name => <option key={name}>{name}</option>)}
+        </select></label>
+        <AsyncButton className="subtle" disabled={locked || !remote} onError={setLocalError} onAction={async () => { setFetching(true); try { await onFetch(remote); } finally { setFetching(false); } }}>获取远端分支</AsyncButton>
+      </div>
+      <p className="form-hint">{mode === 'remote' ? '创建本地跟踪分支和独立工作目录。可修改本地分支名称。' : '新工作区使用独立目录；创建成功后会自动选中。'}{status?.remoteBranchesTruncated && ' 远端分支较多，当前显示前 2000 条。'}</p>
+      <footer><button type="button" className="subtle" disabled={busy || fetching} onClick={onCancel}>取消</button><button type="submit" className="primary" aria-busy={busy} disabled={locked || !branch.trim() || mode === 'remote' && !source}>{busy ? '正在创建…' : '创建 Worktree'}</button></footer>
+    </form>
+  </Dialog>, document.body);
 }
 
 export function WorktreeManager({
@@ -198,8 +215,8 @@ export function WorktreeManager({
       })}
     </div>}
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
-    {enabled && data.worktrees.length > 0 && !creating && <button type="button" className="subtle worktree-add" onClick={() => setCreating(true)}>＋ 新建 Worktree</button>}
-    {creating && <WorktreeCreateForm branches={data.branches} worktrees={data.worktrees} disabled={!enabled || data.loading} onCreate={create} onCancel={() => setCreating(false)} onCreated={() => setCreating(false)} />}
+    {enabled && data.worktrees.length > 0 && <button type="button" className="subtle worktree-add" disabled={creating} onClick={() => setCreating(true)}>＋ 新建 Worktree</button>}
+    {creating && <WorktreeCreateDialog status={data.status} worktrees={data.worktrees} error={actionError || data.error} onFetch={data.fetchRemote} disabled={!enabled || data.loading} onCreate={create} onCancel={() => setCreating(false)} onCreated={() => setCreating(false)} />}
   </section>;
 }
 
@@ -235,7 +252,7 @@ export function WorktreePicker({
 
   return <section className="worktree-picker" aria-label="会话工作区">
     <label>Git 工作区
-      <select value={value ?? ''} disabled={disabled || !enabled || data.loading} onChange={event => onChange(event.target.value || null)}>
+      <select aria-label="Git 工作区" value={value ?? ''} disabled={disabled || !enabled || data.loading} onChange={event => onChange(event.target.value || null)}>
         <option value="">主工作区{main?.branch ? ' · ' + main.branch : ''}</option>
         {data.worktrees.filter(item => !item.main).map(item => <option key={item.path} value={item.workingPath}>{item.branch ?? '游离 HEAD'} · {item.workingPath}</option>)}
       </select>
@@ -243,7 +260,7 @@ export function WorktreePicker({
     {!enabled && <p className="form-hint">更新后台至 API 43 后可选择 Worktree。</p>}
     {data.error && <p className="form-hint">{data.error}；当前使用主工作区。</p>}
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
-    {enabled && data.worktrees.length > 0 && !creating && <button type="button" className="subtle" disabled={disabled} onClick={() => setCreating(true)}>新建 Worktree…</button>}
-    {creating && <WorktreeCreateForm branches={data.branches} worktrees={data.worktrees} disabled={disabled || data.loading} onCreate={create} onCancel={() => setCreating(false)} onCreated={() => setCreating(false)} />}
+    {enabled && data.worktrees.length > 0 && <button type="button" className="subtle" disabled={disabled || creating} onClick={() => setCreating(true)}>新建 Worktree…</button>}
+    {creating && <WorktreeCreateDialog status={data.status} worktrees={data.worktrees} error={actionError || data.error} onFetch={data.fetchRemote} disabled={disabled || data.loading} onCreate={create} onCancel={() => setCreating(false)} onCreated={() => setCreating(false)} />}
   </section>;
 }

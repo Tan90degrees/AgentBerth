@@ -103,3 +103,35 @@ test('fetch never prunes local branches or tags when a custom refspec maps into 
   assert.equal(await git(a, 'show-ref', '--verify', 'refs/tags/mirror/topic').then(() => true, () => false), true);
   assert.ok(!(await service.status(a)).remoteBranches?.some(item => item.ref.startsWith('refs/heads/') || item.ref.startsWith('refs/tags/')));
 });
+
+test('remote-based Worktrees track the selected remote even when automatic tracking is disabled', async t => {
+  const { a, b, service, operation, select } = await fixture(t);
+  await git(b, 'switch', '-c', 'feature/worktree-remote');
+  await writeFile(path.join(b, 'remote-worktree.txt'), 'remote content\n');
+  await git(b, 'add', '.'); await git(b, 'commit', '-m', 'remote worktree');
+  await git(b, 'push', '-u', 'origin', 'feature/worktree-remote'); await operation('fetch');
+  await git(a, 'config', 'branch.autoSetupMerge', 'false');
+  const selected = await select('feature/worktree-remote');
+  const before = await git(a, 'rev-parse', 'HEAD');
+  const worktree = await service.createWorktree(a, 'local/worktree-remote', true, selected.ref);
+  assert.equal(worktree.branch, 'local/worktree-remote');
+  assert.equal(await readFile(path.join(worktree.workingPath, 'remote-worktree.txt'), 'utf8'), 'remote content\n');
+  assert.equal(await git(worktree.workingPath, 'rev-parse', 'HEAD'), selected.head);
+  assert.equal(await git(worktree.workingPath, 'rev-parse', '--abbrev-ref', '@{upstream}'), 'origin/feature/worktree-remote');
+  assert.equal(await git(a, 'branch', '--show-current'), 'main'); assert.equal(await git(a, 'rev-parse', 'HEAD'), before);
+  await service.removeWorktree(a, worktree.path);
+});
+
+test('remote Worktree bases honor custom fetch mappings and fail safely after the remote ref disappears', async t => {
+  const { a, b, service, operation, select } = await fixture(t);
+  await git(b, 'push', 'origin', 'HEAD:refs/heads/feature/custom-worktree');
+  await git(a, 'config', '--replace-all', 'remote.origin.fetch', '+refs/heads/*:refs/vendor/origin/*');
+  await operation('fetch'); const source = await select('feature/custom-worktree');
+  const created = await service.createWorktree(a, 'local/custom-worktree', true, source.ref);
+  assert.equal((await service.status(created.path)).upstreamBranch, 'feature/custom-worktree');
+  assert.equal((await service.status(created.path)).upstreamRemote, 'origin');
+  await service.removeWorktree(a, created.path);
+  await git(b, 'push', 'origin', '--delete', 'feature/custom-worktree'); await operation('fetch');
+  await assert.rejects(service.createWorktree(a, 'local/stale-worktree', true, source.ref), /不存在/);
+  assert.ok(!(await service.status(a)).branches.includes('local/stale-worktree'));
+});

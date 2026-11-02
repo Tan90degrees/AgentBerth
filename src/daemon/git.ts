@@ -122,7 +122,7 @@ export class GitWorkspace {
     this.locks.add(key);
     try{
       await this.command(status.root,['check-ref-format','--branch',branch]);
-      const branches=(await this.command(status.root,['for-each-ref','--format=%(refname:short)','refs/heads/'])).split(/\r?\n/).filter(Boolean);
+      const branches=(await this.command(status.root,['for-each-ref','--format=%(refname:lstrip=2)','refs/heads/'])).split(/\r?\n/).filter(Boolean);
       if(createBranch&&branches.includes(branch))throw new Error(`本地分支 ${branch} 已存在；请选择已有分支，或换一个新分支名称`);
       if(!createBranch&&!branches.includes(branch))throw new Error(`本地分支 ${branch} 不存在，请刷新后选择已有分支`);
       if(baseRef){
@@ -138,7 +138,8 @@ export class GitWorkspace {
       }
       try{await lstat(target);throw new Error('自动生成的 Worktree 目录已被占用，请先清理后重试');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
       await mkdir(path.dirname(target),{recursive:true});
-      const args=['worktree','add',...(createBranch?['-b',branch]:[]),target,...(createBranch?(baseRef?[baseRef]:[]):[branch])];
+      const tracking=createBranch&&!!baseRef&&status.remoteBranches?.some(item=>item.ref===baseRef);
+      const args=['worktree','add',...(createBranch?['-b',branch]:[]),...(tracking?['--track']:[]),target,...(createBranch?(baseRef?[baseRef]:[]):[branch])];
       await this.command(status.root,args,true);
       this.statuses.clear();
       const created=(await this.worktrees(cwd)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?target.toLowerCase():target));

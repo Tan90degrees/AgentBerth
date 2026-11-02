@@ -1,3 +1,4 @@
+import { checkWorktrees } from './smoke-worktrees.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
@@ -376,6 +377,7 @@ try {
   await sideTabs.getByRole('tab', { name: '会话', exact: true }).click();
   assert.equal(await page.locator('.file-browser').count(), 0); await page.locator('.terminal-mount .xterm').waitFor();
   assert.equal((await liveRun()).pid, run.pid);
+  await checkWorktrees(page,{folder,root,project,session,run,packaged});
   await page.evaluate(id => window.berth.rpc('deleteProject', { projectId: id }), other.id);
   assert.deepEqual(errors, []);
   step('all file preview checks passed');
