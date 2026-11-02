@@ -216,6 +216,7 @@ try {
   step('Git background refresh during pointer activation does not swallow publication');
   const publication=gitDialog.getByRole('button',{name:'发布当前分支',exact:true});
   await eventually(()=>publication.isEnabled(),'Git publication did not become ready');
+  await publication.scrollIntoViewIfNeeded();
   const publicationBox=await publication.boundingBox();
   await page.mouse.move(publicationBox.x+publicationBox.width/2,publicationBox.y+publicationBox.height/2);
   await page.mouse.down();
