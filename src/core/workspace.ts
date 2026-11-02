@@ -38,13 +38,13 @@ export function mount(ctx:Context,server:DaemonServer){
       }
       case 'createSession': {
         host.requireProjectAvailable(request.params.projectId);
-        if (host.gitBusy.has(request.params.projectId)) throw new Error('Git / Worktree 操作期间请稍后创建会话');
+        if (host.worktreeBusy.has(request.params.projectId)) throw new Error('Worktree 删除期间请稍后创建会话');
         if (request.params.agent === 'custom' && (!request.params.command.trim() || /[\r\n\x00]/.test(request.params.command))) throw new Error('请填写单行启动命令');
         host.validateRemote(request.params);
         if (request.params.remote && request.params.worktreePath) throw new Error('SSH 会话不能绑定本机 Worktree');
         const project = host.store.project(request.params.projectId);
         const worktreePath = request.params.worktreePath ? await host.git.resolveWorktree(project.path, request.params.worktreePath) : null;
-        if (host.gitBusy.has(request.params.projectId)) throw new Error('Git / Worktree 操作期间请稍后创建会话');
+        if (host.worktreeBusy.has(request.params.projectId)) throw new Error('Worktree 删除期间请稍后创建会话');
         const session = host.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote, worktreePath);
         host.changed(); return session;
       }
@@ -52,13 +52,13 @@ export function mount(ctx:Context,server:DaemonServer){
         const { sessionId, title, agent, command, terminal, remote } = request.params;
         const previous = host.store.session(sessionId);
         host.requireProjectAvailable(previous.projectId);
-        if (host.gitBusy.has(previous.projectId)) throw new Error('Git / Worktree 操作期间请稍后编辑会话');
+        if (host.worktreeBusy.has(previous.projectId)) throw new Error('Worktree 删除期间请稍后编辑会话');
         if (host.historyBusy.has(sessionId)) throw new Error('会话正在读取对话记录，请稍后编辑');
         host.validateRemote(request.params);
         if (remote && request.params.worktreePath) throw new Error('SSH 会话不能绑定本机 Worktree');
         const project = host.store.project(previous.projectId);
         const worktreePath = request.params.worktreePath ? await host.git.resolveWorktree(project.path, request.params.worktreePath) : null;
-        if (host.gitBusy.has(previous.projectId)) throw new Error('Git / Worktree 操作期间请稍后编辑会话');
+        if (host.worktreeBusy.has(previous.projectId)) throw new Error('Worktree 删除期间请稍后编辑会话');
         const launchChanged = JSON.stringify(remote) !== JSON.stringify(previous.remote ?? null) || agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal) || (previous.worktreePath ?? null) !== worktreePath;
         if (launchChanged) host.requireIdle(sessionId);
         if (agent === 'custom' && !command.trim()) throw new Error('请填写单行启动命令');
@@ -68,7 +68,7 @@ export function mount(ctx:Context,server:DaemonServer){
         const id = request.params.sessionId;
         const projectId = host.store.session(id).projectId;
         host.requireProjectAvailable(projectId);
-        if (host.gitBusy.has(projectId)) throw new Error('Git / Worktree 操作期间请稍后删除会话');
+        if (host.worktreeBusy.has(projectId)) throw new Error('Worktree 删除期间请稍后删除会话');
         host.requireIdle(id);
         host.removeLogs(host.store.deleteSession(id)); host.changed(); return null;
       }
