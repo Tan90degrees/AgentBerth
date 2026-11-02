@@ -35,7 +35,7 @@ export class AgentCli {
       const fail = (message: string) => { failure ??= new Error(message); void kill(); };
       const abort = () => fail('Agent 读取已取消');
       signal.addEventListener('abort', abort, { once: true });
-      const timer = setTimeout(() => fail('OpenCode CLI 读取超时；请检查本机安装、配置及插件'), 8000);
+      const timer = setTimeout(() => fail('OpenCode CLI 读取超时；请检查本机安装、配置及插件'), 20000);
       child.stdout.on('data', (data: Buffer) => { bytes += data.length; if (bytes > maxBytes) fail('OpenCode 记录超过读取上限，请导出较小记录'); else chunks.push(data); });
       child.stderr.on('data', (data: Buffer) => { bytes += data.length; if (bytes > maxBytes) fail('OpenCode CLI 输出过大'); });
       child.on('error', () => { failure ??= new Error('无法启动 OpenCode CLI，请检查本机安装与 PATH'); });
