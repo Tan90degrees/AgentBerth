@@ -71,7 +71,11 @@ export function GitSidebar({ project, enabled, visible, supported, worktreePath 
       const detail = String(reason).replace(/^Error: /, '');
       if (alive.current) { setFailure(detail); void refresh(); }
       onError(`${project.name}：${detail}`);
-    } finally { if (alive.current) setWorking(null); window.dispatchEvent(new Event('berth:git-refresh')); }
+    } finally {
+      if (alive.current) setWorking(null);
+      window.dispatchEvent(new Event('berth:git-refresh'));
+      if (action === 'switchRemote') window.dispatchEvent(new Event('berth:worktree-refresh'));
+    }
   }
   function group(staged: boolean) {
     if (!status) return null;
