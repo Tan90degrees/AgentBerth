@@ -361,7 +361,9 @@ try {
   await closePluginSettings(page);
   await pluginSettings(page,'ssh');
   await page.getByLabel('SSH 会话上限',{exact:true}).fill('8');
-  await eventually(async()=>(await page.evaluate(()=>window.berth.rpc('state'))).maxSshTerminals===8,'SSH limit plugin config did not save');
+  await page.getByRole('button',{name:'保存设置',exact:true}).click();
+  await page.getByText('设置已保存',{exact:true}).waitFor();
+  await eventually(async()=>(await page.evaluate(()=>window.berth.rpc('state'))).maxSshTerminals===8,'Core SSH limit setting did not save');
   await closePluginSettings(page);
   const limits=await page.evaluate(()=>window.berth.rpc('state'));
   assert.equal(limits.maxActiveTerminals,24);assert.equal(limits.maxSshTerminals,8);
