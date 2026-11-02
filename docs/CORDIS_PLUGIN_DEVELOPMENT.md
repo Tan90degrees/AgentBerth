@@ -2,7 +2,7 @@
 
 适用：AgentBerth 0.17 / 后台 API 41。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
 
-用户只需在 **插件中心 → 已安装插件 → 安装插件包** 选择 ZIP，或用 **加载开发目录** 选择目录；自定义 Agent 也在 **插件中心 → Agent 接入** 中安装，与 Codex、Claude Code、OpenCode 平级。插件自动启用，点击插件卡片的 **配置** 按钮打开独立弹窗，保存后即时生效。开发目录保存后自动重载；失败保留上一版代码与配置，页面显示错误。无需修改 Agent 的配置来安装工作台插件。
+用户只需在 **插件中心 → 扩展插件 → 安装扩展插件** 或 **Agent 接入 → 安装 Agent 插件** 选择 ZIP，也可用 **加载开发目录** 选择目录。每个 Agent 提供者（Codex、Claude Code、OpenCode、自定义 Agent）都是独立 Cordis 插件；Agent 注册中心本身由工作台核心提供。插件自动启用，点击有配置项的插件卡片可打开独立配置弹窗。开发目录保存后自动重载；失败保留上一版代码与配置，页面显示错误。无需修改 Agent 的配置来安装工作台插件。
 
 ## 给开发 Agent 的任务
 
@@ -27,11 +27,11 @@
 | `name` / `version` | 显示名称与 SemVer 版本 |
 | `entry` | 后台 `.cjs` 入口，默认 `index.cjs` |
 | `desktopEntry` | 可选，Electron 主进程 `.cjs` 入口，适合自定义桌宠或独立窗口 |
-| `dependencies` | 现有插件 ID；已安装的依赖会自动启用，未知第三方插件不自动下载代码；拒绝依赖循环。内置相关能力作为单一功能包展示 |
+| `dependencies` | 仅声明其他可选扩展插件 ID。工作台核心服务（Agent 注册、项目、文件、Git、SSH/MCP、资源、Skills、Worktree 等）始终可用，不需要写入依赖。旧清单中的 `agents`、`workspace`、`ssh`、`files`、`git`、`resources` 等核心 ID 会按宿主能力兼容处理；未知第三方插件不会被自动下载；拒绝依赖循环。 |
 | `config` | 配置字段，支持 string / number / boolean、default、title、description、minimum、maximum、enum |
 | `views` | `{id,title,location,entry}`；location 为 sidebar、panel 或 settings；HTML 须自包含 |
 
-内置插件 ID：`workspace`、`appearance`、`agents`、`agent.codex`、`agent.claude`、`agent.opencode`、`ssh`、`files`、`git`、`resources`、`pet`。核心仅保留配置存储、传输、插件管理和应用生命周期。工作台 RPC 随插件作用域注册与注销。新架构不支持旧版 Agent 单文件导入和旧版数据升级。首次使用前必须退出旧版本并清除原数据目录；系统不会自动迁移或删除旧数据。
+工作台核心能力包括项目/会话、Agent 注册中心与历史、Skills、文件预览、Git/Worktree、SSH/MCP、资源监控和外观设置；这些服务始终挂载，不会出现在插件列表，也不能被插件开关关闭。内置 Agent 提供者 `agent.codex`、`agent.claude`、`agent.opencode` 是独立的 Agent 插件；`pet` 是可选扩展。核心 RPC 由宿主统一注册，插件只能通过 `ctx.berth.call()` 调用宿主公开接口。新架构不支持旧版 Agent 单文件导入；升级时按发行说明备份旧版数据，不会静默删除旧数据。
 
 ## 后台 SDK
 
@@ -49,7 +49,7 @@
 
 命令名用小写 snake_case，不能把 `agentId` 用作业务参数；它由 MCP 保留为调用方标识。inputSchema 必须为 object。返回 JSON，最多 128 KiB，长结果应分页。MCP 工具名为 `extension_<稳定ID摘要>_<命令名>`；不要硬编码摘要，从 tools/list 获取。启停后支持 tools/list_changed 的客户端自动刷新，不支持的客户端需刷新或重连。SDK 不会为命令错误自动重放。
 
-`definition` 与原有 Agent 配置一致：`name`、`command`、可选 `resumeCommand`、`integration: claude|opencode`、`skills:{project,user}`、`plugin`。Skills 的项目路径必须为相对目录，用户路径为绝对路径或 `~/`；仅声明 CLI 真正使用的位置。历史脚本应作为 Cordis 插件包内的资源，通过 `plugin` 字段声明，不再使用独立的 Agent 类型导入入口。使用 `__dirname` 指向包内历史适配脚本；`plugin.runtime: node` 使用应用自带运行时。注册 ID 在更新中保持不变，应用为其派生稳定 Agent ID，已有会话和默认项不因重载变更。
+`definition` 与原有 Agent 配置一致：`name`、`command`、可选 `resumeCommand`、`integration: codex|claude|opencode`、`skills:{project,user}`、`plugin`。Skills 的项目路径必须为相对目录，用户路径为绝对路径或 `~/`；仅声明 CLI 真正使用的位置。历史脚本应作为 Cordis 插件包内的资源，通过 `plugin` 字段声明，不再使用独立的 Agent 类型导入入口。使用 `__dirname` 指向包内历史适配脚本；`plugin.runtime: node` 使用应用自带运行时。注册 ID 在更新中保持不变，应用为其派生稳定 Agent ID，已有会话和默认项不因重载变更。
 
 ## UI 与桌面入口
 
@@ -73,7 +73,7 @@ exports.apply = ctx => {
 
 ## 生命周期与验证
 
-配置、启停、安装、卸载被串行处理；停用依赖会释放其依赖者的作用域，重新启用后自动恢复。若相关插件仍持有正在运行的终端、命令、历史读取或 Git 操作，修改会明确拒绝，绝不默默杀掉任务；其他无关插件可独立修改。配置和开发重载失败恢复旧后台模块及配置。卸载移除受管理的代码包，保留配置、数据与会话；开发模式绝不删除源目录。内置相关功能包一起启停，基础工作区不可从插件 UI 卸载；外部插件卸载后需重新选择包。
+配置、启停、安装、卸载被串行处理；停用依赖会释放其依赖者的作用域，重新启用后自动恢复。若相关插件仍持有正在运行的终端、命令、历史读取或 Git 操作，修改会明确拒绝，绝不默默杀掉任务；其他无关插件可独立修改。配置和开发重载失败恢复旧后台模块及配置。卸载移除受管理的代码包，保留配置、数据与会话；开发模式绝不删除源目录。核心服务不可停用；Agent 提供者插件可独立启停，可选扩展只影响自身及声明依赖它的其他扩展。外部插件卸载后需重新选择包。
 
 验证顺序：安装 → 读取短命令 → 应用配置 → 开发重载 → 故意语法错误并确认旧版仍工作 → 停用依赖并确认工具/视图消失 → 重新启用 → 卸载并检查定时器/监听器/窗口均释放 → 重启确认配置与原会话保留。为 Agent 接入额外验证 Skill 列表、导入/启停与原生历史恢复；不支持的能力保持未声明。
 
