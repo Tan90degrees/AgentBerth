@@ -69,3 +69,11 @@ test('Windows ACP resolves and runs a batch launcher through the same bidirectio
   await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:shim,acp:{executable:shim,args:[path.join(f.dir,'agent')],env:{ELECTRON_RUN_AS_NODE:'1'}}});
   await f.send('hello');const output=await until(f.snapshot,value=>value.phase==='ready');assert.ok(output.events.some(event=>event.text.includes('from small')));
 });
+
+
+test('the first prompt joins an existing ACP startup and executes exactly once',async t=>{
+  const f=await fixture(t,['--slow-init']),started=f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30});
+  await until(f.snapshot,value=>value.phase==='connecting');const requestId=randomUUID();await Promise.all([started,f.send('hello',requestId)]);
+  const result=await until(f.snapshot,value=>value.phase==='ready'&&value.events.some(event=>event.kind==='assistant'));assert.equal(result.events.filter(event=>event.kind==='user').length,1);
+  const log=await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8');assert.equal(log.split('"method":"prompt"').length-1,1);
+});

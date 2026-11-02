@@ -77,7 +77,7 @@ export class GitWorkspace {
       const fail = (error: Error) => { failure ??= error; void kill(); };
       const abort = () => fail(new Error('Git 操作已取消，后台正在退出'));
       controller.signal.addEventListener('abort',abort,{once:true});
-      const timer=setTimeout(()=>fail(new Error(network ? 'Git 远端操作超时，请检查网络和认证；可在终端完成登录后重试' : '读取 Git 状态超时，请稍后刷新')),network ? this.networkTimeout : 10000);
+      const timer=setTimeout(()=>fail(new Error(network ? 'Git 远端操作超时，请检查网络和认证；可在终端完成登录后重试' : '读取 Git 状态超时，请稍后刷新')),network ? this.networkTimeout : process.platform==='win32'?30000:10000);
       const consume = (target: Buffer[],chunk: Buffer) => { bytes+=chunk.length; if(bytes>8*1024*1024) fail(new Error('Git 返回内容过多，请在终端检查仓库状态')); else target.push(chunk); };
       child.stdout.on('data',(data:Buffer)=>consume(stdout,data));child.stderr.on('data',(data:Buffer)=>consume(stderr,data));
       child.on('error',error=>{failure??=new Error(`无法运行 Git：${error.message}`);});

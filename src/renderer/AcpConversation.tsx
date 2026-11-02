@@ -36,11 +36,11 @@ export function AcpConversation({session,connected}:{session:Session;connected:b
   },[snapshot?.events]);
   useEffect(()=>{if(bottom.current)scroll.current?.scrollTo({top:scroll.current.scrollHeight,behavior:'instant'});},[snapshot?.events,snapshot?.permissions]);
   const call=async(method:Method,params:Record<string,unknown>={})=>{setError('');return window.berth.rpc(method,{sessionId:session.id,...params});};
-  const sending=!!snapshot&&['connecting','running','permission'].includes(snapshot.phase);
+  const sending=!!snapshot&&['running','permission'].includes(snapshot.phase);
   async function send(){
-    if(!text.trim()||pending||sending||!connected)return;
+    if(!text.trim()||pending||sending||!connected||!snapshot)return;
     const content=text.trim(),submission=request.current?.text===content?request.current:{id:crypto.randomUUID(),text:content};request.current=submission;setPending(true);setError('');
-    try{await call('acpSend',{requestId:submission.id,text:submission.text});setText('');request.current=null;bottom.current=true;}
+    try{await call('acpSend',{requestId:submission.id,text:submission.text});setText(previous=>previous.trim()===submission.text?'':previous);request.current=null;bottom.current=true;}
     catch(error){setError(String(error));}finally{setPending(false);}
   }
   return <section className="acp-conversation" aria-label="ACP 对话">
@@ -58,6 +58,6 @@ export function AcpConversation({session,connected}:{session:Session;connected:b
     {snapshot?.phase==='error'&&<AsyncButton className="subtle" onError={setError} onAction={async()=>{await call('stop');await call('start',{cols:100,rows:30,resume:true});}}>重新连接 Agent</AsyncButton>}
     {snapshot?.phase==='error'&&snapshot.authMethods?.map(method=><AsyncButton key={method.id} className="subtle" onError={setError} onAction={()=>call('acpAuthenticate',{methodId:method.id})}>{'登录：'+method.name}</AsyncButton>)}
     {snapshot?.permissions.map(permission=><section key={permission.id} className="acp-permission" role="group" aria-label="Agent 授权请求"><strong>{permission.title}</strong><div>{permission.options.map(option=><AsyncButton key={option.optionId} className={option.kind.startsWith('allow')?'primary':'subtle'} onError={setError} onAction={()=>call('acpPermission',{permissionId:permission.id,optionId:option.optionId})}>{option.name}</AsyncButton>)}<AsyncButton className="subtle" onError={setError} onAction={()=>call('acpPermission',{permissionId:permission.id,optionId:null})}>取消授权</AsyncButton></div></section>)}
-    <form className="acp-composer" onSubmit={event=>{event.preventDefault();void send();}}><textarea aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={text} maxLength={40000} disabled={!connected} onChange={event=>{setText(event.target.value);if(request.current?.text!==event.target.value.trim())request.current=null;}} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();void send();}}}/><footer><small>Enter 发送 · Shift+Enter 换行</small>{sending?<AsyncButton className="subtle" onError={setError} onAction={()=>call('acpCancel')}>停止任务</AsyncButton>:<button className="primary" disabled={!connected||!text.trim()||pending}>发送</button>}</footer></form>
+    <form className="acp-composer" onSubmit={event=>{event.preventDefault();void send();}}><textarea aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={text} maxLength={40000} disabled={!connected||!snapshot||pending} onChange={event=>{setText(event.target.value);if(request.current?.text!==event.target.value.trim())request.current=null;}} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();void send();}}}/><footer><small>Enter 发送 · Shift+Enter 换行</small>{sending?<AsyncButton className="subtle" onError={setError} onAction={()=>call('acpCancel')}>停止任务</AsyncButton>:<button className="primary" disabled={!connected||!snapshot||!text.trim()||pending}>发送</button>}</footer></form>
   </section>;
 }

@@ -14,7 +14,7 @@ export function mount(ctx:Context,server:DaemonServer){
       case 'acpSend':{
         const previous=host.store.acpTurn(request.params.requestId);
         if(previous){if(previous.sessionId!==id)throw new Error('请求 ID 已属于另一会话');return {turnId:request.params.requestId,state:previous.state,duplicate:true};}
-        if(!host.acp.active(id))await host.start(id,true,100,30);return host.acp.send(id,request.params.requestId,request.params.text);
+        await host.ensureStarted(id);return host.acp.send(id,request.params.requestId,request.params.text);
       }
       case 'acpCancel':return host.acp.cancel(id);
       case 'acpPermission':return host.acp.permission(id,request.params.permissionId,request.params.optionId);

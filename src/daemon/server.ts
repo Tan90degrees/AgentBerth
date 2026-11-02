@@ -67,6 +67,7 @@ export class DaemonServer {
   private openingAliases = new Map<string, Promise<{sessionId:string;runId:string;info: import('../shared/protocol').RemoteInfo}>>();
   private store: Store;
   private acp:AcpSessions;
+  private startingRuns=new Map<string,Promise<Run>>();
   private transfers: RemoteTransfers;
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
@@ -312,7 +313,7 @@ export class DaemonServer {
       get store(){return self.store;}
     };
   }
-  acpCorePort(){return {acp:this.acp,store:this.store,start:this.start.bind(this)};}
+  acpCorePort(){return {acp:this.acp,store:this.store,ensureStarted:(id:string)=>this.startingRuns.get(id)??(this.acp.active(id)?Promise.resolve():this.start(id,true,100,30))};}
   registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
     if(id==='superagent'){mountSuperagent(ctx,_config as Record<string,string|number|boolean>);return;}
@@ -604,8 +605,9 @@ export class DaemonServer {
     const count=[...reserved].filter(id=>!this.live.get(id)?.closed&&!!this.store.session(id).remote===ssh).length;
     if(count>=limit)throw new Error(`${ssh?'SSH 会话':'本机终端'}已达上限 ${limit}，请在设置中调整或停止一个${ssh?' SSH 会话':'本机终端'}`);
     this.starting.add(sessionId);
-    try { return await this.spawn(sessionId, resume, cols, rows, remoteOwner); }
-    finally { this.starting.delete(sessionId); }
+    const task=this.spawn(sessionId,resume,cols,rows,remoteOwner);this.startingRuns.set(sessionId,task);
+    try { return await task; }
+    finally { this.starting.delete(sessionId);this.startingRuns.delete(sessionId); }
   }
 
   private validateRemote(config: { remote: unknown; agent: string; command: string }): void {
