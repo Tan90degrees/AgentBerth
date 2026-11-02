@@ -187,15 +187,17 @@ export class Store {
     return this.session(id);
   }
 
-  deleteWorktreeSessions(projectId:string,worktreePath:string):string[]{
-    this.project(projectId);
-    const sessions=this.db.prepare('SELECT id FROM sessions WHERE projectId=? AND worktreePath=?').all(projectId,worktreePath).map(row=>String(row.id));
-    if(!sessions.length)return [];
+  sessionIdsUnderPath(root:string):string[]{
+    const canonical=path.resolve(root),windows=process.platform==='win32';
+    return this.db.prepare('SELECT id,worktreePath FROM sessions WHERE worktreePath IS NOT NULL').all().filter(row=>{
+      const value=path.resolve(String(row.worktreePath)),relative=path.relative(canonical,value);
+      return windows?relative!== '..'&&!relative.startsWith('..\\')&&!path.isAbsolute(relative):relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);
+    }).map(row=>String(row.id));
+  }
+  deleteSessions(ids:string[]):string[]{
+    const sessions=[...new Set(ids)];if(!sessions.length)return [];
     const runIds=sessions.flatMap(sessionId=>this.db.prepare('SELECT id FROM runs WHERE sessionId=?').all(sessionId).map(row=>String(row.id)));
-    this.transaction(()=>{
-      for(const sessionId of sessions)this.db.prepare('DELETE FROM runs WHERE sessionId=?').run(sessionId);
-      for(const sessionId of sessions)this.db.prepare('DELETE FROM sessions WHERE id=?').run(sessionId);
-    });
+    this.transaction(()=>{for(const sessionId of sessions){this.db.prepare('DELETE FROM runs WHERE sessionId=?').run(sessionId);this.db.prepare('DELETE FROM sessions WHERE id=?').run(sessionId);}});
     return runIds;
   }
 
