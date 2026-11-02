@@ -13,7 +13,7 @@ export function settingsCatalog(_agents: AgentDefinition[], _apiVersion: number)
   return [
     { id: 'appearance', category: 'appearance', title: '外观主题', keywords: 'theme appearance dark light system 深色 浅色 跟随系统', common: true },
     { id: 'default-agent', category: 'agent', title: '默认 Agent', keywords: 'agent provider codex claude opencode 默认接入', common: true, field: 'defaultAgent' },
-    { id: 'skills', category: 'agent', title: 'Skills 管理', keywords: 'skill 技能 导入 管理', common: true },
+    { id: 'skills', category: 'agent', title: 'Skills 管理', keywords: 'agent skill 技能 导入 管理', common: true },
     { id: 'preview', category: 'files', title: '文件预览', keywords: 'preview font 字体 字号 markdown 语法高亮', common: true },
     { id: 'ssh-limit', category: 'ssh', title: 'SSH 会话上限', keywords: 'ssh maxSshTerminals 并发 数量 容量', field: 'maxSshTerminals' },
     { id: 'connections', category: 'ssh', title: '服务器信息', keywords: 'ssh host server connection 密码 密钥 登录' },
