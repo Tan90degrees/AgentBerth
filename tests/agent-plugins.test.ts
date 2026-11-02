@@ -185,5 +185,5 @@ test('daemon exposes Agent CRUD, plugin history and resume while retaining prior
   const deadline = Date.now() + 5000;
   while ((await c.rpc<State>('state')).sessions.find(item => item.id === s.id)?.latestRun?.status !== 'stopped') { assert.ok(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 50)); }
   await c.rpc('deleteSession', { sessionId: s.id }); await c.rpc('deleteAgent', { agentId: saved.id });
-  assert.equal((await c.rpc<State>('state')).agents!.length, 0);
+  assert.equal((await c.rpc<State>('state')).agents!.length, 3,'the three built-in Agent providers remain registered in the core registry');
 });
