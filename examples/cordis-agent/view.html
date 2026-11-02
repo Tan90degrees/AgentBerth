@@ -1,0 +1,9 @@
+<h1>接入信息</h1>
+<p>此面板通过自己的插件命令读取配置，不启动 Agent。</p>
+<button id="refresh">读取配置</button><pre id="result"></pre>
+<script>
+  document.querySelector('#refresh').onclick = async () => {
+    try { document.querySelector('#result').textContent = JSON.stringify(await agentberth.call('info'), null, 2); }
+    catch (error) { document.querySelector('#result').textContent = String(error); }
+  };
+</script>

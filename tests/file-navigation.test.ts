@@ -1,8 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseFileLocation, terminalFileLinks, fileMatchScore } from '../src/shared/file-navigation';
-import { legacyProfile } from '../src/main/profile';
-import path from 'node:path';
 
 test('terminal paths preserve Windows drive letters, quoted spaces, Unicode and line-column positions', () => {
   assert.deepEqual(parseFileLocation('C:\\work\\src\\app.ts:42:5'), { path: 'C:\\work\\src\\app.ts', line: 42, column: 5 });
@@ -23,10 +21,4 @@ test('file matching prioritizes exact suffixes over fuzzy subsequences', () => {
   assert.ok(fileMatchScore('src/App.tsx', 'app.tsx') > fileMatchScore('src/Application.tsx', 'app'));
   assert.ok(fileMatchScore('src/renderer/App.tsx', 'srapp') >= 0);
   assert.equal(fileMatchScore('docs/README.md', 'xyz'), -1);
-});
-test('rebranding retains old installed and development profiles', () => {
-  const base = path.resolve('profiles');
-  assert.equal(legacyProfile(base, () => false), path.join(base, 'AgentBerth'));
-  assert.equal(legacyProfile(base, name => name.endsWith('agentberth')), path.join(base, 'agentberth'));
-  assert.equal(legacyProfile(base, () => true), path.join(base, 'AgentBerth'));
 });

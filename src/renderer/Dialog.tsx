@@ -11,6 +11,7 @@ export function Dialog({ title, children, onClose, busy = false, dirty = false, 
     const focusable = () => Array.from(host.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]') ?? []);
     if (!host.current?.contains(document.activeElement)) (host.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? focusable()[0])?.focus();
     const key = (event: KeyboardEvent) => {
+      if (Array.from(document.querySelectorAll('[role="dialog"]')).at(-1) !== host.current) return;
       if (event.key === 'Escape') {
         event.preventDefault(); event.stopPropagation();
         if (current.current.confirming) setConfirming(false); else requestClose();
@@ -21,7 +22,7 @@ export function Dialog({ title, children, onClose, busy = false, dirty = false, 
       else if (!event.shiftKey && (document.activeElement === last || !host.current?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
     };
     document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('keydown', key, true); queueMicrotask(() => { if (!document.querySelector('[role="dialog"]') && returnFocus?.isConnected) returnFocus.focus(); }); };
+    return () => { document.removeEventListener('keydown', key, true); queueMicrotask(() => { const top = Array.from(document.querySelectorAll('[role="dialog"]')).at(-1); if (returnFocus?.isConnected && (!top || top.contains(returnFocus))) returnFocus.focus(); }); };
   }, []);
   return <div className="modal-shade" onMouseDown={event => { if (event.target === event.currentTarget) requestClose(); }}><section ref={host} className="dialog" role="dialog" aria-modal="true" aria-label={title} onClickCapture={event => { if ((event.target as HTMLElement).closest('[data-dismiss="dialog"]')) { event.preventDefault(); event.stopPropagation(); requestClose(); } }}>
     <header><h2>{title}</h2><button className="icon-button" disabled={busy} onClick={requestClose} aria-label="关闭对话框">×</button></header>

@@ -1,6 +1,7 @@
+import { cleanupSmoke } from './smoke-cleanup.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -29,15 +30,9 @@ const git = async (...args) => execute('git', ['-c', 'commit.gpgsign=false', '-C
 await git('init', '--initial-branch=main'); await git('config', 'user.name', 'File Smoke'); await git('config', 'user.email', 'smoke@example.invalid');
 await git('add', '.gitignore', 'README.md', 'src/code.ts'); await git('add', '-f', 'tracked.log'); await git('commit', '-m', 'fixture');
 await mkdir('test-results', { recursive: true });
-let application, daemonPid;
+let application, daemonPid, failure;
 const step = message => console.log(`File smoke: ${message}`);
-async function closeApplication(app) {
-  if (!app) return;
-  const process = app.process(); let onExit, timer;
-  const exited = process.exitCode !== null || process.signalCode !== null ? Promise.resolve() : new Promise(resolve => { onExit = resolve; process.once('exit', onExit); });
-  try { await Promise.race([exited, app.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('File smoke application did not exit')), 20000); })]); }
-  finally { clearTimeout(timer); if (onExit) process.removeListener('exit', onExit); }
-}
+async function coreSettings(page,category){await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:category,exact:true}).click();}
 try {
   step('launch and keep a real terminal running throughout file navigation');
   const args = [...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--user-data-dir=' + path.join(folder, 'profile')];
@@ -183,14 +178,14 @@ try {
   await page.getByRole('button', { name: '切换为深色模式' }).click();
   step('preview typography persists across files and supports custom installed fonts');
   assert.equal(await page.getByRole('button', { name: '预览字体设置', exact: true }).count(), 0);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:'文件预览',exact:true}).click();
+  await coreSettings(page,'文件预览');
   let fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByLabel('预览字号', { exact: true }).fill('18');
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('consolas');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('berth.previewAppearance')).size === 18);
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('custom');
   await fonts.getByLabel('自定义预览字体', { exact: true }).fill('Courier New');
+  // File preview settings are core and apply immediately; no plugin dialog is involved.
   await page.getByRole('tablist', { name: '侧栏视图' }).getByRole('tab', { name: '文件', exact: true }).click();
   for (const [file, language] of [['config.json', 'json'], ['config.yaml', 'yaml'], ['main.scala', 'scala']]) {
     await entry(file).click();
@@ -201,10 +196,10 @@ try {
   await preview.getByLabel('预览高亮语言', { exact: true }).selectOption('plaintext');
   await page.waitForFunction(() => document.querySelector('.preview-document:not([hidden]) .source-code code')?.dataset.language === 'plaintext');
   assert.equal(await preview.locator('.source-code [class*="hljs-"]').count(), 0);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', {name:'设置分类',exact:true}).getByRole('button', {name:'文件预览',exact:true}).click();
+  await coreSettings(page,'文件预览');
   fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByRole('button', { name: '恢复默认预览字体', exact: true }).click();
+  // Skills are managed directly in core settings, independently of provider plugins.
   await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
   step('source control sidebar previews separate index/worktree diffs, stages selections, unstages and commits without restarting the terminal');
   await sideTabs.getByRole('tab', { name: 'Git', exact: true }).click();
@@ -333,16 +328,27 @@ try {
   await page.getByLabel('文件所属项目', { exact: true }).selectOption(project.id);
   await preview.getByLabel('文件源码', { exact: true }).waitFor();
   assert.equal(await page.getByRole('tab', { name: 'empty.txt', exact: true }).getAttribute('aria-selected'), 'true');
-  step('Skill management reuses imported Agent types and keeps operations in the fixture project');
+  step('Core Skills management uses an independently installed Agent provider and keeps operations in the fixture project');
   const skillSource = path.join(folder, 'skill-source'); await mkdir(skillSource);
   await writeFile(path.join(skillSource, 'SKILL.md'), '---\nname: smoke-skill\ndescription: Fixture workflow\n---\nInitial instructions\n');
+  const pluginSource = path.join(folder, 'skill-agent-extension'); await mkdir(pluginSource);
+  await writeFile(path.join(pluginSource, 'agentberth.extension.json'), JSON.stringify({
+    apiVersion: 1, id: 'fixture.skill-agent', name: 'Skill fixture Agent',
+    version: '1.0.0', kind: 'agent', entry: 'index.cjs',
+    dependencies: ['agents'], config: {}, views: [],
+  }));
+  await writeFile(path.join(pluginSource, 'index.cjs'),
+    "exports.apply=(ctx)=>ctx.berth.agent({id:'main',definition:{name:'Skill fixture Agent',command:'fixture-agent',skills:{project:'.fixture-agent/skills'}}});\n");
+  await page.evaluate(source => window.berth.extensions({ action: 'install', path: source }), pluginSource);
+  await page.waitForFunction(() => window.berth.rpc('state').then(state => state.agents.some(agent => agent.name === 'Skill fixture Agent')));
   const skillAgent = await page.evaluate(async ({ projectId, source }) => {
-    const agent = await window.berth.rpc('createAgent', { name: 'Skill fixture Agent', command: 'fixture-agent', skills: { project: '.fixture-agent/skills' } });
+    const state = await window.berth.rpc('state');
+    const agent = state.agents.find(value => value.name === 'Skill fixture Agent');
+    if (!agent) throw new Error('Cordis Skill Agent contribution is missing');
     await window.berth.skills({ action: 'import', location: { agentId: agent.id, projectId }, source });
     return agent;
   }, { projectId: project.id, source: skillSource });
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', { name: '设置分类', exact: true }).getByRole('button', { name: 'Skills', exact: true }).click();
+  await coreSettings(page,'Agent 与 Skills');
   await page.getByLabel('Skill Agent 类型', { exact: true }).selectOption(skillAgent.id);
   const skillRow = page.locator('.skill-row').filter({ has: page.getByText('smoke-skill', { exact: true }) });
   await skillRow.getByRole('button', { name: '查看 / 编辑', exact: true }).waitFor();
@@ -357,6 +363,7 @@ try {
   await skillRow.getByRole('button', { name: '移除', exact: true }).click();
   await page.getByRole('dialog', { name: '移除 Skill', exact: true }).getByRole('button', { name: '移除 Skill', exact: true }).click();
   await skillRow.waitFor({ state: 'hidden' });
+  // Core Skills management is part of Settings, not a plugin configuration dialog.
   await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
   const current = await liveRun(); assert.equal(current.id, run.id); assert.equal(current.pid, run.pid); assert.equal(current.status, 'running');
   await mainTabs.getByRole('tab', { name: '终端', exact: true }).click();
@@ -367,15 +374,13 @@ try {
   assert.deepEqual(errors, []);
   step('all file preview checks passed');
 } catch (error) {
+  failure = error;
   if (application) {
     const windows = application.windows();
     if (windows[0]) { await windows[0].screenshot({ path: `test-results/${packaged ? 'packaged-' : ''}files-failed.png` }).catch(() => {}); console.error((await windows[0].locator('body').innerText().catch(() => '')).slice(-10000)); }
   }
   throw error;
 } finally {
-  try { await closeApplication(application); }
-  finally {
-    if (daemonPid) { try { process.kill(daemonPid, 0); process.kill(daemonPid, 'SIGTERM'); } catch {} }
-    await rm(folder, { recursive: true, force: true, maxRetries: 5 });
-  }
+  try { await cleanupSmoke(application, daemonPid, folder); }
+  catch (error) { if (failure) console.error('File smoke cleanup:', error); else throw error; }
 }

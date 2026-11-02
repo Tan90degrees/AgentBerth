@@ -3,7 +3,7 @@ import { release } from 'node:os';
 import { windowsPtyFor } from '../shared/desktop';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
@@ -16,7 +16,16 @@ export class Store {
 
   constructor(private directory: string) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path.join(directory, 'berth.sqlite'));
+    const database=path.join(directory,'berth.sqlite');
+    const existing=existsSync(database);
+    this.db=new DatabaseSync(database);
+    // Schema 6 is the first Cordis-only data format. Schema 7 adds a nullable
+    // session worktree path; all existing sessions continue using the main tree.
+    const schemaVersion=Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
+    if(existing&&![6,7].includes(schemaVersion)){
+      this.db.close();
+      throw new Error('检测到旧版 AgentBerth 数据。新架构不支持原地升级，请退出应用并清除旧数据目录后重新启动。');
+    }
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
@@ -28,12 +37,14 @@ export class Store {
         id TEXT PRIMARY KEY, projectId TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
         agent TEXT NOT NULL, command TEXT NOT NULL, nativeSessionId TEXT, transcriptPath TEXT,
         createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
+        remote TEXT, terminal TEXT, worktreePath TEXT,
         history TEXT NOT NULL DEFAULT '{"messages":[],"warnings":[],"path":null,"nativeSessionId":null}'
       );
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id), pid INTEGER,
         status TEXT NOT NULL, startedAt TEXT NOT NULL, endedAt TEXT, exitCode INTEGER,
         command TEXT NOT NULL, error TEXT, snapshot TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL DEFAULT 0,
+        shell TEXT NOT NULL DEFAULT '', recordOutput INTEGER NOT NULL DEFAULT 1,
         cols INTEGER NOT NULL DEFAULT 100, rows INTEGER NOT NULL DEFAULT 30
       );
       CREATE INDEX IF NOT EXISTS runs_by_session ON runs(sessionId, startedAt DESC);
@@ -48,27 +59,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS restart_plan (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
     `);
+    if(existing&&schemaVersion===6)this.db.exec('ALTER TABLE sessions ADD COLUMN worktreePath TEXT');
     this.db.exec(`CREATE TABLE IF NOT EXISTS remote_actions (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
       sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
     ); CREATE INDEX IF NOT EXISTS remote_actions_by_session ON remote_actions(sessionId, sequence);`);
-    if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'remote')) this.db.exec('ALTER TABLE sessions ADD COLUMN remote TEXT');
     this.db.exec(`CREATE TABLE IF NOT EXISTS remote_requests (
       id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
     )`);
-    // Additive migration preserves 0.1 projects, native history and saved screens.
-    if (!this.db.prepare('PRAGMA table_info(sessions)').all().some(row => row.name === 'terminal')) this.db.exec('ALTER TABLE sessions ADD COLUMN terminal TEXT');
-    if (!this.db.prepare('PRAGMA table_info(runs)').all().some(row => row.name === 'shell')) this.db.exec("ALTER TABLE runs ADD COLUMN shell TEXT NOT NULL DEFAULT ''");
-    if (!this.db.prepare('PRAGMA table_info(runs)').all().some(row => row.name === 'recordOutput')) {
-      this.db.exec('ALTER TABLE runs ADD COLUMN recordOutput INTEGER NOT NULL DEFAULT 1');
-      this.db.exec("UPDATE runs SET recordOutput = 0 WHERE sessionId IN (SELECT id FROM sessions WHERE agent != 'shell')");
-    }
-    if (Number(this.db.prepare('PRAGMA user_version').get()!.user_version) < 5) {
-      this.db.exec(`INSERT OR IGNORE INTO native_histories (projectId, agent, nativeSessionId, title, updatedAt, history)
-        SELECT projectId, agent, nativeSessionId, title, updatedAt, history FROM sessions WHERE nativeSessionId IS NOT NULL ORDER BY updatedAt DESC`);
-    }
     this.db.exec('CREATE TABLE IF NOT EXISTS ssh_connections (id TEXT PRIMARY KEY, value TEXT NOT NULL, fingerprint TEXT)');
-    this.db.exec('PRAGMA user_version = 5');
+    this.db.exec('PRAGMA user_version = 7');
     for (const table of ['remote_actions', 'remote_requests']) for (const row of this.db.prepare(`SELECT id,value FROM ${table}`).all()) { const a = JSON.parse(String(row.value)); if (a.status === 'running') this.db.prepare(`UPDATE ${table} SET value=? WHERE id=?`).run(JSON.stringify({ ...a, status: 'unknown', endedAt: new Date().toISOString() }), row.id); }
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
@@ -105,7 +105,7 @@ export class Store {
       FROM sessions s JOIN runs r ON r.rowid = (SELECT rowid FROM runs WHERE sessionId = s.id ORDER BY rowid DESC LIMIT 1)
       WHERE s.archived = 0`).all() as unknown as Run[];
     const bySession = new Map(latest.map(run => [run.sessionId, run]));
-    const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
+    const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
       .map(row => ({ ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
     const settings=this.settings();
     return { projects, sessions, agents: this.agents(), maxActiveTerminals: settings.maxActiveTerminals, maxSshTerminals: settings.maxSshTerminals, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings, apiVersion: API_VERSION };
@@ -158,33 +158,47 @@ export class Store {
   }
 
   session(id: string): Session {
-    const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
+    const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
     if (!row) throw new Error('会话不存在');
     const latestRun = this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error, recordOutput FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 1').get(id) ?? null;
     return { ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
   }
 
-  createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null, remote: RemoteConfig | null = null): Session {
+  createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null, remote: RemoteConfig | null = null, worktreePath: string | null = null): Session {
     this.project(projectId);
     command = this.sessionCommand(agent, command);
     if (Number(this.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE archived = 0').get()!.count) >= 2000) throw new Error('最多管理 2000 个未归档会话');
     const id = randomUUID();
     const now = new Date().toISOString();
-    this.db.prepare('INSERT INTO sessions (id, projectId, title, agent, command, terminal, remote, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, agent, command, terminal ? JSON.stringify(terminal) : null, remote ? JSON.stringify(remote) : null, now, now);
+    this.db.prepare('INSERT INTO sessions (id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, agent, command, terminal ? JSON.stringify(terminal) : null, remote ? JSON.stringify(remote) : null, worktreePath, now, now);
     return this.session(id);
   }
 
   rename(id: string, title: string): void { this.session(id); this.db.prepare('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?').run(title, new Date().toISOString(), id); }
   archive(id: string): void { this.session(id); this.db.prepare('UPDATE sessions SET archived = 1 WHERE id = ?').run(id); }
 
-  updateSession(id: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null, remote: RemoteConfig | null = null): Session {
+  updateSession(id: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null, remote: RemoteConfig | null = null, worktreePath: string | null = null): Session {
     const previous = this.session(id);
     command = this.sessionCommand(agent, command);
     this.transaction(() => {
-      if (previous.agent !== agent) this.writeHistory(id, emptyHistory());
-      this.db.prepare('UPDATE sessions SET title = ?, agent = ?, command = ?, terminal = ?, remote = ?, updatedAt = ? WHERE id = ?').run(title, agent, command, terminal ? JSON.stringify(terminal) : null, remote ? JSON.stringify(remote) : null, new Date().toISOString(), id);
+      if (previous.agent !== agent || (previous.worktreePath??null)!==worktreePath) this.writeHistory(id, emptyHistory());
+      this.db.prepare('UPDATE sessions SET title = ?, agent = ?, command = ?, terminal = ?, remote = ?, worktreePath = ?, updatedAt = ? WHERE id = ?').run(title, agent, command, terminal ? JSON.stringify(terminal) : null, remote ? JSON.stringify(remote) : null, worktreePath, new Date().toISOString(), id);
     });
     return this.session(id);
+  }
+
+  sessionIdsUnderPath(root:string):string[]{
+    const canonical=path.resolve(root),windows=process.platform==='win32';
+    return this.db.prepare('SELECT id,worktreePath FROM sessions WHERE worktreePath IS NOT NULL').all().filter(row=>{
+      const value=path.resolve(String(row.worktreePath)),relative=path.relative(canonical,value);
+      return windows?relative!== '..'&&!relative.startsWith('..\\')&&!path.isAbsolute(relative):relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);
+    }).map(row=>String(row.id));
+  }
+  deleteSessions(ids:string[]):string[]{
+    const sessions=[...new Set(ids)];if(!sessions.length)return [];
+    const runIds=sessions.flatMap(sessionId=>this.db.prepare('SELECT id FROM runs WHERE sessionId=?').all(sessionId).map(row=>String(row.id)));
+    this.transaction(()=>{for(const sessionId of sessions){this.db.prepare('DELETE FROM runs WHERE sessionId=?').run(sessionId);this.db.prepare('DELETE FROM sessions WHERE id=?').run(sessionId);}});
+    return runIds;
   }
 
   deleteSession(id: string): string[] {

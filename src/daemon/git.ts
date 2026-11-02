@@ -1,8 +1,8 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, open, readlink, realpath, stat } from 'node:fs/promises';
+import { lstat, mkdir, open, readlink, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitRemoteBranch, GitResult, GitStatus } from '../shared/protocol';
+import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitRemoteBranch, GitResult, GitStatus, GitWorktree } from '../shared/protocol';
 import { resolveExecutable } from './executables';
 import { terminalEnvironment } from './paths';
 
@@ -85,10 +85,86 @@ export class GitWorkspace {
     }).finally(()=>this.active.delete(controller));
     this.active.set(controller,task);return task;
   }
+  async worktrees(cwd:string):Promise<GitWorktree[]>{
+    const status=await this.status(cwd);this.requireRepository(status);
+    const canonical=await realpath(cwd),relative=path.relative(status.root,canonical);
+    if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))throw new Error('项目目录不在 Git 仓库内');
+    const output=await this.command(status.root,['worktree','list','--porcelain','-z']);
+    const records:{path:string;head:string|null;branch:string|null;detached:boolean;locked:boolean;prunable:boolean}[]=[];
+    let current:{path:string;head:string|null;branch:string|null;detached:boolean;locked:boolean;prunable:boolean}|null=null;
+    const commit=()=>{if(current){records.push(current);current=null;}};
+    for(const token of output.split('\0')){
+      if(!token){commit();continue;}
+      if(token.startsWith('worktree ')){commit();current={path:path.resolve(token.slice(9)),head:null,branch:null,detached:false,locked:false,prunable:false};continue;}
+      if(!current)continue;
+      if(token.startsWith('HEAD '))current.head=token.slice(5);
+      else if(token.startsWith('branch '))current.branch=token.slice(7).replace(/^refs\/heads\//,'');
+      else if(token==='detached')current.detached=true;
+      else if(token==='locked'||token.startsWith('locked '))current.locked=true;
+      else if(token==='prunable'||token.startsWith('prunable '))current.prunable=true;
+    }
+    commit();
+    return records.map((item,index)=>({...item,main:index===0,workingPath:path.resolve(item.path,relative)}));
+  }
+  async resolveWorktree(cwd:string,workingPath:string|null|undefined):Promise<string>{
+    const canonical=await realpath(cwd);
+    if(!workingPath)return canonical;
+    const expected=process.platform==='win32'?path.resolve(workingPath).toLowerCase():path.resolve(workingPath);
+    const item=(await this.worktrees(canonical)).find(value=>(process.platform==='win32'?value.workingPath.toLowerCase():value.workingPath)===expected);
+    if(!item||item.prunable)throw new Error('所选 Worktree 已不存在或不属于当前项目，请重新选择工作区');
+    return realpath(item.workingPath);
+  }
+  async createWorktree(cwd:string,branch:string,createBranch=true,baseRef?:string):Promise<GitWorktree>{
+    const status=await this.status(cwd);this.requireRepository(status);
+    if(status.operation||status.conflicts)throw new Error('仓库存在未完成的 Git 操作或冲突，请处理后再创建 Worktree');
+    const key=process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory;
+    if(this.locks.has(key))throw new Error('此仓库正在执行 Git 操作，请稍后重试');
+    this.locks.add(key);
+    try{
+      await this.command(status.root,['check-ref-format','--branch',branch]);
+      const branches=(await this.command(status.root,['for-each-ref','--format=%(refname:lstrip=2)','refs/heads/'])).split(/\r?\n/).filter(Boolean);
+      if(createBranch&&branches.includes(branch))throw new Error(`本地分支 ${branch} 已存在；请选择已有分支，或换一个新分支名称`);
+      if(!createBranch&&!branches.includes(branch))throw new Error(`本地分支 ${branch} 不存在，请刷新后选择已有分支`);
+      if(baseRef){
+        const resolved=(await this.command(status.root,['rev-parse','--verify','--quiet',baseRef+'^{commit}'],false,undefined,[0,1])).trim();
+        if(!/^[a-f0-9]{40,64}$/.test(resolved))throw new Error('起始分支或提交不存在');
+      }
+      const slug=branch.replaceAll('/','-').replace(/[^a-zA-Z0-9._-]/g,'-').replace(/^-+|-+$/g,'')||'worktree';
+      const stem=`${path.basename(status.root)}-${slug}`;
+      let target=path.resolve(path.dirname(status.root),stem);
+      for(let suffix=2;suffix<=100;suffix++){
+        try{await lstat(target);target=path.resolve(path.dirname(status.root),`${stem}-${suffix}`);}
+        catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')break;throw error;}
+      }
+      try{await lstat(target);throw new Error('自动生成的 Worktree 目录已被占用，请先清理后重试');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      await mkdir(path.dirname(target),{recursive:true});
+      const tracking=createBranch&&!!baseRef&&status.remoteBranches?.some(item=>item.ref===baseRef);
+      const args=['worktree','add',...(createBranch?['-b',branch]:[]),...(tracking?['--track']:[]),target,...(createBranch?(baseRef?[baseRef]:[]):[branch])];
+      await this.command(status.root,args,true);
+      this.statuses.clear();
+      const created=(await this.worktrees(cwd)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?target.toLowerCase():target));
+      if(!created)throw new Error('Git 已创建 Worktree，但刷新列表失败；请刷新 Git 状态');
+      return created;
+    }finally{this.locks.delete(key);this.statuses.clear();}
+  }
+  async removeWorktree(cwd:string,worktreePath:string):Promise<void>{
+    const status=await this.status(cwd);this.requireRepository(status);
+    const worktree=(await this.worktrees(cwd)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?path.resolve(worktreePath).toLowerCase():path.resolve(worktreePath)));
+    if(!worktree)throw new Error('Worktree 不属于当前 Git 仓库，或已经被删除');
+    if(worktree.main)throw new Error('主工作区不能作为 Worktree 删除');
+    if(worktree.prunable)throw new Error('该 Worktree 已失效，请在终端执行 git worktree prune 清理元数据');
+    if(worktree.locked)throw new Error('该 Worktree 已锁定，请先在终端解除锁定');
+    const key=process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory;
+    if(this.locks.has(key))throw new Error('此仓库正在执行 Git 操作，请稍后重试');
+    this.locks.add(key);
+    try{await this.command(status.root,['worktree','remove',worktree.path],true);this.statuses.clear();}
+    finally{this.locks.delete(key);this.statuses.clear();}
+  }
   status(cwd: string): Promise<GitStatus> {
     const pending=this.statuses.get(cwd);if(pending)return pending;
-    const task=this.inspect(cwd).finally(()=>this.statuses.delete(cwd));this.statuses.set(cwd,task);return task;
+    const task=this.inspect(cwd).finally(()=>{if(this.statuses.get(cwd)===task)this.statuses.delete(cwd);});this.statuses.set(cwd,task);return task;
   }
+  private freshStatus(cwd:string):Promise<GitStatus>{this.statuses.delete(cwd);return this.status(cwd);}
   async ignored(cwd: string, paths: string[]): Promise<{ paths: Set<string>; available: boolean; warning?: string }> {
     if (!paths.length) return { paths: new Set(), available: true };
     try {
@@ -211,16 +287,17 @@ export class GitWorkspace {
     if(status.operation)throw new Error(`仓库正在${status.operation}，请先在终端完成或取消该操作`);
   }
   async operate(cwd: string, request: GitOperation): Promise<GitResult> {
-    let status=await this.inspect(cwd);this.verify(status,request.action==='fetch'?{...request.expected,branch:status.branch,head:status.head}:request.expected);
-    const key=process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory;
+    // Resolve only the lock identity before acquiring it. A complete status
+    // here was immediately discarded by the mandatory inspection under lock.
+    const common=await realpath(path.resolve(cwd,(await this.command(cwd,['rev-parse','--git-common-dir'])).replace(/\r?\n$/,'')));
+    const key=process.platform==='win32'?common.toLowerCase():common;
     if(this.locks.has(key))throw new Error('此仓库正在进行 Git 操作，请稍后重试');
     if(this.locks.size>=2)throw new Error('已有两个 Git 操作在执行，请稍后重试');
     this.locks.add(key);const output: string[]=[];let completed='';
     try {
-      // Re-read after acquiring our repository lock; a preceding operation may
-      // have completed while the initial inspection was in flight.
-      status = await this.inspect(cwd);
+      let status = await this.freshStatus(cwd);
       this.verify(status, request.action === 'fetch' ? { ...request.expected, branch: status.branch, head: status.head } : request.expected);
+      if((process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory)!==key)throw new Error('仓库已变化，请刷新后重新操作');
       if (request.action === 'stage' || request.action === 'unstage') {
         if (!request.paths?.length) throw new Error('请先选择文件');
         const selected = [...new Set(request.paths.map(repositoryPath))].map(filename => {
@@ -289,7 +366,7 @@ export class GitWorkspace {
           }
           output.push(await this.command(status.root,['fetch',...prune,'--no-auto-gc','--no-tags','--no-recurse-submodules','--',remote,...(request.action==='fetch'?[]:['refs/heads/'+target])],true));
           completed='已获取远端更新';
-          const fresh=await this.inspect(cwd);this.verify(fresh,request.action==='fetch'?{...request.expected,branch:fresh.branch,head:fresh.head}:request.expected);status=fresh;
+          const fresh=await this.freshStatus(cwd);this.verify(fresh,request.action==='fetch'?{...request.expected,branch:fresh.branch,head:fresh.head}:request.expected);status=fresh;
           if(request.action!=='fetch' && (fresh.upstreamRemote!==remote || fresh.upstreamBranch!==target))throw new Error('上游配置已变化，请刷新重试');
           if(['pull','sync'].includes(request.action)) {
             this.requireReady(status);
@@ -316,7 +393,9 @@ export class GitWorkspace {
           }
         }
       }
-      const updated=await this.inspect(cwd);
+      // Fetch has already collected the final status. Share that result with
+      // the caller instead of launching another full set of Git processes.
+      const updated=request.action==='fetch'?status:await this.freshStatus(cwd);
       updated.busy=false;
       return {status:updated,message:completed,output:gitMessage(output.join('\n'))};
     } catch(error) {

@@ -8,7 +8,7 @@ import os from 'node:os';
 import {GitWorkspace,parseGitStatus,gitMessage} from '../src/daemon/git';
 import {DaemonServer} from '../src/daemon/server';
 import {DaemonConnection} from '../src/main/connection';
-import type {GitOperation,GitStatus,GitResult,Project,Session,Run,State} from '../src/shared/protocol';
+import type {Attachment,GitOperation,GitStatus,GitResult,GitWorktree,Project,Session,Run,State} from '../src/shared/protocol';
 
 const execute=promisify(execFile);
 async function git(cwd:string,...args:string[]){return(await execute('git',['-c','core.autocrlf=false','-c','commit.gpgsign=false','-C',cwd,...args],{encoding:'utf8',windowsHide:true})).stdout.trim();}
@@ -20,7 +20,7 @@ async function fixture(t:any){
   for(const cwd of [a]){await git(cwd,'config','user.name','Fixture');await git(cwd,'config','user.email','fixture@example.invalid');}
   await writeFile(path.join(a,'base.txt'),'base\n');await git(a,'add','.');await git(a,'commit','-m','base');await git(a,'push','-u','origin','main');
   await git(dir,'clone',remote,b);await git(b,'config','user.name','Fixture');await git(b,'config','user.email','fixture@example.invalid');
-  const operation=async(action:GitOperation['action'],extra:Partial<GitOperation>={})=>{const s=await service.status(a);return service.operate(a,{projectId:'fixture',action,expected:{root:s.root,branch:s.branch,head:s.head},remote:'origin',branch:s.upstreamBranch||s.branch||undefined,...extra});};
+  const operation=async(action:GitOperation['action'],extra:Partial<GitOperation>={})=>{const s=await service.status(a);return service.operate(a,{projectId:'fixture',worktreePath:null,action,expected:{root:s.root,branch:s.branch,head:s.head},remote:'origin',branch:s.upstreamBranch||s.branch||undefined,...extra});};
   return{dir,remote,a,b,service,operation};
 }
 
@@ -70,7 +70,7 @@ test('unrelated edits survive pull/switch while overlapping edits, changed previ
   await assert.rejects(operation('switch',{branch:'feature/same'}),/overwritten|local changes/);
   assert.equal((await service.status(a)).branch,'main');assert.equal(await readFile(path.join(a,'base.txt'),'utf8'),'local edit again');
   await git(a,'checkout','--','base.txt');await rm(path.join(a,'local-only.txt'));
-  const old=await service.status(a);await git(a,'switch','-c','changed');await assert.rejects(service.operate(a,{projectId:'x',action:'push',remote:'origin',expected:{root:old.root,head:old.head,branch:old.branch}}),/已变化/);await git(a,'switch','main');
+  const old=await service.status(a);await git(a,'switch','-c','changed');await assert.rejects(service.operate(a,{projectId:'x',worktreePath:null,action:'push',remote:'origin',expected:{root:old.root,head:old.head,branch:old.branch}}),/已变化/);await git(a,'switch','main');
   await writeFile(path.join(a,'a.txt'),'a');await git(a,'add','.');await git(a,'commit','-m','a');const local=await git(a,'rev-parse','HEAD');
   await writeFile(path.join(b,'b.txt'),'b');await git(b,'add','.');await git(b,'commit','-m','b');await git(b,'push');const theirs=await git(remote,'rev-parse','refs/heads/main');
   await assert.rejects(operation('sync'),/fast-forward/);assert.equal(await git(a,'rev-parse','HEAD'),local);assert.equal(await git(remote,'rev-parse','refs/heads/main'),theirs);
@@ -140,11 +140,53 @@ test('slow fetches are serialized per repository and full shutdown cancels Git a
   await writeFile(helper,`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000);`);
   const quote=(value:string)=>'"'+value.replaceAll('\\','/')+'"';
   await git(a,'config','remote.origin.uploadpack',quote(node)+' '+quote(helper));
-  const status=await service.status(a),request:GitOperation={projectId:'x',action:'fetch',remote:'origin',expected:{root:status.root,branch:status.branch,head:status.head}};
+  const status=await service.status(a),request:GitOperation={projectId:'x',worktreePath:null,action:'fetch',remote:'origin',expected:{root:status.root,branch:status.branch,head:status.head}};
   const pending=service.operate(a,request);const rejected=assert.rejects(pending,/取消/);
   const deadline=Date.now()+10000;let pid=0;
   while(!pid){assert.ok(Date.now()<deadline,'Upload helper did not start');try{pid=Number(await readFile(pidFile,'utf8'));}catch{}await new Promise(resolve=>setTimeout(resolve,40));}
   await assert.rejects(service.operate(a,request),/正在进行 Git/);
   await service.close();await rejected;
   try{process.kill(pid,0);assert.ok(process.platform==='linux'&&/\) Z /.test(await readFile(`/proc/${pid}/stat`,'utf8')),'Git helper survived shutdown');}catch(error){assert.ok(['ESRCH','ENOENT'].includes((error as NodeJS.ErrnoException).code!));}
+});
+
+test('Worktree RPCs persist session association, launch in the selected directory and guard removal', {timeout:30000}, async t => {
+  const {dir,a}=await fixture(t);
+  const server=new DaemonServer(path.join(dir,'worktree-data'));
+  const connection=await DaemonConnection.open(await server.listen(),()=>{});
+  try {
+    const project=await connection.rpc<Project>('createProject',{name:'Worktree project',path:a});
+    const initial=await connection.rpc<GitWorktree[]>('gitWorktrees',{projectId:project.id});
+    assert.equal(initial.length,1);
+    assert.equal(initial[0].main,true);
+    const created=await connection.rpc<GitWorktree>('gitCreateWorktree',{projectId:project.id,branch:'feature/worktree-session',createBranch:true,baseRef:'main'});
+    assert.equal(created.branch,'feature/worktree-session');
+    assert.equal(created.main,false);
+    assert.equal(await git(created.workingPath,'branch','--show-current'),'feature/worktree-session');
+    const status=await connection.rpc<GitStatus>('gitStatus',{projectId:project.id,worktreePath:created.workingPath});
+    assert.equal(status.branch,'feature/worktree-session');
+    const session=await connection.rpc<Session>('createSession',{projectId:project.id,title:'Worktree shell',agent:'shell',command:'',worktreePath:created.workingPath});
+    assert.equal(session.worktreePath,await realpath(created.workingPath));
+    assert.equal((await connection.rpc<State>('state')).sessions.find(item=>item.id===session.id)?.worktreePath,session.worktreePath);
+    const run=await connection.rpc<Run>('start',{sessionId:session.id,cols:100,rows:30});
+    await connection.rpc('attach',{sessionId:session.id});
+    const command=process.platform==='win32'?'Get-Location | ForEach-Object { $_.Path }\r':'pwd\r';
+    await connection.rpc('input',{sessionId:session.id,runId:run.id,data:command});
+    const expected=created.workingPath;
+    const deadline=Date.now()+7000;
+    let snapshot='';
+    while(Date.now()<deadline){
+      snapshot=(await connection.rpc<Attachment>('attach',{sessionId:session.id})).snapshot;
+      if(snapshot.includes(expected))break;
+      await new Promise(resolve=>setTimeout(resolve,60));
+    }
+    assert.ok(snapshot.includes(expected),'terminal did not start in selected Worktree: '+snapshot.slice(-1000));
+    await assert.rejects(connection.rpc('gitRemoveWorktree',{projectId:project.id,path:created.path,deleteSessions:false}),/还有 1 个会话/);
+    await connection.rpc('stop',{sessionId:session.id});
+    await connection.rpc('gitRemoveWorktree',{projectId:project.id,path:created.path,deleteSessions:true});
+    assert.equal((await connection.rpc<State>('state')).sessions.some(item=>item.id===session.id),false);
+    assert.equal((await connection.rpc<GitWorktree[]>('gitWorktrees',{projectId:project.id})).length,1);
+  } finally {
+    connection.close();
+    await server.close();
+  }
 });

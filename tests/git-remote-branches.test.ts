@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { GitWorkspace } from '../src/daemon/git';
-import type { GitOperation, GitRemoteBranch } from '../src/shared/protocol';
+import type { GitOperation, GitRemoteBranch, GitStatus } from '../src/shared/protocol';
 const execute = promisify(execFile);
 async function git(cwd: string, ...args: string[]) { return (await execute('git', ['-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', '-C', cwd, ...args], { encoding: 'utf8', windowsHide: true })).stdout.trim(); }
 async function fixture(t: any) {
@@ -17,11 +17,37 @@ async function fixture(t: any) {
   await git(a, 'config', 'user.name', 'Fixture'); await git(a, 'config', 'user.email', 'fixture@example.invalid');
   await writeFile(path.join(a, 'base.txt'), 'base\n'); await git(a, 'add', '.'); await git(a, 'commit', '-m', 'base'); await git(a, 'push', '-u', 'origin', 'main');
   await git(dir, 'clone', remote, b); await git(b, 'config', 'user.name', 'Fixture'); await git(b, 'config', 'user.email', 'fixture@example.invalid');
-  const operation = async (action: GitOperation['action'], extra: Partial<GitOperation> = {}) => { const s = await service.status(a); return service.operate(a, { projectId: 'fixture', action, expected: { root: s.root, branch: s.branch, head: s.head }, remote: 'origin', ...extra }); };
+  const operation = async (action: GitOperation['action'], extra: Partial<GitOperation> = {}) => { const s = await service.status(a); return service.operate(a, { projectId: 'fixture', worktreePath: null, action, expected: { root: s.root, branch: s.branch, head: s.head }, remote: 'origin', ...extra }); };
   const select = async (branch: string, remote = 'origin') => { const item = (await service.status(a)).remoteBranches?.find(item => item.remote === remote && item.branch === branch); assert.ok(item, `missing ${remote}/${branch}`); return item; };
   const switchTo = (item: GitRemoteBranch, localBranch?: string) => operation('switchRemote', { remote: item.remote, branch: item.branch, remoteRef: item.ref, remoteHead: item.head, ...(localBranch ? { localBranch } : {}) });
   return { dir, remote, a, b, service, operation, select, switchTo };
 }
+
+test('fetch collects one preflight and one final status, returns new refs and executes only once', async t => {
+  const { a, b, service } = await fixture(t);
+  await git(b, 'push', 'origin', 'HEAD:refs/heads/feature/single-fetch');
+  const before = await service.status(a);
+  const original = (service as any).command.bind(service);
+  const command = t.mock.method(service as any, 'command', (...args: any[]) => original(...args));
+  const result = await service.operate(a, { projectId: 'fixture', worktreePath: null, action: 'fetch', remote: 'origin', expected: { root: before.root, branch: before.branch, head: before.head } });
+  const args: string[][] = command.mock.calls.map((call: { arguments: unknown[] }) => call.arguments[1] as string[]);
+  assert.equal(args.filter(args => args[0] === 'fetch').length, 1);
+  assert.equal(args.filter(args => args[0] === 'status').length, 2, 'Fetch must not discard and repeat complete repository scans');
+  assert.ok(result.status.remoteBranches?.some(item => item.branch === 'feature/single-fetch'));
+  assert.equal(result.status.busy, false);
+  assert.equal(result.status.head, before.head);
+});
+
+test('an older status completion cannot evict a newer shared inspection', async t => {
+  const service = new GitWorkspace(), completions: ((value: GitStatus) => void)[] = [];
+  const inspect = t.mock.method(service as any, 'inspect', () => new Promise<GitStatus>(resolve => completions.push(resolve)));
+  const old = service.status('repo'), fresh = (service as any).freshStatus('repo') as Promise<GitStatus>;
+  completions[0]({ kind: 'unavailable' } as GitStatus); await old;
+  assert.equal(service.status('repo'), fresh);
+  assert.equal(inspect.mock.callCount(), 2);
+  const current = { kind: 'repository' } as GitStatus;
+  completions[1](current); assert.equal(await fresh, current);
+});
 
 test('remote branches exclude symbolic HEAD, distinguish remotes and follow custom fetch mappings', async t => {
   const { a, b, remote, operation, service, select } = await fixture(t);
@@ -102,4 +128,37 @@ test('fetch never prunes local branches or tags when a custom refspec maps into 
   assert.equal(await git(a, 'show-ref', '--verify', 'refs/heads/mirror/topic').then(() => true, () => false), true);
   assert.equal(await git(a, 'show-ref', '--verify', 'refs/tags/mirror/topic').then(() => true, () => false), true);
   assert.ok(!(await service.status(a)).remoteBranches?.some(item => item.ref.startsWith('refs/heads/') || item.ref.startsWith('refs/tags/')));
+});
+
+test('remote-based Worktrees track the selected remote even when automatic tracking is disabled', async t => {
+  const { a, b, service, operation, select } = await fixture(t);
+  await git(b, 'switch', '-c', 'feature/worktree-remote');
+  await writeFile(path.join(b, 'remote-worktree.txt'), 'remote content\n');
+  await git(b, 'add', '.'); await git(b, 'commit', '-m', 'remote worktree');
+  await git(b, 'push', '-u', 'origin', 'feature/worktree-remote'); await operation('fetch');
+  await git(a, 'config', 'branch.autoSetupMerge', 'false');
+  await git(a, 'config', 'core.autocrlf', 'true'); // Exercise Windows checkout conversion on every platform.
+  const selected = await select('feature/worktree-remote');
+  const before = await git(a, 'rev-parse', 'HEAD');
+  const worktree = await service.createWorktree(a, 'local/worktree-remote', true, selected.ref);
+  assert.equal(worktree.branch, 'local/worktree-remote');
+  assert.equal((await readFile(path.join(worktree.workingPath, 'remote-worktree.txt'), 'utf8')).replace(/\r\n/g, '\n'), 'remote content\n');
+  assert.equal(await git(worktree.workingPath, 'rev-parse', 'HEAD'), selected.head);
+  assert.equal(await git(worktree.workingPath, 'rev-parse', '--abbrev-ref', '@{upstream}'), 'origin/feature/worktree-remote');
+  assert.equal(await git(a, 'branch', '--show-current'), 'main'); assert.equal(await git(a, 'rev-parse', 'HEAD'), before);
+  await service.removeWorktree(a, worktree.path);
+});
+
+test('remote Worktree bases honor custom fetch mappings and fail safely after the remote ref disappears', async t => {
+  const { a, b, service, operation, select } = await fixture(t);
+  await git(b, 'push', 'origin', 'HEAD:refs/heads/feature/custom-worktree');
+  await git(a, 'config', '--replace-all', 'remote.origin.fetch', '+refs/heads/*:refs/vendor/origin/*');
+  await operation('fetch'); const source = await select('feature/custom-worktree');
+  const created = await service.createWorktree(a, 'local/custom-worktree', true, source.ref);
+  assert.equal((await service.status(created.path)).upstreamBranch, 'feature/custom-worktree');
+  assert.equal((await service.status(created.path)).upstreamRemote, 'origin');
+  await service.removeWorktree(a, created.path);
+  await git(b, 'push', 'origin', '--delete', 'feature/custom-worktree'); await operation('fetch');
+  await assert.rejects(service.createWorktree(a, 'local/stale-worktree', true, source.ref), /不存在/);
+  assert.ok(!(await service.status(a)).branches.includes('local/stale-worktree'));
 });

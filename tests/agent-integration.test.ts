@@ -11,7 +11,6 @@ import { createBridge } from '../src/integrations/opencode/bridge';
 import { OpenCodeHistory } from '../src/daemon/opencode-history';
 import { AgentCli } from '../src/daemon/agent-cli';
 import { openCodeLaunch } from '../src/daemon/opencode-launch';
-import { installAgentFile } from '../src/main/plugin-files';
 import { Store } from '../src/daemon/store';
 import { petHookConfiguration } from '../src/main/pet-config';
 
@@ -177,16 +176,4 @@ test('installed OpenCode CLI is resolved without profiles and reads JSON through
   environment(t, { PATH: folder + path.delimiter + process.env.PATH });
   const cli = new AgentCli(); t.after(() => cli.close());
   assert.equal((await new OpenCodeHistory(cli).history('cli-session', folder)).messages[0].text, 'CLI_TEXT');
-});
-
-test('single-file Agent profiles retain provider inheritance through import, save and rename', async t => {
-  const folder = await temporary(t), store = new Store(path.join(folder, 'data'));
-  try {
-    for (const integration of ['claude', 'opencode']) {
-      const file = path.join(folder, integration + '.json'); await writeFile(file, JSON.stringify({ schemaVersion: 1, id: integration + '-profile', name: integration + ' profile', integration, command: integration, resumeCommand: integration + ' --resume {sessionId}' }));
-      const config = await installAgentFile(file, folder), saved = store.saveAgent(config);
-      assert.equal(store.saveAgent({ ...config, name: 'Renamed ' + integration }, saved.id).integration, integration);
-    }
-  } finally { store.close(); }
-  assert.equal((await readdir(folder)).includes('node_modules'), false, 'Integration does not install an Agent engine');
 });

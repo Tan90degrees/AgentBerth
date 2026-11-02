@@ -18,17 +18,31 @@ await writeFile(path.join(fixtureBin, process.platform === 'win32' ? 'opencode.c
 const env = { ...process.env, PATH: fixtureBin + path.delimiter + process.env.PATH, AGENTBERTH_DATA_DIR: dataDirectory, CLAUDE_CONFIG_DIR: path.join(folder, 'claude-home'), XDG_CONFIG_HOME: path.join(folder, 'config-home') }; delete env.ELECTRON_RUN_AS_NODE;
 let application;
 try {
+  console.log('Pet smoke: launching Electron');
   application = await electron.launch({ executablePath, args, env, timeout: 20000 });
-  const page = await application.firstWindow(); page.setDefaultTimeout(15000);
+  console.log('Pet smoke: waiting for main window');
+  const page = await application.firstWindow({timeout:20000}); page.setDefaultTimeout(15000);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.berth);
-  const rpc = (method, params) => page.evaluate(({ method, params }) => window.berth.rpc(method, params), { method, params });
-  await rpc('state', {});
+  console.log('Pet smoke: IPC ready; setting up fixtures');
+  const rpc = async (method, params) => {
+    let timer;
+    try{return await Promise.race([
+      page.evaluate(({method,params})=>window.berth.rpc(method,params),{method,params}),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Pet smoke RPC '+method+' exceeded 40 seconds')),40000);}),
+    ]);}finally{clearTimeout(timer);}
+  };
+  try { await rpc('state', {}); }
+  catch (error) {
+    const log = await readFile(path.join(dataDirectory, 'daemon.log'), 'utf8').catch(reason => 'daemon.log unavailable: '+String(reason));
+    throw new Error('Packaged pet fixture could not start its daemon: '+String(error)+'\n'+log.slice(-12000),{cause:error});
+  }
   const project = await rpc('createProject', { name: 'Pet test', path: folder });
   const shell = await rpc('createSession', { projectId: project.id, title: 'Ordinary terminal', agent: 'shell', command: '' });
   await rpc('start', { sessionId: shell.id, cols: 80, rows: 24 });
   // Seed a failed remote locally without making a network connection.
+  console.log('Pet smoke: validating SSH fixture and Agent sessions');
   const profile = await page.evaluate(privateKeyPath => window.berth.saveSshConnection({ alias: 'pet-filter-fixture', hostname: '127.0.0.1', port: 22, username: 'fixture', authentication: 'key', privateKeyPath, allowAgent: false }, undefined, {}, false), path.join(folder, 'missing-fixture-key'));
   const remote = await rpc('createRemoteSession', { title: 'Excluded SSH', remote: { host: profile.alias, connectionId: profile.id, directory: '' } });
   await assert.rejects(rpc('start', { sessionId: remote.id, cols: 80, rows: 24 }), /无法读取私钥/);
@@ -37,8 +51,8 @@ try {
   const runA = await rpc('start', { sessionId: a.id, cols: 80, rows: 24 });
   const runB = await rpc('start', { sessionId: b.id, cols: 80, rows: 24 });
   console.log('Pet smoke: open settings/window');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.locator('[data-plugin-id="pet"]').getByRole('button',{name:'配置',exact:true}).click();
   await page.waitForFunction(() => [...document.querySelectorAll('.pet-animation .pet-character')].length === 6 && [...document.querySelectorAll('.pet-animation .pet-character')].every(image => image.src.endsWith('.png') && image.complete && image.naturalWidth === 288 && image.naturalHeight === 240));
   await page.locator('.pet-animation .pet-character').first().hover();
   await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.webp'));
@@ -166,7 +180,8 @@ try {
   await pet.waitForFunction(() => document.querySelector('.pet-state-completed'));
   await chooseMenu('打开当前会话');
   await chooseMenu('桌宠设置…');
-  await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).waitFor();
+  await page.getByRole('dialog',{name:/^配置插件/}).waitFor();
+  await page.getByLabel('显示桌宠',{exact:true}).waitFor();
   console.log('Pet smoke: copy Agent setup tutorial with actual installation paths');
   await page.getByRole('button', { name: '复制给 Agent 自动配置', exact: true }).click();
   const guide = await page.evaluate(() => window.berth.readClipboard());
@@ -186,7 +201,16 @@ try {
   assert.deepEqual(merged.permissions, { allow: ['Read'] }); assert.equal(merged.hooks.Stop.length, 1);
   await page.getByLabel('桌宠适配 Agent', { exact: true }).selectOption('opencode');
   await page.getByRole('button', { name: '安装/更新适配', exact: true }).click();
-  await page.getByRole('status', { name: '适配安装结果', exact: true }).filter({ hasText: '适配已安装；' }).waitFor();
+  await page.waitForFunction(() => {
+    const host=document.querySelector('.pet-settings');
+    return !!host?.querySelector('[aria-label="适配安装结果"]')?.textContent?.includes('适配已安装；')
+      || !!host?.querySelector('[role="alert"]')?.textContent?.trim();
+  }, null, { timeout: 35000 });
+  const hookStatus = await page.locator('.pet-settings').evaluate(host=>({
+    success:host.querySelector('[aria-label="适配安装结果"]')?.textContent?.includes('适配已安装；')??false,
+    error:host.querySelector('[role="alert"]')?.textContent?.trim()??'',
+  }));
+  assert.equal(hookStatus.success,true,'OpenCode hook auto-detection must succeed: '+hookStatus.error);
   const installedPlugin = path.join(folder, '.opencode', 'plugins', 'agentberth-pet.js');
   assert.match(await readFile(installedPlugin, 'utf8'), /OpenCode major: 1/);
   await page.evaluate(projectId => window.berth.pet({ action: 'installHook', provider: 'opencode', projectId, opencodeVersion: '2' }), project.id);

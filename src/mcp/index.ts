@@ -4,6 +4,7 @@ import { DaemonConnection, DaemonRpcError } from '../main/connection';
 import type { RuntimeInfo } from '../shared/protocol';
 import { McpError, TerminalMcp, MCP_API_VERSION } from './server';
 import { AgentMcp } from './agents';
+import { ExtensionMcp } from '../extensions/mcp';
 
 const directory = process.argv[2];
 if (!directory || !path.isAbsolute(directory)) { process.stderr.write('Usage: agentberth-mcp <absolute-data-directory>\n'); process.exit(1); }
@@ -11,15 +12,17 @@ const server = new AgentMcp(() => {
   let generation = 0;
   let connection: DaemonConnection | null = null;
   let connecting: Promise<DaemonConnection> | null = null;
+  let extensionRevision:number|undefined;
   async function connect(): Promise<DaemonConnection> {
     if (connection?.connected) return connection;
     if (!connecting) connecting = (async () => {
       const attempt = generation;
       const runtime: RuntimeInfo = JSON.parse(readFileSync(path.join(directory, 'runtime.json'), 'utf8'));
       if (runtime.version !== 1 || !Number.isInteger(runtime.port) || runtime.port < 1 || runtime.port > 65535 || !/^[a-f0-9]{64}$/.test(runtime.token)) throw new Error('请先启动 AgentBerth，并更新后台');
-      const candidate = await DaemonConnection.open(runtime, () => {});
+      const candidate = await DaemonConnection.open(runtime,event=>{if(event.event==='state'&&event.data.extensions){const next=event.data.extensions.revision;if(extensionRevision!==undefined&&next!==extensionRevision)send({jsonrpc:'2.0',method:'notifications/tools/list_changed'});extensionRevision=next;}});
       try {
         const state = await candidate.rpc<import('../shared/protocol').State>('state');
+        extensionRevision=state.extensions?.revision;
         if (state.apiVersion < MCP_API_VERSION) throw new DaemonRpcError(`此 MCP 的独立 Agent 会话需要后台 API ${MCP_API_VERSION}，当前为 ${state.apiVersion}。请在设置中更新空闲后台并重新连接 MCP。`, 'BACKEND_UPGRADE_REQUIRED');
         if (ending || attempt !== generation) throw new Error('MCP client disconnected');
         const targets = terminal.ownedTargets();
@@ -35,7 +38,7 @@ const server = new AgentMcp(() => {
   }
   const terminal = new TerminalMcp({ rpc: async (method, params) => (await connect()).rpc(method, params) }, event => connect().then(client => client.rpc('mcpRecordCall', event as unknown as Record<string,unknown>)));
   return {
-    server: terminal,
+    server: new ExtensionMcp(terminal,async(method,params)=>(await connect()).rpc(method as import('../shared/protocol').Method,params)),
     disconnect() { generation++; connection?.close(true); connection = null; },
   };
 });

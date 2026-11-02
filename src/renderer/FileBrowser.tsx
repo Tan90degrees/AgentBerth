@@ -11,7 +11,7 @@ type Directory = { page?: ProjectFilePage; loading: boolean; error?: string };
 function EntryIcon({ directory, expanded }: { directory: boolean; expanded?: boolean }) {
   return <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true"><path d={directory ? expanded ? 'M2 7V4h6l2 2h8v2M2 8h17l-3 8H3L2 8Z' : 'M2 6V4h6l2 2h8v10H2V6Z' : 'M5 2h7l4 4v12H5V2Zm7 0v5h4'} /></svg>;
 }
-export default memo(function FileBrowser({ project, connected, treeHost, previewHost, previewHidden = false, onPreview, target, onTargetConsumed, navigationSupported, onDiff }: { project: Project; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; previewHidden?: boolean; onPreview: () => void; onDiff?: (path: string, staged: boolean, projectPath: boolean) => void; navigationSupported: boolean; onTargetConsumed: (nonce: number) => void; target: { query: string; nonce: number } | null }) {
+export default memo(function FileBrowser({ project, worktreePath = null, connected, treeHost, previewHost, previewHidden = false, onPreview, target, onTargetConsumed, navigationSupported, onDiff }: { project: Project; worktreePath?: string | null; connected: boolean; treeHost: HTMLElement | null; previewHost: HTMLElement | null; previewHidden?: boolean; onPreview: () => void; onDiff?: (path: string, staged: boolean, projectPath: boolean) => void; navigationSupported: boolean; onTargetConsumed: (nonce: number) => void; target: { query: string; nonce: number } | null }) {
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
   const directoriesRef = useRef(directories); directoriesRef.current = directories;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -20,7 +20,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
   const [markdown, setMarkdown] = useState(() => readStored('berth.markdownPreview') !== 'source');
   const [selected, setSelected] = useState('');
   const selectedRef = useRef('');
-  const storageKey = `berth.previewTabs.${project.id}`;
+  const storageKey = `berth.previewTabs.${project.id}.${worktreePath ?? 'main'}`;
   const [tabs, setTabs] = useState<PreviewTab[]>(() => {
     try { const saved = JSON.parse(readStored(storageKey) || '[]'); return Array.isArray(saved) ? saved.filter((p): p is string => typeof p === 'string' && p.length > 0 && p.length <= 4096).slice(0, MAX_PREVIEW_TABS).map(path => ({ path, markdown })) : []; } catch { return []; }
   });
@@ -56,7 +56,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     sequence.current.set(path, token);
     setDirectories(previous => ({ ...previous, [path]: { ...previous[path], loading: true, error: undefined } }));
     try {
-      const result = await window.berth.rpc<ProjectFilePage>('projectFiles', { projectId: project.id, path, offset });
+      const result = await window.berth.rpc<ProjectFilePage>('projectFiles', { projectId: project.id, ...(worktreePath ? { worktreePath } : {}), path, offset });
       if (!alive.current || sequence.current.get(path) !== token) return;
       setDirectories(previous => {
         const entries = offset ? [...(previous[path]?.page?.entries ?? []), ...result.entries] : result.entries;
@@ -66,7 +66,7 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     } catch (reason) {
       if (alive.current && sequence.current.get(path) === token) setDirectories(previous => ({ ...previous, [path]: { loading: false, error: String(reason).replace(/^Error: /, '') } }));
     }
-  }, [project.id]);
+  }, [project.id, worktreePath]);
   const openFile = useCallback(async (path: string, anchor = '', activate = true, force = false) => {
     if (activate) onPreview();
     const existing = tabsRef.current.find(tab => tab.path === path);
@@ -89,14 +89,14 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     await previous;
     try {
       if (!alive.current || fileRequests.current.get(path) !== token) return;
-      const result = await window.berth.rpc<FilePreview>('previewFile', { projectId: project.id, path });
+      const result = await window.berth.rpc<FilePreview>('previewFile', { projectId: project.id, ...(worktreePath ? { worktreePath } : {}), path });
       if (!alive.current || fileRequests.current.get(path) !== token) return;
       updateTab(path, { file: result, loading: false });
       if (anchor) requestAnimationFrame(() => host.current?.querySelector<HTMLElement>(`.preview-document:not([hidden]) .markdown-document [id="${CSS.escape(anchor)}"]`)?.scrollIntoView({ block: 'start' }));
     } catch (reason) {
       if (alive.current && fileRequests.current.get(path) === token) updateTab(path, { loading: false, error: String(reason).replace(/^Error: /, '') });
     } finally { release(); }
-  }, [project.id, onPreview, position, updateTab]);
+  }, [project.id, worktreePath, onPreview, position, updateTab]);
   function closeTab(path: string) {
     fileRequests.current.delete(path);
     const old = tabsRef.current, index = old.findIndex(tab => tab.path === path);
@@ -164,14 +164,14 @@ export default memo(function FileBrowser({ project, connected, treeHost, preview
     setSearching(true); setSearchError(''); setMatches(null); setMatchIndex(0);
     const timer = setTimeout(() => {
       if (!query.trim()) { setSearching(false); return; }
-      void window.berth.rpc<{ matches: ProjectFile[]; truncated: boolean; line?: number; column?: number }>('findProjectFiles', { projectId: project.id, query }).then(result => {
+      void window.berth.rpc<{ matches: ProjectFile[]; truncated: boolean; line?: number; column?: number }>('findProjectFiles', { projectId: project.id, ...(worktreePath ? { worktreePath } : {}), query }).then(result => {
         if (!alive.current || token !== searchToken.current) return;
         setMatches(result); setSearching(false);
         if (result.matches.length === 1 && !result.truncated && query === automaticQuery.current) { automaticQuery.current = null; void reveal(result.matches[0], result.line, result.column); }
       }).catch(reason => { if (alive.current && token === searchToken.current) { setSearchError(String(reason)); setSearching(false); } });
     }, 180);
     return () => { clearTimeout(timer); searchToken.current++; };
-  }, [query, searchOpen, project.id, reveal]);
+  }, [query, searchOpen, project.id, worktreePath, reveal]);
   useEffect(() => { document.querySelector('[aria-label="匹配的文件和目录"] [aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }); }, [matchIndex]);
   function toggle(entry: ProjectFile) {
     if (expanded.has(entry.path)) setExpanded(previous => { const next = new Set(previous); next.delete(entry.path); return next; });

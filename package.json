@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "type": "module",
   "description": "A project workspace for persistent terminals, agents, files and history",
@@ -32,7 +32,11 @@
     "@xterm/addon-webgl": "0.19.0",
     "@xterm/headless": "6.0.0",
     "@xterm/xterm": "6.0.0",
+    "ajv": "8.17.1",
+    "cordis": "4.0.0-rc.12",
+    "fflate": "0.8.2",
     "highlight.js": "11.12.0",
+    "js-yaml": "4.3.2",
     "node-pty": "1.1.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -40,8 +44,7 @@
     "remark-gfm": "4.0.1",
     "ssh2": "1.17.0",
     "ws": "8.22.0",
-    "zod": "4.6.7",
-    "js-yaml": "4.3.2"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@electron/rebuild": "4.2.1",
@@ -93,10 +96,6 @@
       "uninstallerIcon": "assets/app.ico"
     },
     "extraResources": [
-      {
-        "from": "dist/check-plugin.cjs",
-        "to": "plugin-kit/check-plugin.cjs"
-      },
       {
         "from": "docs",
         "to": "docs"

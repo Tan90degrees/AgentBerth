@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 let failed = false;
-for (const script of ['scripts/smoke.mjs', 'scripts/smoke-files.mjs', 'scripts/smoke-pet.mjs']) {
+for (const script of ['scripts/smoke.mjs', 'scripts/smoke-files.mjs', 'scripts/smoke-pet.mjs', 'scripts/smoke-extensions.mjs']) {
   const result = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', env: process.env });
   if (result.error) console.error(result.error);
   if (result.status !== 0) failed = true;

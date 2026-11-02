@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import HighlightWorker from './highlight-worker?worker&inline';
 
 type Job = { id: number; text: string; language: string; done: (html: string | null) => void };
-let worker: Worker | null = null, current: Job | null = null, timer: ReturnType<typeof setTimeout> | undefined, nextId = 0;
+let worker: Worker | null = null, current: Job | null = null, timer: ReturnType<typeof setTimeout> | undefined, nextId = 0, users = 0;
 const queue: Job[] = [];
 function finish(html: string | null, reset = false) {
   clearTimeout(timer); const job = current; current = null;
@@ -23,10 +23,12 @@ function pump() {
   } catch { finish(null, true); }
 }
 function request(text: string, language: string, done: Job['done']): () => void {
+  users++;
   const job: Job = { id: ++nextId, text, language, done }; queue.push(job); pump();
   return () => {
     const index = queue.indexOf(job); if (index >= 0) queue.splice(index, 1);
     if (current === job) { job.done = () => {}; finish(null, true); }
+    if(--users===0)queueMicrotask(()=>{if(!users){clearTimeout(timer);worker?.terminate();worker=null;}});
   };
 }
 export function useHighlightedCode(text: string, language: string, enabled = true): string | null {

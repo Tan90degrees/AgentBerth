@@ -38,12 +38,12 @@ test('live Agent hot update validates before activation, preserves PID/identity/
   await writeFile(wrongIdentity.plugin!.executable, (await readFile(wrongIdentity.plugin!.executable, 'utf8')).replace("id:'hot-agent'", "id:'different-agent'"));
   await assert.rejects(c.rpc('updateAgent',{agentId:agent.id,...wrongIdentity}),/ID 与配置不一致/);
   await assert.rejects(c.rpc('updateAgent',{agentId:agent.id,...original,plugin:{...original.plugin!,sourceId:'different-agent'}}),/ID 与配置不一致/);
-  assert.equal((await c.rpc<State>('state')).agents![0].plugin!.executable,original.plugin!.executable);
+  assert.equal((await c.rpc<State>('state')).agents!.find(value=>value.id===agent.id)!.plugin!.executable,original.plugin!.executable);
   assert.equal((await c.rpc<History>('history',{sessionId:session.id})).messages[0].text,'old');
   const next=await adapter(folder,'new');await c.rpc('updateAgent',{agentId:agent.id,...next});
   const state=await c.rpc<State>('state');const retained=state.sessions.find(x=>x.id===session.id)!;
   assert.equal(retained.latestRun!.pid,run.pid);assert.equal(retained.latestRun!.id,run.id);assert.equal(retained.latestRun!.status,'running');
-  assert.equal(retained.command,original.command);assert.equal(retained.nativeSessionId,'native-hot');assert.equal(state.agents![0].id,agent.id);assert.equal(state.agents![0].name,'User name');
+  assert.equal(retained.command,original.command);assert.equal(retained.nativeSessionId,'native-hot');assert.equal(state.agents!.find(value=>value.id===agent.id)!.id,agent.id);assert.equal(state.agents!.find(value=>value.id===agent.id)!.name,'User name');
   assert.equal((await c.rpc<History>('refreshHistory',{sessionId:session.id})).messages[0].text,'new');
   assert.equal((await c.rpc<NativeHistoryPage>('discoverNativeHistories',{sessionId:session.id,cursor:null,limit:5,query:''})).items[0].title,'new');
   const fresh=await c.rpc<Session>('createSession',{projectId:project.id,title:'New',agent:agent.id,command:''});assert.equal(fresh.command,next.command);

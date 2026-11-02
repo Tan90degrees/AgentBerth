@@ -46,34 +46,23 @@ test('Bash profile starts inside the project and preserves inherited executable 
   assert.match(await connection.rpc<string>('output', { runId: run.id }), /(?:bin|cmd)\/git/);
 });
 
-test('0.1 database migrates without losing projects, transcripts, run screens or IDs', t => {
-  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-migration-'));
-  const old = new DatabaseSync(path.join(folder, 'berth.sqlite'));
+test('old databases are rejected without modifying stored project and session records', t => {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-schema-rejection-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5 }));
+  const file = path.join(folder, 'berth.sqlite');
+  const old = new DatabaseSync(file);
   old.exec(`CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,path TEXT NOT NULL,pathKey TEXT UNIQUE NOT NULL,createdAt TEXT NOT NULL);
     CREATE TABLE sessions(id TEXT PRIMARY KEY,projectId TEXT NOT NULL REFERENCES projects(id),title TEXT NOT NULL,agent TEXT NOT NULL,command TEXT NOT NULL,nativeSessionId TEXT,transcriptPath TEXT,createdAt TEXT NOT NULL,updatedAt TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,history TEXT NOT NULL);
-    CREATE TABLE runs(id TEXT PRIMARY KEY,sessionId TEXT NOT NULL REFERENCES sessions(id),pid INTEGER,status TEXT NOT NULL,startedAt TEXT NOT NULL,endedAt TEXT,exitCode INTEGER,command TEXT NOT NULL,error TEXT,snapshot TEXT NOT NULL DEFAULT '',seq INTEGER NOT NULL DEFAULT 0,cols INTEGER NOT NULL DEFAULT 100,rows INTEGER NOT NULL DEFAULT 30);
     PRAGMA user_version=1;`);
-  const projectId = randomUUID(), sessionId = randomUUID(), runId = randomUUID();
-  const history = { nativeSessionId: 'old-native-id', path: 'old.jsonl', messages: [{ role: 'user', text: '旧版对话', timestamp: null }], warnings: [] };
-  old.prepare('INSERT INTO projects VALUES(?,?,?,?,?)').run(projectId, '旧项目', folder, folder, '2026-01-01');
-  old.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(sessionId, projectId, '旧会话', 'codex', '', history.nativeSessionId, history.path, '2026-01-01', '2026-01-01', 0, JSON.stringify(history));
-  old.prepare('INSERT INTO runs(id,sessionId,status,startedAt,command,snapshot,seq) VALUES(?,?,?,?,?,?,?)').run(runId, sessionId, 'exited', '2026-01-01', 'codex', 'old-screen', 7);
+  const projectId = randomUUID();
+  old.prepare('INSERT INTO projects VALUES(?,?,?,?,?)').run(projectId,'旧项目',folder,folder,'2026-01-01');
   old.close();
-  let store = new Store(folder);
-  t.after(() => { store.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5 }); });
-  assert.equal(store.project(projectId).name, '旧项目');
-  assert.equal(store.session(sessionId).terminal, null);
-  assert.deepEqual(store.history(sessionId), history);
-  assert.equal(store.run(runId).shell, '');
-  assert.equal(store.savedScreen(runId).snapshot, 'old-screen');
-  assert.deepEqual(store.settings(), DEFAULT_SETTINGS);
-  const config: Settings = { ...DEFAULT_SETTINGS, defaultAgent: 'opencode', fontSize: 18, terminal: { profile: 'custom', executable: shell().file, args: shell().args } };
-  store.saveSettings(config);
-  store.updateSession(sessionId, '编辑后', 'codex', '', config.terminal);
-  store.close(); store = new Store(folder);
-  assert.deepEqual(store.settings(), config);
-  assert.equal(store.session(sessionId).nativeSessionId, history.nativeSessionId);
-  assert.deepEqual(store.session(sessionId).terminal, config.terminal);
+  assert.throws(() => new Store(folder), /旧版 AgentBerth 数据.*清除旧数据目录/);
+  const preserved = new DatabaseSync(file);
+  assert.equal(preserved.prepare('SELECT name FROM projects WHERE id=?').get(projectId)?.name,'旧项目');
+  assert.equal(Number(preserved.prepare('PRAGMA user_version').get()?.user_version),1);
+  assert.equal(preserved.prepare('PRAGMA table_info(sessions)').all().some(row=>row.name==='terminal'),false);
+  preserved.close();
 });
 
 test('editing keeps prior runs and clears incompatible native links; deletion cascades all runs and archived sessions', t => {

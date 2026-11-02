@@ -16,8 +16,8 @@ async function fixture(t: any, initial = true) {
   t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }); });
   await git('init', '--initial-branch=main'); await git('config', 'user.name', 'Change Fixture'); await git('config', 'user.email', 'changes@example.invalid'); await git('config', 'commit.gpgsign', 'false');
   if (initial) { await writeFile(path.join(root, 'base.txt'), 'base\n'); await git('add', '.'); await git('commit', '-m', 'base'); }
-  const act = async (action: GitOperation['action'], extra: Partial<GitOperation> = {}) => { const status = await service.status(root); return service.operate(root, { projectId: 'fixture', action, expected: { root: status.root, head: status.head, branch: status.branch }, ...extra }); };
-  const diff = (filename: string, staged = false, cwd = root, projectPath = false) => service.diff(cwd, { projectId: 'fixture', path: filename, staged, projectPath });
+  const act = async (action: GitOperation['action'], extra: Partial<GitOperation> = {}) => { const status = await service.status(root); return service.operate(root, { projectId: 'fixture', worktreePath: null, action, expected: { root: status.root, head: status.head, branch: status.branch }, ...extra }); };
+  const diff = (filename: string, staged = false, cwd = root, projectPath = false) => service.diff(cwd, { projectId: 'fixture', worktreePath: null, path: filename, staged, projectPath });
   return { root, service, git, act, diff };
 }
 
@@ -76,7 +76,7 @@ test('diff handles binary, nested project scope, empty files and oversized text;
   await assert.rejects(act('stage', { paths: ['.git/config'] }), /路径无效/);
   await assert.rejects(act('stage', { paths: ['nested'] }), /状态已变化/);
   await assert.rejects(act('commit', { message: 'nothing' }), /没有已暂存/);
-  await assert.rejects(service.diff(root, { projectId: 'fixture', path: '../outside', staged: false, projectPath: false }), /路径无效/);
+  await assert.rejects(service.diff(root, { projectId: 'fixture', worktreePath: null, path: '../outside', staged: false, projectPath: false }), /路径无效/);
 });
 
 test('unified diff line numbers distinguish file headers, additions, removals and multiple hunks', () => {

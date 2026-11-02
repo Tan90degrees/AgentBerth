@@ -18,7 +18,7 @@ export default function GitDiffPreview({ request, connected, onChange, onBack }:
     setLoading(true);
     void window.berth.rpc<GitDiff>('gitDiff', request).then(value => { if (generation.current === token) setDiff(value); }).catch(reason => { if (generation.current === token) setError(String(reason).replace(/^Error: /, '')); }).finally(() => { if (generation.current === token) setLoading(false); });
     return () => { generation.current++; };
-  }, [request.projectId, request.path, request.staged, request.projectPath, connected, revision]);
+  }, [request.projectId, request.worktreePath, request.path, request.staged, request.projectPath, connected, revision]);
   const parsed = useMemo(() => parseDiff(diff?.patch ?? ''), [diff?.patch]);
   return <section className="file-preview-pane git-diff-pane" aria-label="Git 差异预览" aria-busy={loading} style={previewStyle(appearance)}>
     <div className="file-preview-tools"><span className="file-relative-path" title={diff?.path ?? request.path}>{diff?.path ?? request.path}</span>

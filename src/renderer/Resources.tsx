@@ -1,3 +1,4 @@
+import { useExtension } from './ExtensionManager';
 import { memo, useEffect, useSyncExternalStore } from 'react';
 import type { ResourceSnapshot, ResourceUsage } from '../shared/protocol';
 
@@ -9,6 +10,7 @@ const publish=(value:ResourceSnapshot|null)=>{snapshot=value;for(const listener 
 export function ResourceMonitor({enabled}:{enabled:boolean}){
   useEffect(()=>{
     let alive=true,pending=false;publish(null);
+    if(!enabled)return;
     const refresh=async()=>{if(!enabled||pending||document.visibilityState!=='visible'||!document.hasFocus())return;pending=true;try{const value=await window.berth.rpc<ResourceSnapshot>('resources',{});if(alive)publish(value);}catch{if(alive)publish({sampledAt:new Date().toISOString(),cpuCount:0,sessions:{},projects:{},workspace:{cpuPercent:null,memoryBytes:null,processCount:0,partial:true},desktopIncluded:false,error:'资源信息暂不可用，稍后自动重试'});}finally{pending=false;}};
     void refresh();const timer=setInterval(()=>void refresh(),3000);
     window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
@@ -20,7 +22,9 @@ export function memoryLabel(bytes:number|null):string{
   if(bytes>=1024**3)return `${(bytes/1024**3).toFixed(1)}G`;return `${Math.round(bytes/1024**2)}M`;
 }
 export const ResourceBadge=memo(function ResourceBadge({scope,id,runId,full=false}:{scope:'session'|'project'|'workspace';id?:string;runId?:string;full?:boolean}){
+  const enabled=useExtension('resources');
   const value=useSyncExternalStore(subscribe,()=>snapshot);
+  if(!enabled)return null;
   let usage:ResourceUsage|undefined=scope==='workspace'?value?.workspace:scope==='project'?value?.projects[id??'']:value?.sessions[id??''];
   if(scope==='session'&&value?.sessions[id??'']?.runId!==runId)usage=undefined;
   const cpu=usage?.cpuPercent==null?'—':`${usage.cpuPercent<10?usage.cpuPercent.toFixed(1):Math.round(usage.cpuPercent)}%`,memory=memoryLabel(usage?.memoryBytes??null);
