@@ -121,7 +121,7 @@ test('core routes stay available while Agent provider plugins have independent l
   const project=await connection.rpc<any>('createProject',{name:'Fixture',path:root});const session=await connection.rpc<any>('createSession',{projectId:project.id,title:'Shell',agent:'shell'});await connection.rpc('start',{sessionId:session.id,cols:90,rows:20});
   const change=(request:any)=>connection.rpc<any>('extensions',{request});
   await assert.rejects(change({action:'disable',id:'workspace'}),/插件不存在/,'the project/session workspace is core');
-  const codex=await connection.rpc<any>('createSession',{projectId:project.id,title:'Disabled provider',agent:'codex'});await change({action:'disable',id:'agent.codex'});await assert.rejects(connection.rpc('start',{sessionId:codex.id,cols:90,rows:20}),/接入插件未启用/);await change({action:'enable',id:'agent.codex'});
+  const codex=await connection.rpc<any>('createSession',{projectId:project.id,title:'Disabled provider',agent:'codex'});await change({action:'disable',id:'agent.codex'});await assert.rejects(connection.rpc('start',{sessionId:codex.id,cols:90,rows:20}),/未启用/);await change({action:'enable',id:'agent.codex'});
   await assert.rejects(change({action:'disable',id:'files'}),/插件不存在/,'file browsing is core');await connection.rpc('projectFiles',{projectId:project.id});await connection.rpc('gitStatus',{projectId:project.id});await connection.rpc('resources',{appPids:[]});
   let snapshot=(await connection.rpc<any>('state')).extensions.plugins;for(const id of ['workspace','agents','ssh','files','git','resources','appearance'])assert.ok(!snapshot.some((p:any)=>p.manifest.id===id),`${id} must not appear in the extension center`);
 
