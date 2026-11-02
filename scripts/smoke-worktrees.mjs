@@ -60,6 +60,7 @@ export async function checkWorktrees(page,{folder,root,project,session,run,packa
   assert.equal(await git(created.workingPath,'rev-parse','--abbrev-ref','@{upstream}'),'origin/feature/remote-worktree');
   assert.equal((await readFile(path.join(created.workingPath,'from-remote.txt'),'utf8')).replace(/\r\n/g,'\n'),'WORKTREE_REMOTE_CONTENT\n');
   const started=await page.evaluate(id=>window.berth.rpc('start',{sessionId:id,cols:160,rows:25}),createdSession.id);
+  await page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}),createdSession.id);
   const expected=created.workingPath;
   const command=process.platform==='win32'?`if((Get-Location).Path -eq '${expected.replaceAll("'","''")}'){Write-Output ('WORKTREE_'+'CWD_OK')}\r`:`if test "$PWD" = '${expected.replaceAll("'","'\\''")}'; then printf 'WORKTREE_%s_OK\\n' CWD; fi\r`;
   await page.evaluate(({id,runId,data})=>window.berth.rpc('input',{sessionId:id,runId,data}),{id:createdSession.id,runId:started.id,data:command});

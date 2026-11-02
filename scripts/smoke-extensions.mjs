@@ -12,7 +12,7 @@ const code=`exports.apply=(ctx,c)=>{ctx.berth.agent({id:'main',definition:{name:
 await Promise.all([
   writeFile(path.join(source,'agentberth.extension.json'),JSON.stringify(manifest)),writeFile(path.join(source,'index.cjs'),code),
   writeFile(path.join(source,'desktop.cjs'),`exports.apply=(ctx,c)=>{const{BrowserWindow}=require('electron');ctx.effect(()=>{const win=new BrowserWindow({show:false,title:'Plugin native '+c.name,webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true}});return()=>{if(!win.isDestroyed())win.destroy();};});};`),
-  writeFile(path.join(source,'view.html'),`<button id="read">Read plugin</button><pre id="result"></pre><script>document.querySelector('#read').onclick=async()=>{document.querySelector('#result').textContent=JSON.stringify(await agentberth.call('info'));};</script>`),
+  writeFile(path.join(source,'view.html'),`<button id="read" data-calls="0">Read plugin</button><pre id="result"></pre><script>document.querySelector('#read').onclick=async()=>{const button=document.querySelector('#read');button.dataset.calls=String(Number(button.dataset.calls)+1);document.querySelector('#result').textContent=JSON.stringify(await agentberth.call('info'));};</script>`),
 ]);
 let application,daemonPid;
 try {
@@ -61,14 +61,17 @@ try {
   // installs onclick, especially under the slower Linux/Xvfb renderer.
   for(let i=0;i<100;i++){if(await frame.locator('#read').evaluate(button=>typeof button.onclick==='function'))break;await new Promise(resolve=>setTimeout(resolve,25));}
   assert.equal(await frame.locator('#read').evaluate(button=>typeof button.onclick==='function'),true,'Plugin view must finish initializing before the first click');
+  // Prepare native/iframe focus before the single activation (Xvfb may otherwise consume it).
+  await page.bringToFront();await frame.getByRole('button',{name:'Read plugin'}).focus();
   await frame.getByRole('button',{name:'Read plugin'}).click();
   try{await frame.locator('#result').filter({hasText:'Updated Agent'}).waitFor();}
   catch(error){
-    const diagnostic=await frame.locator('body').evaluate(()=>({result:document.querySelector('#result')?.textContent,bridge:typeof window.agentberth?.call,secure:window.isSecureContext,cryptoUuid:typeof crypto?.randomUUID,frameUrl:location.href,frameConnected:window.parent!==window})).catch(reason=>({frameError:String(reason)}));
+    const diagnostic=await frame.locator('body').evaluate(()=>({result:document.querySelector('#result')?.textContent,calls:document.querySelector('#read')?.getAttribute('data-calls'),focused:document.hasFocus(),bridge:typeof window.agentberth?.call,secure:window.isSecureContext,cryptoUuid:typeof crypto?.randomUUID,frameUrl:location.href,frameConnected:window.parent!==window})).catch(reason=>({frameError:String(reason)}));
     const parentMessages=await page.evaluate(()=>window.__pluginSmokeMessages);
     const directCommand=await page.evaluate(()=>window.berth.extensions({action:'call',id:'example.smoke',command:'info'})).catch(reason=>({error:String(reason)}));
     throw new Error('Plugin iframe RPC failed: '+JSON.stringify({diagnostic,parentMessages,directCommand,pageErrors:errors}),{cause:error});
   }
+  assert.equal(await frame.locator('#read').getAttribute('data-calls'),'1','Plugin command must run once without automatic replay');
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-view.png`});
   await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
   await card.getByRole('button',{name:'停用',exact:true}).click();await card.getByText('已停用',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Plugin info',exact:true}).count(),0);
