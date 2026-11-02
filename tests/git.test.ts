@@ -169,7 +169,7 @@ test('Worktree RPCs persist session association, launch in the selected director
     assert.equal((await connection.rpc<State>('state')).sessions.find(item=>item.id===session.id)?.worktreePath,session.worktreePath);
     const run=await connection.rpc<Run>('start',{sessionId:session.id,cols:100,rows:30});
     await connection.rpc('attach',{sessionId:session.id});
-    const command=process.platform==='win32'?'Get-Location | ForEach-Object { $_.Path }\\r':'pwd\\r';
+    const command=process.platform==='win32'?'Get-Location | ForEach-Object { $_.Path }\r':'pwd\r';
     await connection.rpc('input',{sessionId:session.id,runId:run.id,data:command});
     const expected=created.workingPath;
     const deadline=Date.now()+7000;
