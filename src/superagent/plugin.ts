@@ -49,6 +49,11 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   const host=<T=any>(method:string,params:Record<string,unknown>={})=>{if(closed||api.signal.aborted)throw new Error('Superagent 已停止');return api.call(method,params) as Promise<T>;};
   const validate=async(p:any)=>{const state=await host<State>('state');if(!state.projects.some(project=>project.id===p.projectId&&!project.remoteWorkspace))throw new Error('请选择本机项目');for(const key of ['coordinatorId','executorId'])if(!state.agents?.some(agent=>agent.id===p[key]&&agent.acp))throw new Error('协调和执行 Agent 均须为已配置的 ACP 接入');return state;};
   const stopSessions=async(ticket:Ticket)=>{await Promise.all([ticket.coordinatorSession,ticket.workerSession].map(sessionId=>api.call('stop',{sessionId}).catch(error=>{if(!String(error).includes('会话不存在'))throw error;})));};
+  const interrupt=async(ticket:Ticket,error:unknown,reason:string)=>{
+    let detail=String(error);
+    try{await stopSessions(ticket);}catch(cleanup){detail+='；连接清理尚未完成，请从会话重试停止：'+String(cleanup);}
+    if(!closed)change(ticket.id,{phase:'interrupted',attention:true,error:detail.slice(0,4000)},reason);
+  };
   const create=async(p:any,source:string='desktop',eventId:string=randomUUID(),approved=true,origin?:Ticket['source'])=>{
     const previous=db.prepare('SELECT ticketId FROM triggers WHERE source=? AND eventId=?').get(source,eventId);if(previous)return {id:String(previous.ticketId),duplicate:true};
     await validate(p);if(closed)throw new Error('插件已停止');
@@ -127,12 +132,12 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     if(closed||ticking)return;
     ticking=(async()=>{
       const tickets=all().reverse(),active=tickets.filter(ticket=>['planning','working'].includes(ticket.phase));
-      for(const ticket of active){if(closed)return;try{await advance(ticket);}catch(error){if(!closed)change(ticket.id,{phase:'interrupted',attention:true,error:String(error)},'处理结果失败；等待显式重试');}}
+      for(const ticket of active){if(closed)return;try{await advance(ticket);}catch(error){if(!closed)await interrupt(ticket,error,'处理结果失败；等待显式重试');}}
       const occupied=all().filter(ticket=>['planning','working'].includes(ticket.phase)).length;
       for(const ticket of tickets.filter(ticket=>ticket.phase==='queued'&&ticket.approved).slice(0,Math.max(0,Number(config.maxConcurrent??2)-occupied))){
         if(closed)return;const current=get(ticket.id);if(current.phase!=='queued')continue;
         const next=change(ticket.id,{phase:'planning',stage:'coordinator',attention:false,error:undefined},'取得执行槽')!;
-        try{await launchCoordinator(next);}catch(error){if(!closed)change(ticket.id,{phase:'interrupted',attention:true,error:String(error)},'启动协调者失败；不会自动重新发送');}
+        try{await launchCoordinator(next);}catch(error){if(!closed)await interrupt(ticket,error,'启动协调者失败；不会自动重新发送');}
       }
     })().finally(()=>{ticking=null;});void ticking.catch(()=>{});
   };
@@ -178,10 +183,10 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   });
   api.interval(tick,1000);
   api.effect(()=>async()=>{
-    closed=true;const active=all().filter(ticket=>['planning','working'].includes(ticket.phase));
+    closed=true;const owned=all(),active=owned.filter(ticket=>['planning','working'].includes(ticket.phase));
     // Persist interruption before stopping anything; restart never replays a
     // half-acknowledged turn, and no worktree or journal is deleted.
     for(const ticket of active){ticket.phase='interrupted';ticket.attention=true;ticket.error='插件已停止，请确认结果后选择继续';db.prepare('UPDATE tickets SET value=? WHERE id=?').run(JSON.stringify(ticket),ticket.id);}
-    await Promise.allSettled(active.map(stopSessions));if(ticking)await ticking.catch(()=>{});db.close();
+    await Promise.allSettled(owned.map(stopSessions));if(ticking)await ticking.catch(()=>{});db.close();
   });
 }

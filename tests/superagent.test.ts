@@ -66,3 +66,12 @@ test('built standalone Superagent package installs as a real Cordis provider wit
   const state=await f.extension({action:'call',id:'superagent.custom',command:'state'});assert.deepEqual(state.sources,[]);assert.ok(state.agents.some((agent:any)=>agent.id===f.agent.id));
   const view=await f.extension({action:'view',id:'superagent.custom',view:'tasks'});assert.match(view,/信息源插件/);
 });
+
+
+test('a coordinator setup failure stops its owned ACP connection and remains explicitly interrupted',async t=>{
+  const f=await fixture(t);
+  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--fail-mode']}});
+  const created=await f.create(),interrupted=await until(()=>f.task(created.id),value=>value.phase==='interrupted');assert.match(interrupted.error,/mode failed/);
+  const state=await f.connection.rpc<State>('state');assert.notEqual(state.sessions.find(session=>session.id===interrupted.coordinatorSession)?.latestRun?.status,'running');
+  await f.extension({action:'disable',id:'superagent'});
+});

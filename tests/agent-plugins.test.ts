@@ -151,12 +151,15 @@ test('plugin timeout and shutdown clean up running program and descendants', { t
   const plugins = new AgentPlugins(2000); t.after(async () => { await plugins.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   await assert.rejects(plugins.history(a, session, folder, null), /超时/);
   assert.ok(existsSync(pidFile)); const childPid = Number(readFileSync(pidFile, 'utf8'));
-  try { process.kill(childPid, 0); assert.ok(process.platform === 'linux' && /\) Z /.test(readFileSync(`/proc/${childPid}/stat`, 'utf8'))); }
-  catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    // The process may disappear between kill(0) and the /proc read.
-    assert.ok(code === 'ESRCH' || (process.platform === 'linux' && code === 'ENOENT'), String(error));
-  }
+  // SIGKILL queues termination; the scheduler can still expose a live /proc
+  // entry briefly after the plugin promise rejects. Verify eventual death,
+  // without sending another signal or accepting a surviving descendant.
+  const gone = () => {
+    try { process.kill(childPid, 0); return process.platform === 'linux' && /\) [ZX] /.test(readFileSync(`/proc/${childPid}/stat`, 'utf8')); }
+    catch (error) { const code=(error as NodeJS.ErrnoException).code;if(code==='ESRCH'||process.platform==='linux'&&code==='ENOENT')return true;throw error; }
+  };
+  const deadline=Date.now()+2000;while(!gone()&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.ok(gone(),'Timed-out plugin descendant must exit within two seconds');
   const pending = plugins.history(a, session, folder, null); const rejected = assert.rejects(pending, /取消/);
   await new Promise(resolve => setTimeout(resolve, 100)); await plugins.close(); await rejected;
 });

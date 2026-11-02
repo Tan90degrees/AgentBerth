@@ -617,7 +617,7 @@ export class DaemonServer {
     const project = this.store.project(session.projectId);
     const projectPath = session.remote || !session.worktreePath ? project.path : await this.git.resolveWorktree(project.path, session.worktreePath);
     const acpDefinition=this.store.agents().find(agent=>agent.id===session.agent&&agent.acp);
-    if(acpDefinition)return this.acp.start(session,acpDefinition,await directory(projectPath),cols,rows);
+    if(acpDefinition){if(session.remote||project.remoteWorkspace)throw new Error('ACP 接入目前仅支持本机项目，请使用本机 ACP 会话');return this.acp.start(session,acpDefinition,await directory(projectPath),cols,rows);}
     const version = this.agentVersion(session.agent);
     let command = resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)

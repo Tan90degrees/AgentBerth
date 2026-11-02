@@ -24,7 +24,7 @@ test('expanded bytes, actual output, case collisions, traversal and truncated ar
   const {dir,base}=await fixture(t),file=path.join(dir,'invalid.zip'),core={'agentberth.extension.json':manifest(),'index.cjs':strToU8('exports.apply=()=>{}')},limits={...PACKAGE_LIMITS,expandedBytes:3000,fileBytes:2048};
   await writeFile(file,zipSync({...core,'large.bin':new Uint8Array(4096)}));await assert.rejects(stagePackage(file,base,false,limits),/容量限制/);assert.deepEqual(await readdir(base),[]);
   const lying=Buffer.from(zipSync({...core,'large.bin':new Uint8Array(4096)},{level:0})),name=lying.indexOf(Buffer.from('large.bin'));lying.writeUInt32LE(1,name-30+22);await writeFile(file,lying);await assert.rejects(stagePackage(file,base,false,limits),/实际解压/);assert.deepEqual(await readdir(base),[]);
-  for(const extra of [{'../escape':strToU8('no')},{'INDEX.cjs':strToU8('no')}] as Record<string,Uint8Array>[]){await writeFile(file,zipSync({...core,...extra}));await assert.rejects(stagePackage(file,base,false),/路径无效|大小写冲突/);assert.deepEqual(await readdir(base),[]);}
+  for(const extra of [{'../escape':strToU8('no')},{'INDEX.cjs':strToU8('no')},{'CON.txt':strToU8('no')},{'assets./file.txt':strToU8('no')}] as Record<string,Uint8Array>[]){await writeFile(file,zipSync({...core,...extra}));await assert.rejects(stagePackage(file,base,false),/路径无效|大小写冲突/);assert.deepEqual(await readdir(base),[]);}
   const valid=zipSync(core);await writeFile(file,valid.subarray(0,valid.length-8));await assert.rejects(stagePackage(file,base,false),/ZIP 不完整/);assert.deepEqual(await readdir(base),[]);
 });
 test('a DeepSeek Harness package receives an explicit compatibility diagnostic',async t=>{

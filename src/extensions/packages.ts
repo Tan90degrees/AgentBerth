@@ -8,7 +8,7 @@ import { extensionManifestSchema, type ExtensionManifest } from '../shared/exten
 export const PACKAGE_LIMITS={archiveBytes:256*1024*1024,expandedBytes:1024*1024*1024,fileBytes:256*1024*1024,files:50000} as const;
 export function packagePath(root:string,relative:string):string {
   if(relative.split('/').length>33)throw new Error('插件目录过深');
-  if(!relative||relative.includes('\\')||relative.includes('\0')||relative.split('/').some(p=>p==='..'||p==='.'||!p)||path.posix.isAbsolute(relative)||relative.includes(':'))throw new Error('插件包路径无效');
+  if(!relative||relative.includes('\\')||relative.includes('\0')||relative.split('/').some(p=>p==='..'||p==='.'||!p||/[<>"|?*\x00-\x1f]/.test(p)||/[. ]$/.test(p)||/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(p))||path.posix.isAbsolute(relative)||relative.includes(':'))throw new Error('插件包路径无效');
   const file=path.resolve(root,...relative.split('/'));const sub=path.relative(root,file);
   if(!sub||sub.startsWith('..')||path.isAbsolute(sub))throw new Error('插件文件必须位于插件包内');return file;
 }

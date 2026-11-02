@@ -30,7 +30,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{void(async()=>{
   else if(message.method==='authenticate'){authenticated=true;result(message.id,{});}
   else if(message.method==='session/new'){if(!authenticated){error(message.id,-32000,'Authentication required');return;}const sessionId=randomUUID();sessions[sessionId]={cwd:p.cwd};fs.writeFileSync(database,JSON.stringify(sessions));record({method:'new',sessionId,cwd:p.cwd});result(message.id,{sessionId,...metadata()});}
   else if(message.method==='session/load'){record({method:'load',sessionId:p.sessionId});if(!sessions[p.sessionId]){error(message.id,-32001,'Session not found');return;}text(p.sessionId,'REMOTE_REPLAY_SHOULD_NOT_DUPLICATE');result(message.id,metadata());}
-  else if(message.method==='session/set_mode'){mode=p.modeId;result(message.id,{});}
+  else if(message.method==='session/set_mode'){if(process.argv.includes('--fail-mode')){error(message.id,-32603,'fixture mode failed');return;}mode=p.modeId;result(message.id,{});}
   else if(message.method==='session/set_config_option'){model=p.value;result(message.id,{configOptions:configs()});}
   else if(message.method==='session/prompt')await prompt(message);
   else if(message.method==='session/cancel'){record({method:'cancel',sessionId:p.sessionId});const turn=turns.get(p.sessionId);if(turn?.timer){clearInterval(turn.timer);turns.delete(p.sessionId);result(turn.id,{stopReason:'cancelled'});}}
