@@ -162,8 +162,9 @@ export class GitWorkspace {
   }
   status(cwd: string): Promise<GitStatus> {
     const pending=this.statuses.get(cwd);if(pending)return pending;
-    const task=this.inspect(cwd).finally(()=>this.statuses.delete(cwd));this.statuses.set(cwd,task);return task;
+    const task=this.inspect(cwd).finally(()=>{if(this.statuses.get(cwd)===task)this.statuses.delete(cwd);});this.statuses.set(cwd,task);return task;
   }
+  private freshStatus(cwd:string):Promise<GitStatus>{this.statuses.delete(cwd);return this.status(cwd);}
   async ignored(cwd: string, paths: string[]): Promise<{ paths: Set<string>; available: boolean; warning?: string }> {
     if (!paths.length) return { paths: new Set(), available: true };
     try {
@@ -286,16 +287,17 @@ export class GitWorkspace {
     if(status.operation)throw new Error(`仓库正在${status.operation}，请先在终端完成或取消该操作`);
   }
   async operate(cwd: string, request: GitOperation): Promise<GitResult> {
-    let status=await this.inspect(cwd);this.verify(status,request.action==='fetch'?{...request.expected,branch:status.branch,head:status.head}:request.expected);
-    const key=process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory;
+    // Resolve only the lock identity before acquiring it. A complete status
+    // here was immediately discarded by the mandatory inspection under lock.
+    const common=await realpath(path.resolve(cwd,(await this.command(cwd,['rev-parse','--git-common-dir'])).replace(/\r?\n$/,'')));
+    const key=process.platform==='win32'?common.toLowerCase():common;
     if(this.locks.has(key))throw new Error('此仓库正在进行 Git 操作，请稍后重试');
     if(this.locks.size>=2)throw new Error('已有两个 Git 操作在执行，请稍后重试');
     this.locks.add(key);const output: string[]=[];let completed='';
     try {
-      // Re-read after acquiring our repository lock; a preceding operation may
-      // have completed while the initial inspection was in flight.
-      status = await this.inspect(cwd);
+      let status = await this.freshStatus(cwd);
       this.verify(status, request.action === 'fetch' ? { ...request.expected, branch: status.branch, head: status.head } : request.expected);
+      if((process.platform==='win32'?status.commonDirectory.toLowerCase():status.commonDirectory)!==key)throw new Error('仓库已变化，请刷新后重新操作');
       if (request.action === 'stage' || request.action === 'unstage') {
         if (!request.paths?.length) throw new Error('请先选择文件');
         const selected = [...new Set(request.paths.map(repositoryPath))].map(filename => {
@@ -364,7 +366,7 @@ export class GitWorkspace {
           }
           output.push(await this.command(status.root,['fetch',...prune,'--no-auto-gc','--no-tags','--no-recurse-submodules','--',remote,...(request.action==='fetch'?[]:['refs/heads/'+target])],true));
           completed='已获取远端更新';
-          const fresh=await this.inspect(cwd);this.verify(fresh,request.action==='fetch'?{...request.expected,branch:fresh.branch,head:fresh.head}:request.expected);status=fresh;
+          const fresh=await this.freshStatus(cwd);this.verify(fresh,request.action==='fetch'?{...request.expected,branch:fresh.branch,head:fresh.head}:request.expected);status=fresh;
           if(request.action!=='fetch' && (fresh.upstreamRemote!==remote || fresh.upstreamBranch!==target))throw new Error('上游配置已变化，请刷新重试');
           if(['pull','sync'].includes(request.action)) {
             this.requireReady(status);
@@ -391,7 +393,9 @@ export class GitWorkspace {
           }
         }
       }
-      const updated=await this.inspect(cwd);
+      // Fetch has already collected the final status. Share that result with
+      // the caller instead of launching another full set of Git processes.
+      const updated=request.action==='fetch'?status:await this.freshStatus(cwd);
       updated.busy=false;
       return {status:updated,message:completed,output:gitMessage(output.join('\n'))};
     } catch(error) {

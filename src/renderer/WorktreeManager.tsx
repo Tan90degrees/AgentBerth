@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom';
 import { Dialog } from './Dialog';
 import { AsyncButton } from './AsyncButton';
-import type { GitStatus, GitWorktree, Project } from '../shared/protocol';
+import type { GitResult, GitStatus, GitWorktree, Project } from '../shared/protocol';
+
+type WorktreeRefresh = { projectId: string; status?: GitStatus };
 
 function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
@@ -32,10 +34,16 @@ function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
   useEffect(() => {
     alive.current = true;
     if (enabled && visible) void refresh();
-    const update = () => { if (visible) void refresh(); };
+    const update = (event: Event) => {
+      const detail = (event as CustomEvent<WorktreeRefresh>).detail;
+      if (detail?.projectId && detail.projectId !== project.id) return;
+      if (detail?.status) {
+        generation.current++; setStatus(detail.status); setError(''); setLoading(false);
+      } else if (visible) void refresh();
+    };
     window.addEventListener('berth:worktree-refresh', update);
     return () => { generation.current++; window.removeEventListener('berth:worktree-refresh', update); };
-  }, [refresh, enabled, visible]);
+  }, [project.id, refresh, enabled, visible]);
   useEffect(() => () => { alive.current = false; generation.current++; }, []);
   const changed = () => {
     window.dispatchEvent(new Event('berth:worktree-refresh'));
@@ -52,12 +60,14 @@ function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
     changed(); await refresh();
   }, [project.id, refresh]);
   const fetchRemote = useCallback(async (remote: string) => {
-    const current = await window.berth.rpc<GitStatus>('gitStatus', { projectId: project.id });
-    if (current.kind !== 'repository') throw new Error(current.message ?? '无法读取仓库');
-    await window.berth.rpc('gitOperation', { projectId: project.id, action: 'fetch', remote,
-      expected: { root: current.root, branch: current.branch, head: current.head } });
-    changed(); await refresh();
-  }, [project.id, refresh]);
+    if (status?.kind !== 'repository') throw new Error('无法读取仓库，请刷新后重试');
+    const result = await window.berth.rpc<GitResult>('gitOperation', { projectId: project.id, action: 'fetch', remote,
+      expected: { root: status.root, branch: status.branch, head: status.head } });
+    // Fetch changes refs, not the worktree list. All open pickers can use the
+    // authoritative result without repeating their own status/list requests.
+    window.dispatchEvent(new CustomEvent<WorktreeRefresh>('berth:worktree-refresh', { detail: { projectId: project.id, status: result.status } }));
+    window.dispatchEvent(new Event('berth:git-refresh'));
+  }, [project.id, status]);
   return { worktrees, status, loading, error, refresh, create, remove, fetchRemote };
 }
 

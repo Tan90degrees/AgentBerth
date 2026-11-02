@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { GitWorkspace } from '../src/daemon/git';
-import type { GitOperation, GitRemoteBranch } from '../src/shared/protocol';
+import type { GitOperation, GitRemoteBranch, GitStatus } from '../src/shared/protocol';
 const execute = promisify(execFile);
 async function git(cwd: string, ...args: string[]) { return (await execute('git', ['-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', '-C', cwd, ...args], { encoding: 'utf8', windowsHide: true })).stdout.trim(); }
 async function fixture(t: any) {
@@ -22,6 +22,32 @@ async function fixture(t: any) {
   const switchTo = (item: GitRemoteBranch, localBranch?: string) => operation('switchRemote', { remote: item.remote, branch: item.branch, remoteRef: item.ref, remoteHead: item.head, ...(localBranch ? { localBranch } : {}) });
   return { dir, remote, a, b, service, operation, select, switchTo };
 }
+
+test('fetch collects one preflight and one final status, returns new refs and executes only once', async t => {
+  const { a, b, service } = await fixture(t);
+  await git(b, 'push', 'origin', 'HEAD:refs/heads/feature/single-fetch');
+  const before = await service.status(a);
+  const original = (service as any).command.bind(service);
+  const command = t.mock.method(service as any, 'command', (...args: any[]) => original(...args));
+  const result = await service.operate(a, { projectId: 'fixture', worktreePath: null, action: 'fetch', remote: 'origin', expected: { root: before.root, branch: before.branch, head: before.head } });
+  const args: string[][] = command.mock.calls.map((call: { arguments: unknown[] }) => call.arguments[1] as string[]);
+  assert.equal(args.filter(args => args[0] === 'fetch').length, 1);
+  assert.equal(args.filter(args => args[0] === 'status').length, 2, 'Fetch must not discard and repeat complete repository scans');
+  assert.ok(result.status.remoteBranches?.some(item => item.branch === 'feature/single-fetch'));
+  assert.equal(result.status.busy, false);
+  assert.equal(result.status.head, before.head);
+});
+
+test('an older status completion cannot evict a newer shared inspection', async t => {
+  const service = new GitWorkspace(), completions: ((value: GitStatus) => void)[] = [];
+  const inspect = t.mock.method(service as any, 'inspect', () => new Promise<GitStatus>(resolve => completions.push(resolve)));
+  const old = service.status('repo'), fresh = (service as any).freshStatus('repo') as Promise<GitStatus>;
+  completions[0]({ kind: 'unavailable' } as GitStatus); await old;
+  assert.equal(service.status('repo'), fresh);
+  assert.equal(inspect.mock.callCount(), 2);
+  const current = { kind: 'repository' } as GitStatus;
+  completions[1](current); assert.equal(await fresh, current);
+});
 
 test('remote branches exclude symbolic HEAD, distinguish remotes and follow custom fetch mappings', async t => {
   const { a, b, remote, operation, service, select } = await fixture(t);

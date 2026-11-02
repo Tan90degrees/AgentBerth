@@ -52,7 +52,6 @@ export function mount(ctx:Context,server:DaemonServer){
         const params=request.params,project=host.store.project(params.projectId);
         host.requireProjectAvailable(project.id);
         const cwd=await host.git.resolveWorktree(project.path,params.worktreePath);
-        const status=await host.git.status(cwd);
         if(host.closing)throw new Error('后台正在退出');
         if(host.gitBusy.has(project.id))throw new Error('此项目正在执行 Git 操作，请稍后重试');
         host.gitBusy.add(project.id);
