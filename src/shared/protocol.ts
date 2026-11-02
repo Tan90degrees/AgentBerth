@@ -4,7 +4,7 @@ import type { AppearanceMode } from './appearance';
 import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest } from './extensions';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 41;
+export const API_VERSION = 42;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -32,7 +32,7 @@ const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
   name: title,
-  integration: z.enum(['claude', 'opencode']).optional(),
+  integration: z.enum(['codex', 'claude', 'opencode']).optional(),
   skills: agentSkillsSchema.optional(),
   sourceId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
   command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
