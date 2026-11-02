@@ -40,10 +40,10 @@ function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
     alive.current = true;
     if (enabled && visible) void refresh();
     const update = () => { if (visible) void refresh(); };
-    window.addEventListener('berth:git-refresh', update);
+    window.addEventListener('berth:worktree-refresh', update);
     return () => {
       generation.current++;
-      window.removeEventListener('berth:git-refresh', update);
+      window.removeEventListener('berth:worktree-refresh', update);
     };
   }, [refresh, enabled, visible]);
 
@@ -53,6 +53,7 @@ function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
     const item = await window.berth.rpc<GitWorktree>('gitCreateWorktree', {
       projectId: project.id, branch, createBranch, ...(baseRef ? { baseRef } : {}),
     });
+    window.dispatchEvent(new Event('berth:worktree-refresh'));
     window.dispatchEvent(new Event('berth:git-refresh'));
     await refresh();
     return item;
@@ -60,6 +61,7 @@ function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
 
   const remove = useCallback(async (item: GitWorktree, deleteSessions: boolean) => {
     await window.berth.rpc('gitRemoveWorktree', { projectId: project.id, path: item.path, deleteSessions });
+    window.dispatchEvent(new Event('berth:worktree-refresh'));
     window.dispatchEvent(new Event('berth:git-refresh'));
     await refresh();
   }, [project.id, refresh]);
