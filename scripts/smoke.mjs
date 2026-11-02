@@ -22,12 +22,13 @@ async function openSettings(page) {
   await settingsCategory(page, '常用设置');
 }
 async function pluginSettings(page,id){
-  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
-  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).click();
-  await page.locator('[data-plugin-id="'+id+'"]').getByRole('button',{name:'配置',exact:true}).click();
-  return page.getByRole('dialog',{name:/^配置插件/});
+  const category=({appearance:'外观',agents:'Agent 与 Skills',ssh:'SSH 与 MCP'})[id];
+  if(!category)throw new Error('Unknown core settings category: '+id);
+  await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();
+  await settingsCategory(page,category);
+  return null;
 }
-async function closePluginSettings(page){await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();}
+async function closePluginSettings(page){ /* Core settings stay in the settings page; no plugin dialog is opened. */ }
 
 async function assertTerminalGutter(page) {
   await page.waitForFunction(() => {
@@ -310,7 +311,7 @@ try {
   await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
   assert.equal(await page.locator('[data-setting-id="plugins"]').count(),0,'Core settings must not manage plugins');
-  assert.equal(await page.locator('[data-setting-id="default-agent"]').count(),0,'Agent settings must belong to its plugin');
+  assert.equal(await page.locator('[data-setting-id="default-agent"]').count(),1,'Default Agent selection belongs to core settings');
   await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
   await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).click();
   await page.getByRole('heading',{name:'插件中心'}).waitFor();
@@ -1078,12 +1079,12 @@ try {
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
-  step('select an installed Agent provider inside the Agent plugin');
+  step('select an installed Agent provider in core Agent settings');
   await pluginSettings(page,'agents');
   const defaultAgentField = page.getByLabel('默认 Agent', { exact: true });
   if (await defaultAgentField.inputValue() !== 'opencode') {
     await defaultAgentField.selectOption('opencode');
-    await eventually(async()=>(await page.evaluate(()=>window.berth.rpc('state'))).settings.defaultAgent==='opencode','Agent plugin default did not save');
+    await eventually(async()=>(await page.evaluate(()=>window.berth.rpc('state'))).settings.defaultAgent==='opencode','Core Agent default did not save');
   }
   assert.equal(await defaultAgentField.inputValue(), 'opencode');
   await closePluginSettings(page);
