@@ -17,7 +17,7 @@ async function fixture(t: any) {
   await git(a, 'config', 'user.name', 'Fixture'); await git(a, 'config', 'user.email', 'fixture@example.invalid');
   await writeFile(path.join(a, 'base.txt'), 'base\n'); await git(a, 'add', '.'); await git(a, 'commit', '-m', 'base'); await git(a, 'push', '-u', 'origin', 'main');
   await git(dir, 'clone', remote, b); await git(b, 'config', 'user.name', 'Fixture'); await git(b, 'config', 'user.email', 'fixture@example.invalid');
-  const operation = async (action: GitOperation['action'], extra: Partial<GitOperation> = {}) => { const s = await service.status(a); return service.operate(a, { projectId: 'fixture', action, expected: { root: s.root, branch: s.branch, head: s.head }, remote: 'origin', ...extra }); };
+  const operation = async (action: GitOperation['action'], extra: Partial<GitOperation> = {}) => { const s = await service.status(a); return service.operate(a, { projectId: 'fixture', worktreePath: null, action, expected: { root: s.root, branch: s.branch, head: s.head }, remote: 'origin', ...extra }); };
   const select = async (branch: string, remote = 'origin') => { const item = (await service.status(a)).remoteBranches?.find(item => item.remote === remote && item.branch === branch); assert.ok(item, `missing ${remote}/${branch}`); return item; };
   const switchTo = (item: GitRemoteBranch, localBranch?: string) => operation('switchRemote', { remote: item.remote, branch: item.branch, remoteRef: item.ref, remoteHead: item.head, ...(localBranch ? { localBranch } : {}) });
   return { dir, remote, a, b, service, operation, select, switchTo };
