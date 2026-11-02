@@ -20,7 +20,7 @@ async function fixture(t:any){
   for(const cwd of [a]){await git(cwd,'config','user.name','Fixture');await git(cwd,'config','user.email','fixture@example.invalid');}
   await writeFile(path.join(a,'base.txt'),'base\n');await git(a,'add','.');await git(a,'commit','-m','base');await git(a,'push','-u','origin','main');
   await git(dir,'clone',remote,b);await git(b,'config','user.name','Fixture');await git(b,'config','user.email','fixture@example.invalid');
-  const operation=async(action:GitOperation['action'],extra:Partial<GitOperation>={})=>{const s=await service.status(a);return service.operate(a,{projectId:'fixture',action,expected:{root:s.root,branch:s.branch,head:s.head},remote:'origin',branch:s.upstreamBranch||s.branch||undefined,...extra});};
+  const operation=async(action:GitOperation['action'],extra:Partial<GitOperation>={})=>{const s=await service.status(a);return service.operate(a,{projectId:'fixture',worktreePath:null,action,expected:{root:s.root,branch:s.branch,head:s.head},remote:'origin',branch:s.upstreamBranch||s.branch||undefined,...extra});};
   return{dir,remote,a,b,service,operation};
 }
 
@@ -70,7 +70,7 @@ test('unrelated edits survive pull/switch while overlapping edits, changed previ
   await assert.rejects(operation('switch',{branch:'feature/same'}),/overwritten|local changes/);
   assert.equal((await service.status(a)).branch,'main');assert.equal(await readFile(path.join(a,'base.txt'),'utf8'),'local edit again');
   await git(a,'checkout','--','base.txt');await rm(path.join(a,'local-only.txt'));
-  const old=await service.status(a);await git(a,'switch','-c','changed');await assert.rejects(service.operate(a,{projectId:'x',action:'push',remote:'origin',expected:{root:old.root,head:old.head,branch:old.branch}}),/已变化/);await git(a,'switch','main');
+  const old=await service.status(a);await git(a,'switch','-c','changed');await assert.rejects(service.operate(a,{projectId:'x',worktreePath:null,action:'push',remote:'origin',expected:{root:old.root,head:old.head,branch:old.branch}}),/已变化/);await git(a,'switch','main');
   await writeFile(path.join(a,'a.txt'),'a');await git(a,'add','.');await git(a,'commit','-m','a');const local=await git(a,'rev-parse','HEAD');
   await writeFile(path.join(b,'b.txt'),'b');await git(b,'add','.');await git(b,'commit','-m','b');await git(b,'push');const theirs=await git(remote,'rev-parse','refs/heads/main');
   await assert.rejects(operation('sync'),/fast-forward/);assert.equal(await git(a,'rev-parse','HEAD'),local);assert.equal(await git(remote,'rev-parse','refs/heads/main'),theirs);
@@ -140,7 +140,7 @@ test('slow fetches are serialized per repository and full shutdown cancels Git a
   await writeFile(helper,`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000);`);
   const quote=(value:string)=>'"'+value.replaceAll('\\','/')+'"';
   await git(a,'config','remote.origin.uploadpack',quote(node)+' '+quote(helper));
-  const status=await service.status(a),request:GitOperation={projectId:'x',action:'fetch',remote:'origin',expected:{root:status.root,branch:status.branch,head:status.head}};
+  const status=await service.status(a),request:GitOperation={projectId:'x',worktreePath:null,action:'fetch',remote:'origin',expected:{root:status.root,branch:status.branch,head:status.head}};
   const pending=service.operate(a,request);const rejected=assert.rejects(pending,/取消/);
   const deadline=Date.now()+10000;let pid=0;
   while(!pid){assert.ok(Date.now()<deadline,'Upload helper did not start');try{pid=Number(await readFile(pidFile,'utf8'));}catch{}await new Promise(resolve=>setTimeout(resolve,40));}
