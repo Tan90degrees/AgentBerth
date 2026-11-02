@@ -17,6 +17,7 @@ export const extensionRequestSchema=z.discriminatedUnion('action',[
   z.object({action:z.literal('install'),path:z.string().min(1).max(4096),development:z.boolean().default(false)}).strict(),
   z.object({action:z.enum(['enable','disable','uninstall','reload']),id:extensionId}).strict(),
   z.object({action:z.literal('configure'),id:extensionId,config:z.record(z.string(),z.union([z.string(),z.number(),z.boolean()]))}).strict(),
+  z.object({action:z.literal('bundle'),id:z.enum(['agents','files']),enabled:z.boolean()}).strict(),
   z.object({action:z.literal('call'),id:extensionId,command:z.string().min(1).max(100),params:z.record(z.string(),z.unknown()).default({})}).strict(),
   z.object({action:z.literal('view'),id:extensionId,view:extensionId}).strict(),
 ]);
