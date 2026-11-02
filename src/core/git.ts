@@ -29,14 +29,14 @@ export function mount(ctx:Context,server:DaemonServer){
         const project=host.store.project(request.params.projectId);
         host.requireProjectAvailable(project.id);
         if(host.gitBusy.has(project.id))throw new Error('此项目正在执行 Git 操作，请稍后重试');
-        const worktree=(await host.git.worktrees(project.path)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?path.resolve(request.params.path).toLowerCase():path.resolve(request.params.path)));
-        if(!worktree)throw new Error('Worktree 不属于当前项目，或已经被删除');
-        if(worktree.main)throw new Error('主工作区不能删除');
-        const sessionIds=host.store.sessionIdsUnderPath(worktree.path);
-        if(sessionIds.length&&!request.params.deleteSessions)throw new Error(`此 Worktree 还有 ${sessionIds.length} 个会话；确认删除关联会话后才能移除`);
-        for(const sessionId of sessionIds)host.requireIdle(sessionId);
         host.gitBusy.add(project.id);
         try {
+          const worktree=(await host.git.worktrees(project.path)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?path.resolve(request.params.path).toLowerCase():path.resolve(request.params.path)));
+          if(!worktree)throw new Error('Worktree 不属于当前项目，或已经被删除');
+          if(worktree.main)throw new Error('主工作区不能删除');
+          const sessionIds=host.store.sessionIdsUnderPath(worktree.path);
+          if(sessionIds.length&&!request.params.deleteSessions)throw new Error(`此 Worktree 还有 ${sessionIds.length} 个会话；确认删除关联会话后才能移除`);
+          for(const sessionId of sessionIds)host.requireIdle(sessionId);
           await host.git.removeWorktree(project.path,worktree.path);
           if(sessionIds.length)host.removeLogs(host.store.deleteSessions(sessionIds));
           host.changed();return null;
