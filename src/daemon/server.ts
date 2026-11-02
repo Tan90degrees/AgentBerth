@@ -277,6 +277,9 @@ export class DaemonServer {
       get closing(){return self.closing;},
       get git(){return self.git;},
       get gitBusy(){return self.gitBusy;},
+      changed:self.changed.bind(self),
+      requireIdle:self.requireIdle.bind(self),
+      removeLogs:self.removeLogs.bind(self),
       requireProjectAvailable:self.requireProjectAvailable.bind(self),
       get store(){return self.store;}
     };
@@ -299,9 +302,9 @@ export class DaemonServer {
   registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
     const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
-      'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'}}},
-      'agent.claude':{id:'claude',definition:{name:'Claude Code',command:'claude',integration:'claude',resumeCommand:'claude --resume {sessionId}',skills:{project:'.claude/skills',user:'~/.claude/skills'}}},
-      'agent.opencode':{id:'opencode',definition:{name:'OpenCode',command:'opencode',integration:'opencode',resumeCommand:'opencode --session {sessionId}',skills:{project:'.opencode/skills',user:'~/.config/opencode/skills'}}},
+      'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'},plugin:null}},
+      'agent.claude':{id:'claude',definition:{name:'Claude Code',command:'claude',integration:'claude',resumeCommand:'claude --resume {sessionId}',skills:{project:'.claude/skills',user:'~/.claude/skills'},plugin:null}},
+      'agent.opencode':{id:'opencode',definition:{name:'OpenCode',command:'opencode',integration:'opencode',resumeCommand:'opencode --session {sessionId}',skills:{project:'.opencode/skills',user:'~/.config/opencode/skills'},plugin:null}},
     };
     const provider=providers[id];if(provider)ctx.berth.agent(provider);
   }
