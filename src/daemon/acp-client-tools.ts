@@ -10,14 +10,20 @@ import { terminateWindowsTree } from './processes';
 interface TerminalTask {child:ChildProcessWithoutNullStreams;output:Buffer;limit:number;truncated:boolean;exit:{exitCode?:number;signal?:string}|null;done:Promise<{exitCode?:number;signal?:string}>}
 export class AcpClientTools {
   private tasks=new Map<string,TerminalTask>();
+  private rootReady:Promise<string>|undefined;
   constructor(private root:string){}
-  private inside(file:string){const relative=path.relative(this.root,file);return relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);}
+  private inside(file:string,root:string){const relative=path.relative(root,file);return relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);}
   async file(input:string,create=false):Promise<string>{
     if(!input||input.includes('\0'))throw new Error('文件路径无效');
-    const file=path.resolve(this.root,input);if(!this.inside(file))throw new Error('ACP 文件和命令目录须位于当前项目工作区');
+    const root=await(this.rootReady??=realpath(this.root)),file=path.resolve(root,input);
     let ancestor=create?path.dirname(file):file;
-    while(true){try{const actual=await realpath(ancestor);if(!this.inside(actual))throw new Error('ACP 路径指向工作区之外');break;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;const parent=path.dirname(ancestor);if(parent===ancestor)throw error;ancestor=parent;}}
-    return file;
+    // Canonicalize the closest existing ancestor first. Windows temp paths can
+    // use 8.3 aliases (RUNNER~1); comparing them lexically to realpath rejects
+    // the same workspace. Symlink targets still have to remain inside root.
+    while(true){
+      try{const actual=await realpath(ancestor),resolved=path.resolve(actual,path.relative(ancestor,file));if(!this.inside(actual,root)||!this.inside(resolved,root))throw new Error('ACP 路径指向工作区之外');return resolved;}
+      catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;const parent=path.dirname(ancestor);if(parent===ancestor)throw error;ancestor=parent;}
+    }
   }
   async call(method:string,p:Record<string,any>){
     if(method==='fs/read_text_file'){

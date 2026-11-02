@@ -52,7 +52,12 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   const interrupt=async(ticket:Ticket,error:unknown,reason:string)=>{
     let detail=String(error);
     try{await stopSessions(ticket);}catch(cleanup){detail+='；连接清理尚未完成，请从会话重试停止：'+String(cleanup);}
-    if(!closed)change(ticket.id,{phase:'interrupted',attention:true,error:detail.slice(0,4000)},reason);
+    if(!closed){const current=get(ticket.id);if(current.attempt===ticket.attempt&&['planning','working'].includes(current.phase))change(ticket.id,{phase:'interrupted',attention:true,error:detail.slice(0,4000)},reason);}
+  };
+  const guard=async(ticket:Ticket,phase:Phase)=>{
+    const current=closed?null:get(ticket.id);
+    if(current?.attempt===ticket.attempt&&current.phase===phase)return true;
+    await stopSessions(ticket);return false;
   };
   const create=async(p:any,source:string='desktop',eventId:string=randomUUID(),approved=true,origin?:Ticket['source'])=>{
     const previous=db.prepare('SELECT ticketId FROM triggers WHERE source=? AND eventId=?').get(source,eventId);if(previous)return {id:String(previous.ticketId),duplicate:true};
@@ -87,29 +92,34 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     return {snapshot,text,ended:snapshot.turnId!==turnId&&snapshot.phase!=='running'&&snapshot.phase!=='permission'&&snapshot.phase!=='connecting'};
   };
   const launchCoordinator=async(ticket:Ticket)=>{
-    const coordinator=await session(ticket,'coordinator');
+    const coordinator=await session(ticket,'coordinator');if(!await guard(ticket,'planning'))return;
     if(coordinator.latestRun?.status!=='running')await host('start',{sessionId:ticket.coordinatorSession,cols:100,rows:30,resume:true});
+    if(!await guard(ticket,'planning'))return;
     const setup=await host<AcpSnapshot>('acpSnapshot',{sessionId:ticket.coordinatorSession,limit:1});
     if(setup.modes?.availableModes.some(mode=>mode.id==='plan')){await host('acpConfigure',{sessionId:ticket.coordinatorSession,configId:'mode',value:'plan'});audit(ticket.id,'policy','协调者使用 Agent 声明的 plan 模式');}
     else audit(ticket.id,'policy','此 Agent 未提供 plan 模式，协调者遵循自身权限与任务指令');
+    if(!await guard(ticket,'planning'))return;
     const rules=String(config.rules??'仅在请求范围内工作。不得自动推送、合并或向外部渠道发送消息。');
     if(rules.length>4000)throw new Error('Superagent 规则超过 4000 字，请缩短规则或放入项目 AGENTS.md');
     const prompt=`你是 Superagent 的协调者。原则：尽量少占用人的注意力，提供可验证的价值。先判断目标与范围，不直接开展实现。任务 ${ticket.id}，第 ${ticket.attempt} 次明确请求。\n规则：${rules}\n标题：${ticket.title}\n目标：${ticket.objective}\n${ticket.lastInput?'用户补充：'+ticket.lastInput:''}\n只输出一个 JSON 对象：{"action":"execute|ask|ignore","assignment":"给独立执行 Agent 的具体任务、约束与验收方式","reason":"简短原因","question":"必须由人回答的问题，没有则留空"}。范围不清时用 ask。不要编造已执行的步骤。`;
     audit(ticket.id,'dispatch','提交协调请求，幂等请求 ID：'+ticket.planTurn);
-    await host('acpSend',{sessionId:ticket.coordinatorSession,requestId:ticket.planTurn,text:prompt});
+    await host('acpSend',{sessionId:ticket.coordinatorSession,requestId:ticket.planTurn,text:prompt});await guard(ticket,'planning');
   };
   const launchWorker=async(ticket:Ticket)=>{
+    if(!await guard(ticket,'working'))return;
     let worktreePath=ticket.worktreePath;
     if(ticket.isolated&&!worktreePath){
       const branch='superagent/'+ticket.id,trees=await host<GitWorktree[]>('gitWorktrees',{projectId:ticket.projectId});
+      if(!await guard(ticket,'working'))return;
       const existing=trees.find(tree=>tree.branch===branch);
       const tree=existing??await host<GitWorktree>('gitCreateWorktree',{projectId:ticket.projectId,branch,createBranch:true});worktreePath=tree.workingPath;
       change(ticket.id,{worktreePath},'已准备任务独立工作区：'+worktreePath);
     }
-    ticket=get(ticket.id);await session(ticket,'worker',worktreePath);
+    if(!await guard(ticket,'working'))return;
+    ticket=get(ticket.id);await session(ticket,'worker',worktreePath);if(!await guard(ticket,'working'))return;
     const prompt=`你是 Superagent 的独立执行器。只完成当前任务，不接管其他会话。\n任务 ${ticket.id}\n${ticket.assignment}\n${ticket.lastInput?'用户补充：'+ticket.lastInput:''}\n在当前工作目录实施并验证。不得自动推送、合并或向外部渠道发消息。不要删除工作区或历史。需要授权时使用 Agent 的标准授权请求；无法继续就解释具体阻塞。最终只输出 JSON：{"status":"ready|blocked|failed","summary":"完成内容、验证结果和限制","question":"需要用户回答的具体问题，没有则留空"}。ready 代表可交付审核，不代表用户已接受。`;
     audit(ticket.id,'dispatch','提交执行请求，幂等请求 ID：'+ticket.workerTurn);
-    await host('acpSend',{sessionId:ticket.workerSession,requestId:ticket.workerTurn,text:prompt});
+    await host('acpSend',{sessionId:ticket.workerSession,requestId:ticket.workerTurn,text:prompt});await guard(ticket,'working');
   };
   const advance=async(ticket:Ticket)=>{
     const planning=ticket.phase==='planning',sessionId=planning?ticket.coordinatorSession:ticket.workerSession,turnId=planning?ticket.planTurn:ticket.workerTurn;

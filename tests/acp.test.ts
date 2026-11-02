@@ -59,7 +59,7 @@ test('ACP filesystem requests stay inside the canonical workspace, including sym
   const dir=await mkdtemp(path.join(os.tmpdir(),'berth-acp-files-')),root=path.join(dir,'root'),outside=path.join(dir,'outside');await mkdir(root);await mkdir(outside);const tools=new AcpClientTools(root);t.after(async()=>{await tools.close();await rm(dir,{recursive:true,force:true});});
   await assert.rejects(tools.call('fs/write_text_file',{path:path.join(outside,'no.txt'),content:'no'}),/工作区/);
   await tools.call('fs/write_text_file',{path:path.join(root,'sub','ok.txt'),content:'one\ntwo\nthree'});assert.deepEqual(await tools.call('fs/read_text_file',{path:path.join(root,'sub','ok.txt'),line:2,limit:1}),{content:'two'});
-  if(process.platform!=='win32'){await symlink(outside,path.join(root,'link'));await assert.rejects(tools.call('fs/write_text_file',{path:path.join(root,'link','no.txt'),content:'no'}),/工作区/);}
+  if(process.platform!=='win32'){const alias=path.join(dir,'workspace-alias');await symlink(root,alias);const aliased=new AcpClientTools(alias);await aliased.call('fs/write_text_file',{path:path.join(alias,'alias.txt'),content:'SAME_WORKSPACE'});assert.equal(await readFile(path.join(root,'alias.txt'),'utf8'),'SAME_WORKSPACE');await aliased.close();await symlink(outside,path.join(root,'link'));await assert.rejects(tools.call('fs/write_text_file',{path:path.join(root,'link','no.txt'),content:'no'}),/工作区/);}
 });
 
 

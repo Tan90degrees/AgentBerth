@@ -75,3 +75,13 @@ test('a coordinator setup failure stops its owned ACP connection and remains exp
   const state=await f.connection.rpc<State>('state');assert.notEqual(state.sessions.find(session=>session.id===interrupted.coordinatorSession)?.latestRun?.status,'running');
   await f.extension({action:'disable',id:'superagent'});
 });
+
+
+test('cancelling during ACP initialization remains cancelled and never starts a late worker',async t=>{
+  const f=await fixture(t);
+  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--slow-mode']}});
+  const created=await f.create();
+  await until(async()=>{const task=await f.task(created.id),state=await f.connection.rpc<State>('state');return {task,run:state.sessions.find(session=>session.id===task.coordinatorSession)?.latestRun};},value=>value.task.phase==='planning'&&value.run?.pid);
+  await f.call('action',{id:created.id,action:'cancel'});await new Promise(resolve=>setTimeout(resolve,600));
+  assert.equal((await f.task(created.id)).phase,'cancelled');const state=await f.connection.rpc<State>('state');assert.ok(state.sessions.every(session=>session.latestRun?.status!=='running'));const final=await f.task(created.id);assert.ok(!state.sessions.some(session=>session.id===final.workerSession));
+});
