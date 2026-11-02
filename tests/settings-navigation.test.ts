@@ -13,7 +13,7 @@ test('core settings search exposes host capabilities but not optional extension 
   assert.deepEqual(ids('预览'),['preview']);
   assert.deepEqual(ids('ssh'),['ssh-limit','connections','mcp']);
   assert.deepEqual(ids('mcp'),['mcp']);
-  assert.deepEqual(ids('Agent'),['default-agent','skills']);
+  assert.deepEqual(ids('Agent'),['default-agent','skills','mcp']);
   assert.deepEqual(ids('Git'),[]);
   assert.deepEqual(ids('外观'),['appearance']);
   assert.deepEqual(ids('诊断'),['about']);
