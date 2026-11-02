@@ -37,8 +37,10 @@ export function AcpConversation({session,connected}:{session:Session;connected:b
   useEffect(()=>{if(bottom.current)scroll.current?.scrollTo({top:scroll.current.scrollHeight,behavior:'instant'});},[snapshot?.events,snapshot?.permissions]);
   const call=async(method:Method,params:Record<string,unknown>={})=>{setError('');return window.berth.rpc(method,{sessionId:session.id,...params});};
   const sending=!!snapshot&&['running','permission'].includes(snapshot.phase);
+  async function configure(configId:string,value:string){setPending(true);try{await call('acpConfigure',{configId,value});}catch(error){setError(String(error));}finally{setPending(false);}}
   async function send(){
-    if(!text.trim()||pending||sending||!connected||!snapshot)return;
+    if(!text.trim()||!connected||!snapshot)return;
+    if(pending||sending){setError('Agent 仍在执行，草稿已保留；请等待完成或先停止当前任务。');return;}
     const content=text.trim(),submission=request.current?.text===content?request.current:{id:crypto.randomUUID(),text:content};request.current=submission;setPending(true);setError('');
     try{await call('acpSend',{requestId:submission.id,text:submission.text});setText(previous=>previous.trim()===submission.text?'':previous);request.current=null;bottom.current=true;}
     catch(error){setError(String(error));}finally{setPending(false);}
@@ -46,8 +48,8 @@ export function AcpConversation({session,connected}:{session:Session;connected:b
   return <section className="acp-conversation" aria-label="ACP 对话">
     <header className="acp-toolbar"><span className="badge">ACP · {snapshot?phases[snapshot.phase]:'读取记录…'}</span>
       {snapshot?.nativeSessionId&&<small title={snapshot.nativeSessionId}>{snapshot.nativeSessionId.slice(0,16)}</small>}
-      {snapshot?.modes&&<label>模式<select aria-label="ACP 会话模式" disabled={snapshot.phase!=='ready'} value={snapshot.modes.currentModeId} onChange={event=>void call('acpConfigure',{configId:'mode',value:event.target.value}).catch(error=>setError(String(error)))}>{snapshot.modes.availableModes.map(mode=><option key={mode.id} value={mode.id}>{mode.name}</option>)}</select></label>}
-      {snapshot?.configOptions?.map(option=><label key={option.id}>{option.name}<select aria-label={'ACP '+option.name} disabled={snapshot.phase!=='ready'} value={option.currentValue??''} onChange={event=>void call('acpConfigure',{configId:option.id,value:event.target.value}).catch(error=>setError(String(error)))}>{option.options?.flatMap(item=>item.options??[{value:item.value??'',name:item.name??item.value??''}]).map(item=><option key={item.value} value={item.value}>{item.name}</option>)}</select></label>)}
+      {snapshot?.modes&&<label>模式<select aria-label="ACP 会话模式" disabled={snapshot.phase!=='ready'||pending} value={snapshot.modes.currentModeId} onChange={event=>void configure('mode',event.target.value)}>{snapshot.modes.availableModes.map(mode=><option key={mode.id} value={mode.id}>{mode.name}</option>)}</select></label>}
+      {snapshot?.configOptions?.map(option=><label key={option.id}>{option.name}<select aria-label={'ACP '+option.name} disabled={snapshot.phase!=='ready'||pending} value={option.currentValue??''} onChange={event=>void configure(option.id,event.target.value)}>{option.options?.flatMap(item=>item.options??[{value:item.value??'',name:item.name??item.value??''}]).map(item=><option key={item.value} value={item.value}>{item.name}</option>)}</select></label>)}
     </header>
     <div className="acp-messages" ref={scroll} onScroll={()=>{const box=scroll.current!;bottom.current=box.scrollHeight-box.scrollTop-box.clientHeight<64;}}>
       {hasOlder&&<AsyncButton className="subtle" onError={setError} onAction={async()=>{const value=await window.berth.rpc<AcpSnapshot>('acpSnapshot',{sessionId:session.id,before:snapshot?.events[0]?.sequence});setHasOlder(value.hasMore);bottom.current=false;setSnapshot(previous=>previous?{...previous,events:[...value.events,...previous.events].filter((event,index,all)=>all.findIndex(item=>item.id===event.id)===index)}:value);}}>加载更早的消息</AsyncButton>}

@@ -114,18 +114,48 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-extensions.mjs
         timeout-minutes: 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ runner.os }}
+          path: test-results/*.png
+          if-no-files-found: ignore
+  acp-check:
+    name: ACP and Superagent (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-dependencies
+      - name: Restore Linux CJK font
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/share/fonts/agentberth-ci
+          key: ${{ runner.os }}-agentberth-wqy-microhei-v1
+      - name: Refresh available Linux fonts
+        if: runner.os == 'Linux'
+        run: fc-cache -f
+        timeout-minutes: 1
+      - name: Build ACP workbench
+        run: npm run typecheck && npm run build
+        timeout-minutes: 2
       - name: ACP and Superagent smoke (Linux)
-        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/smoke-acp.mjs
         timeout-minutes: 3
       - name: ACP and Superagent smoke (Windows)
-        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        if: runner.os == 'Windows'
         run: node scripts/smoke-acp.mjs
         timeout-minutes: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: screenshots-${{ runner.os }}
+          name: screenshots-acp-${{ runner.os }}
           path: test-results/*.png
           if-no-files-found: ignore
   windows-package:
@@ -250,7 +280,7 @@ jobs:
           if-no-files-found: ignore
   release:
     name: Publish verified release
-    needs: [check, windows-package]
+    needs: [check, acp-check, windows-package]
     if: github.repository == 'Tan90degrees/AgentBerth' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
