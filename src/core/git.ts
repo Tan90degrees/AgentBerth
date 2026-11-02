@@ -28,8 +28,9 @@ export function mount(ctx:Context,server:DaemonServer){
       case 'gitRemoveWorktree': {
         const project=host.store.project(request.params.projectId);
         host.requireProjectAvailable(project.id);
-        if(host.gitBusy.has(project.id))throw new Error('此项目正在执行 Git 操作，请稍后重试');
+        if(host.gitBusy.has(project.id)||host.worktreeBusy.has(project.id))throw new Error('此项目正在执行 Git / Worktree 操作，请稍后重试');
         host.gitBusy.add(project.id);
+        host.worktreeBusy.add(project.id);
         try {
           const worktree=(await host.git.worktrees(project.path)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?path.resolve(request.params.path).toLowerCase():path.resolve(request.params.path)));
           if(!worktree)throw new Error('Worktree 不属于当前项目，或已经被删除');
@@ -40,7 +41,7 @@ export function mount(ctx:Context,server:DaemonServer){
           await host.git.removeWorktree(project.path,worktree.path);
           if(sessionIds.length)host.removeLogs(host.store.deleteSessions(sessionIds));
           host.changed();return null;
-        } finally {host.gitBusy.delete(project.id);}
+        } finally {host.gitBusy.delete(project.id);host.worktreeBusy.delete(project.id);}
       }
       case 'gitDiff': {
         const project=host.store.project(request.params.projectId);
