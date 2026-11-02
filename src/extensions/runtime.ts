@@ -34,6 +34,9 @@ export class ExtensionRuntime {
     try{const raw=JSON.parse(await readFile(path.join(this.directory,'plugins.json'),'utf8'));if(!Array.isArray(raw))throw new Error('插件配置格式无效');saved=raw;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){const backup='plugins.invalid-'+Date.now()+'.json';await copyFile(path.join(this.directory,'plugins.json'),path.join(this.directory,backup));this.warnings.push('插件配置读取失败，原文件已备份为 '+backup+'；当前使用默认配置');}}
     for(const manifest of builtinExtensions)this.records.set(manifest.id,{manifest,installed:true,enabled:true,config:{}});
     for(const value of saved){try{const manifest=extensionManifestSchema.parse(value.manifest), builtin=builtinExtensions.find(p=>p.id===manifest.id);if(!builtin&&!value.root)continue;this.records.set(manifest.id,{...value,manifest:builtin??(value.installed?await readManifest(value.root!):manifest),config:resolveExtensionConfig(builtin??manifest,value.config??{})});}catch(error){if(value?.manifest?.id)this.errors.set(value.manifest.id,String(error));}}
+    // Workspace is the host foundation: never let a historic disabled state
+    // make unrelated plugins require a manual prerequisite toggle.
+    const workspace=this.records.get('workspace');if(workspace){workspace.enabled=true;workspace.installed=true;}
     await this.reconcile();this.installWatchers();
   }
   private publish(){this.revision++;this.host.agentsChanged([...this.mounted].flatMap(([pluginId,p])=>[...p.agents.values()].map(agent=>({pluginId,agent}))));this.host.changed();}
@@ -77,6 +80,35 @@ export class ExtensionRuntime {
     }}this.publish();
   }
   private serialize<T>(action:()=>Promise<T>):Promise<T>{const task=this.chain.catch(()=>{}).then(async()=>{await this.ready;if(this.closed)throw new Error('插件宿主已关闭');return action();});this.chain=task;return task;}
+  /** One user-facing switch owns every tightly coupled built-in submodule. */
+  async bundle(root:'agents'|'files',enabled:boolean){
+    return this.serialize(async()=>{
+      const members=root==='agents'?['agents','agent.codex','agent.claude','agent.opencode','pet']:['files','git'];
+      const affected=new Set(members.flatMap(id=>this.dependents(id)));
+      const previous=new Map([...affected].map(id=>[id,this.records.get(id)?{...this.records.get(id)!,config:{...this.records.get(id)!.config}}:undefined]));
+      for(const id of affected)this.changing.add(id);
+      try {
+        this.assertIdle([...affected]);
+        await this.host.beforeChange([...affected]);
+        await this.dispose([...affected]);
+        for(const id of affected){this.errors.delete(id);this.notices.delete(id);}
+        for(const id of members){const record=this.records.get(id);if(record){record.installed=true;record.enabled=enabled;}}
+        // Enabled external dependents keep their configuration and return
+        // automatically when the bundle comes back. No separate prerequisite UI.
+        await this.reconcile();
+        const failed=members.find(id=>enabled&&this.errors.has(id));
+        if(failed)throw new Error(this.errors.get(failed));
+        await this.persist();
+        return this.snapshot();
+      } catch(error){
+        await this.dispose([...affected]);
+        for(const [id,entry] of previous)if(entry)this.records.set(id,entry);
+        for(const id of affected)this.errors.delete(id);
+        await this.reconcile();
+        throw new Error('组合插件切换失败，已恢复原状态：'+String(error));
+      } finally {for(const id of affected)this.changing.delete(id);}
+    });
+  }
   async change(action:'enable'|'disable'|'uninstall'|'reload'|'configure',id:string,config?:ExtensionConfig){return this.serialize(async()=>{
     const record=this.records.get(id);if(!record)throw new Error('插件不存在');
     if(action==='enable'&&record.root&&!record.installed)throw new Error('请重新选择插件包安装');
