@@ -11,7 +11,10 @@ export function mount(ctx:Context,server:DaemonServer){
         const cwd=await host.git.resolveWorktree(project.path,request.params.worktreePath);
         return host.git.status(cwd);
       }
-      case 'gitWorktrees': return host.git.worktrees(host.store.project(request.params.projectId).path);
+      case 'gitWorktrees': {
+        const project=host.store.project(request.params.projectId);
+        return (await host.git.worktrees(project.path)).map(worktree=>({...worktree,sessionCount:host.store.sessionIdsUnderPath(worktree.path).length}));
+      }
       case 'gitCreateWorktree': {
         const project=host.store.project(request.params.projectId);
         host.requireProjectAvailable(project.id);
@@ -29,13 +32,13 @@ export function mount(ctx:Context,server:DaemonServer){
         const worktree=(await host.git.worktrees(project.path)).find(item=>(process.platform==='win32'?item.path.toLowerCase():item.path)===(process.platform==='win32'?path.resolve(request.params.path).toLowerCase():path.resolve(request.params.path)));
         if(!worktree)throw new Error('Worktree 不属于当前项目，或已经被删除');
         if(worktree.main)throw new Error('主工作区不能删除');
-        const sessions=host.store.state().sessions.filter(session=>session.projectId===project.id&&(session.worktreePath??null)===worktree.workingPath);
-        if(sessions.length&&!request.params.deleteSessions)throw new Error(`此 Worktree 还有 ${sessions.length} 个会话；确认删除关联会话后才能移除`);
-        for(const session of sessions)host.requireIdle(session.id);
+        const sessionIds=host.store.sessionIdsUnderPath(worktree.path);
+        if(sessionIds.length&&!request.params.deleteSessions)throw new Error(`此 Worktree 还有 ${sessionIds.length} 个会话；确认删除关联会话后才能移除`);
+        for(const sessionId of sessionIds)host.requireIdle(sessionId);
         host.gitBusy.add(project.id);
         try {
           await host.git.removeWorktree(project.path,worktree.path);
-          if(sessions.length)host.removeLogs(host.store.deleteWorktreeSessions(project.id,worktree.workingPath));
+          if(sessionIds.length)host.removeLogs(host.store.deleteSessions(sessionIds));
           host.changed();return null;
         } finally {host.gitBusy.delete(project.id);}
       }
