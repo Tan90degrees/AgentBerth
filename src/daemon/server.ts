@@ -596,7 +596,7 @@ export class DaemonServer {
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     const project = this.store.project(session.projectId);
-    const projectPath = await this.git.resolveWorktree(project.path, session.worktreePath ?? null);
+    const projectPath = session.remote ? project.path : await this.git.resolveWorktree(project.path, session.worktreePath ?? null);
     const version = this.agentVersion(session.agent);
     let command = resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
