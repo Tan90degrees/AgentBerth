@@ -27,7 +27,7 @@ export class ExtensionRuntime {
   private watchers=new Map<string,FSWatcher>();private timers=new Map<string,NodeJS.Timeout>();private generations=new Map<string,number>();private revision=0;private chain:Promise<unknown>=Promise.resolve();private closed=false;
   private ajv=new Ajv({strict:true,allErrors:true,addUsedSchema:false});
   readonly ready:Promise<void>;
-  constructor(readonly directory:string,private host:ExtensionHost){this.ready=this.initialize();}
+  constructor(readonly directory:string,private host:ExtensionHost){for(const id of coreCapabilities)this.context.provide('extension_'+id.replaceAll(/[.-]/g,'_'),{});this.ready=this.initialize();}
   private async initialize(){
     await mkdir(this.directory,{recursive:true});
     let saved:RecordEntry[]=[];
