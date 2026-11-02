@@ -49,7 +49,6 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [projectId, setProjectId] = useState(() => readStored('berth.project') ?? '');
   const [sessionId, setSessionId] = useState(() => readStored('berth.session') ?? '');
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
-  const selectedSession = state.sessions.find(item => item.id === sessionId && item.projectId === projectId);
   const [headerCollapsed, setHeaderCollapsed] = useState(() => readStored('berth.headerCollapsed') === 'true');
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>readStored('berth.sidebarCollapsed')==='true');
   useEffect(()=>{if(!sshWindow)saveStored('berth.sidebarCollapsed',String(sidebarCollapsed));},[sidebarCollapsed]);
