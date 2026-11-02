@@ -183,15 +183,14 @@ try {
   await page.getByRole('button', { name: '切换为深色模式' }).click();
   step('preview typography persists across files and supports custom installed fonts');
   assert.equal(await page.getByRole('button', { name: '预览字体设置', exact: true }).count(), 0);
-  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
-  await page.locator('[data-plugin-id="files"]').getByRole('button',{name:'配置',exact:true}).click();
+  await coreSettings(page,'文件预览');
   let fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByLabel('预览字号', { exact: true }).fill('18');
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('consolas');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('berth.previewAppearance')).size === 18);
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('custom');
   await fonts.getByLabel('自定义预览字体', { exact: true }).fill('Courier New');
-  await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();
+  // File preview settings are core and apply immediately; no plugin dialog is involved.
   await page.getByRole('tablist', { name: '侧栏视图' }).getByRole('tab', { name: '文件', exact: true }).click();
   for (const [file, language] of [['config.json', 'json'], ['config.yaml', 'yaml'], ['main.scala', 'scala']]) {
     await entry(file).click();
@@ -202,11 +201,10 @@ try {
   await preview.getByLabel('预览高亮语言', { exact: true }).selectOption('plaintext');
   await page.waitForFunction(() => document.querySelector('.preview-document:not([hidden]) .source-code code')?.dataset.language === 'plaintext');
   assert.equal(await preview.locator('.source-code [class*="hljs-"]').count(), 0);
-  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
-  await page.locator('[data-plugin-id="files"]').getByRole('button',{name:'配置',exact:true}).click();
+  await coreSettings(page,'文件预览');
   fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByRole('button', { name: '恢复默认预览字体', exact: true }).click();
-  await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();
+  // Skills are managed directly in core settings, independently of provider plugins.
   await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
   step('source control sidebar previews separate index/worktree diffs, stages selections, unstages and commits without restarting the terminal');
   await sideTabs.getByRole('tab', { name: 'Git', exact: true }).click();
@@ -335,7 +333,7 @@ try {
   await page.getByLabel('文件所属项目', { exact: true }).selectOption(project.id);
   await preview.getByLabel('文件源码', { exact: true }).waitFor();
   assert.equal(await page.getByRole('tab', { name: 'empty.txt', exact: true }).getAttribute('aria-selected'), 'true');
-  step('Skill management uses an installed Cordis Agent plugin and keeps operations in the fixture project');
+  step('Core Skills management uses an independently installed Agent provider and keeps operations in the fixture project');
   const skillSource = path.join(folder, 'skill-source'); await mkdir(skillSource);
   await writeFile(path.join(skillSource, 'SKILL.md'), '---\nname: smoke-skill\ndescription: Fixture workflow\n---\nInitial instructions\n');
   const pluginSource = path.join(folder, 'skill-agent-extension'); await mkdir(pluginSource);
@@ -355,9 +353,7 @@ try {
     await window.berth.skills({ action: 'import', location: { agentId: agent.id, projectId }, source });
     return agent;
   }, { projectId: project.id, source: skillSource });
-  await page.locator('.sidebar-settings').getByRole('button', { name: '插件', exact: true }).click();
-  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).click();
-  await page.locator('[data-plugin-id="agents"]').getByRole('button',{name:'配置',exact:true}).click();
+  await coreSettings(page,'Agent 与 Skills');
   await page.getByLabel('Skill Agent 类型', { exact: true }).selectOption(skillAgent.id);
   const skillRow = page.locator('.skill-row').filter({ has: page.getByText('smoke-skill', { exact: true }) });
   await skillRow.getByRole('button', { name: '查看 / 编辑', exact: true }).waitFor();
