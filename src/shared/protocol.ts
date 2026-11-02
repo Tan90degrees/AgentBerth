@@ -196,7 +196,7 @@ export interface GitStatus {
   remoteBranches?: GitRemoteBranch[]; remoteBranchesTruncated?: boolean;
   branches: string[]; remotes: string[]; operation: string | null; fetchedAt: string | null;
 }
-export interface GitWorktree { path:string; workingPath:string; branch:string|null; head:string|null; main:boolean; detached:boolean; locked:boolean; prunable:boolean }
+export interface GitWorktree { path:string; workingPath:string; branch:string|null; head:string|null; main:boolean; detached:boolean; locked:boolean; prunable:boolean; sessionCount?:number }
 export interface GitResult { status: GitStatus; message: string; output: string }
 export interface GitDiff { path: string; staged: boolean; patch: string; binary: boolean; truncated: boolean; message?: string }
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
