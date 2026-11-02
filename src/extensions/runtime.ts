@@ -4,7 +4,7 @@ import { boundedPlugin, clearModules, loadModule, shareCordis } from './modules'
 import { watch, type FSWatcher } from 'node:fs';
 import { readFile, mkdir, writeFile, rename, rm, copyFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { builtinExtensions } from './builtins';
+import { builtinExtensions, coreCapabilities } from './builtins';
 import { commitPackage, packagePath, readManifest, stagePackage } from './packages';
 import { extensionManifestSchema, resolveExtensionConfig, type ExtensionConfig, type ExtensionInfo, type ExtensionManifest, type ExtensionSnapshot } from '../shared/extensions';
 import { agentDefinitionSchema } from '../shared/protocol';
@@ -42,8 +42,8 @@ export class ExtensionRuntime {
     const active=this.mounted.get(record.manifest.id),failure=this.errors.get(record.manifest.id),error=failure??this.notices.get(record.manifest.id)??(record.enabled&&record.installed&&!active?'依赖尚未启用或存在循环：'+record.manifest.dependencies.filter(id=>!this.active(id)).join('、'):undefined);
     return {manifest:record.manifest,generation:this.generations.get(record.manifest.id)??0,...(active&&record.root&&record.manifest.desktopEntry?{desktop:{root:record.root,entry:packagePath(record.root,record.manifest.desktopEntry),dataDirectory:path.join(this.directory,'data',record.manifest.id)}}:{}),installed:record.installed,enabled:record.enabled,status:failure?'failed':!record.installed||!record.enabled?'disabled':active?.fiber.state===FiberState.ACTIVE?'active':'blocked',builtin:!record.root,development:!!record.development,isAgent:record.manifest.kind==='agent'||!!record.agentContribution||!!active?.agents.size,error,config:record.config,commands:[...(active?.commands.values()??[])].map(c=>c.description),views:active?record.manifest.views:[]};
   }),warnings:this.warnings};}
-  active(id:string){return !this.errors.has(id)&&this.mounted.get(id)?.fiber.state===FiberState.ACTIVE;}
-  require(id:string){if(this.changing.has(id))throw new Error('插件正在更新，请稍后重试；操作尚未执行');if(!this.active(id))throw new Error(`插件“${this.records.get(id)?.manifest.name??id}”未启用，请在插件中心启用`);}
+  active(id:string){return coreCapabilities.has(id)||!this.errors.has(id)&&this.mounted.get(id)?.fiber.state===FiberState.ACTIVE;}
+  require(id:string){if(coreCapabilities.has(id))return;if(this.changing.has(id))throw new Error('插件正在更新，请稍后重试；操作尚未执行');if(!this.active(id))throw new Error(`插件“${this.records.get(id)?.manifest.name??id}”未启用，请在插件中心启用`);}
   private load(record:RecordEntry):Plugin {
     return loadModule(record.root!,packagePath(record.root!,record.manifest.entry));
   }
