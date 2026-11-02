@@ -58,8 +58,7 @@ test('Cordis lifecycle, live config, dependency teardown, persistence and uninst
   await runtime.install(dir);assert.equal(await runtime.call('example.agent','value',{}),'hello');assert.equal(agents[0].agent.definition.skills.project,'.example/skills');
   await runtime.change('configure','example.agent',{greeting:'updated'});assert.equal(await runtime.call('example.agent','value',{}),'updated');assert.equal((globalThis as any).__extensionMounted,1);
   await assert.rejects(runtime.change('configure','example.agent',{greeting:42}),/配置无效/);assert.equal(await runtime.call('example.agent','value',{}),'updated');
-  await runtime.change('disable','agents');assert.equal(agents.length,0);assert.equal(runtime.active('example.agent'),false);assert.equal((globalThis as any).__extensionMounted,0);await assert.rejects(runtime.call('example.agent','value',{}),/未启用/);
-  await runtime.change('enable','agents');assert.equal(await runtime.call('example.agent','value',{}),'updated');assert.equal((globalThis as any).__extensionMounted,1);
+  await assert.rejects(runtime.change('disable','agents'),/插件不存在/,'the Agent registry is a host capability, not a disableable plugin');assert.equal(agents.length,1);assert.equal(runtime.active('agents'),true);assert.equal(runtime.active('example.agent'),true);assert.equal((globalThis as any).__extensionMounted,1);assert.equal(await runtime.call('example.agent','value',{}),'updated');
   const data=path.join(directory,'data','example.agent','keep.txt');await writeFile(data,'keep');await runtime.change('uninstall','example.agent');assert.equal(await readFile(data,'utf8'),'keep');assert.ok((await readdir(path.join(directory,'packages'))).every(name=>!name.startsWith('example.agent-')));await assert.rejects(runtime.change('enable','example.agent'),/重新选择/);
   await runtime.close();const restarted=new ExtensionRuntime(directory,host());await restarted.ready;t.after(()=>restarted.close());assert.equal(restarted.snapshot().plugins.find(p=>p.manifest.id==='example.agent')?.installed,false);
 });
@@ -112,7 +111,7 @@ test('desktop Cordis mirrors only changed plugin scopes',async t=>{
   await desktop.update({...snapshot,plugins:[]});assert.equal(disposed,2);
 });
 
-test('real daemon removes feature routes and keeps contributed Agent identities across config and restart',async t=>{
+test('core routes stay available while Agent provider plugins have independent lifecycles',async t=>{
   const {DaemonServer}=await import('../src/daemon/server');const {DaemonConnection}=await import('../src/main/connection');
   // The SQLite database must be closed before removing its directory on Windows.
   // fixture(t) registers deletion before the daemon teardown hook and can leave
@@ -121,27 +120,16 @@ test('real daemon removes feature routes and keeps contributed Agent identities 
   t.after(async()=>{try{connection.close();await server.close();}finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:150});}});
   const project=await connection.rpc<any>('createProject',{name:'Fixture',path:root});const session=await connection.rpc<any>('createSession',{projectId:project.id,title:'Shell',agent:'shell'});await connection.rpc('start',{sessionId:session.id,cols:90,rows:20});
   const change=(request:any)=>connection.rpc<any>('extensions',{request});
-  await assert.rejects(change({action:'disable',id:'workspace'}),/运行会话/);
-  const codex=await connection.rpc<any>('createSession',{projectId:project.id,title:'Disabled provider',agent:'codex'});await change({action:'disable',id:'agent.codex'});await assert.rejects(connection.rpc('history',{sessionId:codex.id}),/未启用/);await change({action:'enable',id:'agent.codex'});
-  await change({action:'disable',id:'files'});await assert.rejects(connection.rpc('projectFiles',{projectId:project.id}),/未启用/);assert.equal((await connection.rpc<any>('state')).extensions.plugins.find((p:any)=>p.manifest.id==='git').status,'blocked');
-  await change({action:'enable',id:'files'});await connection.rpc('projectFiles',{projectId:project.id});
-  await change({action:'bundle',id:'files',enabled:false});
-  let bundle=(await connection.rpc<any>('state')).extensions.plugins;
-  for(const id of ['files','git'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'disabled','Files and Git must disable together');
-  await change({action:'bundle',id:'files',enabled:true});
-  bundle=(await connection.rpc<any>('state')).extensions.plugins;
-  for(const id of ['files','git'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'active','Files and Git must enable together');
+  await assert.rejects(change({action:'disable',id:'workspace'}),/插件不存在/,'the project/session workspace is core');
+  const codex=await connection.rpc<any>('createSession',{projectId:project.id,title:'Disabled provider',agent:'codex'});await change({action:'disable',id:'agent.codex'});await assert.rejects(connection.rpc('start',{sessionId:codex.id,cols:90,rows:20}),/接入插件未启用/);await change({action:'enable',id:'agent.codex'});
+  await assert.rejects(change({action:'disable',id:'files'}),/插件不存在/,'file browsing is core');await connection.rpc('projectFiles',{projectId:project.id});await connection.rpc('gitStatus',{projectId:project.id});await connection.rpc('resources',{appPids:[]});
+  let snapshot=(await connection.rpc<any>('state')).extensions.plugins;for(const id of ['workspace','agents','ssh','files','git','resources','appearance'])assert.ok(!snapshot.some((p:any)=>p.manifest.id===id),`${id} must not appear in the extension center`);
 
   const dir=await source(root,'example.integration',`exports.apply=(ctx,c)=>ctx.berth.agent({id:'main',definition:{name:c.name,command:'fixture-agent',skills:{project:'.fixture/skills'}}});`,{dependencies:['agents'],config:{name:{type:'string',title:'Name',default:'Fixture Agent'}}});
   await change({action:'install',path:dir});let agent=(await connection.rpc<any>('state')).agents.find((a:any)=>a.name==='Fixture Agent');assert.ok(agent.id);
-  await change({action:'bundle',id:'agents',enabled:false});
-  bundle=(await connection.rpc<any>('state')).extensions.plugins;
-  for(const id of ['agents','agent.codex','agent.claude','agent.opencode','pet'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'disabled','Agents, adapters and pet must disable together');
-  await change({action:'enable',id:'example.integration'}); // Restores its installed prerequisites without asking the user.
-  bundle=(await connection.rpc<any>('state')).extensions.plugins;
-  for(const id of ['agents','agent.codex','agent.claude','agent.opencode','pet','example.integration'])assert.equal(bundle.find((p:any)=>p.manifest.id===id).status,'active','Enabling an Agent integration must restore its bundled prerequisites');
-
-  const versions=(server as any).agentVersions as Map<string,number>,revision=versions.get(agent.id);await change({action:'disable',id:'resources'});await change({action:'enable',id:'resources'});assert.equal(versions.get(agent.id),revision,'Unrelated plugins must not invalidate in-flight Agent history reads');
+  await assert.rejects(change({action:'disable',id:'agents'}),/插件不存在/,'the Agent registry is core and cannot be disabled');
+  snapshot=(await connection.rpc<any>('state')).extensions.plugins;assert.ok(snapshot.some((p:any)=>p.manifest.id==='agent.codex'&&p.status==='active'));assert.ok(snapshot.some((p:any)=>p.manifest.id==='example.integration'&&p.status==='active'));
+  const versions=(server as any).agentVersions as Map<string,number>,revision=versions.get(agent.id);await connection.rpc('resources',{appPids:[]});assert.equal(versions.get(agent.id),revision,'core resource sampling must not invalidate Agent history reads');
   const owned=await connection.rpc<any>('createSession',{projectId:project.id,title:'Plugin Agent',agent:agent.id});
   await change({action:'configure',id:'example.integration',config:{name:'Renamed Fixture'}});assert.equal((await connection.rpc<any>('state')).agents.find((a:any)=>a.name==='Renamed Fixture').id,agent.id);
   await assert.rejects(connection.rpc('deleteAgent',{agentId:agent.id}),/卸载接入插件/);
