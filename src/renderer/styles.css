@@ -2515,6 +2515,11 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 9px;
+  height: 168px;
+  min-height: 168px;
+  max-height: 168px;
+  box-sizing: border-box;
+  overflow-y: auto;
   padding: 10px 10px 12px;
   border-bottom: 1px solid var(--border);
 }
