@@ -2,6 +2,8 @@ import { extensionManifestSchema, type ExtensionManifest } from '../shared/exten
 
 // The workbench itself is not a plugin. Only optional providers and additive
 // extensions are managed by Cordis. Core services are mounted by DaemonServer.
+export const coreCapabilities=new Set(['workspace','agents','agent-registry','ssh','mcp','files','git','resources','appearance','skills','worktrees']);
+
 export const builtinExtensions:ExtensionManifest[]=[
   {kind:'agent',id:'agent.codex',name:'Codex',description:'Codex CLI 接入、原生会话历史与 Skills。',dependencies:[],config:{}},
   {kind:'agent',id:'agent.claude',name:'Claude Code',description:'Claude Code 接入、原生会话历史与 Skills。',dependencies:[],config:{}},
