@@ -158,7 +158,7 @@ export function WorktreeManager({
   async function remove(item: GitWorktree) {
     const count = item.sessionCount ?? 0;
     const deleteSessions = count > 0;
-    if (deleteSessions && !window.confirm('此 Worktree 关联了 ' + count + ' 个会话。删除 Worktree 时也会删除这些会话及运行记录，磁盘上的其他文件不会保留。确定继续吗？')) return;
+    if (deleteSessions && !window.confirm('此 Worktree 关联了 ' + count + ' 个会话。删除 Worktree 时也会删除这些会话及运行记录；Git 会拒绝移除仍有未提交改动的工作区。确定继续吗？')) return;
     setActionError('');
     try {
       await data.remove(item, deleteSessions);
