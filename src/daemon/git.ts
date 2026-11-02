@@ -2,7 +2,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lstat, mkdir, open, readlink, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitRemoteBranch, GitResult, GitStatus } from '../shared/protocol';
+import type { GitDiff, GitDiffRequest, GitFile, GitOperation, GitRemoteBranch, GitResult, GitStatus, GitWorktree } from '../shared/protocol';
 import { resolveExecutable } from './executables';
 import { terminalEnvironment } from './paths';
 
