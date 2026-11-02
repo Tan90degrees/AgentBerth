@@ -2508,3 +2508,86 @@ textarea:focus-visible {
 .startup-failure .startup-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;}
 .startup-failure .startup-actions button{min-height:36px;padding:8px 14px;border-radius:7px;}
 .startup-failure small{color:var(--text-muted);max-width:640px;line-height:1.65;}
+
+
+/* Git Worktree management */
+.worktree-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.worktree-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+}
+.worktree-heading strong { font-size: 12px; font-weight: 650; }
+.worktree-list { display: flex; flex-direction: column; gap: 6px; }
+.worktree-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  min-width: 0;
+}
+.worktree-row.selected {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+.worktree-select {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.worktree-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.worktree-path {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.worktree-select small:last-child { color: var(--text-muted); font-size: 10px; }
+.worktree-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.worktree-actions button { padding: 4px 6px; font-size: 10px; }
+.worktree-add { align-self: flex-start; }
+.worktree-create-form, .worktree-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.worktree-create-form {
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.worktree-create-form label, .worktree-picker label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.worktree-create-form input, .worktree-create-form select, .worktree-picker select {
+  width: 100%;
+  min-width: 0;
+}
+.worktree-create-form footer { display: flex; justify-content: flex-end; gap: 7px; }
+.worktree-picker { padding: 2px 0 8px; }
+.worktree-picker > button { align-self: flex-start; }
