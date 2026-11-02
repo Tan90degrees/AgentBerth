@@ -481,8 +481,12 @@ export class DaemonServer {
 
   private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
   private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:')||['codex','claude','opencode'].includes(session.agent) ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
+  private async sessionProjectPath(session: import('../shared/protocol').Session): Promise<string> {
+    const projectPath = this.store.project(session.projectId).path;
+    return session.remote ? projectPath : this.git.resolveWorktree(projectPath, session.worktreePath ?? null);
+  }
   private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
-    const project = this.store.project(session.projectId).path;
+    const project = await this.sessionProjectPath(session);
     if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file);
     const provider = this.integration(session);
     if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project);
@@ -525,7 +529,8 @@ export class DaemonServer {
       this.reserveHistory(sessionId);
       try {
         const version = this.agentVersion(session.agent);
-        const items = await this.nativeDiscovery.list(this.integration(session), this.store.project(session.projectId).path);
+        const projectPath = await this.sessionProjectPath(session);
+        const items = await this.nativeDiscovery.list(this.integration(session), projectPath);
         if (this.closing) throw new Error('后台正在退出');
         this.assertAgentVersion(session.agent, version);
         const query = pagination.query.toLowerCase();
@@ -541,7 +546,8 @@ export class DaemonServer {
     this.reserveHistory(sessionId);
     try {
       const version = this.agentVersion(session.agent);
-      const result = await this.plugins.list(this.store.agent(session.agent), session, this.store.project(session.projectId).path, pagination);
+      const projectPath = await this.sessionProjectPath(session);
+      const result = await this.plugins.list(this.store.agent(session.agent), session, projectPath, pagination);
       if (this.closing) throw new Error('后台正在退出');
       this.assertAgentVersion(session.agent, version);
       return result;
@@ -708,7 +714,7 @@ export class DaemonServer {
   }
 
   private async nativeCandidates(sessionId: string): Promise<NativeCandidate[] | null> {
-    const session = this.store.session(sessionId), project = this.store.project(session.projectId).path;
+    const session = this.store.session(sessionId), project = await this.sessionProjectPath(session);
     if (!session.agent.startsWith('agent:') || !this.store.agent(session.agent).plugin?.list) return this.nativeDiscovery.list(this.integration(session), project);
     const version = this.agentVersion(session.agent);
     const page = await this.plugins.list(this.store.agent(session.agent), session, project, { cursor: null, limit: 50, query: '' });
