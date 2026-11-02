@@ -10,7 +10,7 @@ export const extensionManifestSchema=z.object({
 }).strict();
 export type ExtensionManifest=z.infer<typeof extensionManifestSchema>;
 export type ExtensionConfig=Record<string,string|number|boolean>;
-export interface ExtensionInfo {manifest:ExtensionManifest;generation:number;desktop?:{root:string;entry:string;dataDirectory:string};desktopError?:string;installed:boolean;enabled:boolean;status:'disabled'|'active'|'blocked'|'failed';builtin:boolean;development:boolean;isAgent:boolean;error?:string;config:ExtensionConfig;commands:{name:string;description:string;inputSchema:Record<string,unknown>}[];views:ExtensionManifest['views'];}
+export interface ExtensionInfo {manifest:ExtensionManifest;generation:number;desktop?:{root:string;entry:string;dataDirectory:string};desktopError?:string;installed:boolean;enabled:boolean;status:'disabled'|'active'|'blocked'|'failed';builtin:boolean;development:boolean;isAgent:boolean;error?:string;config:ExtensionConfig;commands:{mcp?:boolean;name:string;description:string;inputSchema:Record<string,unknown>}[];views:ExtensionManifest['views'];}
 export interface ExtensionSnapshot {apiVersion:1;plugins:ExtensionInfo[];revision:number;warnings?:string[];}
 export const extensionRequestSchema=z.discriminatedUnion('action',[
   z.object({action:z.literal('list')}).strict(),
@@ -21,7 +21,7 @@ export const extensionRequestSchema=z.discriminatedUnion('action',[
   z.object({action:z.literal('view'),id:extensionId,view:extensionId}).strict(),
 ]);
 export type ExtensionRequest=z.infer<typeof extensionRequestSchema>;
-export const CORE_CAPABILITIES=new Set(['workspace','agents','agent-registry','ssh','mcp','files','git','resources','appearance','skills','worktrees']);
+export const CORE_CAPABILITIES=new Set(['workspace','agents','agent-registry','acp','ssh','mcp','files','git','resources','appearance','skills','worktrees']);
 export function extensionEnabled(snapshot:ExtensionSnapshot|undefined,id:string):boolean {return CORE_CAPABILITIES.has(id)||!snapshot||snapshot.plugins.some(p=>p.manifest.id===id&&p.status==='active');}
 export function resolveExtensionConfig(manifest:ExtensionManifest,input:ExtensionConfig):ExtensionConfig {
   const result:ExtensionConfig={};

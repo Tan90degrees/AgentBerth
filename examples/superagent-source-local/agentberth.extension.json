@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "example.superagent.source.local",
+  "name": "本地模拟信息源（开发示例）",
+  "version": "1.0.0",
+  "description": "演示自定义信息源发布事件、身份准入、事件去重和幂等回传。不连接外部服务，不会自动安装。",
+  "entry": "index.cjs",
+  "dependencies": ["superagent"],
+  "config": {"loseAck": {"type": "boolean", "title": "模拟回执丢失（仅测试）", "default": false}}
+}

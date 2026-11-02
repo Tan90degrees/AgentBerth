@@ -1,6 +1,6 @@
 # AgentBerth Cordis 插件开发指南
 
-适用：AgentBerth 0.17 / 后台 API 41。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
+适用：AgentBerth 0.18 / 后台 API 44。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
 
 用户只需在 **插件中心 → 扩展插件 → 安装扩展插件** 或 **Agent 接入 → 安装 Agent 插件** 选择 ZIP，也可用 **加载开发目录** 选择目录。每个 Agent 提供者（Codex、Claude Code、OpenCode、自定义 Agent）都是独立 Cordis 插件；Agent 注册中心本身由工作台核心提供。插件自动启用，点击有配置项的插件卡片可打开独立配置弹窗。开发目录保存后自动重载；失败保留上一版代码与配置，页面显示错误。无需修改 Agent 的配置来安装工作台插件。
 
@@ -16,7 +16,7 @@
 - `index.cjs`：已打包的 CommonJS 入口，导出 Cordis 函数或 `{ apply(ctx, config) }`。
 - 清单声明的 HTML、脚本和其他资源。
 
-不要把整个 node_modules 打包。使用 TypeScript 时自行用 esbuild 打包为 `.cjs`，把 `cordis` 和 `electron` 标记 external；在普通入口中不要加载 Electron。包内禁止符号链接、绝对路径和 `..`，限制 64 MiB / 2000 文件。插件运行可信的本机 Node 代码，具有当前用户的权限，**不是安全沙箱**。
+不要把整个 node_modules 打包。使用 TypeScript 时自行用 esbuild 打包为 `.cjs`，把 `cordis` 和 `electron` 标记 external；在普通入口中不要加载 Electron。包内禁止符号链接、绝对路径和 `..`，压缩包限制 256 MiB，展开总量 1 GiB、单文件 256 MiB、最多 50000 个条目，采用分块解压。插件运行可信的本机 Node 代码，具有当前用户的权限，**不是安全沙箱**。
 
 清单字段：
 
@@ -41,8 +41,9 @@
 | --- | --- |
 | `ctx.berth.id` / `dataDirectory` | 插件身份与持久数据目录；卸载保留此目录 |
 | `ctx.berth.signal` | 作用域释放时 abort |
-| `ctx.berth.command({name,description,inputSchema}, handler)` | 注册插件命令；同时进入 MCP 的动态工具列表；参数由 AJV 校验 |
+| `ctx.berth.command({name,description,inputSchema}, handler)` | 注册插件命令；同时进入 MCP 的动态工具列表；参数由 AJV 校验；`mcp:false` 可仅供自己的界面调用 |
 | `ctx.berth.agent({id,definition})` | 同时注册 Agent 类型、原生适配和 Skills |
+| `ctx.berth.source(contribution)` | 注册 Superagent 自定义信息源；清单需依赖当前 Superagent 提供者，见 [来源 SDK](ACP_SUPERAGENT.md) |
 | `ctx.berth.effect(setup)` | setup 返回清理函数；异步 setup 请优先 `await ctx.effect(...)` |
 | `ctx.berth.interval(callback,ms)` | 自动清理的同步定时器，至少 100 ms |
 | `ctx.berth.call(method,params)` | 调用当前已启用功能的后台 RPC；MCP 命令继承调用方连接身份 |
@@ -78,3 +79,7 @@ exports.apply = ctx => {
 验证顺序：安装 → 读取短命令 → 应用配置 → 开发重载 → 故意语法错误并确认旧版仍工作 → 停用依赖并确认工具/视图消失 → 重新启用 → 卸载并检查定时器/监听器/窗口均释放 → 重启确认配置与原会话保留。为 Agent 接入额外验证 Skill 列表、导入/启停与原生历史恢复；不支持的能力保持未声明。
 
 桌面入口在主进程独立激活，失败会显示在插件卡片中，修复后可重新加载；后台的回滚保证不代表跨进程的桌面窗口也能原样恢复。插件的异步清理也必须自行响应取消，框架无法终止恶意或阻塞事件循环的本机代码。
+
+## ACP 与 Superagent
+
+可在 `definition.acp` 注册标准 ACP Agent，Skills 与接入一并声明；也支持界面直接添加。Superagent 使用选定的 ACP Agent。来源完全由插件扩展，不预装 GitHub、飞书。参见 [ACP 与 Superagent 开发指南](ACP_SUPERAGENT.md) 和可选本地示例 `examples/superagent-source-local`。

@@ -11,14 +11,14 @@ export class ExtensionMcp {
       const base=await this.base.request(method,params) as Record<string,any>;let state:State|undefined;
       try{state=await this.rpc('state') as State;}catch{/* Discovery remains available while the desktop is offline. */}
       const guide='Tools belong to enabled AgentBerth Cordis plugins. Refresh tools/list on list_changed. Plugin errors never trigger automatic command replay. Keep an optional agentId stable for each independent subagent.';
-      return {...base,serverInfo:{name:base.serverInfo?.name??'agentberth-terminal',title:'AgentBerth plugin workbench',version:'0.17.0'},capabilities:{...base.capabilities,tools:{...base.capabilities?.tools,listChanged:true}},instructions:(extensionEnabled(state?.extensions,'ssh')?String(base.instructions??'')+'\n\n':'')+guide};
+      return {...base,serverInfo:{name:base.serverInfo?.name??'agentberth-terminal',title:'AgentBerth plugin workbench',version:'0.18.0'},capabilities:{...base.capabilities,tools:{...base.capabilities?.tools,listChanged:true}},instructions:(extensionEnabled(state?.extensions,'ssh')?String(base.instructions??'')+'\n\n':'')+guide};
     }
     if(!['tools/list','tools/call','resources/list','resources/read'].includes(method))return this.base.request(method,params);
     let state:State;
     try{state=await this.rpc('state') as State;}catch{return this.base.request(method,params);}
     if(!state.extensions)return this.base.request(method,params);
     const plugins=state.extensions.plugins.filter(p=>p.status==='active');
-    const tools=plugins.flatMap(p=>p.commands.map(command=>({name:extensionToolName(p.manifest.id,command.name),description:`${p.manifest.name}: ${command.description}`,inputSchema:{...command.inputSchema,properties:{...(command.inputSchema.properties as Record<string,unknown>??{}),agentId:{type:'string',description:'Stable subagent identity; use your own value for independent SSH ownership.'}}},pluginId:p.manifest.id,command:command.name})));
+    const tools=plugins.flatMap(p=>p.commands.filter(command=>command.mcp!==false).map(command=>({name:extensionToolName(p.manifest.id,command.name),description:`${p.manifest.name}: ${command.description}`,inputSchema:{...command.inputSchema,properties:{...(command.inputSchema.properties as Record<string,unknown>??{}),agentId:{type:'string',description:'Stable subagent identity; use your own value for independent SSH ownership.'}}},pluginId:p.manifest.id,command:command.name})));
     if(method==='tools/list'){
       const base=extensionEnabled(state.extensions,'ssh')?await this.base.request(method,params) as {tools:unknown[]}:{tools:[]};
       return {tools:[...base.tools,...tools.map(({pluginId,command,...tool})=>tool)]};

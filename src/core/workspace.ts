@@ -45,7 +45,7 @@ export function mount(ctx:Context,server:DaemonServer){
         const project = host.store.project(request.params.projectId);
         const worktreePath = request.params.worktreePath ? await host.git.resolveWorktree(project.path, request.params.worktreePath) : null;
         if (host.worktreeBusy.has(request.params.projectId)) throw new Error('Worktree 删除期间请稍后创建会话');
-        const session = host.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote, worktreePath);
+        const session = host.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote, worktreePath,request.params.requestId);
         host.changed(); return session;
       }
       case 'updateSession': {

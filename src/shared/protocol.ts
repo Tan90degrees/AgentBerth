@@ -2,9 +2,10 @@ import { z } from 'zod';
 import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest } from './extensions';
+import { acpConfigSchema, type AcpSnapshot, type AcpEvent } from './acp';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 43;
+export const API_VERSION = 44;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -32,6 +33,7 @@ const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
   name: title,
+  acp: acpConfigSchema.optional(),
   integration: z.enum(['codex', 'claude', 'opencode']).optional(),
   skills: agentSkillsSchema.optional(),
   sourceId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
@@ -130,6 +132,13 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({id,method:z.literal('mcpMetrics'),params:z.object({}).strict()}),
   z.object({id,method:z.literal('mcpRecordCall'),params:z.object({callId:id,tool:z.string().min(1).max(80),success:z.boolean()}).strict()}),
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
+  z.object({id,method:z.literal('acpSnapshot'),params:z.object({sessionId:id,before:z.number().int().positive().optional(),after:z.number().int().nonnegative().optional(),limit:z.number().int().min(1).max(200).default(100)}).strict()}),
+  z.object({id,method:z.literal('acpSend'),params:z.object({sessionId:id,requestId:id,text:z.string().trim().min(1).max(40000)}).strict()}),
+  z.object({id,method:z.literal('acpCancel'),params:z.object({sessionId:id}).strict()}),
+  z.object({id,method:z.literal('acpPermission'),params:z.object({sessionId:id,permissionId:z.string().min(1).max(200),optionId:z.string().max(500).nullable()}).strict()}),
+  z.object({id,method:z.literal('acpConfigure'),params:z.object({sessionId:id,configId:z.string().min(1).max(200),value:z.string().max(1000)}).strict()}),
+  z.object({id,method:z.literal('acpAuthenticate'),params:z.object({sessionId:id,methodId:z.string().min(1).max(500)}).strict()}),
+  z.object({id,method:z.literal('acpProbe'),params:acpConfigSchema}),
   z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id, worktreePath: z.string().min(1).max(4096).nullable().default(null) }).strict() }),
   z.object({ id, method: z.literal('gitWorktrees'), params: z.object({ projectId: id }).strict() }),
@@ -143,7 +152,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('createProject'), params: z.object({ name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('updateProject'), params: z.object({ projectId: id, name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('deleteProject'), params: z.object({ projectId: id }).strict() }),
-  z.object({ id, method: z.literal('createSession'), params: z.object({ projectId: id, ...sessionConfig }).strict() }),
+  z.object({ id, method: z.literal('createSession'), params: z.object({ projectId: id, requestId:id.optional(), ...sessionConfig }).strict() }),
   z.object({ id, method: z.literal('updateSession'), params: z.object({ sessionId: id, ...sessionConfig }).strict() }),
   z.object({ id, method: z.literal('deleteSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('saveSettings'), params: settingsSchema }),
@@ -222,6 +231,7 @@ export interface McpMetrics {since:string;total:number;succeeded:number;failed:n
 export interface RemoteCommandOutput { search?:OutputSearchResult; text: string; nextCursor: number; earliestCursor: number | null; truncated: boolean; hasMore: boolean; available: boolean; format: 'terminal'; mode?:'summary'|'page'; omitted?:boolean; cacheLost?:boolean; totalBytes?:number;totalLines?:number;returnedBytes?:number }
 export interface RemoteCommandResult extends RemoteAction { output: RemoteCommandOutput; info: RemoteInfo; elapsedMs: number; requestMs?: number }
 export type ServerEvent =
+  | {event:'acp';data:{sessionId:string;event?:AcpEvent;state?:Omit<AcpSnapshot,'events'|'before'|'hasMore'>}}
   | {event:'mcpMetrics';data:McpMetrics}
   | { event: 'terminalActivity'; data: { sessionId: string; runId: string; seq: number } }
   | { event: 'sshChallenge'; data: SshChallenge }

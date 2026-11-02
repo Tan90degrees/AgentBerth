@@ -114,6 +114,14 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-extensions.mjs
         timeout-minutes: 2
+      - name: ACP and Superagent smoke (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        run: xvfb-run -a node scripts/smoke-acp.mjs
+        timeout-minutes: 3
+      - name: ACP and Superagent smoke (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        run: node scripts/smoke-acp.mjs
+        timeout-minutes: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -178,6 +186,11 @@ jobs:
         if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
         run: node scripts/smoke-extensions.mjs --packaged
         timeout-minutes: 2
+      - name: Test packaged ACP and Superagent
+        id: packaged-acp-smoke
+        if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
+        run: node scripts/smoke-acp.mjs --packaged
+        timeout-minutes: 3
       - name: Test packaged legacy database startup and exit
         run: node scripts/smoke-startup-failure.mjs --packaged
         timeout-minutes: 2
@@ -189,6 +202,7 @@ jobs:
           PACKAGED_FILES_RESULT: ${{ steps.packaged-files-smoke.outcome }}
           PACKAGED_WORKTREES_RESULT: ${{ steps.packaged-worktrees-smoke.outcome }}
           PACKAGED_PET_RESULT: ${{ steps.packaged-pet-smoke.outcome }}
+          PACKAGED_ACP_RESULT: ${{ steps.packaged-acp-smoke.outcome }}
           PACKAGED_EXTENSIONS_RESULT: ${{ steps.packaged-extensions-smoke.outcome }}
           INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
         run: |
@@ -200,8 +214,8 @@ jobs:
           }
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_WORKTREES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success' -and $env:PACKAGED_EXTENSIONS_RESULT -eq 'success') { 'success' } else { 'failure' }
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; worktrees = $env:PACKAGED_WORKTREES_RESULT; pet = $env:PACKAGED_PET_RESULT; extensions = $env:PACKAGED_EXTENSIONS_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_WORKTREES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success' -and $env:PACKAGED_EXTENSIONS_RESULT -eq 'success' -and $env:PACKAGED_ACP_RESULT -eq 'success') { 'success' } else { 'failure' }
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; worktrees = $env:PACKAGED_WORKTREES_RESULT; pet = $env:PACKAGED_PET_RESULT; extensions = $env:PACKAGED_EXTENSIONS_RESULT; acp = $env:PACKAGED_ACP_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
