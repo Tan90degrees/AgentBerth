@@ -441,7 +441,7 @@ export class DaemonServer {
     if(request.method==='extensions'){
       const p=request.params.request;
       if(p.action==='list')return this.extensions.snapshot();
-      if(p.action==='install')return this.extensions.install(p.path,p.development);
+      if(p.action==='install')return this.extensions.install(p.path,p.development);if(p.action==='bundle')return this.extensions.bundle(p.id,p.enabled);
       if(p.action==='call')return this.extensionCaller.run(client,()=>this.extensions.call(p.id,p.command,p.params));
       if(p.action==='view')return this.extensions.view(p.id,p.view);
       return this.extensions.change(p.action,p.id,'config' in p?p.config:undefined);
