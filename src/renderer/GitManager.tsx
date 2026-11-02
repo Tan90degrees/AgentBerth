@@ -16,12 +16,24 @@ function useGitStatus(project: Project, enabled: boolean, worktreePath: string |
     finally{if(pending.current===request){pending.current=null;if(alive.current)setLoading(false);}}
   },[project.id,project.path,enabled,worktreePath]);
   const applyStatus=useCallback((value:GitStatus)=>{generation.current++;setStatus(value);setError('');},[]);
+  const pointerDown = useRef(false);
   useEffect(()=>{
     alive.current=true;void refresh();
-    const update=()=>{if(document.visibilityState==='visible'){generation.current++;void refresh();}};
-    const timer=setInterval(()=>{if(document.visibilityState==='visible' && document.hasFocus())void refresh();},15000);
+    const update=()=>{if(document.visibilityState==='visible'&&!pointerDown.current){generation.current++;void refresh();}};
+    const onPointerDown=()=>{pointerDown.current=true;};
+    const onPointerUp=()=>{pointerDown.current=false;};
+    const timer=setInterval(()=>{if(document.visibilityState==='visible'&&document.hasFocus()&&!pointerDown.current)void refresh();},15000);
+    window.addEventListener('pointerdown',onPointerDown,true);
+    window.addEventListener('pointerup',onPointerUp,true);
+    window.addEventListener('pointercancel',onPointerUp,true);
     window.addEventListener('focus',update);window.addEventListener('berth:git-refresh',update);
-    return()=>{alive.current=false;generation.current++;clearInterval(timer);window.removeEventListener('focus',update);window.removeEventListener('berth:git-refresh',update);};
+    return()=>{
+      alive.current=false;generation.current++;clearInterval(timer);
+      window.removeEventListener('pointerdown',onPointerDown,true);
+      window.removeEventListener('pointerup',onPointerUp,true);
+      window.removeEventListener('pointercancel',onPointerUp,true);
+      window.removeEventListener('focus',update);window.removeEventListener('berth:git-refresh',update);
+    };
   },[refresh]);
   return{status,loading,error,refresh,setStatus:applyStatus};
 }
