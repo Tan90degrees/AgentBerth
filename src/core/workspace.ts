@@ -44,6 +44,7 @@ export function mount(ctx:Context,server:DaemonServer){
         if (request.params.remote && request.params.worktreePath) throw new Error('SSH 会话不能绑定本机 Worktree');
         const project = host.store.project(request.params.projectId);
         const worktreePath = request.params.worktreePath ? await host.git.resolveWorktree(project.path, request.params.worktreePath) : null;
+        if (host.gitBusy.has(request.params.projectId)) throw new Error('Git / Worktree 操作期间请稍后创建会话');
         const session = host.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote, worktreePath);
         host.changed(); return session;
       }
@@ -57,6 +58,7 @@ export function mount(ctx:Context,server:DaemonServer){
         if (remote && request.params.worktreePath) throw new Error('SSH 会话不能绑定本机 Worktree');
         const project = host.store.project(previous.projectId);
         const worktreePath = request.params.worktreePath ? await host.git.resolveWorktree(project.path, request.params.worktreePath) : null;
+        if (host.gitBusy.has(previous.projectId)) throw new Error('Git / Worktree 操作期间请稍后编辑会话');
         const launchChanged = JSON.stringify(remote) !== JSON.stringify(previous.remote ?? null) || agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal) || (previous.worktreePath ?? null) !== worktreePath;
         if (launchChanged) host.requireIdle(sessionId);
         if (agent === 'custom' && !command.trim()) throw new Error('请填写单行启动命令');
