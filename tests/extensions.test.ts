@@ -92,14 +92,14 @@ test('plugin packages validate zip boundaries, symlinks, schema and config',asyn
   const config=extensionManifestSchema.parse(manifest('example.config',{config:{count:{type:'number',title:'Count',minimum:1,maximum:3,default:2}}}));assert.deepEqual(resolveExtensionConfig(config,{}),{count:2});assert.throws(()=>resolveExtensionConfig(config,{count:4}),/配置无效/);
 });
 
-test('MCP catalog follows plugin lifecycle and custom commands stay on the caller RPC',async()=>{
+test('MCP catalog keeps core SSH tools and tracks optional plugin commands',async()=>{
   let snapshot:any={apiVersion:1,revision:1,plugins:[{manifest:manifest('example.tools'),status:'active',commands:[{name:'value',description:'Read',inputSchema:{type:'object'}}]}]},calls:any[]=[];
   const base={request:async(method:string)=>method==='tools/list'?{tools:[{name:'terminal_execute'}]}:{base:true,instructions:'SSH_GUIDE'}};
   const mcp=new ExtensionMcp(base,async(method,params)=>{calls.push([method,params]);return method==='state'?{extensions:snapshot}:123;});
-  const name=extensionToolName('example.tools','value');assert.deepEqual((await mcp.request('tools/list')).tools.map((t:any)=>t.name),[name]);
-  const init=await mcp.request('initialize');assert.equal(init.capabilities.tools.listChanged,true);assert.equal(init.serverInfo.name,'agentberth-terminal');assert.ok(!init.instructions.includes('SSH_GUIDE'));
+  const name=extensionToolName('example.tools','value');assert.deepEqual((await mcp.request('tools/list')).tools.map((t:any)=>t.name),['terminal_execute',name]);
+  const init=await mcp.request('initialize');assert.equal(init.capabilities.tools.listChanged,true);assert.equal(init.serverInfo.name,'agentberth-terminal');assert.ok(init.instructions.includes('SSH_GUIDE'));
   const result=await mcp.request('tools/call',{name,arguments:{x:1}});assert.equal(result.content[0].text,'123');assert.equal(calls.at(-1)[1].request.id,'example.tools');assert.deepEqual(calls.at(-1)[1].request.params,{x:1});
-  assert.equal((await mcp.request('tools/call',{name:'terminal_execute'})).isError,true);await assert.rejects(mcp.request('resources/read'),/未启用/);
+  assert.deepEqual(await mcp.request('tools/call',{name:'terminal_execute'}),{base:true,instructions:'SSH_GUIDE'});assert.deepEqual(await mcp.request('resources/read'),{base:true,instructions:'SSH_GUIDE'});
   snapshot.plugins.push({manifest:manifest('ssh'),status:'active',commands:[]});assert.equal((await mcp.request('tools/list')).tools.length,2);
 });
 
