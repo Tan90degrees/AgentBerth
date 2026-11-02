@@ -26,12 +26,16 @@ function useGitStatus(project: Project, enabled: boolean, worktreePath: string |
     window.addEventListener('pointerdown',onPointerDown,true);
     window.addEventListener('pointerup',onPointerUp,true);
     window.addEventListener('pointercancel',onPointerUp,true);
+    window.addEventListener('mousedown',onPointerDown,true);
+    window.addEventListener('mouseup',onPointerUp,true);
     window.addEventListener('focus',update);window.addEventListener('berth:git-refresh',update);
     return()=>{
       alive.current=false;generation.current++;clearInterval(timer);
       window.removeEventListener('pointerdown',onPointerDown,true);
       window.removeEventListener('pointerup',onPointerUp,true);
       window.removeEventListener('pointercancel',onPointerUp,true);
+      window.removeEventListener('mousedown',onPointerDown,true);
+      window.removeEventListener('mouseup',onPointerUp,true);
       window.removeEventListener('focus',update);window.removeEventListener('berth:git-refresh',update);
     };
   },[refresh]);
