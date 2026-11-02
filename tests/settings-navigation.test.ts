@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { filterSettings, settingsCatalog } from '../src/renderer/settings-catalog';
 import type { AgentDefinition } from '../src/shared/protocol';
 
-test('core settings search cannot reveal plugin-owned settings', () => {
+test('core settings search exposes host capabilities but not optional extension settings', () => {
   const entries=settingsCatalog([{name:'Aider Dev'} as AgentDefinition],40);
   const ids=(query:string)=>filterSettings(entries,query,'all').map(entry=>entry.id);
   assert.deepEqual(ids('PWSH'),['shell']);
-  assert.deepEqual(ids('字体'),['terminal-font']);
+  assert.deepEqual(ids('字体'),['preview','terminal-font']);
   assert.deepEqual(ids('Aider Dev'),[]);
   assert.deepEqual(ids('桌宠'),[]);
   assert.deepEqual(ids('预览'),['preview']);
@@ -20,7 +20,7 @@ test('core settings search cannot reveal plugin-owned settings', () => {
   assert.deepEqual(ids('definitely absent'),[]);
   assert.deepEqual(ids('终端 密码'),[]);
 });
-test('only global terminal and backend settings remain in the core catalog',()=>{
+test('default workbench settings remain in the core catalog',()=>{
   const entries=settingsCatalog([],40);
   assert.deepEqual(filterSettings(entries,'','common').map(value=>value.id),['appearance','default-agent','skills','preview','shell','terminal-font','local-limit']);
   assert.deepEqual(filterSettings(entries,'','terminal').map(value=>value.id),['shell','terminal-font','local-limit']);
