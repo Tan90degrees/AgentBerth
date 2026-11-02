@@ -46,7 +46,7 @@ ${(['working', 'waiting', 'completed', 'error', 'idle'] as const).map(event => `
 开始处理/工具执行映射 working；需要用户输入或授权映射 waiting；本轮完成映射 completed；本轮失败映射 error；会话初始化/结束映射 idle。子 Agent 完成不能当作整个会话完成。只发送状态，不传 prompt、工具参数、命令输出或密码。hook 使用短超时，失败继续；脚本静默失败不影响 Agent，不要加入阻断决策。
 
 ## OpenCode 1.x / 2.x
-优先使用 AgentBerth 设置 → 桌宠 → 安装/更新适配。它只部署一个无外部依赖的本地插件，不安装 OpenCode、不修改模型和账号。
+优先使用 AgentBerth 插件中心 → Agent 与桌宠 → 配置 → 安装/更新适配。它只部署一个无外部依赖的本地插件，不安装 OpenCode、不修改模型和账号。
 手动配置时先执行 opencode --version。1.x 用 opencode-pet-v1.mjs，2.x 用 opencode-pet-v2.mjs，两代接口不能混用。2.x 在 AgentBerth 中会自动追加 --standalone，保证独立服务继承当前会话身份；自定义包装命令需要自行转发 --standalone，不支持将桌宠绑定到共享 --server 服务。
 应用自带插件目录：${JSON.stringify(plugins ?? pathForPlugins(script, platform))}。
 复制对应文件到项目 .opencode/plugins/agentberth-pet.js；全局使用 $XDG_CONFIG_HOME/opencode/plugins/agentberth-pet.js（默认 ~/.config/opencode/plugins/agentberth-pet.js）。同名文件先备份，若是其他人的插件不得覆盖；不要在项目和全局重复安装。无需写 plugin 数组或运行 npm install。
