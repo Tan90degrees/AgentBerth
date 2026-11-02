@@ -21,6 +21,13 @@ async function openSettings(page) {
   await page.getByRole('button', {name:'设置',exact:true}).click();
   await settingsCategory(page, '常用设置');
 }
+async function pluginSettings(page,id){
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).click();
+  await page.locator('[data-plugin-id="'+id+'"]').getByRole('button',{name:'配置',exact:true}).click();
+  return page.getByRole('dialog',{name:/^配置插件/});
+}
+async function closePluginSettings(page){await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();}
 
 async function assertTerminalGutter(page) {
   await page.waitForFunction(() => {
@@ -224,21 +231,21 @@ try {
   step('categorized settings search, empty results, cross-category drafts and hidden-field validation');
   const settingsNav=page.getByRole('navigation',{name:'设置分类',exact:true});
   const settingsSearch=page.getByRole('textbox',{name:'搜索设置',exact:true});
-  await settingsCategory(page,'文件预览');
-  await page.getByLabel('预览字号',{exact:true}).waitFor();
-  assert.equal(await page.getByLabel('默认终端',{exact:true}).isVisible(),false);
+  assert.equal(await settingsNav.getByRole('button',{name:'文件预览',exact:true}).count(),0);
+  assert.equal(await settingsNav.getByRole('button',{name:'桌宠',exact:true}).count(),0);
+  assert.equal(await settingsNav.getByRole('button',{name:'SSH 连接',exact:true}).count(),0);
   await page.keyboard.press('Control+f');
   assert.equal(await settingsSearch.evaluate(element=>element===document.activeElement),true);
   await settingsSearch.fill('SSH 会话上限');
-  await page.getByLabel('SSH 会话上限',{exact:true}).waitFor();
-  assert.equal(await page.locator('.settings-entry:visible').count(),1);
+  await page.getByRole('heading',{name:'没有匹配的设置',exact:true}).waitFor();
+  assert.equal(await page.locator('.settings-entry:visible').count(),0);
   await settingsCategory(page,'终端');
   await page.getByRole('heading',{name:'没有匹配的设置',exact:true}).waitFor();
   await page.getByRole('button',{name:'查看全部设置',exact:true}).click();
   const initialSettings=(await page.evaluate(()=>window.berth.rpc('state'))).settings;
   await settingsCategory(page,'终端');
   await page.getByLabel('终端字号',{exact:true}).fill('17');
-  await settingsCategory(page,'Agent');
+  await settingsCategory(page,'后台服务');
   assert.equal(await page.getByLabel('终端字号',{exact:true}).isVisible(),false);
   assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).settings.fontSize,initialSettings.fontSize);
   await settingsCategory(page,'终端');
@@ -248,13 +255,14 @@ try {
   await page.getByLabel('终端字号',{exact:true}).fill('17');
   await page.getByRole('button',{name:'取消修改',exact:true}).click();
   await page.getByLabel('默认终端',{exact:true}).selectOption('custom');
-  await settingsCategory(page,'Agent');
+  await settingsCategory(page,'后台服务');
   await page.getByRole('button',{name:'保存设置',exact:true}).click();
   await page.getByLabel('终端程序',{exact:true}).waitFor();
   assert.equal(await settingsNav.getByRole('button',{name:'终端',exact:true}).getAttribute('aria-current'),'page');
   await page.getByRole('button',{name:'取消修改',exact:true}).click();
   await settingsCategory(page,'常用设置');
   step('appearance follows system, supports keyboard choice and explicit override');
+  await pluginSettings(page,'appearance');
   await page.getByRole('radio', { name: '跟随系统', exact: true }).click();
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
@@ -271,6 +279,8 @@ try {
   await page.getByRole('radio', { name: '浅色', exact: true }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}settings-light.png` });
+  await closePluginSettings(page);
+  await openSettings(page);
   await settingsCategory(page, '关于与支持');
   step('show version, copy bounded diagnostics, open data directory and use developer help while disconnected');
   const appInfo = await page.evaluate(() => window.berth.appInfo());
@@ -299,9 +309,10 @@ try {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: false } }));
   await page.locator('.sidebar-bottom').getByText('后台未连接', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
-  await settingsCategory(page, 'Agent');
   assert.equal(await page.locator('[data-setting-id="plugins"]').count(),0,'Core settings must not manage plugins');
-  await page.getByRole('button',{name:'前往 Agent 插件',exact:true}).click();
+  assert.equal(await page.locator('[data-setting-id="default-agent"]').count(),0,'Agent settings must belong to its plugin');
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).click();
   await page.getByRole('heading',{name:'插件中心'}).waitFor();
   await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).getAttribute('aria-current').then(value=>assert.equal(value,'page'));
   await page.getByRole('button', { name: '导出插件开发套件并复制指令', exact: true }).waitFor();
@@ -340,12 +351,17 @@ try {
     await openSettings(page);
   }
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'cmd' : 'bash');
-  await page.getByLabel('默认 Agent', { exact: true }).selectOption('opencode');
   await page.getByLabel('终端字号', { exact: true }).fill('16');
   await page.getByLabel('本机终端上限', { exact: true }).fill('24');
-  await page.getByLabel('SSH 会话上限', { exact: true }).fill('8');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
+  await pluginSettings(page,'agents');
+  await page.getByLabel('默认 Agent',{exact:true}).selectOption('opencode');
+  await closePluginSettings(page);
+  await pluginSettings(page,'ssh');
+  await page.getByLabel('SSH 会话上限',{exact:true}).fill('8');
+  await eventually(async()=>(await page.evaluate(()=>window.berth.rpc('state'))).maxSshTerminals===8,'SSH limit plugin config did not save');
+  await closePluginSettings(page);
   const limits=await page.evaluate(()=>window.berth.rpc('state'));
   assert.equal(limits.maxActiveTerminals,24);assert.equal(limits.maxSshTerminals,8);
   await page.locator('.projects .project-item').click();
@@ -990,7 +1006,9 @@ try {
   await page.getByRole('button', { name: '取消修改', exact: true }).click();
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '16');
   assert.equal(await page.getByLabel('本机终端上限', { exact: true }).inputValue(), '24');
+  await pluginSettings(page,'ssh');
   assert.equal(await page.getByLabel('SSH 会话上限', { exact: true }).inputValue(), '8');
+  await closePluginSettings(page);
   await page.locator('.projects .project-item').click();
   const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), after.sessions[0].id);
   assert.doesNotMatch(snapshot.snapshot, /FLOW_DONE/, 'A restored terminal must not replay historical output or commands');
@@ -1143,8 +1161,7 @@ try {
   // Custom Agent installation and configuration is covered by the Cordis
   // plugin integration smoke, not the retired standalone Agent manager.
   step('MCP configuration and remote session usability');
-  await openSettings(page);
-  await settingsCategory(page, 'MCP');
+  await pluginSettings(page,'ssh');
   await page.getByRole('button', { name: '复制 MCP 配置', exact: true }).click();
   await page.waitForFunction(()=>document.querySelector('.mcp-actions button[aria-label="复制 MCP 配置"]')?.dataset.feedback==='success');
   assert.equal(await page.getByRole('button',{name:'复制给 Agent 的说明',exact:true}).count(),0);
@@ -1161,7 +1178,6 @@ try {
   assert.equal(await page.getByLabel('MCP 调用成功率',{exact:true}).innerText(),((beforeMcpMetrics.succeeded+1)/(beforeMcpMetrics.total+2)*100).toFixed(1)+'%');
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}mcp-call-stats.png`});
 
-  await settingsCategory(page, 'SSH 连接');
   step('saved SSH profile uses blank identity defaults and supports password editing/deletion');
   await page.getByRole('button',{name:'新建 SSH 连接',exact:true}).click();
   assert.equal(await page.getByLabel('SSH 地址',{exact:true}).inputValue(),'');
@@ -1180,6 +1196,7 @@ try {
   await page.getByRole('button',{name:'保存连接',exact:true}).click();
   await page.locator('.ssh-profile').filter({hasText:'smoke-server-edited'}).getByRole('button',{name:'删除',exact:true}).click();
   await eventually(async()=> (await page.evaluate(()=>window.berth.rpc('sshConnections'))).length===0,'SSH profile was not deleted');
+  await closePluginSettings(page);
   await page.locator('.projects .project-item').click();
   await menuAction(page, '新建会话', 'project');
   assert.equal(await page.getByLabel('运行位置',{exact:true}).count(),0,'Local session creation must not expose SSH');
