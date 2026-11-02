@@ -369,7 +369,7 @@ try {
   await skillRow.getByRole('button', { name: '移除', exact: true }).click();
   await page.getByRole('dialog', { name: '移除 Skill', exact: true }).getByRole('button', { name: '移除 Skill', exact: true }).click();
   await skillRow.waitFor({ state: 'hidden' });
-  await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();
+  // Core Skills management is part of Settings, not a plugin configuration dialog.
   await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
   const current = await liveRun(); assert.equal(current.id, run.id); assert.equal(current.pid, run.pid); assert.equal(current.status, 'running');
   await mainTabs.getByRole('tab', { name: '终端', exact: true }).click();
