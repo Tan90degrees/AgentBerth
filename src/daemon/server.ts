@@ -40,8 +40,7 @@ import { mount as mountAgents } from '../plugins/agents';
 import { mount as mountGit } from '../plugins/git';
 import { mount as mountFiles } from '../plugins/files';
 import { mount as mountResources } from '../plugins/resources';
-import { featureForMethod } from '../extensions/builtins';
-import type { Context } from 'cordis';
+import { Context } from 'cordis';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -55,6 +54,7 @@ export interface Client { id: string; disposing: boolean; subscriptions: Set<str
 
 export class DaemonServer {
   private extensions:ExtensionRuntime;
+  private coreContext=new Context();
   private extensionRoutes=new Map<string,(request:Request,client:Client)=>Promise<unknown>>();
   private extensionCaller=new AsyncLocalStorage<Client>();
   private extensionAgents=new Map<string,string>();
@@ -81,7 +81,6 @@ export class DaemonServer {
   private closing = false;
   private logs: string;
   private nativeDiscovery = new NativeDiscovery();
-  private agentsMounted=false;
   private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string }>();
   private nativeTimer: NodeJS.Timeout | null = null;
   private nativeScanning: Promise<void> | null = null;
@@ -102,18 +101,16 @@ export class DaemonServer {
       beforeChange:async ids=>{
         const sessions=this.store.state().sessions;
         for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)){
-          if(ids.includes('workspace')||ids.includes('ssh')&&session.remote||ids.includes('agents')&&!session.remote&&session.agent!=='shell'||ids.includes('agent.'+session.agent)||ids.some(id=>this.extensionAgents.get(session.agent)===id))throw new Error(`插件仍有运行会话“${session.title}”，请先停止该会话；其他插件无需停止`);
+          if(ids.includes('agent.'+session.agent)||ids.some(id=>this.extensionAgents.get(session.agent)===id))throw new Error(`插件仍有运行会话“${session.title}”，请先停止该会话；其他插件无需停止`);
         }
-        if(ids.includes('git')&&this.gitBusy.size)throw new Error('Git 操作正在进行，请完成后再停用插件');
-        if(ids.includes('ssh')&&this.transfers.busy)throw new Error('文件传输正在进行，请完成后再停用 SSH 插件');
-        if((ids.includes('agents')||ids.some(id=>id.startsWith('agent.')))&&this.historyBusy.size)throw new Error('会话历史正在读取，请完成后再停用接入插件');
+        if(ids.some(id=>id.startsWith('agent.'))&&this.historyBusy.size)throw new Error('会话历史正在读取，请完成后再停用接入插件');
       },
       call:async(method,params)=>{const caller=this.extensionCaller.getStore();if(!caller&&/^(remote|ssh|mcp)/i.test(method))throw new Error('SSH 操作必须由明确的调用会话发起');const request=requestSchema.parse({id:randomUUID(),method,params});return this.dispatch(request,caller??{id:'extension',disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort:new AbortController()});},
       validateAgent:(pluginId,agent)=>{const sourceId='ext.'+createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex').slice(0,32);if(this.store.agents().some(value=>value.sourceId!==sourceId&&value.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('Agent 名称已被其他接入使用：'+agent.definition.name);},
       agentsChanged:values=>{
         const names=new Set<string>();for(const {agent} of values){const name=agent.definition.name.toLocaleLowerCase();if(names.has(name))throw new Error('插件 Agent 名称重复：'+agent.definition.name);names.add(name);}
         const next=new Map<string,string>();
-        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const id=`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition=agentDefinitionSchema.parse({...agent.definition,sourceId:'ext.'+hash.slice(0,32)}),previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
+        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const builtin=pluginId===`agent.${agent.id}`&&['codex','claude','opencode'].includes(agent.id);const id=builtin?agent.id:`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition=agentDefinitionSchema.parse({...agent.definition,sourceId:'ext.'+hash.slice(0,32)}),previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
         this.extensionAgents=next;
       },changed:()=>this.changed(),
     });
@@ -122,6 +119,7 @@ export class DaemonServer {
       const profile=this.store.sshConnection(this.store.session(endpoint.sessionId).remote!.connectionId!);
       return `ssh:${profile.hostname.toLowerCase()}:${profile.port}:${profile.username}`;
     });
+    mountWorkspace(this.coreContext,this);mountSsh(this.coreContext,this);mountAgents(this.coreContext,this);mountGit(this.coreContext,this);mountFiles(this.coreContext,this);mountResources(this.coreContext,this);
     rmSync(path.join(dataDirectory,'command-output'),{recursive:true,force:true});
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
@@ -300,12 +298,12 @@ export class DaemonServer {
   }
   registerExtensionRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.extensionRoutes.has(method))throw new Error('插件接口重复：'+method);this.extensionRoutes.set(method,handler);return()=>{this.extensionRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
-    const mounts:Record<string,(ctx:Context,server:DaemonServer)=>void>={workspace:mountWorkspace,ssh:mountSsh,agents:mountAgents,git:mountGit,files:mountFiles,resources:mountResources};mounts[id]?.(ctx,this);
-    if(id==='resources'){this.resources=new ResourceSampler();ctx.effect(()=>()=>this.resources.close());}
-    if(id==='git'){this.git=new GitWorkspace();ctx.effect(()=>()=>this.git.close());}
-    if(id==='files'){const readonlyGit=new GitWorkspace();this.files=new ProjectFiles(readonlyGit);ctx.effect(()=>()=>readonlyGit.close());}
-    if(id==='agents'){if(this.agentsMounted)this.nativeDiscovery=new NativeDiscovery();this.agentsMounted=true;this.plugins=new AgentPlugins();ctx.effect(()=>async()=>{if(this.nativeTimer)clearTimeout(this.nativeTimer);this.nativeTimer=null;await this.nativeScanning;this.nativeTracking.clear();await this.plugins.close();await this.nativeDiscovery.opencode.close();});}
-    if(id==='ssh')ctx.effect(()=>async()=>{if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;this.sshProvider=null;for(const challenge of this.sshChallenges.values())challenge.reject(new Error('SSH 插件已停用'));this.sshChallenges.clear();await this.transfers.close();});
+    const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
+      'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'}}},
+      'agent.claude':{id:'claude',definition:{name:'Claude Code',command:'claude',integration:'claude',resumeCommand:'claude --resume {sessionId}',skills:{project:'.claude/skills',user:'~/.claude/skills'}}},
+      'agent.opencode':{id:'opencode',definition:{name:'OpenCode',command:'opencode',integration:'opencode',resumeCommand:'opencode --session {sessionId}',skills:{project:'.opencode/skills',user:'~/.config/opencode/skills'}}},
+    };
+    const provider=providers[id];if(provider)ctx.berth.agent(provider);
   }
   private recoveryConfiguration(session: import('../shared/protocol').Session): string {
     return restartConfiguration(session, this.store.project(session.projectId).path,
@@ -441,13 +439,11 @@ export class DaemonServer {
     if(request.method==='extensions'){
       const p=request.params.request;
       if(p.action==='list')return this.extensions.snapshot();
-      if(p.action==='install')return this.extensions.install(p.path,p.development);if(p.action==='bundle')return this.extensions.bundle(p.id,p.enabled);
+      if(p.action==='install')return this.extensions.install(p.path,p.development);
       if(p.action==='call')return this.extensionCaller.run(client,()=>this.extensions.call(p.id,p.command,p.params));
       if(p.action==='view')return this.extensions.view(p.id,p.view);
       return this.extensions.change(p.action,p.id,'config' in p?p.config:undefined);
     }
-    const feature=featureForMethod(request.method);if(feature)this.extensions.require(feature);
-    if(feature==='agents'&&'sessionId' in request.params&&typeof request.params.sessionId==='string')this.requireSessionAgent(this.store.session(request.params.sessionId));
     const extensionHandler=this.extensionRoutes.get(request.method);if(extensionHandler)return extensionHandler(request,client);
     switch (request.method) {
       case 'state': return this.snapshot();
@@ -461,7 +457,7 @@ export class DaemonServer {
         return null;
 
     }
-    throw new Error('对应插件未启用或接口尚未注册，请在设置 → 插件中检查');
+    throw new Error('接口不存在或当前版本不支持此操作');
   }
 
   private async runRemoteCommand(client:Client,p:Extract<Request,{method:'remoteCommand'}>['params']) {
@@ -479,7 +475,7 @@ export class DaemonServer {
   }
 
   private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
-  private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:') ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
+  private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:')||['codex','claude','opencode'].includes(session.agent) ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
   private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
     const project = this.store.project(session.projectId).path;
     if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file);
@@ -567,16 +563,13 @@ export class DaemonServer {
 
   private requireSessionAgent(session:import('../shared/protocol').Session){
     if(session.remote||session.agent==='shell')return;
-    this.extensions.require('agents');
-    if(['codex','claude','opencode'].includes(session.agent))this.extensions.require('agent.'+session.agent);
     const owner=this.extensionAgents.get(session.agent);
     if(owner)this.extensions.require(owner);
-    else if(session.agent.startsWith('agent:')&&this.store.agent(session.agent).sourceId?.startsWith('ext.'))throw new Error('此 Agent 的接入插件未启用');
+    else if(['codex','claude','opencode'].includes(session.agent)||session.agent.startsWith('agent:')&&this.store.agent(session.agent).sourceId?.startsWith('ext.'))throw new Error('此 Agent 的接入插件未启用，请在插件中心启用对应 Agent');
   }
   private async start(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
-    this.extensions.require('workspace');
-    if(session.remote)this.extensions.require('ssh');else this.requireSessionAgent(session);
+    if(!session.remote)this.requireSessionAgent(session);
     this.requireProjectAvailable(session.projectId);
     if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
     if (this.historyWrites.has(sessionId)) throw new Error('会话正在关联对话记录，请稍后启动');
