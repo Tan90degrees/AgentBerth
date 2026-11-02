@@ -2,19 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GitFile, GitOperation, GitResult, GitStatus, Project } from '../shared/protocol';
 import { readStored, saveStored } from './storage';
 
-function useGitStatus(project: Project, enabled: boolean) {
+function useGitStatus(project: Project, enabled: boolean, worktreePath: string | null = null) {
   const [status,setStatus]=useState<GitStatus|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState('');
   const alive=useRef(true),generation=useRef(0);
   const pending=useRef<{key:string;generation:number}|null>(null);
   const refresh=useCallback(async()=>{
     if(!enabled)return;
-    const key=project.id+'\0'+project.path;
+    const key=project.id+'\0'+project.path+'\0'+(worktreePath??'');
     if(pending.current?.key===key&&pending.current.generation===generation.current)return;
     const request={key,generation:generation.current};pending.current=request;setLoading(true);
-    try {const value=await window.berth.rpc<GitStatus>('gitStatus',{projectId:project.id});if(alive.current&&request.generation===generation.current){setStatus(value);setError('');}}
+    try {const value=await window.berth.rpc<GitStatus>('gitStatus',{projectId:project.id,...(worktreePath?{worktreePath}:{})});if(alive.current&&request.generation===generation.current){setStatus(value);setError('');}}
     catch(reason){if(alive.current&&request.generation===generation.current)setError(String(reason));}
     finally{if(pending.current===request){pending.current=null;if(alive.current)setLoading(false);}}
-  },[project.id,project.path,enabled]);
+  },[project.id,project.path,enabled,worktreePath]);
   const applyStatus=useCallback((value:GitStatus)=>{generation.current++;setStatus(value);setError('');},[]);
   useEffect(()=>{
     alive.current=true;void refresh();
@@ -26,15 +26,15 @@ function useGitStatus(project: Project, enabled: boolean) {
   return{status,loading,error,refresh,setStatus:applyStatus};
 }
 const branchLabel=(status:GitStatus|null)=>status?.kind==='repository' ? status.branch || `游离 ${status.head?.slice(0,7)??'HEAD'}` : status?.kind==='not-repository'?'非 Git 项目':status?'Git 不可用':'Git…';
-export function GitBranch({project,enabled,onOpen}:{project:Project;enabled:boolean;onOpen:()=>void}){
-  const {status,error}=useGitStatus(project,enabled);
+export function GitBranch({project,enabled,worktreePath=null,onOpen}:{project:Project;enabled:boolean;worktreePath?:string|null;onOpen:()=>void}){
+  const {status,error}=useGitStatus(project,enabled,worktreePath);
   return <button className="git-branch" aria-label={`Git 管理 ${project.name}`} title={!enabled?'更新后台后可使用 Git 管理':error || status?.message || `${status?.root??project.path}\n${status?.upstream??'未配置上游'} · 领先/落后以最近获取为准`} onClick={onOpen} disabled={!enabled}>
     <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="5" cy="4" r="2"/><circle cx="15" cy="4" r="2"/><circle cx="5" cy="16" r="2"/><path d="M5 6v8m0-3c7 0 10-1 10-5"/></svg><span>{branchLabel(status)}</span>{status?.kind==='repository'&&<><small>{status.total?` · ${status.total} 项改动`:''}</small><small>↑{status.ahead} ↓{status.behind}</small>{status.busy&&<small>处理中…</small>}</>}
   </button>;
 }
 const actions = { fetch: '获取远端', pull: '拉取', push: '推送', sync: '同步远端', switch: '切换分支', switchRemote: '切换远端分支', stage: '暂存', unstage: '取消暂存', commit: '提交' };
-export function GitSidebar({ project, enabled, visible, supported, onDiff, onNotice, onError }: { project: Project; enabled: boolean; visible: boolean; supported: boolean; onDiff: (path: string, staged: boolean) => void; onNotice: (message: string) => void; onError: (message: string) => void }) {
-  const { status, loading, error, refresh, setStatus } = useGitStatus(project, enabled && visible);
+export function GitSidebar({ project, enabled, visible, supported, worktreePath = null, onDiff, onNotice, onError }: { project: Project; enabled: boolean; visible: boolean; supported: boolean; worktreePath?: string | null; onDiff: (path: string, staged: boolean) => void; onNotice: (message: string) => void; onError: (message: string) => void }) {
+  const { status, loading, error, refresh, setStatus } = useGitStatus(project, enabled && visible, worktreePath);
   const [remote, setRemote] = useState(''), [branch, setBranch] = useState('');
   const [branchScope, setBranchScope] = useState<'local' | 'remote'>('local'), [branchQuery, setBranchQuery] = useState(''), [localBranch, setLocalBranch] = useState('');
   const [working, setWorking] = useState<GitOperation['action'] | null>(null), [failure, setFailure] = useState(''), [output, setOutput] = useState(''), [notice, setNotice] = useState('');
@@ -62,7 +62,7 @@ export function GitSidebar({ project, enabled, visible, supported, onDiff, onNot
     if (!status || !repository || blocked) return;
     setWorking(action); setFailure(''); setNotice(''); setOutput('');
     try {
-      const result = await window.berth.rpc<GitResult>('gitOperation', { projectId: project.id, action, expected: { root: status.root, branch: status.branch, head: status.head },
+      const result = await window.berth.rpc<GitResult>('gitOperation', { projectId: project.id, ...(worktreePath ? { worktreePath } : {}), action, expected: { root: status.root, branch: status.branch, head: status.head },
         ...(action === 'stage' || action === 'unstage' ? { paths } : action === 'commit' ? { message } : action === 'switch' ? { branch } : action === 'switchRemote' && selectedRemote ? { remote: selectedRemote.remote, branch: selectedRemote.branch, remoteRef: selectedRemote.ref, remoteHead: selectedRemote.head, localBranch } : { remote, ...(status.upstreamBranch || status.branch ? { branch: status.upstreamBranch || status.branch } : {}) }) });
       if (action === 'commit') saveStored(`berth.commit.${project.id}`, null);
       if (alive.current) { setStatus(result.status); setOutput(result.output); setNotice(result.message); setSelected(new Set()); if (action === 'commit') setMessage(''); }
