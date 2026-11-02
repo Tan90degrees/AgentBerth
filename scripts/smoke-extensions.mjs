@@ -25,7 +25,7 @@ try {
   await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
   await page.getByRole('heading',{name:'插件中心'}).waitFor();
   assert.equal(await page.getByRole('navigation',{name:'设置分类'}).count(),0,'Core settings navigation must be separate from Plugins');
-  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).waitFor();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).click();
   const card=page.locator('[data-plugin-id="example.smoke"]');await card.getByText('已启用',{exact:true}).waitFor();
   // All plugin actions must share the same geometry; semantic color variants
   // must not regress to mixed borderless text links and full-sized buttons.
@@ -74,17 +74,14 @@ try {
   await card.getByRole('button',{name:'停用',exact:true}).click();await card.getByText('已停用',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Plugin info',exact:true}).count(),0);
   for(let i=0;i<100&&await nativeCount()!==0;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),0);
   await card.getByRole('button',{name:'启用',exact:true}).click();await card.getByText('已启用',{exact:true}).waitFor();
-  const files=page.locator('[data-plugin-id="files"]');await files.getByRole('button',{name:'停用',exact:true}).click();await files.getByText('已停用',{exact:true}).waitFor();
-  assert.equal(await page.locator('[data-plugin-id="git"]').count(),0,'Git must be part of the Files feature bundle');
-  assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).extensions.plugins.find(p=>p.manifest.id==='git').enabled,false);
-  await files.getByRole('button',{name:'启用',exact:true}).click();await files.getByText('已启用',{exact:true}).waitFor();
-  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).click();
-  for(const id of ['agents','example.smoke'])await page.locator('.plugin-center-content [data-plugin-id="'+id+'"]').waitFor();
-  for(const id of ['agent.codex','agent.claude','agent.opencode','pet'])assert.equal(await page.locator('[data-plugin-id="'+id+'"]').count(),0,'Built-in Agent subplugins must be merged in the Agent bundle');
-  await page.locator('[data-plugin-id="agents"]').getByRole('button',{name:'配置',exact:true}).click();
+  for(const id of ['workspace','agents','ssh','files','git','resources','appearance'])assert.equal(await page.locator('[data-plugin-id="'+id+'"]').count(),0,`${id} is a core capability, not an extension`);
+  const registered=(await page.evaluate(()=>window.berth.rpc('state'))).extensions.plugins.map(p=>p.manifest.id);
+  for(const id of ['agent.codex','agent.claude','agent.opencode','example.smoke'])assert.ok(registered.includes(id),`${id} must be registered independently`);
+  await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:'Agent 与 Skills',exact:true}).click();
   await page.getByRole('heading',{name:'Skill 管理'}).waitFor();
-  await page.getByRole('dialog',{name:/^配置插件/}).getByRole('button',{name:'关闭',exact:true}).click();
-  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/已安装插件/}).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).click();
   await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();
   assert.equal(await page.getByRole('navigation',{name:'插件分类'}).count(),0,'Plugin navigation must not be embedded in core settings');
   assert.equal(await page.locator('[data-setting-id="agent-integrations"]').count(),0);
