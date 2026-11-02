@@ -6,9 +6,21 @@ export const methods=["projectFiles", "findProjectFiles", "previewFile"] as cons
 export function mount(ctx:Context,server:DaemonServer){
  const host=server.filesCorePort();
  server.registerCoreRoutes(ctx,methods,async(request:Request,client:Client)=>{switch(request.method){
-      case 'projectFiles': return host.files.list(host.store.project(request.params.projectId).path, request.params.path, request.params.offset, request.params.limit);
-      case 'findProjectFiles': return host.files.search(host.store.project(request.params.projectId).path, request.params.query);
-      case 'previewFile': return host.files.preview(host.store.project(request.params.projectId).path, request.params.path);
+      case 'projectFiles': {
+        const project = host.store.project(request.params.projectId);
+        const cwd = await host.git.resolveWorktree(project.path, request.params.worktreePath);
+        return host.files.list(cwd, request.params.path, request.params.offset, request.params.limit);
+      }
+      case 'findProjectFiles': {
+        const project = host.store.project(request.params.projectId);
+        const cwd = await host.git.resolveWorktree(project.path, request.params.worktreePath);
+        return host.files.search(cwd, request.params.query);
+      }
+      case 'previewFile': {
+        const project = host.store.project(request.params.projectId);
+        const cwd = await host.git.resolveWorktree(project.path, request.params.worktreePath);
+        return host.files.preview(cwd, request.params.path);
+      }
 
  default:throw new Error('核心接口不支持此请求');
  }});
