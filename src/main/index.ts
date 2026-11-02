@@ -449,7 +449,7 @@ ipcMain.handle('berth:skills', async (event, input: unknown) => {
     if (!connection) await reconnect();
     const state = await connection!.rpc<import('../shared/protocol').State>('state');
     const definition = (state.agents ?? []).find(agent => agent.id === request.location.agentId);
-    if (!definition?.skills) integration ??= definition?.integration;
+    if (!definition?.skills && (definition?.integration === 'claude' || definition?.integration === 'opencode')) integration ??= definition.integration;
     skills ??= definition?.skills ?? builtinSkillProviders.find(agent => agent.id === definition?.integration)?.skills;
     projectPath = request.location.projectId ? state.projects.find(project => project.id === request.location.projectId)?.path : undefined;
     if (request.location.projectId && !projectPath) throw new Error('项目不存在，请重新选择');
