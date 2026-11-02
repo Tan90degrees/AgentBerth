@@ -17,7 +17,7 @@ export function settingsCatalog(_agents: AgentDefinition[], _apiVersion: number)
     { id: 'preview', category: 'files', title: '文件预览', keywords: 'preview font 字体 字号 markdown 语法高亮', common: true },
     { id: 'ssh-limit', category: 'ssh', title: 'SSH 会话上限', keywords: 'ssh maxSshTerminals 并发 数量 容量', field: 'maxSshTerminals' },
     { id: 'connections', category: 'ssh', title: '服务器信息', keywords: 'ssh host server connection 密码 密钥 登录' },
-    { id: 'mcp', category: 'ssh', title: 'Agent 远程终端 · MCP', keywords: 'mcp agent remote terminal 远程工具 配置' },
+    { id: 'mcp', category: 'ssh', title: 'Agent 远程终端 · MCP', keywords: 'ssh mcp agent remote terminal 远程工具 配置' },
     { id: 'shell', category: 'terminal', title: '默认终端', keywords: 'shell profile powershell pwsh cmd bash zsh 启动参数 环境', common: true, field: 'terminal' },
     { id: 'terminal-font', category: 'terminal', title: '终端字号', keywords: 'terminal fontSize 字体 字号 大小 size', common: true, field: 'fontSize' },
     { id: 'local-limit', category: 'terminal', title: '本机终端上限', keywords: 'maxActiveTerminals 并发 数量 容量 后台', common: true, field: 'maxActiveTerminals' },
@@ -28,5 +28,5 @@ export function settingsCatalog(_agents: AgentDefinition[], _apiVersion: number)
 export function filterSettings(entries: SettingsEntry[], query: string, category: SettingsCategory): SettingsEntry[] {
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   return entries.filter(entry => (category === 'all' || category === 'common' ? category === 'all' || entry.common : entry.category === category)
-    && words.every(word => `${entry.title} ${entry.keywords} ${settingsCategories.find(value => value.id === entry.category)?.label}`.toLocaleLowerCase().replace(/\s+/g, '').includes(word)));
+    && words.every(word => `${entry.title} ${entry.keywords}`.toLocaleLowerCase().replace(/\s+/g, '').includes(word)));
 }
