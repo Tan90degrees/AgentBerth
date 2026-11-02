@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type AgentDefinition, type Project, type Settings } from '../shared/protocol';
+import { TERMINAL_LIMIT_MAX, type AgentDefinition, type Project, type Settings } from '../shared/protocol';
 import { AppearanceControls } from './AppearanceControls';
 import { PreviewSettings } from './PreviewSettings';
 import { PetSettings } from './DesktopPet';
