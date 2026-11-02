@@ -52,7 +52,7 @@ try {
   const runB = await rpc('start', { sessionId: b.id, cols: 80, rows: 24 });
   console.log('Pet smoke: open settings/window');
   await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
-  await page.locator('[data-plugin-id="agents"]').getByRole('button',{name:'配置',exact:true}).click();
+  await page.locator('[data-plugin-id="pet"]').getByRole('button',{name:'配置',exact:true}).click();
   await page.waitForFunction(() => [...document.querySelectorAll('.pet-animation .pet-character')].length === 6 && [...document.querySelectorAll('.pet-animation .pet-character')].every(image => image.src.endsWith('.png') && image.complete && image.naturalWidth === 288 && image.naturalHeight === 240));
   await page.locator('.pet-animation .pet-character').first().hover();
   await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.webp'));
