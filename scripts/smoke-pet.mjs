@@ -51,8 +51,8 @@ try {
   const runA = await rpc('start', { sessionId: a.id, cols: 80, rows: 24 });
   const runB = await rpc('start', { sessionId: b.id, cols: 80, rows: 24 });
   console.log('Pet smoke: open settings/window');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).click();
+  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.locator('[data-plugin-id="agents"]').getByRole('button',{name:'配置',exact:true}).click();
   await page.waitForFunction(() => [...document.querySelectorAll('.pet-animation .pet-character')].length === 6 && [...document.querySelectorAll('.pet-animation .pet-character')].every(image => image.src.endsWith('.png') && image.complete && image.naturalWidth === 288 && image.naturalHeight === 240));
   await page.locator('.pet-animation .pet-character').first().hover();
   await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.webp'));
@@ -180,7 +180,8 @@ try {
   await pet.waitForFunction(() => document.querySelector('.pet-state-completed'));
   await chooseMenu('打开当前会话');
   await chooseMenu('桌宠设置…');
-  await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '桌宠', exact: true }).waitFor();
+  await page.getByRole('dialog',{name:/^配置插件/}).waitFor();
+  await page.getByLabel('显示桌宠',{exact:true}).waitFor();
   console.log('Pet smoke: copy Agent setup tutorial with actual installation paths');
   await page.getByRole('button', { name: '复制给 Agent 自动配置', exact: true }).click();
   const guide = await page.evaluate(() => window.berth.readClipboard());
