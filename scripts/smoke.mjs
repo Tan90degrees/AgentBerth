@@ -1078,15 +1078,15 @@ try {
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
-  step('select an installed Agent provider as the default');
-  await openSettings(page);
+  step('select an installed Agent provider inside the Agent plugin');
+  await pluginSettings(page,'agents');
   const defaultAgentField = page.getByLabel('默认 Agent', { exact: true });
   if (await defaultAgentField.inputValue() !== 'opencode') {
     await defaultAgentField.selectOption('opencode');
-    await page.getByRole('button', { name: '保存设置', exact: true }).click();
-    await page.getByText('设置已保存', { exact: true }).waitFor();
+    await eventually(async()=>(await page.evaluate(()=>window.berth.rpc('state'))).settings.defaultAgent==='opencode','Agent plugin default did not save');
   }
   assert.equal(await defaultAgentField.inputValue(), 'opencode');
+  await closePluginSettings(page);
   await page.locator('.projects .project-item').click();
   step('create OpenCode without starting, link ID and import native export through IPC');
   await menuAction(page, '新建会话', 'project');
