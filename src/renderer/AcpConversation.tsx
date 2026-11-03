@@ -1,25 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { acpOptionChoices, type AcpSnapshot } from '../shared/acp';
 import type { Session, Method } from '../shared/protocol';
 import { AsyncButton } from './AsyncButton';
 import {AcpEventView as Message} from './AcpEventView';
+import {captureHistoryAnchor,restoreHistoryAnchor} from './history-scroll';
 import {conversationGroups} from '../shared/acp-presentation';
 
 const phases={disconnected:'未连接',connecting:'正在连接',ready:'就绪',running:'正在执行',permission:'等待你的授权',error:'需要处理'};
 const drafts=new Map<string,string>();
 export function AcpConversation({session,connected,onOpenFile,task}:{session:Session;connected:boolean;task?:{title:string;label:string;onOpen:()=>void};onOpenFile?:(path:string,line?:number)=>void}){
-  const [snapshot,setSnapshot]=useState<AcpSnapshot|null>(null),[text,setText]=useState(()=>drafts.get(session.id)??''),[error,setError]=useState(''),[pending,setPending]=useState(false),[hasOlder,setHasOlder]=useState(false),[following,setFollowing]=useState(true);
+  const [snapshot,setSnapshot]=useState<AcpSnapshot|null>(null),[text,setText]=useState(()=>drafts.get(session.id)??''),[error,setError]=useState(''),[pending,setPending]=useState(false),[hasOlder,setHasOlder]=useState(false),[following,setFollowing]=useState(true),[loadingOlder,setLoadingOlder]=useState(false);
   useEffect(()=>{if(text)drafts.set(session.id,text);else drafts.delete(session.id);if(drafts.size>100)drafts.delete(drafts.keys().next().value!);},[text,session.id]);
-  const scroll=useRef<HTMLDivElement>(null),bottom=useRef(true),openerGeneration=useRef(0),request=useRef<{id:string;text:string}|null>(null);
+  const scroll=useRef<HTMLDivElement>(null),bottom=useRef(true),openerGeneration=useRef(0),request=useRef<{id:string;text:string}|null>(null),olderRequest=useRef<symbol|null>(null),prependAnchor=useRef<ReturnType<typeof captureHistoryAnchor>|null>(null),previousTop=useRef(0);
   useEffect(()=>{
-    const generation=++openerGeneration.current;let initialized=false;const queued:any[]=[];
+    const generation=++openerGeneration.current;olderRequest.current=null;prependAnchor.current=null;setLoadingOlder(false);bottom.current=true;setFollowing(true);let initialized=false;const queued:any[]=[];
     const apply=(event:any)=>setSnapshot(previous=>{if(!previous)return previous;if(event.state)return {...previous,...event.state};if(event.event){if(previous.events.some(item=>item.id===event.event.id))return previous;return {...previous,events:[...previous.events,event.event].sort((a,b)=>a.sequence-b.sequence)};}return previous;});
     const off=window.berth.onEvent(event=>{if(event.event==='acp'&&event.data.sessionId===session.id){if(!initialized)queued.push(event.data);else apply(event.data);}});
     void window.berth.rpc<AcpSnapshot>('acpSnapshot',{sessionId:session.id}).then(value=>{if(openerGeneration.current!==generation)return;setSnapshot(value);setHasOlder(value.hasMore);initialized=true;for(const event of queued)apply(event);}).catch(error=>{if(openerGeneration.current===generation)setError(String(error));});
     return()=>{openerGeneration.current++;off();};
   },[session.id,connected]);
   const groups=useMemo(()=>{const referenced=new Set((snapshot?.events??[]).flatMap(event=>Array.isArray(event.data?.content)?(event.data!.content as any[]).filter(item=>item?.type==='terminal').map(item=>item.terminalId):[]));return conversationGroups(snapshot?.events??[]).filter(events=>events[0].kind!=='terminal'||!referenced.has(events[0].data?.terminalId));},[snapshot?.events]);
-  useEffect(()=>{if(bottom.current)scroll.current?.scrollTo({top:scroll.current.scrollHeight,behavior:'instant'});},[snapshot?.events,snapshot?.permissions]);
+  useEffect(()=>{if(bottom.current&&scroll.current){scroll.current.scrollTo({top:scroll.current.scrollHeight,behavior:'instant'});previousTop.current=scroll.current.scrollTop;}},[snapshot?.events,snapshot?.permissions]);
+  useLayoutEffect(()=>{if(prependAnchor.current&&scroll.current){restoreHistoryAnchor(scroll.current,prependAnchor.current);previousTop.current=scroll.current.scrollTop;prependAnchor.current=null;olderRequest.current=null;setLoadingOlder(false);}},[snapshot?.events]);
+  async function loadOlder(){
+    const before=snapshot?.events[0]?.sequence,box=scroll.current;if(!hasOlder||olderRequest.current||!before||!box)return;
+    const token=Symbol(),generation=openerGeneration.current;olderRequest.current=token;setLoadingOlder(true);
+    try{const value=await window.berth.rpc<AcpSnapshot>('acpSnapshot',{sessionId:session.id,before});if(openerGeneration.current!==generation||olderRequest.current!==token)return;prependAnchor.current=captureHistoryAnchor(box);bottom.current=false;setFollowing(false);setHasOlder(value.hasMore&&!!value.events.length&&value.events[0].sequence<before);setSnapshot(previous=>previous?{...previous,events:[...value.events,...previous.events].filter((event,index,all)=>all.findIndex(item=>item.id===event.id)===index)}:value);}
+    catch(error){if(openerGeneration.current===generation)setError(String(error));}
+    finally{if(olderRequest.current===token&&!prependAnchor.current){olderRequest.current=null;setLoadingOlder(false);}}
+  }
   const call=async(method:Method,params:Record<string,unknown>={})=>{setError('');return window.berth.rpc(method,{sessionId:session.id,...params});};
   const sending=!!snapshot&&['running','permission'].includes(snapshot.phase);
   async function configure(configId:string,value:string){setPending(true);try{await call('acpConfigure',{configId,value});}catch(error){setError(String(error));}finally{setPending(false);}}
@@ -36,8 +45,8 @@ export function AcpConversation({session,connected,onOpenFile,task}:{session:Ses
       {snapshot?.modes&&!snapshot.configOptions?.some(option=>option.id==='mode'||option.category==='mode')&&<label>模式<select aria-label="ACP 会话模式" disabled={snapshot.phase!=='ready'||pending} value={snapshot.modes.currentModeId} onChange={event=>void configure('mode',event.target.value)}>{snapshot.modes.availableModes.map(mode=><option key={mode.id} value={mode.id}>{mode.name}</option>)}</select></label>}
       {snapshot?.configOptions?.map(option=>{const choices=acpOptionChoices(option);return <label key={option.id}>{option.name}<select aria-label={'ACP '+option.name} disabled={snapshot.phase!=='ready'||pending||!choices.length} value={option.currentValue??''} onChange={event=>void configure(option.id,event.target.value)}>{choices.length?choices.map(item=><option key={item.value} value={item.value}>{item.name}</option>):<option value={option.currentValue??''}>暂无可选项</option>}</select></label>;})}
     </header>
-    <div className="acp-messages" ref={scroll} onScroll={()=>{const box=scroll.current!;bottom.current=box.scrollHeight-box.scrollTop-box.clientHeight<64;setFollowing(bottom.current);}}>
-      {hasOlder&&<AsyncButton className="subtle" onError={setError} onAction={async()=>{const box=scroll.current,previousHeight=box?.scrollHeight??0,previousTop=box?.scrollTop??0;const value=await window.berth.rpc<AcpSnapshot>('acpSnapshot',{sessionId:session.id,before:snapshot?.events[0]?.sequence});setHasOlder(value.hasMore);bottom.current=false;setSnapshot(previous=>previous?{...previous,events:[...value.events,...previous.events].filter((event,index,all)=>all.findIndex(item=>item.id===event.id)===index)}:value);requestAnimationFrame(()=>{if(box)box.scrollTop=previousTop+box.scrollHeight-previousHeight;});}}>加载更早的消息</AsyncButton>}
+    <div className="acp-messages" ref={scroll} style={{overflowAnchor:'none'}} onWheel={event=>{if(event.deltaY<0&&(scroll.current?.scrollTop??0)<80)void loadOlder();}} onScroll={()=>{const box=scroll.current!,up=box.scrollTop<previousTop.current;previousTop.current=box.scrollTop;bottom.current=box.scrollHeight-box.scrollTop-box.clientHeight<64;setFollowing(bottom.current);if(up&&box.scrollTop<80)void loadOlder();}}>
+      {!!snapshot?.events.length&&<p className="history-load-status" role="status">{loadingOlder?'正在加载更早消息…':hasOlder?'向上滚动查看更早消息':'已到对话开头'}</p>}
       {!groups.length&&<div className="acp-welcome"><h2>开始这段对话</h2><p>发送任务后，Agent 的回复、计划、工具调用和授权请求会显示在这里。</p></div>}
       {groups.map(events=><Message key={events[0].id} events={events} sessionId={session.id} label={String(snapshot?.agentInfo?.title??snapshot?.agentInfo?.name??'Agent')} onError={setError} onOpenFile={onOpenFile} streaming={sending&&events[0].kind==='assistant'&&events[0].turnId===snapshot?.turnId}/>)}
     </div>

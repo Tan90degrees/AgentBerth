@@ -199,3 +199,38 @@ test('source inbox approval and rejection are explicit; task deletion preserves 
   assert.equal(await readFile(path.join(approved.worktreePath,'keep.txt'),'utf8'),'KEEP_WORKTREE');const state=await f.connection.rpc<State>('state');assert.ok(!state.sessions.some(session=>session.owner?.taskId===approved.id));assert.ok(!state.agentActivities?.some(activity=>activity.taskId===approved.id));assert.equal(state.sessions.find(session=>session.id===personal.id)?.latestRun?.status,'running');assert.equal((await f.call('state')).counts.all,0);
   await f.extension({action:'reload',id:'superagent'});assert.equal((await f.call('tasks',{filter:'all'})).total,0);assert.equal((await emit('approval-a','Old event')).duplicate,true);
 });
+
+test('named source pipelines route the same source to distinct projects, reject overlap and retain history after edits or deletion',async t=>{
+  const f=await fixture(t);await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});
+  const secondRoot=path.join(f.dir,'second-project');await mkdir(secondRoot);const second=await f.connection.rpc<any>('createProject',{name:'Second route',path:secondRoot});
+  const save=(extra:any={})=>f.call('save_pipeline',{name:'Project A requests',sourceId,enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],threadIds:['project-a'],autoApprove:false,isolated:false,...extra});
+  assert.deepEqual((await f.call('source_threads',{sourceId})).threads,[{id:'thread-1',name:'本地演示会话'},{id:'thread-2',name:'另一组演示会话'}]);
+  const one=await save(),two=await save({name:'Project B requests',projectId:second.id,threadIds:['project-b']});assert.notEqual(one.id,two.id);
+  await assert.rejects(save({name:'Overlapping route',threadIds:[]}),/范围重叠/);await assert.rejects(save({name:'Unsafe automatic admission',threadIds:['auto'],autoApprove:true}),/授权身份/);
+  const emit=(id:string,threadId:string,actorId='alice')=>f.extension({action:'call',id:'example.superagent.source.local',command:'emit',params:{id,threadId,actorId,title:'Pipeline request',text:'Check source routing'}});
+  const a=await emit('route-a','project-a'),b=await emit('route-b','project-b');assert.equal((await f.task(a.ticketId)).projectId,f.project.id);assert.equal((await f.task(b.ticketId)).projectId,second.id);assert.equal((await f.task(a.ticketId)).source.pipelineId,one.id);assert.equal((await f.task(b.ticketId)).source.pipelineName,'Project B requests');assert.equal((await f.task(a.ticketId)).approved,false);
+  assert.equal((await emit('no-route','other')).reason,'no_matching_pipeline');assert.equal((await f.call('source_events',{})).length,3);assert.equal((await f.call('source_events',{pipelineId:one.id})).length,1);
+  const before=(await f.call('state')).pipelines;assert.equal(before.length,2);assert.equal(before.find((item:any)=>item.id===one.id).received,1);assert.equal(before.find((item:any)=>item.id===one.id).lastEvent.receipt.ticketId,a.ticketId);
+  await f.call('pipeline_action',{pipelineId:one.id,action:'disable'});assert.equal((await emit('paused','project-a')).reason,'no_matching_pipeline');
+  await f.call('pipeline_action',{pipelineId:one.id,action:'enable'});await save({pipelineId:one.id,name:'Renamed pipeline',threadIds:['project-a']});assert.equal((await emit('route-a','project-b')).ticketId,a.ticketId,'A consumed source event cannot be rerouted or run twice');
+  await f.call('pipeline_action',{pipelineId:two.id,action:'delete'});assert.equal((await f.task(b.ticketId)).projectId,second.id,'Deleting a pipeline preserves existing tasks');
+  await f.extension({action:'reload',id:'superagent'});const restored=(await f.call('state')).pipelines;assert.equal(restored.length,1);assert.equal(restored[0].name,'Renamed pipeline');assert.equal((await emit('route-b','project-a')).ticketId,b.ticketId);
+  await f.call('pipeline_action',{pipelineId:one.id,action:'delete'});await f.extension({action:'reload',id:'superagent'});assert.equal((await f.call('state')).pipelines.length,0,'Deleted legacy or new routes must not resurrect on reload');
+  await assert.rejects(emit('not-consumed','project-a'),/尚未绑定/);
+});
+
+test('bulk task approval, rejection and deletion report partial failures and never treat ordinary or running work as pending requests',async t=>{
+  const f=await fixture(t);await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});
+  await f.call('source_policy',{sourceId,enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],autoApprove:false,isolated:false});
+  const incoming=async(id:string)=>(await f.extension({action:'call',id:'example.superagent.source.local',command:'emit',params:{id,threadId:'bulk',actorId:'alice',title:id,text:'Review bulk request'}})).ticketId;
+  const [one,two,three,four]=await Promise.all(['bulk-one','bulk-two','bulk-three','bulk-four'].map(incoming));
+  const ordinary=await f.create({title:'Ordinary task'});await until(()=>f.worker(ordinary.id),value=>value.permissions.length===1);
+  let preview=await f.call('bulk_tasks',{ids:[one,two,ordinary.id],action:'approve',preview:true});assert.equal(preview.eligible,2);assert.equal(preview.skipped,1);assert.equal((await f.task(one)).approved,false,'Preview must never start a request');
+  const approved=await f.call('bulk_tasks',{ids:[one,two,ordinary.id,randomUUID()],action:'approve'});assert.equal(approved.success,2);assert.equal(approved.skipped,1);assert.equal(approved.failed,1);assert.equal((await f.task(one)).approved,true);assert.equal((await f.task(two)).approved,true);
+  const rejected=await f.call('bulk_tasks',{ids:[three,four,ordinary.id],action:'reject'});assert.equal(rejected.success,2);assert.equal(rejected.skipped,1);assert.equal((await f.task(three)).rejected,true);assert.equal((await f.task(four)).rejected,true);assert.equal((await f.task(ordinary.id)).phase,'working');
+  preview=await f.call('bulk_tasks',{ids:[three,four,ordinary.id],action:'delete',preview:true});assert.equal(preview.running,1);assert.equal(preview.eligible,3);
+  const partial=await f.call('bulk_tasks',{ids:[three,ordinary.id],action:'delete'});assert.equal(partial.success,1);assert.equal(partial.failed,1);assert.match(partial.items.find((item:any)=>item.id===ordinary.id).reason,/明确取消/);assert.equal((await f.task(ordinary.id)).phase,'working');
+  const removed=await f.call('bulk_tasks',{ids:[four,ordinary.id],action:'delete',cancelRunning:true});assert.equal(removed.success,2);await assert.rejects(f.task(ordinary.id),/已删除/);assert.equal((await f.call('bulk_tasks',{ids:[four,ordinary.id],action:'delete',cancelRunning:true})).skipped,2);
+  for(const key of [one,two])await f.call('action',{id:key,action:'cancel'});
+  const receipts=await readFile(path.join(f.data,'extensions','data','example.superagent.source.local','receipts.json'),'utf8').catch(error=>{if(error.code==='ENOENT')return '{}';throw error;});assert.deepEqual(JSON.parse(receipts),{},'Batch approval/rejection/deletion never posts channel replies');
+});

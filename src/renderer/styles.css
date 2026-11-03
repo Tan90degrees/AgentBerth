@@ -2622,3 +2622,5 @@ textarea:focus-visible {
 .extension-task-document{display:flex;flex:1;min-height:0}.extension-owned-conversation{display:flex;flex-direction:column;flex:1;min-height:0}.extension-owned-conversation>header{display:flex;gap:12px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border)}.extension-owned-conversation>header strong{font-size:12px;font-weight:500}.extension-owned-conversation>header button{font-size:11px}.extension-owned-conversation>.acp-conversation{flex:1;min-height:0}
 
 .extension-nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 5px;margin-left:auto;border-radius:10px;background:var(--selected);color:var(--focus);font-size:10px;font-weight:600}
+
+.history-load-status{text-align:center;color:var(--muted);font-size:11px;padding:10px 0;min-height:34px;flex-shrink:0;}

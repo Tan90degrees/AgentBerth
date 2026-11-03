@@ -6,6 +6,10 @@ exports.apply = (ctx, config) => {
   try { receipts = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const source = ctx.berth.source({
     id: 'local', name: '本地模拟源', description: '只用于验证协议；通过 emit 命令提交事件。',
+    async listThreads(signal) {
+      if (signal.aborted) throw new Error('来源已停止');
+      return [{id:'thread-1',name:'本地演示会话'}, {id:'thread-2',name:'另一组演示会话'}];
+    },
     async reply(message, signal) {
       if (signal.aborted) throw new Error('来源已停止');
       // A real adapter must implement this same deduplication against its

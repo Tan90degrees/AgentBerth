@@ -7,8 +7,11 @@ export const sourceEventSchema=z.object({
 export type SuperagentSourceEvent=z.infer<typeof sourceEventSchema>;
 export interface SourceReceipt {accepted:boolean;duplicate:boolean;ticketId?:string;reason?:string}
 export interface SourceReply {threadId:string;text:string;idempotencyKey:string}
+export const sourceThreadsSchema=z.array(z.object({id:z.string().min(1).max(500),name:z.string().trim().min(1).max(100)}).strict()).max(256);
 export interface SourceContribution {
   id:string;name:string;description?:string;
+  /** Optional discovery for a human-readable pipeline scope picker. No task execution. */
+  listThreads?:(signal:AbortSignal)=>Promise<{id:string;name:string}[]>;
   /** Required for manual result delivery; must deduplicate idempotencyKey. */
   reply?:(reply:SourceReply,signal:AbortSignal)=>Promise<{receipt:string}>;
 }

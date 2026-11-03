@@ -133,7 +133,7 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   const runtime = runtimeFile(directory);
   if (runtime) {
     let candidate: DaemonConnection | null = null;
-    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!([44,45,46].includes(state.apiVersion)&&API_VERSION===47))throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
+    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!([44,45,46,47].includes(state.apiVersion)&&API_VERSION===48))throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
     catch (error) {
       candidate?.close();
       if(String(error).includes('运行中的后台版本与当前架构不同'))throw error;
