@@ -160,6 +160,9 @@ jobs:
         timeout-minutes: 2
         env:
           AGENTBERTH_OPENCODE_TEST_DIRECTORY: ${{ runner.temp }}/agentberth-opencode-test
+      - name: Validate ACP scripts and bidirectional sessions
+        run: node scripts/test.mjs tests/acp.test.ts
+        timeout-minutes: 2
       - name: ACP and Superagent smoke (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/smoke-acp.mjs

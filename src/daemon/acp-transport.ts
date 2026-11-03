@@ -21,7 +21,13 @@ export async function acpCommand(executable:string,arguments_:string[]){
       if(!found)throw error;file=found;
     }
     let args=arguments_;
-    if(process.platform==='win32'&&/\.(?:cmd|bat|ps1)$/i.test(file)){
+    if(process.platform==='win32'&&/\.ps1$/i.test(file)){
+      // -File preserves the script's interactive stdin. Invoking a script
+      // inside -EncodedCommand adds a PowerShell pipeline around native ACP
+      // children, which can close their input between protocol requests.
+      return {file:path.join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'),args:['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',file,...args]};
+    }
+    if(process.platform==='win32'&&/\.(?:cmd|bat)$/i.test(file)){
       const quote=(s:string)=>"'"+s.replaceAll("'","''")+"'";
       const script=`$ErrorActionPreference='Stop'; [Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; & ${[file,...args].map(quote).join(' ')}; exit $LASTEXITCODE`;
       file=path.join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');args=['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')];
