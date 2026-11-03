@@ -10,6 +10,7 @@ import {DaemonServer} from '../src/daemon/server';
 import {DaemonConnection} from '../src/main/connection';
 import type {AcpSnapshot} from '../src/shared/acp';
 import type {State} from '../src/shared/protocol';
+import {decision} from '../src/superagent/plugin';
 
 const execute=promisify(execFile),sourceId='example.superagent.source.local/local';
 async function until(read:()=>Promise<any>,predicate:(value:any)=>boolean,ms=25000){const end=Date.now()+ms;let value;do{value=await read();if(predicate(value))return value;await new Promise(resolve=>setTimeout(resolve,60));}while(Date.now()<end);throw new Error('Superagent condition timed out: '+JSON.stringify(value));}
@@ -107,4 +108,30 @@ test('an unavailable selected model interrupts before a prompt instead of silent
   const f=await fixture(t),created=await f.create({coordinatorModel:'removed-model'});const task=await until(()=>f.task(created.id),value=>value.phase==='interrupted');assert.match(task.error,/未提供已选择的模型/);
   const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(records.filter(record=>record.method==='prompt').length,0);
   await f.call('action',{id:task.id,action:'complete'});assert.equal((await f.connection.rpc<State>('state')).agentActivities?.find(activity=>activity.taskId===task.id)?.status,'completed','Confirming a task must override a previous execution error in the companion');
+});
+
+test('coordinator reports accept surrounding prose, fences and quoted braces without inventing decisions',()=>{
+  const expected={action:'ask',question:'选择 {x} 还是 "y"？'};assert.deepEqual(decision('分析完成。\n```json\n'+JSON.stringify(expected)+'\n```\n结束。'),expected);
+  assert.equal(decision('仅包含 { 无效文本'),null);assert.equal(decision('{"example":true}'),null);
+});
+test('answering a coordinator question continues its own session, updates the pet, deduplicates submission and keeps worker followups in the worker',async t=>{
+  const f=await fixture(t),created=await f.create({objective:'ask-human: clarify the acceptance conditions'});
+  const asked=await until(()=>f.task(created.id),value=>value.phase==='needs_attention');assert.equal(asked.waitingFor,'answer');assert.match(asked.question,/验收条件/);
+  let state=await f.connection.rpc<State>('state');assert.equal(state.agentActivities?.find(activity=>activity.taskId===asked.id)?.label,'等待你的回答');
+  await assert.rejects(f.call('action',{id:asked.id,action:'continue',text:'   '}),/填写回答/);
+  const request={id:asked.id,action:'continue',text:'验收条件是 result.txt 的内容为 SUPERAGENT_OK',requestId:randomUUID()};await f.call('action',request);assert.equal((await f.call('action',request)).duplicate,true);
+  const resumed=await f.task(asked.id);assert.equal(resumed.coordinatorSession,asked.coordinatorSession);assert.notEqual(resumed.planTurn,asked.planTurn);assert.equal(resumed.question,'');
+  const pending=await until(()=>f.worker(asked.id),value=>value.permissions.length===1),executing=await f.task(asked.id);
+  await until(()=>f.connection.rpc<State>('state'),value=>value.agentActivities?.find((item:any)=>item.taskId===asked.id)?.label==='等待会话授权');
+  await f.connection.rpc('acpPermission',{sessionId:executing.workerSession,permissionId:pending.permissions[0].id,optionId:'allow'});
+  const ready=await until(()=>f.task(asked.id),value=>value.phase==='needs_attention'&&value.stage==='worker');assert.equal(ready.waitingFor,'review');
+  state=await f.connection.rpc<State>('state');assert.equal(state.agentActivities?.find(activity=>activity.taskId===asked.id)?.label,'等待验收');
+  const previousWorker=ready.workerSession;await f.call('action',{id:ready.id,action:'continue',text:'再验证一次文件内容',requestId:randomUUID()});
+  const again=await until(()=>f.worker(asked.id),value=>value.permissions.length===1);assert.equal((await f.task(asked.id)).workerSession,previousWorker);assert.equal((await f.task(asked.id)).coordinatorSession,asked.coordinatorSession);
+  const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  const prompts=records.filter(record=>record.method==='prompt');assert.equal(prompts.filter(record=>record.text.includes('你是 Superagent 的协调者')).length,2);assert.equal(prompts.filter(record=>record.text.includes('你是 Superagent 的独立执行器')).length,2);assert.ok(prompts[1].text.includes('此前问题：请选择验收条件'));assert.ok(prompts[1].text.includes(request.text));
+  await f.connection.rpc('acpPermission',{sessionId:previousWorker,permissionId:again.permissions[0].id,optionId:'allow'});await until(()=>f.task(asked.id),value=>value.phase==='needs_attention');await f.call('action',{id:asked.id,action:'complete'});
+});
+test('a coordinator JSON decision surrounded by prose dispatches the worker instead of getting stuck awaiting confirmation',async t=>{
+  const f=await fixture(t),created=await f.create({objective:'prose-report: create result'});await until(()=>f.worker(created.id),value=>value.permissions.length===1);assert.equal((await f.task(created.id)).stage,'worker');await f.call('action',{id:created.id,action:'cancel'});
 });

@@ -16,16 +16,30 @@ export interface Ticket {
   phase:Phase;approved:boolean;isolated:boolean;createdAt:string;updatedAt:string;
   coordinatorSession:string;workerSession:string;planTurn:string;workerTurn:string;
   worktreePath?:string;assignment?:string;summary?:string;question?:string;error?:string;stage?:'coordinator'|'worker';
-  attempt:number;lastInput?:string;attention?:boolean;
+  attempt:number;lastInput?:string;attention?:boolean;waitingFor?:'answer'|'permission'|'review'|'format';continuing?:boolean;lastQuestion?:string;lastAction?:{id:string;action:string;text:string};
   source?:{id:string;threadId:string;eventId:string;actorId:string;policyVersion:string};
 }
 interface SourcePolicy {enabled:boolean;projectId:string;coordinatorId:string;executorId:string;coordinatorModel?:string;executorModel?:string;allowedActors:string[];autoApprove:boolean;isolated:boolean;version:string}
 const object={type:'object',additionalProperties:false};
 const string={type:'string',minLength:1,maxLength:16000};
 const id={type:'string',minLength:1,maxLength:100};
-function decision(text:string):Record<string,any>|null{
-  const candidate=text.trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'');
-  try{const result=JSON.parse(candidate);return result&&typeof result==='object'&&!Array.isArray(result)?result:null;}catch{return null;}
+export function decision(text:string):Record<string,any>|null{
+  // ACP Agents often wrap the final report in prose or a Markdown fence.
+  // Scan complete JSON objects, respecting quoted braces and escape sequences.
+  let start=-1,depth=0,quoted=false,escaped=false,report:Record<string,any>|null=null;
+  for(let i=0;i<text.length;i++){
+    const char=text[i];
+    if(start<0){if(char==='{'){start=i;depth=1;}continue;}
+    if(quoted){if(escaped)escaped=false;else if(char==='\\')escaped=true;else if(char==='"')quoted=false;continue;}
+    if(char==='"')quoted=true;else if(char==='{')depth++;else if(char==='}'&&!--depth){
+      try{const value=JSON.parse(text.slice(start,i+1));if(value&&typeof value==='object'&&!Array.isArray(value)&&(typeof value.action==='string'||typeof value.status==='string'))report=value;}catch{}
+      start=-1;
+    }
+  }
+  return report;
+}
+export function taskWait(ticket:Pick<Ticket,'waitingFor'|'stage'|'question'|'approved'>){
+  return ticket.waitingFor??(!ticket.approved?'review':ticket.question?'answer':ticket.stage==='worker'?'review':'format');
 }
 function fit(text:string,bytes:number){let result=text;while(Buffer.byteLength(JSON.stringify(result))>bytes)result=result.slice(0,Math.floor(result.length*.8));return result;}
 export function apply(ctx:Context,config:Record<string,string|number|boolean>){
@@ -39,12 +53,16 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     CREATE TABLE IF NOT EXISTS source_events(source TEXT NOT NULL,eventId TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(source,eventId));
     CREATE TABLE IF NOT EXISTS source_outbox(id TEXT PRIMARY KEY,value TEXT NOT NULL);`);
   for(const row of db.prepare('SELECT id,value FROM source_outbox').all()){const value=JSON.parse(String(row.value));if(value.state==='sending')db.prepare('UPDATE source_outbox SET value=? WHERE id=?').run(JSON.stringify({...value,state:'unknown',error:'宿主退出，发送结果未知；不会自动重发'}),row.id);}
-  let closed=false,ticking:Promise<void>|null=null;
+  let closed=false,ticking:Promise<void>|null=null;const acting=new Set<string>();
   const get=(key:string):Ticket=>{const row=db.prepare('SELECT value FROM tickets WHERE id=?').get(key);if(!row)throw new Error('任务不存在');return JSON.parse(String(row.value));};
   const all=():Ticket[]=>db.prepare("SELECT value FROM tickets ORDER BY CASE WHEN json_extract(value,'$.phase') IN ('completed','cancelled') THEN 1 ELSE 0 END,rowid DESC LIMIT 200").all().map(row=>JSON.parse(String(row.value)));
   const audit=(key:string,kind:string,text:string)=>{if(!closed)db.prepare('INSERT INTO audit(ticketId,value) VALUES (?,?)').run(key,JSON.stringify({at:new Date().toISOString(),kind,text:text.slice(0,4000)}));};
   const save=(ticket:Ticket)=>{if(closed)return;ticket.updatedAt=new Date().toISOString();db.prepare('INSERT INTO tickets VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(ticket.id,JSON.stringify(ticket));};
-  const activity=(ticket:Ticket)=>api.activity({id:ticket.id,title:('Superagent · '+ticket.title).slice(0,100),projectId:ticket.projectId,kind:'superagent',targetSessionId:ticket.stage==='worker'?ticket.workerSession:ticket.coordinatorSession,managedSessionIds:[ticket.coordinatorSession,ticket.workerSession],status:ticket.phase==='completed'?'completed':ticket.phase==='cancelled'?'idle':ticket.phase==='interrupted'?'unknown':ticket.error?'error':ticket.phase==='needs_attention'||ticket.attention?'waiting':['planning','working'].includes(ticket.phase)?'working':'idle',label:ticket.phase==='planning'?'协调中':ticket.phase==='working'?(ticket.attention?'等待授权':'执行中'):ticket.phase==='needs_attention'?'等待你审核':ticket.phase==='interrupted'?'任务已中断，等待确认':ticket.phase==='completed'?'任务已完成':ticket.phase==='cancelled'?'任务已取消':'任务排队中',updatedAt:Date.parse(ticket.updatedAt)});
+  const activity=(ticket:Ticket)=>{
+    const waiting=ticket.phase==='needs_attention'?taskWait(ticket):ticket.attention?'permission':null;
+    const label=ticket.phase==='completed'?'任务已完成':ticket.phase==='cancelled'?'任务已取消':ticket.phase==='interrupted'?'任务已中断，等待确认':waiting==='permission'?'等待会话授权':waiting==='answer'?'等待你的回答':waiting==='format'?'协调结果需要确认':waiting==='review'?(ticket.stage==='worker'?'等待验收':'等待批准'):ticket.phase==='planning'?'协调中':ticket.phase==='working'?'执行中':'任务排队中';
+    api.activity({id:ticket.id,title:('Superagent · '+ticket.title).slice(0,100),projectId:ticket.projectId,kind:'superagent',targetSessionId:ticket.stage==='worker'?ticket.workerSession:ticket.coordinatorSession,managedSessionIds:[ticket.coordinatorSession,ticket.workerSession],status:ticket.phase==='completed'?'completed':ticket.phase==='cancelled'?'idle':ticket.phase==='interrupted'?'unknown':waiting?'waiting':ticket.error?'error':['planning','working'].includes(ticket.phase)?'working':'idle',label,updatedAt:Date.parse(ticket.updatedAt)});
+  };
   const change=(key:string,patch:Partial<Ticket>,reason:string)=>{if(closed)return;const ticket={...get(key),...patch};save(ticket);audit(key,'transition',reason);activity(ticket);return ticket;};
   for(const ticket of all())if(['planning','working'].includes(ticket.phase))change(ticket.id,{phase:'interrupted',attention:true,error:'宿主曾退出或插件重新加载，结果需确认；不会自动重新发送任务。'},'恢复检查点：等待显式重试');
   for(const ticket of all())activity(ticket);
@@ -113,7 +131,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     if(!await guard(ticket,'planning'))return;
     const rules=String(config.rules??'仅在请求范围内工作。不得自动推送、合并或向外部渠道发送消息。');
     if(rules.length>4000)throw new Error('Superagent 规则超过 4000 字，请缩短规则或放入项目 AGENTS.md');
-    const prompt=`你是 Superagent 的协调者。原则：尽量少占用人的注意力，提供可验证的价值。先判断目标与范围，不直接开展实现。任务 ${ticket.id}，第 ${ticket.attempt} 次明确请求。\n规则：${rules}\n标题：${ticket.title}\n目标：${ticket.objective}\n${ticket.lastInput?'用户补充：'+ticket.lastInput:''}\n只输出一个 JSON 对象：{"action":"execute|ask|ignore","assignment":"给独立执行 Agent 的具体任务、约束与验收方式","reason":"简短原因","question":"必须由人回答的问题，没有则留空"}。范围不清时用 ask。不要编造已执行的步骤。`;
+    const prompt=`你是 Superagent 的协调者。原则：尽量少占用人的注意力，提供可验证的价值。先判断目标与范围，不直接开展实现。任务 ${ticket.id}，第 ${ticket.attempt} 次明确请求。\n规则：${rules}\n标题：${ticket.title}\n目标：${ticket.objective}\n${ticket.lastInput?'用户回答 / 新指令：'+ticket.lastInput:''}\n${ticket.continuing?'这是同一任务的继续。此前结果：'+(ticket.summary??'')+'\n此前问题：'+(ticket.lastQuestion??'')+'\n请结合本次回答继续，不要重复提出已回答的问题。':''}\n只输出一个 JSON 对象：{"action":"execute|ask|ignore","assignment":"给独立执行 Agent 的具体任务、约束与验收方式","reason":"简短原因","question":"必须由人回答的问题，没有则留空"}。范围不清时用 ask。不要编造已执行的步骤。`;
     audit(ticket.id,'dispatch','提交协调请求，幂等请求 ID：'+ticket.planTurn);
     await host('acpSend',{sessionId:ticket.coordinatorSession,requestId:ticket.planTurn,text:prompt});await guard(ticket,'planning');
   };
@@ -131,25 +149,25 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     ticket=get(ticket.id);await session(ticket,'worker',worktreePath);if(!await guard(ticket,'working'))return;
     await host('start',{sessionId:ticket.workerSession,cols:100,rows:30,resume:true});if(!await guard(ticket,'working'))return;
     await applyModel(ticket,'worker');if(!await guard(ticket,'working'))return;
-    const prompt=`你是 Superagent 的独立执行器。只完成当前任务，不接管其他会话。\n任务 ${ticket.id}\n${ticket.assignment}\n${ticket.lastInput?'用户补充：'+ticket.lastInput:''}\n在当前工作目录实施并验证。不得自动推送、合并或向外部渠道发消息。不要删除工作区或历史。需要授权时使用 Agent 的标准授权请求；无法继续就解释具体阻塞。最终只输出 JSON：{"status":"ready|blocked|failed","summary":"完成内容、验证结果和限制","question":"需要用户回答的具体问题，没有则留空"}。ready 代表可交付审核，不代表用户已接受。`;
+    const prompt=`你是 Superagent 的独立执行器。只完成当前任务，不接管其他会话。\n任务 ${ticket.id}\n${ticket.assignment}\n${ticket.lastInput?'用户回答 / 新指令：'+ticket.lastInput:''}\n${ticket.continuing?'这是同一任务的继续。此前结果：'+(ticket.summary??'')+'\n此前问题：'+(ticket.lastQuestion??'')+'\n请结合本次回答继续，不要重复提出已回答的问题。':''}\n在当前工作目录实施并验证。不得自动推送、合并或向外部渠道发消息。不要删除工作区或历史。需要授权时使用 Agent 的标准授权请求；无法继续就解释具体阻塞。最终只输出 JSON：{"status":"ready|blocked|failed","summary":"完成内容、验证结果和限制","question":"需要用户回答的具体问题，没有则留空"}。ready 代表可交付审核，不代表用户已接受。`;
     audit(ticket.id,'dispatch','提交执行请求，幂等请求 ID：'+ticket.workerTurn);
     await host('acpSend',{sessionId:ticket.workerSession,requestId:ticket.workerTurn,text:prompt});await guard(ticket,'working');
   };
   const advance=async(ticket:Ticket)=>{
     const planning=ticket.phase==='planning',sessionId=planning?ticket.coordinatorSession:ticket.workerSession,turnId=planning?ticket.planTurn:ticket.workerTurn;
     const view=await result(sessionId,turnId);if(closed)return;
-    const current=get(ticket.id);if(current.phase!==ticket.phase)return;
-    if(view.snapshot.permissions.length){if(!current.attention)change(ticket.id,{attention:true,question:'Agent 正在等待授权，请打开对应会话选择。'},'需要用户授权');return;}
+    const current=get(ticket.id);if(current.phase!==ticket.phase||current.attempt!==ticket.attempt)return;
+    if(view.snapshot.permissions.length){if(!current.attention)change(ticket.id,{attention:true,waitingFor:'permission',question:'Agent 正在等待授权，请打开对应会话选择。'},'需要用户授权');return;}
     if(view.snapshot.phase==='error'||view.snapshot.phase==='disconnected'){change(ticket.id,{phase:'interrupted',attention:true,error:view.snapshot.error??'ACP 连接已断开；执行结果未知，需要人工确认。'},'连接中断，不重放命令');await stopSessions(ticket);return;}
-    if(!view.ended){if(current.attention)change(ticket.id,{attention:false,question:''},'授权已处理，任务继续');return;}
+    if(!view.ended){if(current.attention)change(ticket.id,{attention:false,waitingFor:undefined,question:''},'授权已处理，任务继续');return;}
     const report=decision(view.text);
     if(planning){
       if(report?.action==='execute'&&typeof report.assignment==='string'&&report.assignment.trim()){
-        const next=change(ticket.id,{phase:'working',stage:'worker',assignment:report.assignment.slice(0,12000),summary:String(report.reason??''),attention:false,question:''},'协调者已提供执行方案')!;
+        const next=change(ticket.id,{phase:'working',stage:'worker',assignment:report.assignment.slice(0,12000),summary:String(report.reason??''),attention:false,waitingFor:undefined,continuing:false,question:''},'协调者已提供执行方案')!;
         await host('stop',{sessionId:ticket.coordinatorSession});if(closed)return;await launchWorker(next);
-      }else{change(ticket.id,{phase:'needs_attention',stage:'coordinator',attention:true,summary:view.text.slice(0,20000),question:String(report?.question??'协调结果需要确认，请补充需求后继续。').slice(0,4000)},'协调决策需要人工处理');await host('stop',{sessionId:ticket.coordinatorSession});}
+      }else{change(ticket.id,{phase:'needs_attention',stage:'coordinator',attention:true,summary:typeof report?.reason==='string'?report.reason.slice(0,20000):view.text.slice(0,20000),waitingFor:report?.action==='ask'?'answer':'format',question:typeof report?.question==='string'&&report.question.trim()?report.question.slice(0,4000):report?.action==='ignore'?'协调者建议暂不执行。你可以补充要求继续，或确认结束任务。':'协调结果未包含有效的执行方案。请在下方补充要求并继续，或打开协调记录核对。'},'协调决策需要人工处理');await host('stop',{sessionId:ticket.coordinatorSession});}
     }else{
-      change(ticket.id,{phase:'needs_attention',stage:'worker',attention:true,summary:typeof report?.summary==='string'?report.summary.slice(0,20000):view.text.slice(0,20000),question:String(report?.question??''),error:report?.status==='failed'?'执行器报告失败':report?.status==='blocked'?'执行器报告阻塞':undefined},report?.status==='ready'?'结果已就绪，等待确认':'执行器已交接，需要人工处理');await host('stop',{sessionId:ticket.workerSession});
+      change(ticket.id,{phase:'needs_attention',stage:'worker',attention:true,summary:typeof report?.summary==='string'?report.summary.slice(0,20000):view.text.slice(0,20000),question:typeof report?.question==='string'?report.question.slice(0,4000):'',waitingFor:report?.status==='ready'?'review':'answer',error:report?.status==='failed'?'执行器报告失败':report?.status==='blocked'?'执行器报告阻塞':undefined},report?.status==='ready'?'结果已就绪，等待确认':'执行器已交接，需要人工处理');await host('stop',{sessionId:ticket.workerSession});
     }
   };
   const tick=()=>{
@@ -160,8 +178,9 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
       const occupied=all().filter(ticket=>['planning','working'].includes(ticket.phase)).length;
       for(const ticket of tickets.filter(ticket=>ticket.phase==='queued'&&ticket.approved).slice(0,Math.max(0,Number(config.maxConcurrent??2)-occupied))){
         if(closed)return;const current=get(ticket.id);if(current.phase!=='queued')continue;
-        const next=change(ticket.id,{phase:'planning',stage:'coordinator',attention:false,error:undefined},'取得执行槽')!;
-        try{await launchCoordinator(next);}catch(error){if(!closed)await interrupt(ticket,error,'启动协调者失败；不会自动重新发送');}
+        const worker=current.continuing&&current.stage==='worker';
+        const next=change(ticket.id,{phase:worker?'working':'planning',stage:worker?'worker':'coordinator',attention:false,waitingFor:undefined,error:undefined},'取得执行槽')!;
+        try{if(worker)await launchWorker(next);else await launchCoordinator(next);}catch(error){if(!closed)await interrupt(ticket,error,'启动协调者失败；不会自动重新发送');}
       }
     })().finally(()=>{ticking=null;});void ticking.catch(()=>{});
   };
@@ -169,17 +188,18 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   const props={projectId:id,coordinatorId:id,executorId:id,coordinatorModel:model,executorModel:model,title:{...string,maxLength:100},objective:string,isolated:{type:'boolean'}};
   api.command({mcp:false,name:'models',description:'Read model choices declared by an ACP Agent; uses a matching live session or a temporary empty session without sending prompts.',inputSchema:{...object,properties:{projectId:id,acpId:id},required:['projectId','acpId']}},p=>host<AcpModels>('acpOptions',{agentId:p.acpId,projectId:p.projectId}));
   api.command({mcp:false,name:'create',description:'Create a user-requested task with selected ACP coordinator/executor; each task gets independent sessions and optionally a Git worktree.',inputSchema:{...object,properties:props,required:['projectId','coordinatorId','executorId','title','objective']}},p=>create(p));
-  api.command({mcp:false,name:'state',description:'List projects, ACP agents, plugin-defined sources and recent task summaries. No credentials or full transcripts.',inputSchema:{...object,properties:{}}},async()=>{const state=await host<State>('state');return {projects:state.projects.filter(project=>!project.remoteWorkspace).map(project=>({id:project.id,name:project.name})),agents:state.agents?.filter(agent=>agent.acp).map(agent=>({id:agent.id,name:agent.name})),tasks:all().slice(0,50).map(({objective,assignment,lastInput,summary,...ticket})=>({...ticket,summary:summary?.slice(0,240),error:ticket.error?.slice(0,200),question:ticket.question?.slice(0,200)})),sources:sources.snapshot().map(source=>({...source,policy:policies()[source.id]})),maxConcurrent:Number(config.maxConcurrent??2)};});
+  api.command({mcp:false,name:'state',description:'List projects, ACP agents, plugin-defined sources and recent task summaries. No credentials or full transcripts.',inputSchema:{...object,properties:{}}},async()=>{const state=await host<State>('state');return {projects:state.projects.filter(project=>!project.remoteWorkspace).map(project=>({id:project.id,name:project.name})),agents:state.agents?.filter(agent=>agent.acp).map(agent=>({id:agent.id,name:agent.name})),tasks:all().slice(0,50).map(({objective,assignment,lastInput,lastAction,lastQuestion,summary,...ticket})=>({...ticket,summary:summary?.slice(0,240),error:ticket.error?.slice(0,200),question:ticket.question?.slice(0,200)})),sources:sources.snapshot().map(source=>({...source,policy:policies()[source.id]})),maxConcurrent:Number(config.maxConcurrent??2)};});
   api.command({mcp:false,name:'source_policy',description:'Bind a registered source to a project and selected ACP agents. Auto-admission requires an explicit actor allowlist; otherwise incoming tasks wait for approval.',inputSchema:{...object,properties:{sourceId:{type:'string',minLength:1,maxLength:200},enabled:{type:'boolean'},projectId:id,coordinatorId:id,executorId:id,coordinatorModel:model,executorModel:model,allowedActors:{type:'array',items:{type:'string',minLength:1,maxLength:200},maxItems:128},autoApprove:{type:'boolean'},isolated:{type:'boolean'}},required:['sourceId','enabled','projectId','coordinatorId','executorId','allowedActors','autoApprove','isolated']}},async p=>{
     if(!sources.has(String(p.sourceId)))throw new Error('信息源插件未启用');if(p.autoApprove&&!(p.allowedActors as string[]).length)throw new Error('自动准入必须配置明确的授权身份列表');await validate(p);if(closed)throw new Error('插件已停止');
     const policy:SourcePolicy={enabled:!!p.enabled,projectId:String(p.projectId),coordinatorId:String(p.coordinatorId),executorId:String(p.executorId),...(p.coordinatorModel?{coordinatorModel:String(p.coordinatorModel)}:{}),...(p.executorModel?{executorModel:String(p.executorModel)}:{}),allowedActors:p.allowedActors as string[],autoApprove:!!p.autoApprove,isolated:!!p.isolated,version:randomUUID()};db.prepare('INSERT INTO source_policies VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(String(p.sourceId),JSON.stringify(policy));return {version:policy.version};
   });
   api.command({mcp:false,name:'source_events',description:'Read recent source admission receipts without message bodies.',inputSchema:{...object,properties:{sourceId:{type:'string',minLength:1,maxLength:200}},required:['sourceId']}},p=>db.prepare('SELECT value FROM source_events WHERE source=? ORDER BY rowid DESC LIMIT 30').all(String(p.sourceId)).map(row=>JSON.parse(String(row.value))));
-  api.command({mcp:false,name:'get',description:'Read a bounded task summary and its last 20 audit entries. Use read for omitted text or open the ACP session.',inputSchema:{...object,properties:{id},required:['id']}},p=>{
-    const {assignment,lastInput,...task}=get(String(p.id)),omitted:string[]=[];
+  api.command({mcp:false,name:'get',description:'Read a bounded task summary and its last 20 audit entries. Use read for omitted text or open the ACP session.',inputSchema:{...object,properties:{id},required:['id']}},async p=>{
+    const state=await host<State>('state');
+    const {assignment,lastInput,lastAction,lastQuestion,...task}=get(String(p.id)),omitted:string[]=[];
     for(const field of ['objective','summary','question','error'] as const){const text=task[field];if(text){task[field]=fit(text,field==='objective'||field==='summary'?24000:4000);if(task[field]!==text){omitted.push(field);task[field]+='\n[内容已精简，可打开会话或使用 read 读取完整内容]';}}}
     const latestReply=db.prepare("SELECT value FROM source_outbox WHERE json_extract(value,'$.ticketId')=? ORDER BY rowid DESC LIMIT 1").get(task.id);
-    return {task,omitted,replyDraft:latestReply?(({id,text,state})=>({id,text,state}))(JSON.parse(String(latestReply.value))):null,outbox:db.prepare("SELECT value FROM source_outbox WHERE json_extract(value,'$.ticketId')=? ORDER BY rowid DESC LIMIT 10").all(task.id).map(row=>{const {text,...receipt}=JSON.parse(String(row.value));return receipt;}),audit:db.prepare('SELECT value FROM audit WHERE ticketId=? ORDER BY sequence DESC LIMIT 20').all(String(p.id)).map(row=>{const event=JSON.parse(String(row.value));return {...event,text:fit(event.text,800)};}).reverse()};
+    return {task,omitted,sessions:{coordinator:state.sessions.some(session=>session.id===task.coordinatorSession),worker:state.sessions.some(session=>session.id===task.workerSession)},replyDraft:latestReply?(({id,text,state})=>({id,text,state}))(JSON.parse(String(latestReply.value))):null,outbox:db.prepare("SELECT value FROM source_outbox WHERE json_extract(value,'$.ticketId')=? ORDER BY rowid DESC LIMIT 10").all(task.id).map(row=>{const {text,...receipt}=JSON.parse(String(row.value));return receipt;}),audit:db.prepare('SELECT value FROM audit WHERE ticketId=? ORDER BY sequence DESC LIMIT 20').all(String(p.id)).map(row=>{const event=JSON.parse(String(row.value));return {...event,text:fit(event.text,800)};}).reverse()};
   });
   api.command({mcp:false,name:'reply',description:'Send exactly the user-reviewed text through the task source plugin. Persist intent first; an unknown send is never retried automatically. Retry is explicit and uses the original idempotency key.',inputSchema:{...object,properties:{id,requestId:{type:'string',minLength:1,maxLength:100},text:{type:'string',minLength:1,maxLength:12000},retry:{type:'boolean'}},required:['id','requestId','text']}},async p=>{
     const task=get(String(p.id));if(!task.source)throw new Error('手工任务没有外部回复渠道');
@@ -192,20 +212,31 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     if(!closed)db.prepare('UPDATE source_outbox SET value=? WHERE id=?').run(JSON.stringify(value),value.id);return {id:value.id,state:value.state,receipt:value.receipt,error:value.error};
   });
   api.command({mcp:false,name:'read',description:'Read a page of saved task text without rerunning an Agent.',inputSchema:{...object,properties:{id,field:{type:'string',enum:['objective','assignment','summary','lastInput']},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:16000}},required:['id','field']}},p=>{const value=get(String(p.id))[p.field as 'objective']??'',offset=Number(p.offset??0),text=fit(value.slice(offset,offset+Number(p.limit??8000)),24000);return {text,totalChars:value.length,nextOffset:offset+text.length<value.length?offset+text.length:null};});
-  api.command({mcp:false,name:'action',description:'Explicitly approve, cancel, retry or accept a task. Retry never happens automatically after a disconnect.',inputSchema:{...object,properties:{id,action:{type:'string',enum:['approve','cancel','retry','complete']},text:{type:'string',maxLength:12000}},required:['id','action']}},async p=>{
-    let ticket=get(String(p.id));const action=String(p.action);
+  api.command({mcp:false,name:'action',description:'Answer and continue the current task stage, or explicitly approve, cancel, restart coordination or accept a task. Retry never happens automatically after a disconnect.',inputSchema:{...object,properties:{id,action:{type:'string',enum:['approve','cancel','continue','retry','complete']},text:{type:'string',maxLength:12000},requestId:id},required:['id','action']}},async p=>{
+    let ticket=get(String(p.id));const action=String(p.action),text=String(p.text??'').trim(),requestId=typeof p.requestId==='string'?p.requestId:undefined;
+    if(requestId&&ticket.lastAction?.id===requestId){if(ticket.lastAction.action!==action||ticket.lastAction.text!==text)throw new Error('操作 ID 已用于其他指令');return {id:ticket.id,duplicate:true};}
+    if(acting.has(ticket.id))throw new Error('此任务的操作正在提交，请稍候');acting.add(ticket.id);try{
     if(['completed','cancelled'].includes(ticket.phase))throw new Error('任务已结束，不能再次调度');
     if(action==='cancel'){change(ticket.id,{phase:'cancelled',attention:false},'用户取消任务，保留工作区与会话记录');await stopSessions(ticket);return {id:ticket.id};}
     if(action==='complete'){if(['planning','working'].includes(ticket.phase))throw new Error('请先等待执行结果或取消运行');change(ticket.id,{phase:'completed',attention:false},'用户确认交付');await stopSessions(ticket);return {id:ticket.id};}
     if(action==='approve'&&!ticket.approved){await validate(ticket);change(ticket.id,{approved:true,phase:'queued',attention:false},'用户批准外部触发');return {id:ticket.id};}
+    if(action==='continue'){
+      if(ticket.phase!=='needs_attention'||!ticket.approved)throw new Error('请在任务等待回答或验收时继续；中断任务请显式重试');
+      if(!text)throw new Error('请填写回答或下一步指令');
+      await stopSessions(ticket);await validate(ticket);
+      // Continue the same role/native conversation. The fresh request ID sends
+      // only the new instruction; the prior turn is never replayed.
+      change(ticket.id,{phase:'queued',attention:false,waitingFor:undefined,error:undefined,continuing:true,lastInput:text,lastQuestion:ticket.question,question:'',attempt:ticket.attempt+1,...(ticket.stage==='worker'?{workerTurn:randomUUID()}:{planTurn:randomUUID()}),...(requestId?{lastAction:{id:requestId,action,text}}:{})},'用户回答并继续当前阶段');return {id:ticket.id};
+    }
     if(action==='retry'){
       if(['planning','working'].includes(ticket.phase))throw new Error('任务仍在运行，请先取消或等待交接');
       await stopSessions(ticket);await validate(ticket);
       // A retry is a new explicit instruction. Preserve earlier turns and IDs
       // in their original sessions; no old prompt is silently replayed.
-      ticket=change(ticket.id,{phase:'queued',approved:true,attention:false,error:undefined,lastInput:typeof p.text==='string'?p.text:undefined,attempt:ticket.attempt+1,coordinatorSession:randomUUID(),workerSession:randomUUID(),planTurn:randomUUID(),workerTurn:randomUUID()},'用户明确要求继续，创建新的执行尝试')!;return {id:ticket.id};
+      ticket=change(ticket.id,{phase:'queued',stage:'coordinator',continuing:false,question:'',waitingFor:undefined,approved:true,attention:false,error:undefined,lastInput:typeof p.text==='string'?p.text:undefined,attempt:ticket.attempt+1,coordinatorSession:randomUUID(),workerSession:randomUUID(),planTurn:randomUUID(),workerTurn:randomUUID()},'用户明确要求继续，创建新的执行尝试')!;return {id:ticket.id};
     }
     throw new Error('当前任务不支持此操作');
+    }finally{acting.delete(ticket.id);}
   });
   api.interval(tick,1000);
   api.effect(()=>async()=>{
