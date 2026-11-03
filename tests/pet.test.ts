@@ -21,6 +21,15 @@ function fixture(t: import('node:test').TestContext) {
   return { folder, state, pet, a, b };
 }
 
+test('native ACP and Superagent activity needs no hooks, groups managed sessions and preserves manual selection',t=>{
+  const {state,pet,a,b}=fixture(t);
+  state.agentActivities=[{id:a.id,targetSessionId:a.id,title:a.title,projectId:'p',kind:'acp',status:'working',label:'执行中',updatedAt:1000,managedSessionIds:[]}];pet.update(state);assert.equal(pet.snapshot(99999999).sessions.find(value=>value.sessionId===a.id)?.status,'working');
+  const task={id:'activity:task',taskId:randomUUID(),pluginId:'superagent',targetSessionId:a.id,title:'Superagent · Task',projectId:'p',kind:'superagent' as const,status:'waiting' as const,label:'等待审核',updatedAt:2000,managedSessionIds:[a.id]};
+  state.agentActivities=[...state.agentActivities,task];pet.update(state);assert.ok(!pet.snapshot().sessions.some(value=>value.sessionId===a.id));assert.equal(pet.preferences.selectedSessionId,task.id);
+  pet.save({...pet.preferences,selectedSessionId:b.id});pet.update({...state});assert.equal(pet.preferences.selectedSessionId,b.id,'Existing waiting tasks must not steal a manual selection on every state event');
+  pet.connection(false);assert.equal(pet.snapshot().sessions.find(value=>value.sessionId===task.id)?.status,'unknown');
+});
+
 test('pet hooks isolate sessions/runs, highlight waiting and invalidate old launches', t => {
   const { pet, a, b, state } = fixture(t);
   const event = { sessionId: a.id, runId: a.latestRun!.id, status: 'working' as const };

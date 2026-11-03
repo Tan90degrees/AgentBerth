@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const petStatuses = ['idle', 'working', 'waiting', 'completed', 'error', 'unknown'] as const;
 export type PetStatus = typeof petStatuses[number];
+export const agentActivitySchema=z.object({id:z.string().min(1).max(100),title:z.string().min(1).max(100),projectId:z.uuid(),targetSessionId:z.uuid().optional(),status:z.enum(petStatuses),label:z.string().max(120),kind:z.enum(['acp','superagent']),managedSessionIds:z.array(z.uuid()).max(2).default([]),updatedAt:z.number().finite()}).strict();
+export type AgentActivity=z.infer<typeof agentActivitySchema>&{pluginId?:string;taskId?:string};
 export const petLabels: Record<PetStatus, string> = { idle: '空闲', working: '执行中', waiting: '等待你处理', completed: '已完成', error: '执行失败', unknown: '状态待确认' };
 export const petWindowSize = { width: 216, height: 180 } as const;
 export const petScales = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
@@ -22,7 +24,7 @@ export const petHookSchema = z.object({
   cwd: z.string().max(4096).optional(),
 }).strict();
 export type PetHook = z.infer<typeof petHookSchema>;
-export interface PetSession { sessionId: string; runId: string; title: string; project: string; status: PetStatus; label: string; hooked: boolean; updatedAt: number }
+export interface PetSession { sessionId: string; runId: string; title: string; project: string; status: PetStatus; label: string; hooked: boolean; updatedAt: number;targetSessionId?:string;pluginId?:string;taskId?:string;kind?:'acp'|'superagent' }
 export interface PetSnapshot {
   preferences: PetPreferences; sessions: PetSession[]; connected: boolean;
   images: Partial<Record<PetStatus, string>>; imageVersion: number;

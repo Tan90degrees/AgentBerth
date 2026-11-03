@@ -6,12 +6,18 @@ import { z } from 'zod';
 import { terminalEnvironment } from './paths';
 import { acpCommand } from './acp-transport';
 import { terminateWindowsTree } from './processes';
+import type {AcpTerminal} from '../shared/acp';
 
 interface TerminalTask {child:ChildProcessWithoutNullStreams;output:Buffer;limit:number;truncated:boolean;exit:{exitCode?:number;signal?:string}|null;done:Promise<{exitCode?:number;signal?:string}>}
 export class AcpClientTools {
   private tasks=new Map<string,TerminalTask>();
   private rootReady:Promise<string>|undefined;
-  constructor(private root:string){}
+  constructor(private root:string,private released?:(view:AcpTerminal)=>void){}
+  terminal(terminalId:string):AcpTerminal{
+    const task=this.tasks.get(terminalId);if(!task)throw new Error('终端输出尚未保存或已过期');
+    let start=Math.max(0,task.output.length-16384);while(start<task.output.length&&(task.output[start]&0xc0)===0x80)start++;
+    return {terminalId,output:task.output.subarray(start).toString('utf8'),truncated:task.truncated||start>0,...(task.exit?{exitStatus:task.exit}:{})};
+  }
   private inside(file:string,root:string){const relative=path.relative(root,file);return relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);}
   async file(input:string,create=false):Promise<string>{
     if(!input||input.includes('\0'))throw new Error('文件路径无效');
@@ -49,9 +55,9 @@ export class AcpClientTools {
     const task=this.tasks.get(String(p.terminalId));if(!task)throw new Error('ACP 终端不存在或已释放');
     if(method==='terminal/output')return {output:task.output.toString('utf8'),truncated:task.truncated,...(task.exit?{exitStatus:task.exit}:{})};
     if(method==='terminal/wait_for_exit')return task.done;
-    if(method==='terminal/kill'||method==='terminal/release'){await this.kill(task);if(method==='terminal/release')this.tasks.delete(p.terminalId);return {};}
+    if(method==='terminal/kill'||method==='terminal/release'){await this.kill(task);if(method==='terminal/release'){this.released?.({...this.terminal(p.terminalId),released:true});this.tasks.delete(p.terminalId);}return {};}
     throw new Error('不支持的 ACP 客户端方法');
   }
   private async kill(task:TerminalTask){if(task.exit||!task.child.pid)return;if(process.platform==='win32')await terminateWindowsTree(task.child.pid,()=>!task.exit);else try{process.kill(-task.child.pid,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}task.child.stdout.destroy();task.child.stderr.destroy();let timer:NodeJS.Timeout|undefined;try{await Promise.race([task.done,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('ACP 命令进程尚未退出，请重试断开')),3000);})]);}finally{clearTimeout(timer);}}
-  async close(){await Promise.all([...this.tasks.values()].map(task=>this.kill(task)));this.tasks.clear();}
+  async close(){await Promise.all([...this.tasks].map(async([id,task])=>{await this.kill(task);this.released?.({...this.terminal(id),released:true});}));this.tasks.clear();}
 }

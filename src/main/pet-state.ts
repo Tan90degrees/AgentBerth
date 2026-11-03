@@ -17,6 +17,7 @@ export class PetState {
   private state: State | null = null;
   private connected = false;
   private hooks = new Map<string, PetHook & { updatedAt: number }>();
+  private activityStatuses=new Map<string,PetStatus>();
   private imageVersion = 0;
   private images: Partial<Record<PetStatus, string>> = {};
   constructor(private folder: string, private changed: () => void = () => {}) {
@@ -29,17 +30,19 @@ export class PetState {
   }
   private selection(preferences: PetPreferences): PetPreferences {
     if (!this.state) return preferences;
-    const sessions = this.state.sessions.filter(session => isAgentSession(session) && session.latestRun);
-    const selectedSessionId = sessions.some(session => session.id === preferences.selectedSessionId) ? preferences.selectedSessionId : sessions[0]?.id ?? '';
+    const sessions = this.snapshot().sessions;
+    const selectedSessionId = sessions.some(session => session.sessionId === preferences.selectedSessionId) ? preferences.selectedSessionId : sessions[0]?.sessionId ?? '';
     return selectedSessionId === preferences.selectedSessionId ? preferences : { ...preferences, selectedSessionId };
   }
   save(value: unknown) { const preferences = this.selection(petPreferencesSchema.parse(value)); this.persist(preferences); this.preferences = preferences; this.changed(); }
   connection(connected: boolean) { this.connected = connected; this.changed(); }
   update(state: State) {
+    const previous=this.activityStatuses;this.activityStatuses=new Map((state.agentActivities??[]).map(value=>[value.id,value.status]));
     this.state = state;
     const live = new Map(state.sessions.filter(isAgentSession).map(session => [session.id, session.latestRun]));
     for (const [id, hook] of this.hooks) if (live.get(id)?.id !== hook.runId) this.hooks.delete(id);
     this.preferences = this.selection(this.preferences);
+    if(this.preferences.autoSwitch){const attention=this.snapshot().sessions.find(session=>session.kind&&['waiting','error'].includes(session.status)&&previous.get(session.sessionId)!==session.status);if(attention)this.preferences={...this.preferences,selectedSessionId:attention.sessionId};}
     this.changed();
   }
   accept(hook: PetHook, now = Date.now()): boolean {
@@ -51,7 +54,8 @@ export class PetState {
   }
   snapshot(now = Date.now()): PetSnapshot {
     const projects = new Map(this.state?.projects.map(project => [project.id, project.name]));
-    const sessions: PetSession[] = (this.state?.sessions ?? []).filter(session => isAgentSession(session) && session.latestRun).map(session => {
+    const activities=this.state?.agentActivities??[],managed=new Set(activities.filter(value=>value.kind==='superagent').flatMap(value=>value.managedSessionIds)),native=new Set(activities.map(value=>value.id));
+    const sessions: PetSession[] = (this.state?.sessions ?? []).filter(session => isAgentSession(session) && session.latestRun&&!managed.has(session.id)&&!native.has(session.id)).map(session => {
       const run = session.latestRun!, hook = this.hooks.get(session.id);
       const live = ['running', 'stopping'].includes(run.status);
       let status: PetStatus = live ? hook?.status ?? 'unknown' : run.status === 'failed' || (run.exitCode !== null && run.exitCode !== 0) ? 'error' : hook?.status === 'completed' ? 'completed' : 'idle';
@@ -60,6 +64,7 @@ export class PetState {
       if (!this.connected) { status = 'unknown'; label = '后台连接已断开'; }
       return { sessionId: session.id, runId: run.id, title: session.title, project: projects.get(session.projectId) ?? '', status, label, hooked: !!hook, updatedAt: hook?.updatedAt ?? Date.parse(run.startedAt) };
     });
+    for(const value of activities){if(managed.has(value.id))continue;sessions.push({sessionId:value.id,runId:value.id,title:value.title,project:projects.get(value.projectId)??'',status:this.connected?value.status:'unknown',label:this.connected?value.label:'后台连接已断开',hooked:true,updatedAt:value.updatedAt,targetSessionId:value.targetSessionId,pluginId:value.pluginId,taskId:value.taskId,kind:value.kind});}
     return { preferences: { ...this.preferences }, sessions, connected: this.connected, images: { ...this.images }, imageVersion: this.imageVersion };
   }
   importImage(status: PetStatus, bytes: Buffer, name: string) {

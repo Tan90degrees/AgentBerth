@@ -15,7 +15,7 @@ export function petMenuTemplate(snapshot: PetSnapshot, actions: PetMenuActions):
   return [
     { label: selected ? label(`${selected.title} · ${petLabels[selected.status]}`) : '暂无 Agent 会话', enabled: false },
     { type: 'separator' },
-    { label: '打开当前会话', enabled: !!selected, click: () => actions.open() },
+    { label: selected?.kind==='superagent'?'打开当前任务':'打开当前会话', enabled: !!selected, click: () => actions.open() },
     { label: '切换 Agent 会话', enabled: sessions.length > 0, submenu: sessions.map(session => ({ id: session.sessionId, label: label(`${session.project} / ${session.title} · ${petLabels[session.status]}`), type: 'radio', checked: session.sessionId === selected?.sessionId, click: () => actions.select(session.sessionId) })) },
     { label: '桌宠大小', submenu: scales.map(scale => ({ label: `${Math.round(scale * 100)}%`, type: 'radio', checked: preferences.scale === scale, click: () => actions.scale(scale) })) },
     { label: '保持置顶', type: 'checkbox', checked: preferences.alwaysOnTop, click: item => actions.alwaysOnTop(item.checked) },

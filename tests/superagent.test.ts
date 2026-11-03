@@ -92,3 +92,19 @@ test('Superagent selects plan through a current ACP mode config option',async t=
   const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.ok(records.some(record=>record.method==='config'&&record.configId==='mode'&&record.value==='plan'));
   const detail=await f.call('get',{id:created.id});assert.ok(detail.audit.some((event:any)=>event.kind==='policy'&&event.text.includes('plan')));await f.call('action',{id:created.id,action:'cancel'});
 });
+
+test('Superagent applies separate role models, publishes task states and restores saved model choices',async t=>{
+  const f=await fixture(t);await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--named-model']}});
+  const models=await f.call('models',{projectId:f.project.id,acpId:f.agent.id});assert.equal(models.configId,'provider-model');
+  const created=await f.create({coordinatorModel:'small',executorModel:'large'});const pending=await until(()=>f.worker(created.id),value=>value.permissions.length===1),ticket=await f.task(created.id);
+  assert.equal(ticket.coordinatorModel,'small');assert.equal(ticket.executorModel,'large');
+  const coordinator=await f.connection.rpc<AcpSnapshot>('acpSnapshot',{sessionId:ticket.coordinatorSession});assert.equal(coordinator.configOptions?.find(option=>option.id==='provider-model')?.currentValue,'small');assert.equal(pending.configOptions?.find((option:any)=>option.id==='provider-model')?.currentValue,'large');
+  await until(()=>f.connection.rpc<State>('state'),value=>value.agentActivities?.some((activity:any)=>activity.taskId===ticket.id&&activity.status==='waiting'));
+  await f.call('action',{id:ticket.id,action:'cancel'});await f.extension({action:'reload',id:'superagent'});const restored=await f.task(ticket.id);assert.equal(restored.coordinatorModel,'small');assert.equal(restored.executorModel,'large');
+  await f.extension({action:'disable',id:'superagent'});assert.ok(!(await f.connection.rpc<State>('state')).agentActivities?.some(activity=>activity.kind==='superagent'));
+});
+test('an unavailable selected model interrupts before a prompt instead of silently using another model',async t=>{
+  const f=await fixture(t),created=await f.create({coordinatorModel:'removed-model'});const task=await until(()=>f.task(created.id),value=>value.phase==='interrupted');assert.match(task.error,/未提供已选择的模型/);
+  const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(records.filter(record=>record.method==='prompt').length,0);
+  await f.call('action',{id:task.id,action:'complete'});assert.equal((await f.connection.rpc<State>('state')).agentActivities?.find(activity=>activity.taskId===task.id)?.status,'completed','Confirming a task must override a previous execution error in the companion');
+});

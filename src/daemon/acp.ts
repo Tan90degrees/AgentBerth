@@ -1,43 +1,56 @@
 import { createHash } from 'node:crypto';
-import { acpOptionChoices, type AcpConfig, type AcpEvent, type AcpPermission, type AcpSnapshot } from '../shared/acp';
+import { acpOptionChoices,acpModelOption, type AcpConfig, type AcpEvent, type AcpPermission, type AcpSnapshot,type AcpModels,type AcpTerminal } from '../shared/acp';
 import type { AgentDefinition, Run, Session, ServerEvent } from '../shared/protocol';
 import type { Store } from './store';
 import { AcpTransport, AcpRpcError } from './acp-transport';
 import { AcpClientTools } from './acp-client-tools';
+import type {AgentActivity} from '../shared/pet';
 
 type Metadata=Omit<AcpSnapshot,'events'|'before'|'hasMore'>;
 interface Live {
   session:Session;run:Run;cwd:string;definition:AgentDefinition;transport:AcpTransport|null;tools:AcpClientTools;
   state:Metadata;permissions:Map<string,{value:AcpPermission;resolve:(value:unknown)=>void}>;
   stopping:boolean;cancelled:boolean;fingerprint:string;serial:Promise<unknown>;ending?:Promise<void>;
+  toolStates:Map<string,{turnId:string|null;data:Record<string,any>}>;
 }
 const bounded=(value:unknown):Record<string,unknown>|undefined=>{if(!value||typeof value!=='object'||Array.isArray(value))return;const text=JSON.stringify(value);return Buffer.byteLength(text)<=32768?JSON.parse(text):{omitted:true};};
 export class AcpSessions {
   readonly live=new Map<string,Live>();private closed=false;
+  private discovering=new Map<string,Promise<AcpModels>>();
+  private probes=new Set<AcpTransport>();
   constructor(private store:Store,private emit:(event:ServerEvent)=>void,private changed:()=>void){}
   active(id:string){return this.live.has(id);}
+  activities(sessions:Session[],agents:AgentDefinition[]):AgentActivity[]{
+    const ids=new Set(agents.filter(agent=>agent.acp).map(agent=>agent.id));
+    return sessions.filter(session=>!session.remote&&session.latestRun&&ids.has(session.agent)).map(session=>{
+      const state=this.live.get(session.id)?.state??this.store.acpState(session.id),phase=state.phase,connected=this.live.has(session.id);
+      const status=state.error||phase==='error'?'error':connected&&phase==='permission'?'waiting':connected&&(phase==='running'||phase==='connecting')?'working':state.lastTurnStatus==='completed'?'completed':!connected&&(phase==='running'||phase==='permission'||state.lastTurnStatus==='interrupted')?'unknown':'idle';
+      return {id:session.id,title:session.title,projectId:session.projectId,targetSessionId:session.id,managedSessionIds:[],kind:'acp',status,label:status==='waiting'?'等待你的授权':status==='working'?(phase==='connecting'?'正在连接 ACP':'Agent 正在执行'):status==='completed'?'本轮已完成':status==='error'?'ACP 会话异常':status==='unknown'?'上次任务已中断':'ACP 已就绪',updatedAt:Date.parse(session.latestRun!.startedAt)};
+    });
+  }
   targets(){return [...this.live.values()].flatMap(value=>value.transport?.pid?[{sessionId:value.session.id,projectId:value.session.projectId,runId:value.run.id,pid:value.transport.pid}]:[]);}
   private publish(value:Live){
     value.state.permissions=[...value.permissions.values()].map(item=>item.value);
     this.store.saveAcpState(value.session.id,{...value.state,permissions:[],fingerprint:value.fingerprint});
     this.emit({event:'acp',data:{sessionId:value.session.id,state:{...value.state}}});
+    this.changed();
   }
-  private append(value:Live,kind:AcpEvent['kind'],text:string,data?:Record<string,unknown>){
+  private append(value:Live,kind:AcpEvent['kind'],text:string,data?:Record<string,unknown>,turnId?:string|null){
     // Bound individual events and response pages, keeping the full turn in the
     // paginated journal rather than an xterm viewport or a growing state RPC.
     const chunks=text?Array.from({length:Math.ceil(text.length/8192)},(_,i)=>text.slice(i*8192,(i+1)*8192)):[''];
-    for(const chunk of chunks){const event=this.store.appendAcp(value.session.id,value.state.turnId,kind,chunk,data);this.emit({event:'acp',data:{sessionId:value.session.id,event}});}
+    for(const chunk of chunks){const event=this.store.appendAcp(value.session.id,turnId===undefined?value.state.turnId:turnId,kind,chunk,data);this.emit({event:'acp',data:{sessionId:value.session.id,event}});}
   }
   snapshot(id:string,pagination:{before?:number;after?:number;limit?:number}={}):AcpSnapshot{
     const saved=this.store.acpState(id),value=this.live.get(id);
-    const state:Metadata=value?{...value.state,permissions:[...value.permissions.values()].map(p=>p.value)}:{sessionId:id,nativeSessionId:saved.nativeSessionId??null,phase:'disconnected',turnId:null,permissions:[],error:saved.error,agentInfo:saved.agentInfo,capabilities:saved.capabilities,configOptions:saved.configOptions,modes:saved.modes,authMethods:saved.authMethods,...(saved.phase==='running'||saved.phase==='permission'?{error:'上次操作因后台退出而中断；结果未知，不会自动重放'}:{})};
+    const state:Metadata=value?{...value.state,permissions:[...value.permissions.values()].map(p=>p.value)}:{sessionId:id,nativeSessionId:saved.nativeSessionId??null,phase:'disconnected',turnId:null,permissions:[],error:saved.error,agentInfo:saved.agentInfo,capabilities:saved.capabilities,configOptions:saved.configOptions,modes:saved.modes,authMethods:saved.authMethods,availableCommands:saved.availableCommands,lastTurnStatus:saved.lastTurnStatus,...(saved.phase==='running'||saved.phase==='permission'?{error:'上次操作因后台退出而中断；结果未知，不会自动重放'}:{})};
     return {...state,...this.store.acpEvents(id,pagination)};
   }
   async start(session:Session,definition:AgentDefinition,cwd:string,cols:number,rows:number):Promise<Run>{
     if(this.closed)throw new Error('ACP 后台正在退出');if(this.live.has(session.id))throw new Error('ACP 会话已连接');if(!definition.acp)throw new Error('此 Agent 未配置 ACP');
     const run=this.store.createRun(session.id,'ACP',cols,rows,definition.acp.executable),saved=this.store.acpState(session.id);
     const fingerprint=createHash('sha256').update(JSON.stringify([definition.id,definition.acp,cwd])).digest('hex');
-    const value:Live={session,run,cwd,definition,transport:null,tools:new AcpClientTools(cwd),permissions:new Map(),stopping:false,cancelled:false,fingerprint,serial:Promise.resolve(),state:{sessionId:session.id,nativeSessionId:saved.fingerprint===fingerprint?saved.nativeSessionId??null:null,phase:'connecting',turnId:null,permissions:[]}};
+    const value:Live={session,run,cwd,definition,transport:null,tools:new AcpClientTools(cwd,view=>this.append(value,'terminal','',{...view})),toolStates:new Map(),permissions:new Map(),stopping:false,cancelled:false,fingerprint,serial:Promise.resolve(),state:{sessionId:session.id,nativeSessionId:saved.fingerprint===fingerprint?saved.nativeSessionId??null:null,phase:'connecting',turnId:null,permissions:[]}};
     this.live.set(session.id,value);this.publish(value);this.changed();
     try{
       const transport=await AcpTransport.open(definition.acp,cwd,(method,params)=>this.clientRequest(value,method,params),(method,params)=>this.notification(value,method,params),error=>{void this.ended(value,error).catch(()=>{});});value.transport=transport;
@@ -75,7 +88,25 @@ export class AcpSessions {
   }
   async probe(config:AcpConfig,cwd:string){
     const transport=await AcpTransport.open(config,cwd,async()=>{throw new AcpRpcError(-32601,'探测连接不提供会话文件和终端');},()=>{},()=>{});
-    try{return await transport.call('initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'agentberth-probe',version:'0.18.0'}});}finally{await transport.stop();}
+    this.probes.add(transport);try{if(this.closed)throw new Error('ACP 后台正在退出');return await transport.call('initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'agentberth-probe',version:'0.18.0'}});}finally{this.probes.delete(transport);await transport.stop();}
+  }
+  options(definition:AgentDefinition,cwd:string):Promise<AcpModels>{
+    if(this.closed)return Promise.reject(new Error('ACP 后台正在退出'));
+    const models=(options?:AcpSnapshot['configOptions']):AcpModels=>{const option=acpModelOption(options);return {choices:option?acpOptionChoices(option):[],currentValue:option?.currentValue,configId:option?.id};};
+    const live=[...this.live.values()].find(value=>value.definition.id===definition.id&&value.cwd===cwd&&!value.stopping&&['ready','running','permission'].includes(value.state.phase));
+    if(live)return Promise.resolve(models(live.state.configOptions));
+    const key=JSON.stringify([definition.acp,cwd]);const existing=this.discovering.get(key);if(existing)return existing;
+    const task=(async()=>{
+      if(!definition.acp)throw new Error('此 Agent 未配置 ACP');
+      const transport=await AcpTransport.open(definition.acp,cwd,async()=>{throw new AcpRpcError(-32601,'读取模型不提供客户端文件与命令能力');},()=>{},()=>{});
+      this.probes.add(transport);try{if(this.closed)throw new Error('ACP 后台正在退出');const init=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'agentberth-models',version:'0.18.0'}});if(init.protocolVersion!==1)throw new Error('Agent 未协商 ACP v1');const setup=await transport.call('session/new',{cwd,mcpServers:[]});return models(setup.configOptions);}
+      finally{this.probes.delete(transport);await transport.stop();}
+    })().finally(()=>this.discovering.delete(key));this.discovering.set(key,task);return task;
+  }
+  terminal(id:string,terminalId:string):AcpTerminal{
+    this.store.session(id);const live=this.live.get(id);if(live)try{return live.tools.terminal(terminalId);}catch{/* A released terminal is saved in the journal. */}
+    let before:number|undefined;for(let page=0;page<26;page++){const result=this.store.acpEvents(id,{before,limit:200}),found=[...result.events].reverse().find(event=>event.kind==='terminal'&&event.data?.terminalId===terminalId);if(found)return found.data as unknown as AcpTerminal;if(!result.hasMore)break;before=result.before??undefined;}
+    throw new Error('终端输出不属于此会话或已超出历史保留范围');
   }
   private require(id:string){const value=this.live.get(id);if(!value||value.stopping||!value.transport)throw new Error('ACP 会话尚未连接，请启动会话');return value;}
   send(id:string,requestId:string,text:string){
@@ -86,7 +117,7 @@ export class AcpSessions {
     // Ordinary prompts have no wall-clock timeout. Long tasks stay attached;
     // cancel/stop are explicit, and disconnect never resubmits the prompt.
     value.serial=value.transport!.call('session/prompt',{sessionId:value.state.nativeSessionId,prompt:[{type:'text',text}]},0).then(response=>{
-      this.store.finishAcpTurn(requestId,value.cancelled?'cancelled':'completed');this.append(value,'turn',value.cancelled?'已停止当前任务':({end_turn:'本轮已完成',max_tokens:'已达到 Agent 输出上限',max_turn_requests:'已达到 Agent 请求上限',refusal:'Agent 未执行此请求',cancelled:'已停止当前任务'} as Record<string,string>)[String(response.stopReason)]??'本轮已结束',{stopReason:response.stopReason??'end_turn'});
+      value.state.lastTurnStatus=value.cancelled||response.stopReason==='cancelled'?'cancelled':'completed';this.store.finishAcpTurn(requestId,value.state.lastTurnStatus);this.append(value,'turn',value.cancelled?'已停止当前任务':({end_turn:'本轮已完成',max_tokens:'已达到 Agent 输出上限',max_turn_requests:'已达到 Agent 请求上限',refusal:'Agent 未执行此请求',cancelled:'已停止当前任务'} as Record<string,string>)[String(response.stopReason)]??'本轮已结束',{stopReason:response.stopReason??'end_turn'});
     },error=>{this.store.finishAcpTurn(requestId,'interrupted');if(!value.stopping)this.append(value,'error',String(error));value.state.error=String(error);}).finally(()=>{
       this.cancelPermissions(value);value.state.turnId=null;if(this.live.get(id)===value&&!value.stopping){value.state.phase=value.state.error?'error':'ready';this.publish(value);}
     });
@@ -132,17 +163,27 @@ export class AcpSessions {
       // durable; replayed notifications must not duplicate previous messages.
       if(value.state.phase==='connecting')return;
       const text=update.content?.type==='text'?String(update.content.text??''):update.content?.type==='resource_link'?String(update.content.uri??''):'[非文本内容]';
-      this.append(value,kind==='agent_thought_chunk'?'thought':kind==='user_message_chunk'?'notice':'assistant',text);
-    }else if(kind==='tool_call'||kind==='tool_call_update')this.append(value,'tool',String(update.title??update.status??'工具执行'),bounded(update));
+      const data=update.content?.type!=='text'?bounded({content:update.content}):undefined;
+      this.append(value,kind==='agent_thought_chunk'?'thought':kind==='user_message_chunk'?'notice':'assistant',text,data?.omitted?{omitted:true,content:{type:update.content?.type??'unknown'}}:data);
+    }else if(kind==='tool_call'||kind==='tool_call_update'){
+      const id=typeof update.toolCallId==='string'?update.toolCallId:'';if(!id)return;
+      const previous=value.toolStates.get(id),merged={...previous?.data,...Object.fromEntries(Object.entries(update).filter(([,value])=>value!==null&&value!==undefined))};
+      let data=bounded(merged)!;
+      if(data.omitted)data={toolCallId:id.slice(0,200),title:String(merged.title??'工具调用').slice(0,500),kind:String(merged.kind??'other').slice(0,30),status:String(merged.status??'pending').slice(0,30),omitted:true,...(merged.rawInput!==undefined?{rawInput:JSON.stringify(merged.rawInput).slice(0,2048)}:{}),...(merged.rawOutput!==undefined?{rawOutput:JSON.stringify(merged.rawOutput).slice(0,2048)}:{})};
+      const owner=previous?.turnId??value.state.turnId;value.toolStates.set(id,{turnId:owner,data});
+      if(value.toolStates.size>512){const oldest=[...value.toolStates].find(([,item])=>['completed','failed'].includes(String(item.data.status)));value.toolStates.delete(oldest?.[0]??value.toolStates.keys().next().value!);}
+      this.append(value,'tool',String(data.title??data.status??'工具执行'),data,owner);
+    }
     else if(kind==='plan')this.append(value,'plan','执行计划',bounded(update));
     else if(kind==='config_option_update'){value.state.configOptions=Array.isArray(update.configOptions)?update.configOptions:[];this.publish(value);}
     else if(kind==='current_mode_update'&&value.state.modes){value.state.modes.currentModeId=String(update.currentModeId);this.publish(value);}
+    else if(kind==='available_commands_update'){value.state.availableCommands=Array.isArray(update.availableCommands)?update.availableCommands.filter((item:any)=>item&&typeof item.name==='string'&&typeof item.description==='string').slice(0,100):[];this.publish(value);}
   }
   private cancelPermissions(value:Live){for(const pending of value.permissions.values())pending.resolve({outcome:{outcome:'cancelled'}});value.permissions.clear();}
   private ended(value:Live,error?:Error):Promise<void>{
     if(value.ending)return value.ending;value.stopping=true;this.cancelPermissions(value);
     const ending=(async()=>{
-      if(value.state.turnId)this.store.finishAcpTurn(value.state.turnId,'interrupted');
+      if(value.state.turnId){this.store.finishAcpTurn(value.state.turnId,'interrupted');value.state.lastTurnStatus='interrupted';}
       if(error)this.append(value,'error',error.message);
       const results=await Promise.allSettled([value.tools.close(),value.transport?.stop()]);
       const failed=results.find(result=>result.status==='rejected');
@@ -154,5 +195,5 @@ export class AcpSessions {
     value.ending=ending.catch(failure=>{value.ending=undefined;value.stopping=false;value.state.phase='error';value.state.error='ACP 进程清理未完成，请重试停止：'+String(failure);this.publish(value);throw failure;});return value.ending;
   }
   async stop(id:string){const value=this.live.get(id);if(!value)return;await this.ended(value);}
-  async close(){this.closed=true;await Promise.all([...this.live.values()].map(value=>this.ended(value)));}
+  async close(){this.closed=true;await Promise.all([...this.live.values()].map(value=>this.ended(value)).concat([...this.probes].map(transport=>transport.stop())));await Promise.allSettled([...this.discovering.values()]);}
 }

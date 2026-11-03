@@ -199,7 +199,7 @@ export class DaemonServer {
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
   }
-  private snapshot(): State { const state=this.store.state();return {...state,extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private snapshot(): State { const state=this.store.state();return {...state,agentActivities:[...this.acp.activities(state.sessions,state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
   workspaceCorePort() {
     const self=this;
     return {

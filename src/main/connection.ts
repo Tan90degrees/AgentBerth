@@ -43,7 +43,7 @@ export class DaemonConnection {
     if (this.pending.size >= 128) return Promise.reject(new Error('请求过多，请稍后重试'));
     const id = randomUUID();
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, method === 'gitOperation' ? 600000 : method.startsWith('git') ? 60000 : method === 'extensions' ? 120000 : ['start', 'acpSend', 'acpProbe', 'acpAuthenticate', 'remoteOpen', 'remoteManage', 'remoteAgentClose', 'stop', 'shutdown', 'remoteReconnect'].includes(method) ? 60000 : ['remoteWait','remoteCommand','remoteReadOutput','remoteTransferStatus'].includes(method) ? 35000 : 15000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, method === 'gitOperation' ? 600000 : method.startsWith('git') ? 60000 : method === 'extensions' ? 120000 : ['start', 'acpSend', 'acpProbe', 'acpOptions', 'acpAuthenticate', 'remoteOpen', 'remoteManage', 'remoteAgentClose', 'stop', 'shutdown', 'remoteReconnect'].includes(method) ? 60000 : ['remoteWait','remoteCommand','remoteReadOutput','remoteTransferStatus'].includes(method) ? 35000 : 15000);
       this.pending.set(id, { resolve: value => resolve(value as T), reject, timer });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
@@ -133,7 +133,7 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   const runtime = runtimeFile(directory);
   if (runtime) {
     let candidate: DaemonConnection | null = null;
-    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION)throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
+    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!(state.apiVersion===44&&API_VERSION===45))throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
     catch (error) {
       candidate?.close();
       if(String(error).includes('运行中的后台版本与当前架构不同'))throw error;

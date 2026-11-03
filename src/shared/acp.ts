@@ -7,7 +7,7 @@ export const acpConfigSchema=z.object({
   env:z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),line).default({}),
 }).strict();
 export type AcpConfig=z.infer<typeof acpConfigSchema>;
-export interface AcpEvent {sequence:number;id:string;sessionId:string;turnId:string|null;kind:'user'|'assistant'|'thought'|'tool'|'plan'|'notice'|'error'|'permission'|'turn';text:string;data?:Record<string,unknown>;createdAt:string}
+export interface AcpEvent {sequence:number;id:string;sessionId:string;turnId:string|null;kind:'user'|'assistant'|'thought'|'tool'|'plan'|'notice'|'error'|'permission'|'turn'|'terminal';text:string;data?:Record<string,unknown>;createdAt:string}
 export interface AcpOption {id:string;name:string;type:string;category?:string;currentValue?:string;options?:{value?:string;name?:string;group?:string;options?:{value:string;name:string}[]}[]}
 export interface AcpPermission {id:string;title:string;options:{optionId:string;name:string;kind:string}[];toolCall?:Record<string,unknown>}
 export interface AcpSnapshot {
@@ -15,8 +15,13 @@ export interface AcpSnapshot {
   turnId:string|null;error?:string;agentInfo?:Record<string,unknown>;capabilities?:Record<string,unknown>;
   configOptions?:AcpOption[];modes?:{currentModeId:string;availableModes:{id:string;name:string;description?:string}[]};
   authMethods?:{id:string;name:string;description?:string}[];permissions:AcpPermission[];
+  availableCommands?:{name:string;description:string;input?:{hint:string}}[];
+  lastTurnStatus?:'completed'|'cancelled'|'interrupted';
   events:AcpEvent[];before:number|null;hasMore:boolean;
 }
+export function acpModelOption(options?:AcpOption[]){return options?.find(option=>option.category==='model')??options?.find(option=>option.id==='model');}
+export interface AcpModels {choices:{value:string;name:string}[];currentValue?:string;configId?:string}
+export interface AcpTerminal {terminalId:string;output:string;truncated:boolean;released?:boolean;exitStatus?:{exitCode?:number;signal?:string}}
 
 /** ACP select options may contain named groups. Use actual declared values. */
 export function acpOptionChoices(option:AcpOption):{value:string;name:string}[]{

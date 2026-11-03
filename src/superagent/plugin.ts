@@ -6,20 +6,20 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Context } from 'cordis';
 import type { State, Session, GitWorktree } from '../shared/protocol';
-import { acpOptionChoices, type AcpSnapshot } from '../shared/acp';
+import { acpOptionChoices,acpModelOption, type AcpSnapshot,type AcpModels } from '../shared/acp';
 import type { SuperagentSourceEvent } from '../shared/superagent-source';
 import { SuperagentSources } from './sources';
 
 type Phase='queued'|'planning'|'working'|'needs_attention'|'completed'|'cancelled'|'interrupted';
 export interface Ticket {
-  id:string;title:string;objective:string;projectId:string;coordinatorId:string;executorId:string;
+  id:string;title:string;objective:string;projectId:string;coordinatorId:string;executorId:string;coordinatorModel?:string;executorModel?:string;
   phase:Phase;approved:boolean;isolated:boolean;createdAt:string;updatedAt:string;
   coordinatorSession:string;workerSession:string;planTurn:string;workerTurn:string;
   worktreePath?:string;assignment?:string;summary?:string;question?:string;error?:string;stage?:'coordinator'|'worker';
   attempt:number;lastInput?:string;attention?:boolean;
   source?:{id:string;threadId:string;eventId:string;actorId:string;policyVersion:string};
 }
-interface SourcePolicy {enabled:boolean;projectId:string;coordinatorId:string;executorId:string;allowedActors:string[];autoApprove:boolean;isolated:boolean;version:string}
+interface SourcePolicy {enabled:boolean;projectId:string;coordinatorId:string;executorId:string;coordinatorModel?:string;executorModel?:string;allowedActors:string[];autoApprove:boolean;isolated:boolean;version:string}
 const object={type:'object',additionalProperties:false};
 const string={type:'string',minLength:1,maxLength:16000};
 const id={type:'string',minLength:1,maxLength:100};
@@ -44,8 +44,10 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   const all=():Ticket[]=>db.prepare("SELECT value FROM tickets ORDER BY CASE WHEN json_extract(value,'$.phase') IN ('completed','cancelled') THEN 1 ELSE 0 END,rowid DESC LIMIT 200").all().map(row=>JSON.parse(String(row.value)));
   const audit=(key:string,kind:string,text:string)=>{if(!closed)db.prepare('INSERT INTO audit(ticketId,value) VALUES (?,?)').run(key,JSON.stringify({at:new Date().toISOString(),kind,text:text.slice(0,4000)}));};
   const save=(ticket:Ticket)=>{if(closed)return;ticket.updatedAt=new Date().toISOString();db.prepare('INSERT INTO tickets VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(ticket.id,JSON.stringify(ticket));};
-  const change=(key:string,patch:Partial<Ticket>,reason:string)=>{if(closed)return;const ticket={...get(key),...patch};save(ticket);audit(key,'transition',reason);return ticket;};
+  const activity=(ticket:Ticket)=>api.activity({id:ticket.id,title:('Superagent · '+ticket.title).slice(0,100),projectId:ticket.projectId,kind:'superagent',targetSessionId:ticket.stage==='worker'?ticket.workerSession:ticket.coordinatorSession,managedSessionIds:[ticket.coordinatorSession,ticket.workerSession],status:ticket.phase==='completed'?'completed':ticket.phase==='cancelled'?'idle':ticket.phase==='interrupted'?'unknown':ticket.error?'error':ticket.phase==='needs_attention'||ticket.attention?'waiting':['planning','working'].includes(ticket.phase)?'working':'idle',label:ticket.phase==='planning'?'协调中':ticket.phase==='working'?(ticket.attention?'等待授权':'执行中'):ticket.phase==='needs_attention'?'等待你审核':ticket.phase==='interrupted'?'任务已中断，等待确认':ticket.phase==='completed'?'任务已完成':ticket.phase==='cancelled'?'任务已取消':'任务排队中',updatedAt:Date.parse(ticket.updatedAt)});
+  const change=(key:string,patch:Partial<Ticket>,reason:string)=>{if(closed)return;const ticket={...get(key),...patch};save(ticket);audit(key,'transition',reason);activity(ticket);return ticket;};
   for(const ticket of all())if(['planning','working'].includes(ticket.phase))change(ticket.id,{phase:'interrupted',attention:true,error:'宿主曾退出或插件重新加载，结果需确认；不会自动重新发送任务。'},'恢复检查点：等待显式重试');
+  for(const ticket of all())activity(ticket);
   const host=<T=any>(method:string,params:Record<string,unknown>={})=>{if(closed||api.signal.aborted)throw new Error('Superagent 已停止');return api.call(method,params) as Promise<T>;};
   const validate=async(p:any)=>{const state=await host<State>('state');if(!state.projects.some(project=>project.id===p.projectId&&!project.remoteWorkspace))throw new Error('请选择本机项目');for(const key of ['coordinatorId','executorId'])if(!state.agents?.some(agent=>agent.id===p[key]&&agent.acp))throw new Error('协调和执行 Agent 均须为已配置的 ACP 接入');return state;};
   const stopSessions=async(ticket:Ticket)=>{await Promise.all([ticket.coordinatorSession,ticket.workerSession].map(sessionId=>api.call('stop',{sessionId}).catch(error=>{if(!String(error).includes('会话不存在'))throw error;})));};
@@ -63,9 +65,10 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     const previous=db.prepare('SELECT ticketId FROM triggers WHERE source=? AND eventId=?').get(source,eventId);if(previous)return {id:String(previous.ticketId),duplicate:true};
     await validate(p);if(closed)throw new Error('插件已停止');
     if(Number(db.prepare("SELECT COUNT(*) AS count FROM tickets WHERE json_extract(value,'$.phase') NOT IN ('completed','cancelled')").get()!.count)>=200)throw new Error('未结束任务已达 200 个，请先处理已有任务');
-    const ticket:Ticket={id:randomUUID(),title:p.title.trim().slice(0,100),objective:p.objective.trim(),projectId:p.projectId,coordinatorId:p.coordinatorId,executorId:p.executorId,isolated:p.isolated!==false,approved,phase:approved?'queued':'needs_attention',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),coordinatorSession:randomUUID(),workerSession:randomUUID(),planTurn:randomUUID(),workerTurn:randomUUID(),attempt:1,attention:!approved,...(origin?{source:origin}:{})};
+    const ticket:Ticket={id:randomUUID(),title:p.title.trim().slice(0,100),objective:p.objective.trim(),projectId:p.projectId,coordinatorId:p.coordinatorId,executorId:p.executorId,...(p.coordinatorModel?{coordinatorModel:p.coordinatorModel}:{}),...(p.executorModel?{executorModel:p.executorModel}:{}),isolated:p.isolated!==false,approved,phase:approved?'queued':'needs_attention',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),coordinatorSession:randomUUID(),workerSession:randomUUID(),planTurn:randomUUID(),workerTurn:randomUUID(),attempt:1,attention:!approved,...(origin?{source:origin}:{})};
     // Trigger admission and the work item become durable in one transaction.
     db.exec('BEGIN IMMEDIATE');try{save(ticket);db.prepare('INSERT INTO triggers VALUES (?,?,?)').run(source,eventId,ticket.id);audit(ticket.id,'trigger',`来源 ${source} · ${eventId} · ${approved?'用户主动发起':'等待用户批准'}`);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');const duplicate=db.prepare('SELECT ticketId FROM triggers WHERE source=? AND eventId=?').get(source,eventId);if(duplicate)return {id:String(duplicate.ticketId),duplicate:true};throw error;}
+    activity(ticket);
     return {id:ticket.id,duplicate:false};
   };
   const policies=():Record<string,SourcePolicy>=>Object.fromEntries(db.prepare('SELECT id,value FROM source_policies').all().map(row=>[String(row.id),JSON.parse(String(row.value))]));
@@ -91,6 +94,13 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     do{snapshot=await host<AcpSnapshot>('acpSnapshot',{sessionId,after,limit:200});for(const event of snapshot.events){after=Math.max(after,event.sequence);if(event.turnId===turnId&&event.kind==='assistant')text+=event.text;}if(text.length>64000)throw new Error('Agent 决策输出过长，请在会话中缩短结果后显式重试');if(++pages>25)throw new Error('会话日志过多，请在会话中确认任务结果');}while(snapshot.hasMore);
     return {snapshot,text,ended:snapshot.turnId!==turnId&&snapshot.phase!=='running'&&snapshot.phase!=='permission'&&snapshot.phase!=='connecting'};
   };
+  const applyModel=async(ticket:Ticket,role:'coordinator'|'worker')=>{
+    const model=role==='coordinator'?ticket.coordinatorModel:ticket.executorModel;if(!model)return;
+    const sessionId=role==='coordinator'?ticket.coordinatorSession:ticket.workerSession;
+    const snapshot=await host<AcpSnapshot>('acpSnapshot',{sessionId,limit:1}),option=acpModelOption(snapshot.configOptions);
+    if(!option||!acpOptionChoices(option).some(choice=>choice.value===model))throw new Error((role==='coordinator'?'协调':'执行')+' Agent 未提供已选择的模型 '+model+'；请更新模型配置，不会自动替换模型或发送任务');
+    await host('acpConfigure',{sessionId,configId:option.id,value:model});audit(ticket.id,'model',(role==='coordinator'?'协调':'执行')+'模型：'+model);
+  };
   const launchCoordinator=async(ticket:Ticket)=>{
     const coordinator=await session(ticket,'coordinator');if(!await guard(ticket,'planning'))return;
     if(coordinator.latestRun?.status!=='running')await host('start',{sessionId:ticket.coordinatorSession,cols:100,rows:30,resume:true});
@@ -99,6 +109,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     const planOption=setup.configOptions?.find(option=>(option.category==='mode'||option.id==='mode')&&acpOptionChoices(option).some(choice=>choice.value==='plan'));
     if(planOption||setup.modes?.availableModes.some(mode=>mode.id==='plan')){await host('acpConfigure',{sessionId:ticket.coordinatorSession,configId:planOption?.id??'mode',value:'plan'});audit(ticket.id,'policy','协调者使用 Agent 声明的 plan 模式');}
     else audit(ticket.id,'policy','此 Agent 未提供 plan 模式，协调者遵循自身权限与任务指令');
+    await applyModel(ticket,'coordinator');
     if(!await guard(ticket,'planning'))return;
     const rules=String(config.rules??'仅在请求范围内工作。不得自动推送、合并或向外部渠道发送消息。');
     if(rules.length>4000)throw new Error('Superagent 规则超过 4000 字，请缩短规则或放入项目 AGENTS.md');
@@ -118,6 +129,8 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     }
     if(!await guard(ticket,'working'))return;
     ticket=get(ticket.id);await session(ticket,'worker',worktreePath);if(!await guard(ticket,'working'))return;
+    await host('start',{sessionId:ticket.workerSession,cols:100,rows:30,resume:true});if(!await guard(ticket,'working'))return;
+    await applyModel(ticket,'worker');if(!await guard(ticket,'working'))return;
     const prompt=`你是 Superagent 的独立执行器。只完成当前任务，不接管其他会话。\n任务 ${ticket.id}\n${ticket.assignment}\n${ticket.lastInput?'用户补充：'+ticket.lastInput:''}\n在当前工作目录实施并验证。不得自动推送、合并或向外部渠道发消息。不要删除工作区或历史。需要授权时使用 Agent 的标准授权请求；无法继续就解释具体阻塞。最终只输出 JSON：{"status":"ready|blocked|failed","summary":"完成内容、验证结果和限制","question":"需要用户回答的具体问题，没有则留空"}。ready 代表可交付审核，不代表用户已接受。`;
     audit(ticket.id,'dispatch','提交执行请求，幂等请求 ID：'+ticket.workerTurn);
     await host('acpSend',{sessionId:ticket.workerSession,requestId:ticket.workerTurn,text:prompt});await guard(ticket,'working');
@@ -152,12 +165,14 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
       }
     })().finally(()=>{ticking=null;});void ticking.catch(()=>{});
   };
-  const props={projectId:id,coordinatorId:id,executorId:id,title:{...string,maxLength:100},objective:string,isolated:{type:'boolean'}};
+  const model={type:'string',minLength:1,maxLength:1000};
+  const props={projectId:id,coordinatorId:id,executorId:id,coordinatorModel:model,executorModel:model,title:{...string,maxLength:100},objective:string,isolated:{type:'boolean'}};
+  api.command({mcp:false,name:'models',description:'Read model choices declared by an ACP Agent; uses a matching live session or a temporary empty session without sending prompts.',inputSchema:{...object,properties:{projectId:id,acpId:id},required:['projectId','acpId']}},p=>host<AcpModels>('acpOptions',{agentId:p.acpId,projectId:p.projectId}));
   api.command({mcp:false,name:'create',description:'Create a user-requested task with selected ACP coordinator/executor; each task gets independent sessions and optionally a Git worktree.',inputSchema:{...object,properties:props,required:['projectId','coordinatorId','executorId','title','objective']}},p=>create(p));
   api.command({mcp:false,name:'state',description:'List projects, ACP agents, plugin-defined sources and recent task summaries. No credentials or full transcripts.',inputSchema:{...object,properties:{}}},async()=>{const state=await host<State>('state');return {projects:state.projects.filter(project=>!project.remoteWorkspace).map(project=>({id:project.id,name:project.name})),agents:state.agents?.filter(agent=>agent.acp).map(agent=>({id:agent.id,name:agent.name})),tasks:all().slice(0,50).map(({objective,assignment,lastInput,summary,...ticket})=>({...ticket,summary:summary?.slice(0,240),error:ticket.error?.slice(0,200),question:ticket.question?.slice(0,200)})),sources:sources.snapshot().map(source=>({...source,policy:policies()[source.id]})),maxConcurrent:Number(config.maxConcurrent??2)};});
-  api.command({mcp:false,name:'source_policy',description:'Bind a registered source to a project and selected ACP agents. Auto-admission requires an explicit actor allowlist; otherwise incoming tasks wait for approval.',inputSchema:{...object,properties:{sourceId:{type:'string',minLength:1,maxLength:200},enabled:{type:'boolean'},projectId:id,coordinatorId:id,executorId:id,allowedActors:{type:'array',items:{type:'string',minLength:1,maxLength:200},maxItems:128},autoApprove:{type:'boolean'},isolated:{type:'boolean'}},required:['sourceId','enabled','projectId','coordinatorId','executorId','allowedActors','autoApprove','isolated']}},async p=>{
+  api.command({mcp:false,name:'source_policy',description:'Bind a registered source to a project and selected ACP agents. Auto-admission requires an explicit actor allowlist; otherwise incoming tasks wait for approval.',inputSchema:{...object,properties:{sourceId:{type:'string',minLength:1,maxLength:200},enabled:{type:'boolean'},projectId:id,coordinatorId:id,executorId:id,coordinatorModel:model,executorModel:model,allowedActors:{type:'array',items:{type:'string',minLength:1,maxLength:200},maxItems:128},autoApprove:{type:'boolean'},isolated:{type:'boolean'}},required:['sourceId','enabled','projectId','coordinatorId','executorId','allowedActors','autoApprove','isolated']}},async p=>{
     if(!sources.has(String(p.sourceId)))throw new Error('信息源插件未启用');if(p.autoApprove&&!(p.allowedActors as string[]).length)throw new Error('自动准入必须配置明确的授权身份列表');await validate(p);if(closed)throw new Error('插件已停止');
-    const policy:SourcePolicy={enabled:!!p.enabled,projectId:String(p.projectId),coordinatorId:String(p.coordinatorId),executorId:String(p.executorId),allowedActors:p.allowedActors as string[],autoApprove:!!p.autoApprove,isolated:!!p.isolated,version:randomUUID()};db.prepare('INSERT INTO source_policies VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(String(p.sourceId),JSON.stringify(policy));return {version:policy.version};
+    const policy:SourcePolicy={enabled:!!p.enabled,projectId:String(p.projectId),coordinatorId:String(p.coordinatorId),executorId:String(p.executorId),...(p.coordinatorModel?{coordinatorModel:String(p.coordinatorModel)}:{}),...(p.executorModel?{executorModel:String(p.executorModel)}:{}),allowedActors:p.allowedActors as string[],autoApprove:!!p.autoApprove,isolated:!!p.isolated,version:randomUUID()};db.prepare('INSERT INTO source_policies VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(String(p.sourceId),JSON.stringify(policy));return {version:policy.version};
   });
   api.command({mcp:false,name:'source_events',description:'Read recent source admission receipts without message bodies.',inputSchema:{...object,properties:{sourceId:{type:'string',minLength:1,maxLength:200}},required:['sourceId']}},p=>db.prepare('SELECT value FROM source_events WHERE source=? ORDER BY rowid DESC LIMIT 30').all(String(p.sourceId)).map(row=>JSON.parse(String(row.value))));
   api.command({mcp:false,name:'get',description:'Read a bounded task summary and its last 20 audit entries. Use read for omitted text or open the ACP session.',inputSchema:{...object,properties:{id},required:['id']}},p=>{

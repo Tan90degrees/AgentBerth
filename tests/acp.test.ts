@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {DaemonServer} from '../src/daemon/server';
-import {DaemonConnection} from '../src/main/connection';
+import {DaemonConnection,connectDaemon} from '../src/main/connection';
 import {AcpClientTools} from '../src/daemon/acp-client-tools';
 import {acpExecutable,acpCommand} from '../src/daemon/acp-transport';
 import {resolveExecutable} from '../src/daemon/executables';
@@ -120,4 +120,24 @@ test('configOptions mode uses the declared option API instead of the legacy sess
   assert.equal((await f.snapshot()).configOptions?.find(option=>option.id==='mode')?.currentValue,'plan');
   await assert.rejects(f.connection.rpc('acpConfigure',{sessionId:f.session.id,configId:'mode',value:'unavailable'}),/声明的配置/);
   const records=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.deepEqual(records.filter(record=>record.method==='config').map(({configId,value})=>({configId,value})),[{configId:'mode',value:'plan'}]);
+});
+
+test('model discovery uses declared choices without a prompt and reuses a live matching session',async t=>{
+  const f=await fixture(t,['--named-model']),params={agentId:f.agent.id,projectId:f.project.id};
+  const [one,two]=await Promise.all([f.connection.rpc<any>('acpOptions',params),f.connection.rpc<any>('acpOptions',params)]);assert.deepEqual(one,two);assert.equal(one.configId,'provider-model');assert.deepEqual(one.choices.map((choice:any)=>choice.value),['small','large']);
+  const calls=()=>readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8').then(text=>text.trim().split('\n').map(line=>JSON.parse(line)));
+  assert.equal((await calls()).filter(call=>call.method==='initialize').length,1);assert.equal((await calls()).filter(call=>call.method==='prompt').length,0);
+  assert.equal((await f.connection.rpc<State>('state')).sessions.length,1);
+  await f.send('hello');await until(f.snapshot,value=>value.phase==='ready');const before=(await calls()).length;await f.connection.rpc('acpOptions',params);assert.equal((await calls()).length,before);
+});
+test('terminal display output survives release and disconnect and cannot be read from another session',async t=>{
+  const f=await fixture(t);await f.send('terminal');const done=await until(f.snapshot,value=>value.phase==='ready'),event=done.events.find(event=>event.kind==='terminal');assert.ok(event);
+  const terminalId=String(event.data?.terminalId);await f.connection.rpc('stop',{sessionId:f.session.id});const output=await f.connection.rpc<any>('acpTerminal',{sessionId:f.session.id,terminalId});assert.equal(output.output,'ACP_TERMINAL_OK');assert.equal(output.released,true);
+  const other=await f.connection.rpc<Session>('createSession',{projectId:f.project.id,title:'Other',agent:f.agent.id});await assert.rejects(f.connection.rpc('acpTerminal',{sessionId:other.id,terminalId}),/不属于|保留范围/);
+});
+
+test('a compatible API 44 backend remains attachable without stopping a running ACP session',async t=>{
+  const f=await fixture(t);await f.send('long');await until(f.snapshot,value=>value.phase==='running');
+  const store=f.server.agentsCorePort().store,original=store.state.bind(store);store.state=()=>({...original(),apiVersion:44});
+  const connection=await connectDaemon(f.data,'must-not-launch-another-daemon','must-not-launch',()=>{});try{assert.equal((await connection.rpc<State>('state')).apiVersion,44);assert.equal((await f.snapshot()).phase,'running');}finally{connection.close();store.state=original;}
 });

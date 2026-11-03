@@ -5,7 +5,7 @@ import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest }
 import { acpConfigSchema, type AcpSnapshot, type AcpEvent } from './acp';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 44;
+export const API_VERSION = 45;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -139,6 +139,8 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({id,method:z.literal('acpConfigure'),params:z.object({sessionId:id,configId:z.string().min(1).max(200),value:z.string().max(1000)}).strict()}),
   z.object({id,method:z.literal('acpAuthenticate'),params:z.object({sessionId:id,methodId:z.string().min(1).max(500)}).strict()}),
   z.object({id,method:z.literal('acpProbe'),params:acpConfigSchema}),
+  z.object({id,method:z.literal('acpOptions'),params:z.object({agentId:z.string().min(1).max(200),projectId:id}).strict()}),
+  z.object({id,method:z.literal('acpTerminal'),params:z.object({sessionId:id,terminalId:z.string().min(1).max(200)}).strict()}),
   z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id, worktreePath: z.string().min(1).max(4096).nullable().default(null) }).strict() }),
   z.object({ id, method: z.literal('gitWorktrees'), params: z.object({ projectId: id }).strict() }),
@@ -212,7 +214,7 @@ export interface Run { id: string; sessionId: string; pid: number | null; status
 export interface Session { remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface WorkspaceRecovery { id: string; status: 'restoring' | 'completed'; total: number; restored: number; resumed: number; skipped: number; errors: {sessionId: string; title: string; message: string}[] }
-export interface State { extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface State { agentActivities?:import('./pet').AgentActivity[];extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }
