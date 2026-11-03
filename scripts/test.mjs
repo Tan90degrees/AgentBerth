@@ -8,7 +8,7 @@ let electron;
 try { electron = electronExecutable(); }
 catch (error) { console.error(error.message); process.exit(1); }
 await buildBackend();
-const available=globSync('tests/*.test.ts'),requested=process.argv.slice(2);
+const available=globSync('tests/*.test.ts').map(file=>file.replaceAll('\\','/')),requested=process.argv.slice(2).map(file=>file.replaceAll('\\','/'));
 if(requested.some(file=>!available.includes(file)))throw new Error('Specify existing tests/*.test.ts files');
 const tests = requested.length?requested:available;
 await build({ entryPoints: tests, outdir: 'dist/tests', outExtension: { '.js': '.cjs' }, bundle: true, platform: 'node', format: 'cjs', packages: 'external', target: 'node24' });
