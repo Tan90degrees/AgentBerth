@@ -22,9 +22,8 @@ export async function acpCommand(executable:string,arguments_:string[]){
     }
     let args=arguments_;
     if(process.platform==='win32'&&/\.ps1$/i.test(file)){
-      // -File preserves the script's interactive stdin. Invoking a script
-      // inside -EncodedCommand adds a PowerShell pipeline around native ACP
-      // children, which can close their input between protocol requests.
+      // Run the script as a file with literal arguments, without building an
+      // extra PowerShell expression around its bidirectional protocol.
       return {file:path.join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'),args:['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',file,...args]};
     }
     if(process.platform==='win32'&&/\.(?:cmd|bat)$/i.test(file)){
