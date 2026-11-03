@@ -65,4 +65,8 @@ test('Cordis-only developer kit contains a valid Agent contribution package', as
   const guide=await readFile(path.join(kit,'CORDIS_PLUGIN_DEVELOPMENT.md'),'utf8');
   assert.match(developmentPrompt(guide,kit),/Cordis/);
   assert.match(developmentPrompt(guide,kit),/不要生成旧版 Agent JSON/);
+  assert.match(developmentPrompt(guide,kit),/SUPERAGENT_SOURCE_DEVELOPMENT/);
+  const sourceGuide=await readFile(path.join(kit,'SUPERAGENT_SOURCE_DEVELOPMENT.md'),'utf8');
+  assert.match(sourceGuide,/先跑通本地示例/);assert.match(sourceGuide,/idempotencyKey/);
+  await readManifest(path.join(kit,'superagent-source-local'));
 });

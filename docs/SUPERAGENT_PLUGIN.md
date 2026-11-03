@@ -9,3 +9,5 @@
 源码在 `src/superagent`，插件入口仅导出 `apply`，视图通过自带 `view.html` 运行，除 Cordis 外的依赖已打包。无 GitHub、飞书适配器，无外部服务默认配置。插件运行可信本机 Node 代码，安装前应确认来源。
 
 完整用法、ACP 配置、来源 SDK、回执与恢复语义见应用资源 `docs/ACP_SUPERAGENT.md` 或仓库同名文档。上游设计参考及 MIT 声明见包内 `UPSTREAM-NOTICE.txt`。
+
+从零实现信息源请读 `docs/SUPERAGENT_SOURCE_DEVELOPMENT.md`；插件页面「信息源 → 开发指南 / 复制给 Agent」可直接阅读、复制及导出完整开发示例。

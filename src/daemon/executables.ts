@@ -66,10 +66,10 @@ async function firstExecutable(candidates: string[]): Promise<string | null> {
   }
   return null;
 }
-export async function resolveExecutable(file: string, options: {allowBatch?: boolean} = {}): Promise<string> {
+export async function resolveExecutable(file: string, options: {allowBatch?: boolean;allowPowerShell?:boolean} = {}): Promise<string> {
   if (!file.trim() || /[\r\n\x00]/.test(file)) throw new Error('请指定终端可执行文件，启动参数单独填写');
   const windows = process.platform === 'win32';
-  if (windows && /\.(cmd|bat|ps1)$/i.test(file) && !(options.allowBatch && /\.(cmd|bat)$/i.test(file))) throw new Error('终端须为 .exe 可执行文件，例如 pwsh.exe 或 cmd.exe');
+  if (windows && /\.(cmd|bat|ps1)$/i.test(file) && !(options.allowBatch && /\.(cmd|bat)$/i.test(file)) && !(options.allowPowerShell && /\.ps1$/i.test(file))) throw new Error('终端须为 .exe 可执行文件，例如 pwsh.exe 或 cmd.exe');
   if (!path.isAbsolute(file) && /[\\/]/.test(file)) throw new Error('终端路径必须是绝对路径，或 PATH 中的程序名');
   const inherited = await firstExecutable(pathCandidates(file));
   if (inherited) return inherited;

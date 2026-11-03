@@ -5,14 +5,26 @@ import { terminalEnvironment } from './paths';
 import { terminateWindowsTree } from './processes';
 import type { AcpConfig } from '../shared/acp';
 
-/** Resolve native executables or quote Windows npm batch launchers for PowerShell. */
+/** Treat a path as one file, including spaces; never split it as a shell command. */
+export function acpExecutable(value:string){
+  const trimmed=value.trim();
+  return trimmed.length>1&&((trimmed.startsWith('"')&&trimmed.endsWith('"'))||(trimmed.startsWith("'")&&trimmed.endsWith("'")))?trimmed.slice(1,-1):trimmed;
+}
+
+/** Resolve native executables and Windows batch/PowerShell scripts. */
 export async function acpCommand(executable:string,arguments_:string[]){
-    let file:string;try{file=await resolveExecutable(executable,{allowBatch:true});}catch(error){if(process.platform!=='win32'||path.extname(executable))throw error;file=await resolveExecutable(executable+'.cmd',{allowBatch:true});}
+    const name=acpExecutable(executable),options={allowBatch:true,allowPowerShell:true};
+    let file:string;try{file=await resolveExecutable(name,options);}catch(error){
+      if(process.platform!=='win32'||path.extname(name))throw error;
+      let found:string|undefined;
+      for(const extension of ['.cmd','.bat','.ps1']){try{found=await resolveExecutable(name+extension,options);break;}catch{/* Try installed script launchers without splitting the path. */}}
+      if(!found)throw error;file=found;
+    }
     let args=arguments_;
-    if(process.platform==='win32'&&/\.(?:cmd|bat)$/i.test(file)){
+    if(process.platform==='win32'&&/\.(?:cmd|bat|ps1)$/i.test(file)){
       const quote=(s:string)=>"'"+s.replaceAll("'","''")+"'";
       const script=`$ErrorActionPreference='Stop'; [Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; & ${[file,...args].map(quote).join(' ')}; exit $LASTEXITCODE`;
-      file=path.join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');args=['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')];
+      file=path.join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');args=['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')];
     }
     return {file,args};
 }
@@ -28,7 +40,8 @@ export class AcpTransport {
     const {file,args}=await acpCommand(config.executable,config.args);
     const child=spawn(file,args,{cwd,env:{...terminalEnvironment(file),...config.env},shell:false,windowsHide:true,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
     const transport=new AcpTransport(child,request,notify,onExit);
-    await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});return transport;
+    try{await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});}
+    catch(error){throw new Error(`无法启动 ACP 程序“${config.executable}”：${String(error)}。请检查完整路径、脚本解释器和项目工作目录；启动参数须单独填写，不会按空格拆分程序路径。`,{cause:error});}return transport;
   }
   private constructor(child:ChildProcessWithoutNullStreams,private request:Handler,private notification:(method:string,params:Record<string,any>)=>void,private onExit:(error:Error)=>void){
     this.child=child;this.exited=new Promise(resolve=>child.once('close',()=>resolve()));

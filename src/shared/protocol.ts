@@ -267,9 +267,9 @@ export interface DesktopApi {
   skills(request: import('./skills').SkillRequest): Promise<import('./skills').SkillPage | { content: string }>;
   chooseDirectory(): Promise<string | null>;
   chooseTranscript(): Promise<string | null>;
-  chooseExecutable(): Promise<string | null>;
+  chooseExecutable(kind?:'acp'): Promise<string | null>;
   exportPluginKit(): Promise<string | null>;
-  pluginDevelopmentPrompt(folder?: string): Promise<string>;
+  pluginDevelopmentPrompt(folder?: string,topic?:'superagent-source'): Promise<string>;
   copyText(text: string): Promise<void>;
   readClipboard(): Promise<string>;
   openExternal(url: string): Promise<void>;

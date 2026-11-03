@@ -1,12 +1,15 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef,useState } from 'react';
 import type { ExtensionInfo } from '../shared/extensions';
+import {SourceDevelopmentGuide} from './SourceDevelopmentGuide';
 
 export function ExtensionView({plugin,viewId,onError}:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void}){
   const frame=useRef<HTMLIFrameElement>(null);
+  const [sourceGuide,setSourceGuide]=useState(false);
   // Attach the message bridge before paint: a fast iframe can otherwise send
   // its first command before the passive effect subscribes to window messages.
   useLayoutEffect(()=>{let pending=0,alive=true;const theme=()=>{const style=getComputedStyle(document.documentElement);return Object.fromEntries(['--text','--surface','--surface-muted','--border','--muted','--focus'].map(name=>[name,style.getPropertyValue(name)]));};const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
     if(!alive||event.source!==frame.current?.contentWindow)return;
+    if(event.data?.kind==='agentberth-plugin-source-guide'){setSourceGuide(true);return;}
     if(event.data?.kind==='agentberth-plugin-ready'){
       frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-ready-ack',theme:theme()},'*');
       return;
@@ -19,5 +22,5 @@ export function ExtensionView({plugin,viewId,onError}:{plugin:ExtensionInfo;view
     try{const result=await window.berth.extensions({action:'call',id:plugin.manifest.id,command,params:params??{}});if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,result},'*');}catch(error){if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,error:String(error)},'*');}finally{pending--;}
   };window.addEventListener('message',receive);return()=>{alive=false;observer.disconnect();window.removeEventListener('message',receive);};},[plugin.manifest.id]);
   const src=`agentberth-plugin://view/${plugin.manifest.id}/${viewId}?generation=${plugin.generation}`;
-  return <iframe className="extension-view" ref={frame} title={plugin.manifest.views.find(v=>v.id===viewId)?.title??plugin.manifest.name} sandbox="allow-scripts allow-forms" src={src}/>;
+  return <><iframe className="extension-view" ref={frame} title={plugin.manifest.views.find(v=>v.id===viewId)?.title??plugin.manifest.name} sandbox="allow-scripts allow-forms" src={src}/>{sourceGuide&&<SourceDevelopmentGuide onClose={()=>setSourceGuide(false)}/>}</>;
 }

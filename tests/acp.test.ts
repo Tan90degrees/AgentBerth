@@ -7,6 +7,7 @@ import path from 'node:path';
 import {DaemonServer} from '../src/daemon/server';
 import {DaemonConnection} from '../src/main/connection';
 import {AcpClientTools} from '../src/daemon/acp-client-tools';
+import {acpExecutable,acpCommand} from '../src/daemon/acp-transport';
 import type {AgentDefinition,Session,Run,State} from '../src/shared/protocol';
 import type {AcpSnapshot} from '../src/shared/acp';
 
@@ -64,10 +65,29 @@ test('ACP filesystem requests stay inside the canonical workspace, including sym
 
 
 test('Windows ACP resolves and runs a batch launcher through the same bidirectional protocol', {skip:process.platform!=='win32'}, async t=>{
-  const f=await fixture(t),shim=path.join(f.dir,'adapter shim.cmd');
+  const f=await fixture(t),folder=path.join(f.dir,'Program Files');await mkdir(folder);const shim=path.join(folder,'agent launcher.cmd');
   await writeFile(shim,'@echo off\r\n"'+process.execPath+'" "'+path.resolve('tests/fixtures/acp-agent.cjs')+'" %*\r\n');
-  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:shim,acp:{executable:shim,args:[path.join(f.dir,'agent')],env:{ELECTRON_RUN_AS_NODE:'1'}}});
+  const marker='路径 with spaces';
+  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:shim,acp:{executable:'"'+shim+'"',args:[path.join(f.dir,'agent'),marker],env:{ELECTRON_RUN_AS_NODE:'1'}}});
   await f.send('hello');const output=await until(f.snapshot,value=>value.phase==='ready');assert.ok(output.events.some(event=>event.text.includes('from small')));
+  const initialized=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)).find(value=>value.method==='initialize');assert.deepEqual(initialized.arguments,[marker]);
+});
+
+test('ACP executable paths keep spaces and remove only matching surrounding quotes',()=>{
+  assert.equal(acpExecutable('  "C:\\Program Files\\agent launcher.ps1"  '),'C:\\Program Files\\agent launcher.ps1');
+  assert.equal(acpExecutable('C:\\Program Files\\agent launcher.cmd'),'C:\\Program Files\\agent launcher.cmd');
+  assert.equal(acpExecutable("'/opt/agent launch'"),'/opt/agent launch');
+  assert.equal(acpExecutable("/opt/agent's launch"),"/opt/agent's launch");
+});
+
+test('Windows ACP starts a PowerShell script with spaces and preserves its protocol and arguments',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t),folder=path.join(f.dir,'Program Files');await mkdir(folder);const shim=path.join(folder,"agent's launcher.ps1"),quote=(value:string)=>"'"+value.replaceAll("'","''")+"'";
+  await writeFile(shim,`$ErrorActionPreference='Stop'\r\n& ${quote(process.execPath)} ${quote(fixtureFile)} @args\r\nexit $LASTEXITCODE\r\n`);
+  const markers=['路径 with spaces',"a literal's argument",'--config-modes'];
+  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:shim,acp:{executable:shim,args:[path.join(f.dir,'agent'),...markers],env:{ELECTRON_RUN_AS_NODE:'1'}}});
+  await f.send('hello');const output=await until(f.snapshot,value=>value.phase==='ready');assert.ok(output.events.some(event=>event.text.includes('from small')));assert.equal(output.modes,undefined);
+  const initialized=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)).find(value=>value.method==='initialize');assert.deepEqual(initialized.arguments,markers);
+  const resolved=await acpCommand(shim.slice(0,-4),[]);assert.match(resolved.file,/powershell\.exe$/i);
 });
 
 

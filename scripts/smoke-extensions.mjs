@@ -7,7 +7,7 @@ import os from 'node:os';
 const packaged=process.argv.includes('--packaged');
 if(packaged&&process.platform!=='win32')throw new Error('Packaged extension smoke requires Windows');
 const root=await mkdtemp(path.join(os.tmpdir(),'berth-plugin-smoke-')),source=path.join(root,'plugin');await mkdir(source);await mkdir('test-results',{recursive:true});
-const manifest={apiVersion:1,id:'example.smoke',name:'Smoke extension',version:'1.0.0',entry:'index.cjs',desktopEntry:'desktop.cjs',dependencies:['agents'],config:{name:{type:'string',title:'Agent name',default:'Plugin Agent'}},views:[{id:'info',title:'Plugin info',location:'sidebar',entry:'view.html'}]};
+const manifest={apiVersion:1,id:'example.smoke',name:'Smoke extension',version:'1.0.0',entry:'index.cjs',desktopEntry:'desktop.cjs',dependencies:['agents'],config:{name:{type:'string',title:'Agent name',default:'Plugin Agent'},mode:{type:'string',title:'Mode',enum:['basic','advanced'],default:'basic'},...Object.fromEntries(Array.from({length:18},(_,i)=>['field'+i,{type:'string',title:'Extra field '+i,default:'value'}]))},views:[{id:'info',title:'Plugin info',location:'sidebar',entry:'view.html'}]};
 const code=`exports.apply=(ctx,c)=>{ctx.berth.agent({id:'main',definition:{name:c.name,command:'fixture-agent',skills:{project:'.fixture/skills'}}});ctx.berth.command({name:'info',description:'Read configured name',inputSchema:{type:'object',properties:{},additionalProperties:false}},()=>({name:c.name}));};`;
 await Promise.all([
   writeFile(path.join(source,'agentberth.extension.json'),JSON.stringify(manifest)),writeFile(path.join(source,'index.cjs'),code),
@@ -45,6 +45,12 @@ try {
   assert.equal(await card.getByLabel('Smoke extension Agent name').count(),0,'Plugin configuration must not be embedded in settings');
   await card.getByRole('button',{name:'配置',exact:true}).click();
   const configDialog=page.getByRole('dialog',{name:'配置插件 · Smoke extension'});
+  const mode=configDialog.getByLabel('Smoke extension Mode');await mode.focus();
+  const spacing=await mode.evaluate(select=>{const host=select.closest('.extension-config-dialog'),box=host.getBoundingClientRect(),rect=select.getBoundingClientRect(),style=getComputedStyle(select),ring=parseFloat(style.outlineWidth)+parseFloat(style.outlineOffset);return {right:rect.right+ring,edge:box.left+host.clientLeft+host.clientWidth,left:rect.left-ring,start:box.left+host.clientLeft,scrolls:host.scrollHeight>host.clientHeight};});
+  assert.ok(spacing.scrolls,'Use a genuinely scrolling plugin configuration');
+  assert.ok(spacing.edge-spacing.right>=6,'Focused select must leave its outline clear of the scrollbar: '+JSON.stringify(spacing));
+  assert.ok(spacing.left>=spacing.start,'Focus outline must remain inside the scrolling content');
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-config-focus.png`});
   await configDialog.getByLabel('Smoke extension Agent name').fill('Updated Agent');
   await configDialog.getByRole('button',{name:'保存配置'}).click();
   await configDialog.waitFor({state:'hidden'});

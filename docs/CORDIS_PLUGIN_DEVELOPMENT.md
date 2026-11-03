@@ -82,4 +82,6 @@ exports.apply = ctx => {
 
 ## ACP 与 Superagent
 
+信息源从零接入、可运行示例和验收步骤见 [信息源开发指南](SUPERAGENT_SOURCE_DEVELOPMENT.md)。应用内 Superagent → 信息源提供查看、复制给 Agent 和导出入口。
+
 可在 `definition.acp` 注册标准 ACP Agent，Skills 与接入一并声明；也支持界面直接添加。Superagent 使用选定的 ACP Agent。来源完全由插件扩展，不预装 GitHub、飞书。参见 [ACP 与 Superagent 开发指南](ACP_SUPERAGENT.md) 和可选本地示例 `examples/superagent-source-local`。

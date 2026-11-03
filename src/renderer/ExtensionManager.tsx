@@ -3,6 +3,7 @@ import { extensionEnabled, type ExtensionInfo, type ExtensionSnapshot, type Exte
 import { ExtensionView } from './ExtensionView';
 import { PluginSettingsPanel } from './PluginSettingsPanel';
 import { Dialog } from './Dialog';
+import {SourceDevelopmentGuide} from './SourceDevelopmentGuide';
 import type { Project } from '../shared/protocol';
 
 export const ExtensionsContext=createContext<ExtensionSnapshot|undefined>(undefined);
@@ -15,6 +16,7 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
 }){
   const [current,setCurrent]=useState(snapshot),[busy,setBusy]=useState(''),[query,setQuery]=useState(''),[editing,setEditing]=useState<string|null>(null),[draft,setDraft]=useState<ExtensionConfig>({}),[message,setMessage]=useState(''),[configError,setConfigError]=useState('');
   const opener=useRef<HTMLElement|null>(null);
+  const [sourceGuide,setSourceGuide]=useState(false);
   useEffect(()=>setCurrent(snapshot),[snapshot]);
   const perform=async(id:string,action:()=>Promise<ExtensionSnapshot|null>)=>{setBusy(id);setMessage('');onError('');try{const next=await action();if(next){setCurrent(next);setEditing(null);setMessage('插件已更新，即时生效');}}catch(error){onError(String(error));}finally{setBusy('');}};
   const exportKit=async()=>{setBusy('$kit');try{const folder=await window.berth.exportPluginKit();if(folder){await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(folder));setMessage('开发套件已导出，开发指令已复制：'+folder);}}catch(error){onError(String(error));}finally{setBusy('');}};
@@ -36,6 +38,7 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
     <div className="extension-utilities"><input aria-label="搜索插件" placeholder={mode==='agents'?'搜索 Agent 名称或插件 ID':'搜索扩展功能或插件 ID'} value={query} onChange={event=>setQuery(event.target.value)}/><button type="button" className="extension-button subtle" disabled={!!busy} aria-busy={busy==='$kit'} onClick={()=>void exportKit()}>导出插件开发套件并复制指令</button></div>
     {message&&<p role="status">{message}</p>}
     {current.warnings?.map(warning=><p className="form-error" key={warning}>{warning}</p>)}
+    {mode!=='agents'&&current.plugins.some(plugin=>plugin.manifest.id==='superagent')&&<button type="button" className="extension-button subtle" onClick={()=>setSourceGuide(true)}>Superagent 信息源开发指南</button>}
     <ul className="extension-list">{plugins.filter(plugin=>`${plugin.manifest.name} ${plugin.manifest.id} ${plugin.manifest.description}`.toLowerCase().includes(query.toLowerCase())).map(plugin=>{
       const {manifest}=plugin;
       const action=(action:'enable'|'disable'|'uninstall'|'reload')=>perform(manifest.id,()=>window.berth.extensions({action,id:manifest.id}));
@@ -47,6 +50,7 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
       </li>;
     })}</ul>
     {!plugins.length&&<p className="form-hint">{mode==='agents'?'尚无 Agent 接入插件。可安装内置 CLI 对应的接入，或导入自定义 Agent 插件。':'尚无扩展插件。可安装插件包或加载开发目录。'}</p>}
+    {sourceGuide&&<SourceDevelopmentGuide onClose={()=>setSourceGuide(false)}/>}
     {configured&&<Dialog key={configured.manifest.id} title={'配置插件 · '+configured.manifest.name} busy={!!busy} dirty={dirty} error={configError} returnFocus={opener.current} onClose={()=>setEditing(null)}>
       <div className="extension-config-dialog">
         {configured.manifest.id==='pet'&&<PluginSettingsPanel projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion}/>}

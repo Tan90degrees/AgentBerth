@@ -2459,9 +2459,12 @@ textarea:focus-visible {
 .extension-view { width: 100%; height: 100%; min-height: 240px; border: 0; flex: 1; background: var(--surface); }
 
 /* Plugin configuration is always an accessible modal, not a settings card. */
-.extension-config-dialog { display:flex; flex-direction:column; gap:12px; max-height:min(70vh,640px); overflow:auto; }
-.extension-config-dialog>label { display:flex; flex-direction:column; align-items:stretch; gap:6px; margin-top:0; }
-.extension-config-dialog>label>input[type=checkbox] { width:auto; align-self:flex-start; }
+.extension-config-dialog { display:flex; flex-direction:column; gap:12px; max-height:min(70vh,640px); overflow:auto; scrollbar-gutter:stable; padding:6px 12px 8px 6px; overscroll-behavior:contain; }
+.extension-config-dialog>form { min-width:0; }
+.extension-config-dialog>form>label { display:flex; flex-direction:column; align-items:stretch; gap:6px; margin-top:0; margin-bottom:16px; min-width:0; }
+.extension-config-dialog>form>label>input[type=checkbox] { width:auto; align-self:flex-start; }
+.extension-config-dialog>form>label>input,.extension-config-dialog>form>label>select { margin-top:0; max-width:100%; }
+.source-development-guide { width:100%; height: min(48vh,420px); min-height:160px; margin-top:12px; resize:vertical; font:12px/1.65 var(--font-mono,monospace); }
 .extension-config-dialog small { font-size:11px; color:var(--text-muted); }
 .extension-config-dialog .extension-dialog-view { display:flex; flex-direction:column; min-height:220px; gap:8px; }
 .extension-config-dialog .extension-dialog-view h3 { font-size:13px; }
