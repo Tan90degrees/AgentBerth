@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync,mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { connectDaemon, shutdownDaemon } from '../src/main/connection';
@@ -28,11 +28,17 @@ for(const keptFile of [null,'runtime.json','daemon.lock'])test(`lost shutdown re
   assert.equal(existsSync(runtimeFile),keptFile==='runtime.json');assert.equal(existsSync(lock),keptFile==='daemon.lock');
 });
 
-test('daemon completes the WebSocket close handshake after delivering its shutdown reply', {timeout:5000}, async t => {
+for(const trackedActivity of [false,true])test('daemon completes the WebSocket close handshake after delivering its shutdown reply'+(trackedActivity?' with plugin task activity':''), {timeout:5000}, async t => {
   const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-close-'));
   let closing:Promise<void>|undefined;
   const server=new DaemonServer(folder,()=>{closing=server.close();});
   const runtime=await server.listen();
+  if(trackedActivity){
+    const client=await DaemonConnection.open(runtime,()=>{}),project=await client.rpc<Project>('createProject',{name:'Activity fixture',path:folder}),source=path.join(folder,'activity-plugin');mkdirSync(source);
+    writeFileSync(path.join(source,'agentberth.extension.json'),JSON.stringify({apiVersion:1,id:'example.activity',name:'Task activity',version:'1.0.0',entry:'index.cjs'}));
+    writeFileSync(path.join(source,'index.cjs'),`exports.apply=ctx=>ctx.berth.activity({id:'task',title:'Tracked task',projectId:${JSON.stringify(project.id)},kind:'superagent',status:'waiting',label:'Review',managedSessionIds:[],updatedAt:Date.now()});`);
+    try{await client.rpc('extensions',{request:{action:'install',path:source}});assert.equal((await client.rpc<import('../src/shared/protocol').State>('state')).agentActivities?.length,1);}finally{client.close();}
+  }
   const socket=new WebSocket(`ws://127.0.0.1:${runtime.port}/rpc`,{headers:{Authorization:`Bearer ${runtime.token}`}});
   t.after(async()=>{socket.terminate();if(closing)await closing;else await server.close();rmSync(folder,{recursive:true,force:true,maxRetries:5});});
   await new Promise<void>(resolve=>socket.once('open',resolve));

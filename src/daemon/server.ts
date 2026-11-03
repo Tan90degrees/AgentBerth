@@ -193,6 +193,9 @@ export class DaemonServer {
     }
   }
   private changed(): void {
+    // Shutdown's acknowledgement must remain the final application message.
+    // Cleanup still persists state, but must not publish after that reply.
+    if(this.closing)return;
     const state = this.snapshot(), valid = new Set(state.sessions.map(session => session.id));
     for (const id of this.agentOwners.keys()) if (!valid.has(id)) this.agentOwners.delete(id);
     for (const [id, restored] of this.restoredRuns) if (!state.sessions.some(session => session.id === id && session.latestRun?.id === restored.runId)) this.restoredRuns.delete(id);
@@ -902,7 +905,7 @@ export class DaemonServer {
       const deadline = Date.now() + 5000;
       while (this.live.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
       if (this.live.size) throw new Error('部分终端尚未停止，请重试退出；后台已保留以便继续清理');
-    } catch (error) { this.closing = false; throw error; }
+    } catch (error) { this.closing = false;this.changed(); throw error; }
   }
   async close(): Promise<void> {
     if (this.nativeTimer) clearTimeout(this.nativeTimer);
