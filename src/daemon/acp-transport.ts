@@ -14,12 +14,15 @@ export function acpExecutable(value:string){
 /** Resolve native executables and Windows batch/PowerShell scripts. */
 export async function acpCommand(executable:string,arguments_:string[]){
     const name=acpExecutable(executable),options={allowBatch:true,allowPowerShell:true};
-    let file:string;try{file=await resolveExecutable(name,options);}catch(error){
-      if(process.platform!=='win32'||path.extname(name))throw error;
+    let file:string;
+    if(process.platform==='win32'&&!path.extname(name)){
+      // npm also installs an extensionless POSIX shim beside .cmd/.ps1.
+      // Its existence must not short-circuit Windows launcher discovery.
       let found:string|undefined;
-      for(const extension of ['.cmd','.bat','.ps1']){try{found=await resolveExecutable(name+extension,options);break;}catch{/* Try installed script launchers without splitting the path. */}}
-      if(!found)throw error;file=found;
-    }
+      for(const extension of ['.exe','.com','.cmd','.bat','.ps1']){try{found=await resolveExecutable(name+extension,options);break;}catch{/* Try native Windows launchers before extensionless shims. */}}
+      if(!found){const candidate=await resolveExecutable(name,options);if(!path.extname(candidate))throw new Error(`ACP 启动程序“${name}”没有可用的 Windows 启动器；请选择 .exe、.cmd、.bat 或 .ps1，其他脚本请指定解释器并把脚本路径放入参数数组`);found=candidate;}
+      file=found;
+    }else file=await resolveExecutable(name,options);
     let args=arguments_;
     if(process.platform==='win32'&&/\.ps1$/i.test(file)){
       // Run the script as a file with literal arguments, without building an

@@ -81,6 +81,15 @@ test('ACP executable paths keep spaces and remove only matching surrounding quot
   assert.equal(acpExecutable("/opt/agent's launch"),"/opt/agent's launch");
 });
 
+test('Windows ACP chooses the batch launcher when an extensionless POSIX npm shim also exists',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t),folder=path.join(f.dir,'Program Files');await mkdir(folder);const bare=path.join(folder,'agent'),shim=bare+'.cmd';
+  await writeFile(bare,'#!/bin/sh\nexit 13\n');
+  await writeFile(shim,'@echo off\r\n"'+process.execPath+'" "'+fixtureFile+'" %*\r\n');
+  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:bare,acp:{executable:bare,args:[path.join(f.dir,'agent')],env:{ELECTRON_RUN_AS_NODE:'1'}}});
+  await f.send('hello');const output=await until(f.snapshot,value=>value.phase==='ready');assert.ok(output.events.some(event=>event.text.includes('from small')));
+  const command=await acpCommand('"'+bare+'"',[]),script=Buffer.from(command.args.at(-1)!,'base64').toString('utf16le');assert.ok(script.includes(shim));
+});
+
 test('Windows ACP starts a PowerShell script with spaces and preserves its protocol and arguments',{skip:process.platform!=='win32'},async t=>{
   const f=await fixture(t),folder=path.join(f.dir,'Program Files');await mkdir(folder);const shim=path.join(folder,"agent's launcher.ps1"),quote=(value:string)=>"'"+value.replaceAll("'","''")+"'";
   // Use the real console runtime, like a Node ACP adapter. Electron.exe is a
