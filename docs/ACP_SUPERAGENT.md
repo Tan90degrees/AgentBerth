@@ -124,3 +124,18 @@ exports.apply = ctx => {
 **不承诺 100% 兼容 DeepSeek Harness 插件。** 放宽 ZIP 大小解决容量问题，不改变宿主 API 的差异。缺少 AgentBerth 清单时会明确报告兼容性原因。
 
 设计参考：[deepseek-ai/dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype)，保留其 MIT 声明于 `docs/third-party/dsh-superagent-MIT.txt`。本实现使用 AgentBerth 的 ACP 会话、Worktree、Cordis 生命周期和视图桥，不打包上游渠道代码。
+
+## 真实 OpenCode 回归
+
+CI 使用测试目录中固定版本 OpenCode 1.19.5 验证 initialize、创建会话、模型选择、plan 模式和相同原生 ID 恢复。测试只配置本机占位提供者，不提交 prompt、不调用模型、不登录、不安装 hook；XDG 配置、数据和缓存均隔离。测试用 CLI 不进入发行软件包。
+
+OpenCode 的模式由标准 `configOptions` 提供，部分较早的 Agent 则返回 `modes`。工作台优先使用实际声明的配置项，旧模式接口仅在没有同名配置项时使用；Superagent 同时识别两种 plan 模式声明。没有可选值的配置项显示禁用状态。
+
+已有本机 OpenCode 可手动复用同一回归（需先安装项目开发依赖）：
+
+```powershell
+$env:AGENTBERTH_OPENCODE_TEST_EXECUTABLE = 'C:\path\to\opencode.exe'
+node scripts/test-opencode-acp.mjs
+```
+
+这组测试验证真实 CLI 的协议和会话管理，不等同于对所有模型提供者、真实任务或私有 Agent 的完整兼容承诺。

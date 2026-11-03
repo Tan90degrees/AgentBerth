@@ -8,8 +8,8 @@ const result=(id,value)=>send({id,result:value});
 const error=(id,code,message)=>send({id,error:{code,message}});
 const update=(sessionId,value)=>send({method:'session/update',params:{sessionId,update:value}});
 const text=(sessionId,value)=>update(sessionId,{sessionUpdate:'agent_message_chunk',content:{type:'text',text:value}});
-const configs=()=>[{id:'model',name:'模型',type:'select',category:'model',currentValue:model,options:[{value:'small',name:'Small'},{value:'large',name:'Large'}]}];
-const metadata=()=>({modes:{currentModeId:mode,availableModes:[{id:'build',name:'Build'},{id:'plan',name:'Plan'}]},configOptions:configs()});
+const configs=()=>[{id:'model',name:'模型',type:'select',category:'model',currentValue:model,options:[{value:'small',name:'Small'},{value:'large',name:'Large'}]},...(process.argv.includes('--config-modes')?[{id:'mode',name:'Session Mode',category:'mode',type:'select',currentValue:mode,options:[{value:'build',name:'Build'},{value:'plan',name:'Plan'}]}]:[])];
+const metadata=()=>({...(!process.argv.includes('--config-modes')?{modes:{currentModeId:mode,availableModes:[{id:'build',name:'Build'},{id:'plan',name:'Plan'}]}}:{}),configOptions:configs()});
 const call=(method,params)=>new Promise((resolve,reject)=>{const id='client-'+ ++sequence;pending.set(id,{resolve,reject});send({id,method,params});});
 const permission=sessionId=>call('session/request_permission',{sessionId,toolCall:{toolCallId:'file-write',title:'Write note.txt',kind:'edit',status:'pending'},options:[{optionId:'allow',kind:'allow_once',name:'允许一次'},{optionId:'reject',kind:'reject_once',name:'拒绝'}]});
 async function prompt(message){const p=message.params,content=p.prompt.map(item=>item.text??'').join(''),sessionId=p.sessionId;record({method:'prompt',sessionId,text:content});
@@ -31,7 +31,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{void(async()=>{
   else if(message.method==='session/new'){if(!authenticated){error(message.id,-32000,'Authentication required');return;}const sessionId=randomUUID();sessions[sessionId]={cwd:p.cwd};fs.writeFileSync(database,JSON.stringify(sessions));record({method:'new',sessionId,cwd:p.cwd});result(message.id,{sessionId,...metadata()});}
   else if(message.method==='session/load'){record({method:'load',sessionId:p.sessionId});if(!sessions[p.sessionId]){error(message.id,-32001,'Session not found');return;}text(p.sessionId,'REMOTE_REPLAY_SHOULD_NOT_DUPLICATE');result(message.id,metadata());}
   else if(message.method==='session/set_mode'){if(process.argv.includes('--slow-mode'))await new Promise(resolve=>setTimeout(resolve,500));if(process.argv.includes('--fail-mode')){error(message.id,-32603,'fixture mode failed');return;}mode=p.modeId;result(message.id,{});}
-  else if(message.method==='session/set_config_option'){model=p.value;result(message.id,{configOptions:configs()});}
+  else if(message.method==='session/set_config_option'){record({method:'config',configId:p.configId,value:p.value});if(p.configId==='mode')mode=p.value;else model=p.value;result(message.id,{configOptions:configs()});}
   else if(message.method==='session/prompt')await prompt(message);
   else if(message.method==='session/cancel'){record({method:'cancel',sessionId:p.sessionId});const turn=turns.get(p.sessionId);if(turn?.timer){clearInterval(turn.timer);turns.delete(p.sessionId);result(turn.id,{stopReason:'cancelled'});}}
   else if(message.id!==undefined)error(message.id,-32601,'Method not found');

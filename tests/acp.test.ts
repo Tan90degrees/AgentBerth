@@ -77,3 +77,12 @@ test('the first prompt joins an existing ACP startup and executes exactly once',
   const result=await until(f.snapshot,value=>value.phase==='ready'&&value.events.some(event=>event.kind==='assistant'));assert.equal(result.events.filter(event=>event.kind==='user').length,1);
   const log=await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8');assert.equal(log.split('"method":"prompt"').length-1,1);
 });
+
+test('configOptions mode uses the declared option API instead of the legacy session mode method',async t=>{
+  const f=await fixture(t,['--config-modes']);await f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30});
+  const before=await f.snapshot();assert.equal(before.modes,undefined);assert.equal(before.configOptions?.find(option=>option.id==='mode')?.currentValue,'build');
+  await f.connection.rpc('acpConfigure',{sessionId:f.session.id,configId:'mode',value:'plan'});
+  assert.equal((await f.snapshot()).configOptions?.find(option=>option.id==='mode')?.currentValue,'plan');
+  await assert.rejects(f.connection.rpc('acpConfigure',{sessionId:f.session.id,configId:'mode',value:'unavailable'}),/声明的配置/);
+  const records=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.deepEqual(records.filter(record=>record.method==='config').map(({configId,value})=>({configId,value})),[{configId:'mode',value:'plan'}]);
+});

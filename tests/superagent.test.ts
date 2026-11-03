@@ -85,3 +85,10 @@ test('cancelling during ACP initialization remains cancelled and never starts a 
   await f.call('action',{id:created.id,action:'cancel'});await new Promise(resolve=>setTimeout(resolve,600));
   assert.equal((await f.task(created.id)).phase,'cancelled');const state=await f.connection.rpc<State>('state');assert.ok(state.sessions.every(session=>session.latestRun?.status!=='running'));const final=await f.task(created.id);assert.ok(!state.sessions.some(session=>session.id===final.workerSession));
 });
+
+test('Superagent selects plan through a current ACP mode config option',async t=>{
+  const f=await fixture(t);await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--config-modes']}});
+  const created=await f.create();await until(()=>f.worker(created.id),value=>value.permissions.length===1);
+  const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.ok(records.some(record=>record.method==='config'&&record.configId==='mode'&&record.value==='plan'));
+  const detail=await f.call('get',{id:created.id});assert.ok(detail.audit.some((event:any)=>event.kind==='policy'&&event.text.includes('plan')));await f.call('action',{id:created.id,action:'cancel'});
+});

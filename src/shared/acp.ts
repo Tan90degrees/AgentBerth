@@ -8,7 +8,7 @@ export const acpConfigSchema=z.object({
 }).strict();
 export type AcpConfig=z.infer<typeof acpConfigSchema>;
 export interface AcpEvent {sequence:number;id:string;sessionId:string;turnId:string|null;kind:'user'|'assistant'|'thought'|'tool'|'plan'|'notice'|'error'|'permission'|'turn';text:string;data?:Record<string,unknown>;createdAt:string}
-export interface AcpOption {id:string;name:string;type:string;currentValue?:string;options?:{value?:string;name?:string;group?:string;options?:{value:string;name:string}[]}[]}
+export interface AcpOption {id:string;name:string;type:string;category?:string;currentValue?:string;options?:{value?:string;name?:string;group?:string;options?:{value:string;name:string}[]}[]}
 export interface AcpPermission {id:string;title:string;options:{optionId:string;name:string;kind:string}[];toolCall?:Record<string,unknown>}
 export interface AcpSnapshot {
   sessionId:string;nativeSessionId:string|null;phase:'disconnected'|'connecting'|'ready'|'running'|'permission'|'error';
@@ -16,4 +16,9 @@ export interface AcpSnapshot {
   configOptions?:AcpOption[];modes?:{currentModeId:string;availableModes:{id:string;name:string;description?:string}[]};
   authMethods?:{id:string;name:string;description?:string}[];permissions:AcpPermission[];
   events:AcpEvent[];before:number|null;hasMore:boolean;
+}
+
+/** ACP select options may contain named groups. Use actual declared values. */
+export function acpOptionChoices(option:AcpOption):{value:string;name:string}[]{
+  return (option.options??[]).flatMap(item=>item.options??(item.value!==undefined?[{value:item.value,name:item.name??item.value}]:[]));
 }

@@ -6,7 +6,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Context } from 'cordis';
 import type { State, Session, GitWorktree } from '../shared/protocol';
-import type { AcpSnapshot } from '../shared/acp';
+import { acpOptionChoices, type AcpSnapshot } from '../shared/acp';
 import type { SuperagentSourceEvent } from '../shared/superagent-source';
 import { SuperagentSources } from './sources';
 
@@ -96,7 +96,8 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     if(coordinator.latestRun?.status!=='running')await host('start',{sessionId:ticket.coordinatorSession,cols:100,rows:30,resume:true});
     if(!await guard(ticket,'planning'))return;
     const setup=await host<AcpSnapshot>('acpSnapshot',{sessionId:ticket.coordinatorSession,limit:1});
-    if(setup.modes?.availableModes.some(mode=>mode.id==='plan')){await host('acpConfigure',{sessionId:ticket.coordinatorSession,configId:'mode',value:'plan'});audit(ticket.id,'policy','协调者使用 Agent 声明的 plan 模式');}
+    const planOption=setup.configOptions?.find(option=>(option.category==='mode'||option.id==='mode')&&acpOptionChoices(option).some(choice=>choice.value==='plan'));
+    if(planOption||setup.modes?.availableModes.some(mode=>mode.id==='plan')){await host('acpConfigure',{sessionId:ticket.coordinatorSession,configId:planOption?.id??'mode',value:'plan'});audit(ticket.id,'policy','协调者使用 Agent 声明的 plan 模式');}
     else audit(ticket.id,'policy','此 Agent 未提供 plan 模式，协调者遵循自身权限与任务指令');
     if(!await guard(ticket,'planning'))return;
     const rules=String(config.rules??'仅在请求范围内工作。不得自动推送、合并或向外部渠道发送消息。');

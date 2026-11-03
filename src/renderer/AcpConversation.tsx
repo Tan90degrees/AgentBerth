@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { AcpEvent, AcpSnapshot } from '../shared/acp';
+import { acpOptionChoices, type AcpEvent, type AcpSnapshot } from '../shared/acp';
 import type { Session, Method } from '../shared/protocol';
 import { AsyncButton } from './AsyncButton';
 
@@ -48,8 +48,8 @@ export function AcpConversation({session,connected}:{session:Session;connected:b
   return <section className="acp-conversation" aria-label="ACP 对话">
     <header className="acp-toolbar"><span className="badge">ACP · {snapshot?phases[snapshot.phase]:'读取记录…'}</span>
       {snapshot?.nativeSessionId&&<small title={snapshot.nativeSessionId}>{snapshot.nativeSessionId.slice(0,16)}</small>}
-      {snapshot?.modes&&<label>模式<select aria-label="ACP 会话模式" disabled={snapshot.phase!=='ready'||pending} value={snapshot.modes.currentModeId} onChange={event=>void configure('mode',event.target.value)}>{snapshot.modes.availableModes.map(mode=><option key={mode.id} value={mode.id}>{mode.name}</option>)}</select></label>}
-      {snapshot?.configOptions?.map(option=><label key={option.id}>{option.name}<select aria-label={'ACP '+option.name} disabled={snapshot.phase!=='ready'||pending} value={option.currentValue??''} onChange={event=>void configure(option.id,event.target.value)}>{option.options?.flatMap(item=>item.options??[{value:item.value??'',name:item.name??item.value??''}]).map(item=><option key={item.value} value={item.value}>{item.name}</option>)}</select></label>)}
+      {snapshot?.modes&&!snapshot.configOptions?.some(option=>option.id==='mode'||option.category==='mode')&&<label>模式<select aria-label="ACP 会话模式" disabled={snapshot.phase!=='ready'||pending} value={snapshot.modes.currentModeId} onChange={event=>void configure('mode',event.target.value)}>{snapshot.modes.availableModes.map(mode=><option key={mode.id} value={mode.id}>{mode.name}</option>)}</select></label>}
+      {snapshot?.configOptions?.map(option=>{const choices=acpOptionChoices(option);return <label key={option.id}>{option.name}<select aria-label={'ACP '+option.name} disabled={snapshot.phase!=='ready'||pending||!choices.length} value={option.currentValue??''} onChange={event=>void configure(option.id,event.target.value)}>{choices.length?choices.map(item=><option key={item.value} value={item.value}>{item.name}</option>):<option value={option.currentValue??''}>暂无可选项</option>}</select></label>;})}
     </header>
     <div className="acp-messages" ref={scroll} onScroll={()=>{const box=scroll.current!;bottom.current=box.scrollHeight-box.scrollTop-box.clientHeight<64;}}>
       {hasOlder&&<AsyncButton className="subtle" onError={setError} onAction={async()=>{const value=await window.berth.rpc<AcpSnapshot>('acpSnapshot',{sessionId:session.id,before:snapshot?.events[0]?.sequence});setHasOlder(value.hasMore);bottom.current=false;setSnapshot(previous=>previous?{...previous,events:[...value.events,...previous.events].filter((event,index,all)=>all.findIndex(item=>item.id===event.id)===index)}:value);}}>加载更早的消息</AsyncButton>}

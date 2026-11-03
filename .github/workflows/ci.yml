@@ -141,9 +141,25 @@ jobs:
         if: runner.os == 'Linux'
         run: fc-cache -f
         timeout-minutes: 1
+      - name: Cache isolated real ACP test CLI
+        id: opencode-cli
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/agentberth-opencode-test
+          key: opencode-acp-validation-v1-${{ runner.os }}-${{ runner.arch }}-1.19.5
+      - name: Install real ACP test CLI
+        if: steps.opencode-cli.outputs.cache-hit != 'true'
+        shell: bash
+        run: npm install --prefix "$RUNNER_TEMP/agentberth-opencode-test" --ignore-scripts --prefer-offline --no-audit --no-fund opencode-ai@1.19.5
+        timeout-minutes: 3
       - name: Build ACP workbench
         run: npm run typecheck && npm run build
         timeout-minutes: 2
+      - name: Validate official OpenCode ACP without model calls
+        run: node scripts/test-opencode-acp.mjs
+        timeout-minutes: 2
+        env:
+          AGENTBERTH_OPENCODE_TEST_DIRECTORY: ${{ runner.temp }}/agentberth-opencode-test
       - name: ACP and Superagent smoke (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/smoke-acp.mjs

@@ -16,7 +16,7 @@ await Promise.all([
 ]);
 let application,daemonPid;
 try {
-  const args=[...(packaged?[]:[path.resolve('.')]),'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--user-data-dir='+path.join(root,'profile')];if(process.platform==='linux'&&process.getuid?.()===0)args.push('--no-sandbox');
+  const args=[...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged?[]:[path.resolve('.')]),'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--user-data-dir='+path.join(root,'profile')];if(process.platform==='linux'&&process.getuid?.()===0)args.push('--no-sandbox');
   const env={...process.env,AGENTBERTH_DATA_DIR:path.join(root,'data')};delete env.ELECTRON_RUN_AS_NODE;
   application=await electron.launch({executablePath:packaged?path.resolve('release/win-unpacked/AgentBerth.exe'):undefined,args,env,timeout:20000});
   const page=await application.firstWindow();page.setDefaultTimeout(15000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -61,8 +61,13 @@ try {
   // installs onclick, especially under the slower Linux/Xvfb renderer.
   for(let i=0;i<100;i++){if(await frame.locator('#read').evaluate(button=>typeof button.onclick==='function'))break;await new Promise(resolve=>setTimeout(resolve,25));}
   assert.equal(await frame.locator('#read').evaluate(button=>typeof button.onclick==='function'),true,'Plugin view must finish initializing before the first click');
-  // Prepare native/iframe focus before the single activation (Xvfb may otherwise consume it).
-  await page.bringToFront();await frame.getByRole('button',{name:'Read plugin'}).focus();
+  // Focus the native window and its iframe explicitly. CDP bringToFront and
+  // focusing only the inner button do not establish browsing-context focus.
+  const mainWindow=await application.browserWindow(page);
+  await mainWindow.evaluate(win=>{if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.focus();});
+  await page.bringToFront();await page.locator('iframe[title="Plugin info"]').focus();
+  await frame.getByRole('button',{name:'Read plugin'}).focus();
+  assert.equal(await frame.locator('body').evaluate(()=>document.hasFocus()),true,'Plugin iframe must own focus before its single activation');
   await frame.getByRole('button',{name:'Read plugin'}).click();
   try{await frame.locator('#result').filter({hasText:'Updated Agent'}).waitFor();}
   catch(error){

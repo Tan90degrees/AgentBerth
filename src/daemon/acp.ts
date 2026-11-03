@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AcpConfig, AcpEvent, AcpPermission, AcpSnapshot } from '../shared/acp';
+import { acpOptionChoices, type AcpConfig, type AcpEvent, type AcpPermission, type AcpSnapshot } from '../shared/acp';
 import type { AgentDefinition, Run, Session, ServerEvent } from '../shared/protocol';
 import type { Store } from './store';
 import { AcpTransport, AcpRpcError } from './acp-transport';
@@ -100,14 +100,16 @@ export class AcpSessions {
   }
   async configure(id:string,configId:string,setting:string){
     const value=this.require(id);if(value.state.phase!=='ready')throw new Error('请等待当前任务结束后切换模式或模型');
-    if(configId==='mode'){
+    const option=value.state.configOptions?.find(option=>option.id===configId);
+    // Current agents (including OpenCode) expose mode through configOptions.
+    // A standard option named "mode" must not be mistaken for the older API.
+    if(option){
+      if(!acpOptionChoices(option).some(item=>item.value===setting))throw new Error('请选择 Agent 声明的配置值');
+      const response=await value.transport!.call('session/set_config_option',{sessionId:value.state.nativeSessionId,configId,value:setting});if(Array.isArray(response.configOptions))value.state.configOptions=response.configOptions;else option.currentValue=setting;
+    }else if(configId==='mode'){
       if(!value.state.modes?.availableModes.some(mode=>mode.id===setting))throw new Error('Agent 未提供此会话模式');
       await value.transport!.call('session/set_mode',{sessionId:value.state.nativeSessionId,modeId:setting});value.state.modes.currentModeId=setting;
-    }else{
-      const option=value.state.configOptions?.find(option=>option.id===configId);if(!option)throw new Error('Agent 未提供此配置项');
-      const choices=(option.options??[]).flatMap(item=>item.options??(item.value?[{value:item.value,name:item.name??item.value}]:[]));if(!choices.some(item=>item.value===setting))throw new Error('请选择 Agent 声明的配置值');
-      const response=await value.transport!.call('session/set_config_option',{sessionId:value.state.nativeSessionId,configId,value:setting});if(Array.isArray(response.configOptions))value.state.configOptions=response.configOptions;else option.currentValue=setting;
-    }
+    }else throw new Error('Agent 未提供此配置项');
     this.publish(value);return this.snapshot(id);
   }
   private async clientRequest(value:Live,method:string,params:Record<string,any>){
