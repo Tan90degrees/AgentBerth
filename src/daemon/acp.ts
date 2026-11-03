@@ -158,6 +158,9 @@ export class AcpSessions {
     if(value.stopping||method!=='session/update'||typeof params.sessionId!=='string'||value.state.nativeSessionId&&params.sessionId!==value.state.nativeSessionId)return;
     const update=params.update;if(!update||typeof update.sessionUpdate!=='string')return;
     const kind=update.sessionUpdate;
+    // session/load may replay tools and plans as well as message chunks.
+    // Keep our durable journal once; still accept current configuration state.
+    if(value.state.phase==='connecting'&&['agent_message_chunk','agent_thought_chunk','user_message_chunk','tool_call','tool_call_update','plan'].includes(kind))return;
     if(['agent_message_chunk','agent_thought_chunk','user_message_chunk'].includes(kind)){
       // loadSession may replay the remote transcript. Our journal is already
       // durable; replayed notifications must not duplicate previous messages.
