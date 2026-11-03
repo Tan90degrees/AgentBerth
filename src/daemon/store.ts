@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 import { restartPlanSchema, type RestartEntry } from './recovery';
+import type {ManagedSessions,SessionOwner} from '../shared/protocol';
 import type { AcpEvent } from '../shared/acp';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
@@ -69,6 +70,7 @@ export class Store {
       id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
     )`);
     this.db.exec('CREATE TABLE IF NOT EXISTS ssh_connections (id TEXT PRIMARY KEY, value TEXT NOT NULL, fingerprint TEXT)');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS session_owners(sessionId TEXT PRIMARY KEY,projectId TEXT NOT NULL,pluginId TEXT NOT NULL,taskId TEXT NOT NULL,kind TEXT NOT NULL);CREATE TRIGGER IF NOT EXISTS remove_session_owner AFTER DELETE ON sessions BEGIN DELETE FROM session_owners WHERE sessionId=old.id;END;`);
     this.db.exec('PRAGMA user_version = 7');
     this.db.exec(`CREATE TABLE IF NOT EXISTS acp_sessions(sessionId TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS acp_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
@@ -111,8 +113,9 @@ export class Store {
       FROM sessions s JOIN runs r ON r.rowid = (SELECT rowid FROM runs WHERE sessionId = s.id ORDER BY rowid DESC LIMIT 1)
       WHERE s.archived = 0`).all() as unknown as Run[];
     const bySession = new Map(latest.map(run => [run.sessionId, run]));
+    const owners=new Map(this.db.prepare('SELECT sessionId,kind,pluginId,taskId,projectId FROM session_owners').all().map(({sessionId,...owner})=>[String(sessionId),owner]));
     const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
-      .map(row => ({ ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
+      .map(row => ({ ...row, owner:owners.get(String(row.id)), remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
     const settings=this.settings();
     return { projects, sessions, agents: this.agents(), maxActiveTerminals: settings.maxActiveTerminals, maxSshTerminals: settings.maxSshTerminals, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings, apiVersion: API_VERSION };
   }
@@ -158,6 +161,7 @@ export class Store {
     this.transaction(() => {
       this.db.prepare('DELETE FROM runs WHERE sessionId IN (SELECT id FROM sessions WHERE projectId = ?)').run(id);
       this.db.prepare('DELETE FROM sessions WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM session_owners WHERE projectId=?').run(id);
       this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     });
     return runIds;
@@ -167,11 +171,16 @@ export class Store {
     const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
     if (!row) throw new Error('会话不存在');
     const latestRun = this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error, recordOutput FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 1').get(id) ?? null;
-    return { ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
+    return { ...row, owner:this.sessionOwner(String(row.id)), remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
   }
 
+  sessionOwner(sessionId:string):SessionOwner|undefined{const row=this.db.prepare('SELECT kind,pluginId,taskId,projectId FROM session_owners WHERE sessionId=?').get(sessionId);return row as unknown as SessionOwner|undefined;}
+  manageSessions(pluginId:string,value:ManagedSessions){
+    if(!this.db.prepare('SELECT id FROM projects WHERE id=?').get(value.projectId))return;this.transaction(()=>{for(const sessionId of value.sessionIds){const previous=this.sessionOwner(sessionId),session=this.db.prepare('SELECT projectId,remote FROM sessions WHERE id=?').get(sessionId);if(previous&&(previous.pluginId!==pluginId||previous.taskId!==value.taskId||previous.projectId!==value.projectId))throw new Error('会话已由其他任务管理');if(session&&(session.projectId!==value.projectId||session.remote))throw new Error('不能接管其他项目或 SSH 会话');if(!previous)this.db.prepare('INSERT INTO session_owners VALUES (?,?,?,?,?)').run(sessionId,value.projectId,pluginId,value.taskId,value.kind);}});
+  }
   createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null, remote: RemoteConfig | null = null, worktreePath: string | null = null,requestedId?:string): Session {
     this.project(projectId);
+    const owner=requestedId?this.sessionOwner(requestedId):undefined;if(owner&&(owner.projectId!==projectId||remote))throw new Error('任务会话归属与项目不匹配');
     command = this.sessionCommand(agent, command);
     if(requestedId&&this.db.prepare('SELECT id FROM sessions WHERE id=?').get(requestedId)){
       const previous=this.session(requestedId),saved=this.db.prepare('SELECT archived FROM sessions WHERE id=?').get(requestedId);

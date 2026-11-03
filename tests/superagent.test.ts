@@ -10,6 +10,7 @@ import {DaemonServer} from '../src/daemon/server';
 import {DaemonConnection} from '../src/main/connection';
 import type {AcpSnapshot} from '../src/shared/acp';
 import type {State} from '../src/shared/protocol';
+import {taskQuestions} from '../src/shared/task-questions';
 import {decision} from '../src/superagent/plugin';
 
 const execute=promisify(execFile),sourceId='example.superagent.source.local/local';
@@ -134,4 +135,67 @@ test('answering a coordinator question continues its own session, updates the pe
 });
 test('a coordinator JSON decision surrounded by prose dispatches the worker instead of getting stuck awaiting confirmation',async t=>{
   const f=await fixture(t),created=await f.create({objective:'prose-report: create result'});await until(()=>f.worker(created.id),value=>value.permissions.length===1);assert.equal((await f.task(created.id)).stage,'worker');await f.call('action',{id:created.id,action:'cancel'});
+});
+
+
+test('running task instructions persist, withdraw safely and drain FIFO without overlapping prompts or replay',async t=>{
+  const f=await fixture(t),created=await f.create();const first=await until(()=>f.worker(created.id),value=>value.permissions.length===1),original=await f.task(created.id);
+  const send=(text:string)=>({id:created.id,inputId:randomUUID(),action:'send',mode:'queue',text});const one=send('QUEUE_ONE: preserve compatibility'),two=send('QUEUE_TWO: add regression coverage'),withdrawn=send('WITHDRAW_ME');
+  await f.call('input',one);assert.equal((await f.call('input',one)).duplicate,true);await f.call('input',two);await f.call('input',withdrawn);await f.call('input',{id:created.id,inputId:withdrawn.inputId,action:'withdraw'});
+  let detail=await f.call('get',{id:created.id});assert.equal(detail.inputs.filter((input:any)=>input.state==='queued').length,2);assert.equal((await f.worker(created.id)).turnId,first.turnId,'Queueing must leave the active turn and permission intact');
+  await f.connection.rpc('acpPermission',{sessionId:original.workerSession,permissionId:first.permissions[0].id,optionId:'allow'});
+  const second=await until(()=>f.worker(created.id),value=>value.permissions.length===1&&value.turnId!==first.turnId);detail=await f.call('get',{id:created.id});assert.equal(detail.inputs.find((input:any)=>input.id===one.inputId).state,'sent');await assert.rejects(f.call('input',{id:created.id,inputId:one.inputId,action:'withdraw'}),/尚未发送/);
+  await f.connection.rpc('acpPermission',{sessionId:original.workerSession,permissionId:second.permissions[0].id,optionId:'allow'});const third=await until(()=>f.worker(created.id),value=>value.permissions.length===1&&value.turnId!==second.turnId);
+  await f.connection.rpc('acpPermission',{sessionId:original.workerSession,permissionId:third.permissions[0].id,optionId:'allow'});await until(()=>f.task(created.id),value=>value.phase==='needs_attention');
+  const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)),prompts=records.filter(row=>row.method==='prompt');assert.equal(prompts.filter(row=>row.text.includes('QUEUE_ONE')).length,1);assert.equal(prompts.filter(row=>row.text.includes('QUEUE_TWO')).length,1);assert.ok(!prompts.some(row=>row.text.includes('WITHDRAW_ME')));assert.ok(prompts.findIndex(row=>row.text.includes('QUEUE_ONE'))<prompts.findIndex(row=>row.text.includes('QUEUE_TWO')));assert.equal((await f.task(created.id)).workerSession,original.workerSession);
+  const history=await f.call('thread',{id:created.id});assert.ok(history.messages.some((row:any)=>row.text.includes('QUEUE_ONE')));assert.ok(history.messages.some((row:any)=>row.role==='assistant'));await f.call('action',{id:created.id,action:'complete'});
+});
+test('interrupting a streaming worker waits for cancellation, prioritizes the interjection and retains queued work through reload',async t=>{
+  const f=await fixture(t);await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--hold-worker']}});
+  const created=await f.create();const live=await until(()=>f.worker(created.id),value=>value.phase==='running'&&value.events.some((event:any)=>event.text.includes('worker running'))),original=await f.task(created.id);
+  const normal={id:created.id,inputId:randomUUID(),action:'send',mode:'queue',text:'NORMAL_AFTER_INTERRUPT'};await f.call('input',normal);await new Promise(resolve=>setTimeout(resolve,1200));assert.equal((await f.worker(created.id)).turnId,live.turnId);
+  await f.call('input',{id:created.id,inputId:randomUUID(),action:'send',mode:'interrupt',text:'URGENT_CHANGE_SCOPE'});const resumed=await until(()=>f.worker(created.id),value=>value.permissions.length===1&&value.turnId!==live.turnId);
+  const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)),urgent=records.findIndex(row=>row.method==='prompt'&&row.text.includes('URGENT_CHANGE_SCOPE'));assert.ok(records.findIndex(row=>row.method==='cancel')<urgent);assert.ok(!records.some(row=>row.method==='prompt'&&row.text.includes(normal.text)));assert.equal(resumed.sessionId,original.workerSession);
+  await f.extension({action:'disable',id:'superagent'});const previousLog=await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8');await f.extension({action:'enable',id:'superagent'});assert.equal((await f.task(created.id)).phase,'interrupted');assert.equal((await f.call('get',{id:created.id})).inputs.find((input:any)=>input.id===normal.inputId).state,'queued');assert.equal((await f.call('input',normal)).duplicate,true);await new Promise(resolve=>setTimeout(resolve,1200));assert.equal(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8'),previousLog);
+  await f.call('action',{id:created.id,action:'cancel'});assert.equal((await f.call('get',{id:created.id})).inputs.find((input:any)=>input.id===normal.inputId).state,'withdrawn');
+});
+
+test('question cards normalize plain questions, options and multiselect while bounding malformed Agent content',()=>{
+  assert.deepEqual(taskQuestions('需要哪个分支？')[0].options,[]);const [question]=taskQuestions({questions:[{header:'范围',question:'选择目标',multiSelect:true,options:['A',{label:'B',description:'第二项'},null]}]});assert.equal(question.multiple,true);assert.deepEqual(question.options.map(option=>option.label),['A','B']);assert.deepEqual(taskQuestions({questions:[null,{options:[]}]}),[]);
+});
+test('Superagent session ownership survives plugin disable and retry, and never claims an unrelated or foreign-project session',async t=>{
+  const f=await fixture(t),created=await f.create(),pending=await until(()=>f.worker(created.id),value=>value.permissions.length===1),ticket=await f.task(created.id);let state=await f.connection.rpc<State>('state');
+  for(const id of [ticket.coordinatorSession,ticket.workerSession])assert.deepEqual(state.sessions.find(session=>session.id===id)?.owner,{kind:'superagent',projectId:f.project.id,pluginId:'superagent',taskId:created.id});
+  const unrelated=await f.connection.rpc<any>('createSession',{projectId:f.project.id,agent:f.agent.id,title:'Superagent · user named terminal',command:''});assert.equal(unrelated.owner,undefined);
+  await f.connection.rpc('acpPermission',{sessionId:ticket.workerSession,permissionId:pending.permissions[0].id,optionId:'allow'});await until(()=>f.task(created.id),value=>value.phase==='needs_attention');await f.call('action',{id:created.id,action:'retry'});await until(()=>f.worker(created.id),value=>value.permissions.length===1);await f.extension({action:'disable',id:'superagent'});
+  state=await f.connection.rpc<State>('state');assert.equal(state.sessions.find(session=>session.id===ticket.workerSession)?.owner?.taskId,created.id);assert.ok(state.sessions.filter(session=>session.owner?.taskId===created.id).length>=4);assert.equal(state.sessions.find(session=>session.id===unrelated.id)?.owner,undefined);assert.ok(!state.agentActivities?.some(activity=>activity.kind==='acp'&&state.sessions.find(session=>session.id===activity.id)?.owner));
+  assert.throws(()=>f.server.agentsCorePort().store.manageSessions('different-plugin',{kind:'superagent',projectId:f.project.id,taskId:randomUUID(),sessionIds:[ticket.workerSession]}),/其他任务/);
+});
+
+test('an input reserved before a failed start is marked unknown and never resent by reload',async t=>{
+  const f=await fixture(t);await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--fail-mode']}});const created=await f.create(),input={id:created.id,inputId:randomUUID(),action:'send',mode:'queue',text:'Do not silently replay this instruction'};await f.call('input',input);await until(()=>f.task(created.id),value=>value.phase==='interrupted');assert.equal((await f.call('get',{id:created.id})).inputs.find((value:any)=>value.id===input.inputId).state,'unknown');await f.extension({action:'reload',id:'superagent'});assert.equal((await f.call('input',input)).state,'unknown');const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(records.filter(record=>record.method==='prompt').length,0);
+});
+
+test('an interjection during ACP startup replaces the pending dispatch without sending the old prompt first',async t=>{
+  const f=await fixture(t);await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--slow-mode']}});const created=await f.create();
+  await until(async()=>{const task=await f.task(created.id),state=await f.connection.rpc<State>('state');return {task,session:state.sessions.find(session=>session.id===task.coordinatorSession)};},value=>value.task.phase==='planning'&&value.session?.latestRun?.pid);
+  await f.call('input',{id:created.id,inputId:randomUUID(),action:'send',mode:'interrupt',text:'EARLY_STEER: narrow the acceptance scope'});await until(()=>f.worker(created.id),value=>value.permissions.length===1);
+  const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)),coordinator=records.filter(record=>record.method==='prompt'&&record.text.includes('你是 Superagent 的协调者'));assert.equal(coordinator.length,1);assert.match(coordinator[0].text,/EARLY_STEER/);await f.call('action',{id:created.id,action:'cancel'});
+});
+test('internal session history can be read and explicitly deleted only after its task no longer uses it',async t=>{
+  const f=await fixture(t),created=await f.create();await until(()=>f.worker(created.id),value=>value.permissions.length===1);const task=await f.task(created.id),unrelated=await f.connection.rpc<any>('createSession',{projectId:f.project.id,agent:f.agent.id,title:'Personal',command:''});
+  const history=await f.call('sessions',{id:created.id});assert.equal(history.total,2);assert.ok(history.sessions.some((session:any)=>session.id===task.coordinatorSession));await assert.rejects(f.call('delete_session',{id:created.id,sessionId:task.coordinatorSession}),/当前任务会话/);await assert.rejects(f.call('delete_session',{id:created.id,sessionId:unrelated.id}),/不属于此任务/);
+  await f.call('action',{id:created.id,action:'cancel'});await f.call('delete_session',{id:created.id,sessionId:task.coordinatorSession});assert.equal((await f.call('sessions',{id:created.id})).total,1);assert.ok((await f.connection.rpc<State>('state')).sessions.some(session=>session.id===unrelated.id));
+});
+
+test('source inbox approval and rejection are explicit; task deletion preserves files, isolates unrelated work and keeps source deduplication',async t=>{
+  const f=await fixture(t);await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});await f.call('source_policy',{sourceId,enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],autoApprove:false,isolated:true});
+  const emit=(id:string,title:string)=>f.extension({action:'call',id:'example.superagent.source.local',command:'emit',params:{id,threadId:'inbox-thread',actorId:'alice',title,text:'Implement this request only after approval'}});
+  const first=await emit('approval-a','A request'),second=await emit('approval-b','B request');assert.equal((await f.call('state')).counts.approval,2);assert.equal((await f.call('tasks',{filter:'approval'})).total,2);assert.ok(!(await f.connection.rpc<State>('state')).sessions.some(session=>session.owner));
+  const alternate=await f.connection.rpc<any>('createAgent',{name:'Alternate executor',command:f.agent.command,acp:f.agent.acp});await f.call('action',{id:first.ticketId,action:'approve',executorId:alternate.id});await until(()=>f.worker(first.ticketId),value=>value.permissions.length===1);const approved=await f.task(first.ticketId);assert.equal(approved.executorId,alternate.id);assert.equal((await f.call('tasks',{filter:'active'})).total,1);assert.equal((await f.call('get',{id:approved.id})).sourceInfo.canReply,true);await assert.rejects(readFile(path.join(f.data,'extensions','data','example.superagent.source.local','receipts.json')),/ENOENT/,'Approval must not send a channel reply');
+  await f.call('action',{id:second.ticketId,action:'reject'});assert.equal((await f.task(second.ticketId)).rejected,true);assert.equal((await f.call('state')).counts.approval,0);
+  await f.call('delete_task',{id:second.ticketId});assert.equal((await f.call('delete_task',{id:second.ticketId})).duplicate,true);await assert.rejects(f.task(second.ticketId),/已删除/);const duplicate=await emit('approval-b','Same event again');assert.equal(duplicate.duplicate,true);assert.equal(duplicate.ticketId,second.ticketId);assert.equal((await f.call('tasks',{filter:'all'})).total,1);
+  const personal=await f.connection.rpc<any>('createSession',{projectId:f.project.id,agent:f.agent.id,title:'Personal long task',command:''});await f.connection.rpc('acpSend',{sessionId:personal.id,requestId:randomUUID(),text:'long'});await writeFile(path.join(approved.worktreePath,'keep.txt'),'KEEP_WORKTREE');await assert.rejects(f.call('delete_task',{id:approved.id}),/仍在运行/);await f.call('delete_task',{id:approved.id,cancelRunning:true});
+  assert.equal(await readFile(path.join(approved.worktreePath,'keep.txt'),'utf8'),'KEEP_WORKTREE');const state=await f.connection.rpc<State>('state');assert.ok(!state.sessions.some(session=>session.owner?.taskId===approved.id));assert.ok(!state.agentActivities?.some(activity=>activity.taskId===approved.id));assert.equal(state.sessions.find(session=>session.id===personal.id)?.latestRun?.status,'running');assert.equal((await f.call('state')).counts.all,0);
+  await f.extension({action:'reload',id:'superagent'});assert.equal((await f.call('tasks',{filter:'all'})).total,0);assert.equal((await emit('approval-a','Old event')).duplicate,true);
 });

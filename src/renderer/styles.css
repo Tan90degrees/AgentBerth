@@ -2618,3 +2618,7 @@ textarea:focus-visible {
 .acp-conversation>.form-error {margin:6px 16px;max-height:90px;overflow:auto;flex-shrink:0}
 .acp-permission {margin:8px 16px;padding:12px 16px;border:1px solid var(--focus);border-radius:12px;flex-shrink:0}.acp-permission>div {display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .acp-composer {margin:10px max(16px,calc((100% - 820px)/2));padding:12px;border:1px solid var(--border);border-radius:16px;background:var(--surface-muted);flex-shrink:0}.acp-composer textarea {display:block;width:100%;resize:vertical;min-height:64px;max-height:220px;background:transparent;border:none;color:var(--text);font:inherit;outline:none}.acp-composer footer {display:flex;justify-content:space-between;align-items:center;margin-top:8px}.acp-composer small {color:var(--muted);font-size:11px}
+
+.extension-task-document{display:flex;flex:1;min-height:0}.extension-owned-conversation{display:flex;flex-direction:column;flex:1;min-height:0}.extension-owned-conversation>header{display:flex;gap:12px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border)}.extension-owned-conversation>header strong{font-size:12px;font-weight:500}.extension-owned-conversation>header button{font-size:11px}.extension-owned-conversation>.acp-conversation{flex:1;min-height:0}
+
+.extension-nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 5px;margin-left:auto;border-radius:10px;background:var(--selected);color:var(--focus);font-size:10px;font-weight:600}

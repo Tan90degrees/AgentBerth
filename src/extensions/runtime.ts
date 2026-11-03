@@ -7,7 +7,7 @@ import path from 'node:path';
 import { builtinExtensions, coreCapabilities } from './builtins';
 import { commitPackage, packagePath, readManifest, stagePackage } from './packages';
 import { extensionManifestSchema, resolveExtensionConfig, type ExtensionConfig, type ExtensionInfo, type ExtensionManifest, type ExtensionSnapshot } from '../shared/extensions';
-import { agentDefinitionSchema } from '../shared/protocol';
+import { agentDefinitionSchema,managedSessionsSchema,type ManagedSessions } from '../shared/protocol';
 import {agentActivitySchema,type AgentActivity} from '../shared/pet';
 import {createHash} from 'node:crypto';
 import type { WorkbenchPlugin, WorkbenchPluginApi, ExtensionCommand, AgentContribution } from './sdk';
@@ -20,6 +20,7 @@ export interface ExtensionHost {
   call(method:string,params:Record<string,unknown>):Promise<unknown>;
   agentsChanged(contributions:{pluginId:string;agent:AgentContribution}[]):void;
   validateAgent?(pluginId:string,agent:AgentContribution):void;
+  manageSessions?(pluginId:string,value:ManagedSessions):void;
   changed():void;
   builtinView?(id:string,view:string):string|undefined;
 }
@@ -70,7 +71,9 @@ export class ExtensionRuntime {
           command:(description,execute)=>{if(!/^[a-z][a-z0-9_]{0,63}$/.test(description.name)||commands.has(description.name))throw new Error('插件命令名无效或重复');if((description.inputSchema.properties as Record<string,unknown>|undefined)?.agentId)throw new Error('agentId 是 MCP 的调用方标识，请改用其他参数名');if(description.inputSchema.type!=='object')throw new Error('插件命令 inputSchema 须为 object');const validate=this.ajv.compile(description.inputSchema);ctx.effect(()=>{commands.set(description.name,{description,execute,validate});return()=>{commands.delete(description.name);};});},
           agent:agent=>{if(!/^[a-z][a-z0-9.-]{0,63}$/.test(agent.id)||agents.has(agent.id))throw new Error('Agent 接入 ID 无效或重复');agent={...agent,definition:agentDefinitionSchema.parse(agent.definition)};if([...agents.values()].some(value=>value.definition.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('同一插件的 Agent 名称不能重复');this.host.validateAgent?.(id,agent);ctx.effect(()=>{agents.set(agent.id,agent);return()=>{agents.delete(agent.id);};});},
           source:contribution=>{const service=this.context.superagentSources;if(!service||!record.manifest.dependencies.includes(service.id))throw new Error('信息源插件须在 dependencies 中声明已启用的 Superagent 插件');const handle=service.register(id,contribution,abort.signal);ctx.effect(()=>handle.dispose);return {emit:event=>{this.require(id);return handle.emit(event);},health:handle.health};},
+          manageSessions:input=>{if(abort.signal.aborted)throw new Error('插件已停止');if(!this.host.manageSessions)throw new Error('宿主不支持任务会话隔离，请更新后台');this.host.manageSessions(id,managedSessionsSchema.parse(input));},
           activity:input=>{if(abort.signal.aborted)return;const {pluginId:_,taskId:__,...raw}=input,value=agentActivitySchema.parse(raw),key='activity:'+createHash('sha256').update(id+'/'+value.id).digest('hex').slice(0,32);if(!this.activityEntries.has(key)&&[...this.activityEntries.values()].filter(value=>value.pluginId===id).length>=200){const oldest=[...this.activityEntries].filter(([,value])=>value.pluginId===id&&['completed','idle'].includes(value.status)).sort((a,b)=>a[1].updatedAt-b[1].updatedAt)[0];if(oldest)this.activityEntries.delete(oldest[0]);else throw new Error('插件状态最多保留 200 项');}this.activityEntries.set(key,{...value,id:key,taskId:value.id,pluginId:id});this.host.changed();},
+          removeActivity:taskId=>{if(typeof taskId!=='string'||!taskId||taskId.length>100)throw new Error('任务状态 ID 无效');const key='activity:'+createHash('sha256').update(id+'/'+taskId).digest('hex').slice(0,32);if(this.activityEntries.delete(key))this.host.changed();},
           effect:setup=>{ctx.effect(async()=>{const dispose=await setup();return dispose??(()=>{});});},
           interval:(callback,milliseconds)=>{if(milliseconds<100||!Number.isFinite(milliseconds))throw new Error('定时器间隔至少 100 ms');ctx.effect(()=>{const timer=setInterval(()=>{try{callback();}catch(error){this.notices.set(id,'定时任务失败：'+String(error));this.publish();}},milliseconds);return()=>clearInterval(timer);});},
           call:(method,params={})=>this.host.call(method,params),

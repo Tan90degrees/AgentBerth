@@ -55,7 +55,7 @@ export class PetState {
   snapshot(now = Date.now()): PetSnapshot {
     const projects = new Map(this.state?.projects.map(project => [project.id, project.name]));
     const activities=this.state?.agentActivities??[],managed=new Set(activities.filter(value=>value.kind==='superagent').flatMap(value=>value.managedSessionIds)),native=new Set(activities.map(value=>value.id));
-    const sessions: PetSession[] = (this.state?.sessions ?? []).filter(session => isAgentSession(session) && session.latestRun&&!managed.has(session.id)&&!native.has(session.id)).map(session => {
+    const sessions: PetSession[] = (this.state?.sessions ?? []).filter(session => isAgentSession(session) && !session.owner && session.latestRun&&!managed.has(session.id)&&!native.has(session.id)).map(session => {
       const run = session.latestRun!, hook = this.hooks.get(session.id);
       const live = ['running', 'stopping'].includes(run.status);
       let status: PetStatus = live ? hook?.status ?? 'unknown' : run.status === 'failed' || (run.exitCode !== null && run.exitCode !== 0) ? 'error' : hook?.status === 'completed' ? 'completed' : 'idle';

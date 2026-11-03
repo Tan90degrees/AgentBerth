@@ -115,6 +115,7 @@ export class DaemonServer {
       },
       call:async(method,params)=>{const caller=this.extensionCaller.getStore();if(!caller&&/^(remote|ssh|mcp)/i.test(method))throw new Error('SSH 操作必须由明确的调用会话发起');const request=requestSchema.parse({id:randomUUID(),method,params});return this.dispatch(request,caller??{id:'extension',disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort:new AbortController()});},
       validateAgent:(pluginId,agent)=>{const sourceId='ext.'+createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex').slice(0,32);if(this.store.agents().some(value=>value.sourceId!==sourceId&&value.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('Agent 名称已被其他接入使用：'+agent.definition.name);},
+      manageSessions:(pluginId,value)=>this.store.manageSessions(pluginId,value),
       agentsChanged:values=>{
         const names=new Set<string>();for(const {agent} of values){const name=agent.definition.name.toLocaleLowerCase();if(names.has(name))throw new Error('插件 Agent 名称重复：'+agent.definition.name);names.add(name);}
         const next=new Map<string,string>();
@@ -202,7 +203,7 @@ export class DaemonServer {
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
   }
-  private snapshot(): State { const state=this.store.state();return {...state,agentActivities:[...this.acp.activities(state.sessions,state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private snapshot(): State { const state=this.store.state();return {...state,agentActivities:[...this.acp.activities(state.sessions.filter(session=>!session.owner),state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
   workspaceCorePort() {
     const self=this;
     return {

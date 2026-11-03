@@ -3,7 +3,7 @@
 // Xvfb the document can finish loading before the React frame is fully mounted.
 export const extensionDocument=(html:string)=>`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'"><style>body{font:14px system-ui;margin:16px;color:var(--text,#ddd);background:var(--surface,#212121)}button,input{font:inherit}</style><script>
 let requestSequence=0,bridgeReady;
-function applyTheme(theme){if(typeof document==='undefined'||!theme)return;for(const name of ['--text','--surface','--surface-muted','--border','--muted','--focus'])if(typeof theme[name]==='string')document.documentElement.style.setProperty(name,theme[name]);}
+function applyTheme(theme){if(typeof document==='undefined'||!theme)return;for(const name of ['--text','--surface','--surface-muted','--border','--muted','--focus','--color-scheme','--scrollbar','--hover'])if(typeof theme[name]==='string')document.documentElement.style.setProperty(name,theme[name]);}
 addEventListener('message',event=>{if(event.source===parent&&event.data?.kind==='agentberth-plugin-theme')applyTheme(event.data.theme);});
 function waitForBridge(){
   if(bridgeReady)return bridgeReady;

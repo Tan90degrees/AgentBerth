@@ -5,7 +5,7 @@ import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest }
 import { acpConfigSchema, type AcpSnapshot, type AcpEvent } from './acp';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 46;
+export const API_VERSION = 47;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -211,7 +211,10 @@ export interface GitWorktree { path:string; workingPath:string; branch:string|nu
 export interface GitResult { status: GitStatus; message: string; output: string }
 export interface GitDiff { path: string; staged: boolean; patch: string; binary: boolean; truncated: boolean; message?: string }
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
-export interface Session { remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
+export const managedSessionsSchema=z.object({kind:z.literal('superagent'),taskId:z.uuid(),projectId:z.uuid(),sessionIds:z.array(z.uuid()).min(1).max(2)}).strict();
+export type ManagedSessions=z.infer<typeof managedSessionsSchema>;
+export interface SessionOwner {kind:'superagent';pluginId:string;taskId:string;projectId:string}
+export interface Session { owner?:SessionOwner; remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface WorkspaceRecovery { id: string; status: 'restoring' | 'completed'; total: number; restored: number; resumed: number; skipped: number; errors: {sessionId: string; title: string; message: string}[] }
 export interface State { agentActivities?:import('./pet').AgentActivity[];extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }

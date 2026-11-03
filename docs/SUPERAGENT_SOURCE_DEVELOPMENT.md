@@ -1,12 +1,12 @@
 # Superagent 信息源插件开发指南
 
-适用 AgentBerth 0.18 / API 46。信息源插件负责把渠道消息变成任务事件，并按用户审核的内容回传消息；Superagent 负责项目绑定、身份准入、任务编排与审计。无需修改 Agent、工作台核心或 Agent 的配置。不附带任何 GitHub、飞书渠道。
+适用 AgentBerth 0.18 / API 47。信息源插件负责把渠道消息变成任务事件，并按用户审核的内容回传消息；Superagent 负责项目绑定、身份准入、任务编排与审计。无需修改 Agent、工作台核心或 Agent 的配置。不附带任何 GitHub、飞书渠道。
 
 ## 1. 先跑通本地示例
 
-1. 在 Superagent → 信息源 →「开发指南 / 复制给 Agent」中导出开发套件。插件中心也有「Superagent 信息源开发指南」入口。
+1. 在 Superagent → 来源设置 → 接收记录与开发指南 →「开发指南 / 复制给 Agent」中导出开发套件。插件中心也有「Superagent 信息源开发指南」入口。
 2. 插件中心 → 加载开发目录 → 选择导出的 `superagent-source-local`。保持 Superagent 已启用。
-3. Superagent → 信息源，选择「本地模拟源」，选择项目、协调 ACP Agent 和执行 ACP Agent，勾选接收并保存。先保留人工审批。
+3. Superagent → 来源设置 → 接收记录与开发指南，选择「本地模拟源」，选择项目、协调 ACP Agent 和执行 ACP Agent，勾选接收并保存。先保留人工审批。
 4. 让连接 AgentBerth MCP 的 Agent 调用描述为「向 Superagent 提交一个本地模拟事件」的扩展工具，参数如下。工具实际名称由插件 ID 确定，不要猜测工具名。未配置 MCP 时，可在应用开发者工具控制台执行下面的本机验证代码：
 
 ```js

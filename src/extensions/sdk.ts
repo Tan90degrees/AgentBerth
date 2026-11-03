@@ -12,8 +12,11 @@ export interface WorkbenchPluginApi {
   agent(contribution:AgentContribution):void;
   /** Declare the Superagent provider in manifest.dependencies. No source is bundled by the host. */
   source(contribution:SourceContribution):SourceHandle;
+  /** Persist feature ownership independently of the companion or plugin lifecycle. */
+  manageSessions(value:import('../shared/protocol').ManagedSessions):void;
   /** Publish a task status for the desktop companion. Removed on plugin disposal. */
   activity(value:import('../shared/pet').AgentActivity):void;
+  removeActivity(id:string):void;
   /** Every resource belongs to the Cordis fiber; return its cleanup function. */
   effect(setup:()=>void|(()=>void|Promise<void>)|Promise<()=>void|Promise<void>>):void;
   interval(callback:()=>void,milliseconds:number):void;

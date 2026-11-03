@@ -1,6 +1,6 @@
 # AgentBerth Cordis 插件开发指南
 
-适用：AgentBerth 0.18 / 后台 API 46。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
+适用：AgentBerth 0.18 / 后台 API 47。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
 
 用户只需在 **插件中心 → 扩展插件 → 安装扩展插件** 或 **Agent 接入 → 安装 Agent 插件** 选择 ZIP，也可用 **加载开发目录** 选择目录。每个 Agent 提供者（Codex、Claude Code、OpenCode、自定义 Agent）都是独立 Cordis 插件；Agent 注册中心本身由工作台核心提供。插件自动启用，点击有配置项的插件卡片可打开独立配置弹窗。开发目录保存后自动重载；失败保留上一版代码与配置，页面显示错误。无需修改 Agent 的配置来安装工作台插件。
 
@@ -92,3 +92,20 @@ exports.apply = ctx => {
 `ctx.berth.activity({ id, title, projectId, kind: 'superagent', status, label, updatedAt, targetSessionId?, managedSessionIds })` 发布轻量任务状态，不发送 prompt、输出或凭据。`id` 在插件内稳定；宿主自动隔离插件身份。`status` 使用 `idle / working / waiting / completed / error / unknown`，`updatedAt` 为毫秒时间戳。`managedSessionIds` 最多两项，用于将协调、执行会话聚合成一个任务；`targetSessionId` 为会话跳转目标。
 
 同 ID 更新会覆盖当前状态。注册由 Cordis 作用域托管，停用或卸载自动移除；每插件最多 200 项，会优先淘汰旧的已完成/空闲条目。Superagent 已使用该接口，无需依赖桌宠插件本身；桌宠启用后读取宿主状态即可。此接口要求后台 API 45。
+
+
+### 特性内部会话归属（API 47）
+
+独立任务插件在创建会话前声明归属：
+
+```js
+ctx.berth.manageSessions({
+  kind: 'superagent', projectId, taskId,
+  sessionIds: [coordinatorSessionId, workerSessionId]
+});
+```
+
+ID 均为 UUID，单次 1–2 个会话。宿主自动绑定调用插件 ID，持久记录 `Session.owner`，普通会话树与快速切换排除这些会话；插件通过自己的任务视图管理。不可接管其他任务、其他项目或 SSH 会话。此归属与临时 `activity` 独立，停用插件不会解除；删除会话时清除记录。插件需在任务检查点恢复时重新声明可识别的旧会话归属，并为重试后的历史记录保留查看和显式删除入口。
+
+
+任务删除时调用 `ctx.berth.removeActivity(taskId)` 移除本插件对应的桌宠/侧栏待办状态。宿主按调用插件命名空间隔离，不能移除其他插件的状态；此操作不解除持久会话归属。
