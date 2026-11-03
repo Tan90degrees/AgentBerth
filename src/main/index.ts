@@ -506,7 +506,7 @@ ipcMain.handle('berth:pluginPrompt', async (event, folder?: string,topic?:unknow
     readFileSync(path.join(resourceRoot,'docs','SUPERAGENT_SOURCE_DEVELOPMENT.md'),'utf8'),
     '以下是可直接加载的完整本地示例，不访问外部服务。将其复制为新插件后实现渠道接收与回传：',
     ...['agentberth.extension.json','index.cjs'].map(name=>name+'\n```'+(name.endsWith('.json')?'json':'js')+'\n'+readFileSync(path.join(resourceRoot,'examples','superagent-source-local',name),'utf8')+'\n```'),
-  ].join('\n\n');
+  ].join('\n\n').replace(/\r\n?/g,'\n');
   return developmentPrompt(readFileSync(path.join(resourceRoot, 'docs', 'CORDIS_PLUGIN_DEVELOPMENT.md'), 'utf8'), folder);
 });
 

@@ -56,7 +56,7 @@ try{
   const sourceGuide=page.getByRole('dialog',{name:'Superagent 信息源开发指南'}),guideText=sourceGuide.getByLabel('信息源开发指南内容');
   await page.waitForFunction(()=>document.querySelector('.source-development-guide')?.value.includes('ctx.berth.source'));
   const guide=await guideText.inputValue();assert.ok(guide.includes('先跑通本地示例'));assert.ok(guide.includes('example.superagent.source.local'));assert.ok(guide.includes('idempotencyKey'));
-  await sourceGuide.getByRole('button',{name:'复制给 Agent',exact:true}).click();assert.equal(await page.evaluate(()=>window.berth.readClipboard()),guide);
+  await sourceGuide.getByRole('button',{name:'复制给 Agent',exact:true}).click();await sourceGuide.getByRole('button',{name:'复制给 Agent',exact:true}).and(page.locator('[data-feedback="success"]')).waitFor();assert.equal(await page.evaluate(()=>window.berth.readClipboard()),guide);
   await sourceGuide.getByRole('button',{name:'关闭对话框',exact:true}).click();await sourceGuide.waitFor({state:'hidden'});
   await page.evaluate(source=>window.berth.extensions({action:'install',path:source}),path.resolve('examples/superagent-source-local'));await frame.locator('#source option').waitFor({state:'attached'});await frame.getByRole('button',{name:'信息源',exact:true}).click();
   await frame.locator('#sourceEnabled').check();await frame.getByRole('button',{name:'保存信息源规则',exact:true}).click();
