@@ -40,8 +40,8 @@ export async function acpCommand(executable:string,arguments_:string[]){
 export class AcpRpcError extends Error {constructor(readonly code:number,message:string,readonly data?:unknown){super(message);}}
 type Handler=(method:string,params:Record<string,any>)=>Promise<unknown>;
 export class AcpTransport {
-  private sequence=0;private buffer='';private closed=false;private ended=false;
-  private stopping:Promise<void>|undefined;
+  private sequence=0;private buffer='';private closed=false;private ended=false;private processExited=false;
+  private stopping:Promise<void>|undefined;private drainTimer:NodeJS.Timeout|undefined;
   private pending=new Map<string,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer?:NodeJS.Timeout}>();
   private incoming=0;readonly child:ChildProcessWithoutNullStreams;readonly exited:Promise<void>;stderr='';
   static async open(config:AcpConfig,cwd:string,request:Handler,notify:(method:string,params:Record<string,any>)=>void,onExit:(error:Error)=>void){
@@ -58,10 +58,15 @@ export class AcpTransport {
       catch(error){this.fail(new Error('ACP 标准输出必须是逐行 JSON-RPC；日志请写入 stderr：'+String(error)));void this.stop();}
     });
     child.stderr.setEncoding('utf8');child.stderr.on('data',(chunk:string)=>{this.stderr=(this.stderr+chunk).slice(-16384);});child.stdin.on('error',()=>{});
-    child.once('error',error=>this.fail(error));child.once('exit',(code,signal)=>this.fail(new Error(`ACP 进程已退出（${code??signal??'unknown'}）${this.stderr?'：'+this.stderr.slice(-1500):''}`)));
+    child.once('error',error=>this.fail(error));
+    // exit can precede the final stdout/stderr data, especially on Windows.
+    // Refuse new writes immediately, but drain complete protocol messages before
+    // notifying the owner: its cleanup destroys the pipes.
+    child.once('exit',()=>{this.processExited=true;if(!this.ended){this.drainTimer=setTimeout(()=>this.fail(new Error('ACP 进程已退出，但输出流未关闭；已保留收到的记录，剩余输出未知')),3000);this.drainTimer.unref();}});
+    child.once('close',(code,signal)=>this.fail(new Error(`ACP 进程已退出（${code??signal??'unknown'}）${this.stderr?'：'+this.stderr.slice(-1500):''}`)));
   }
   get pid(){return this.child.pid??null;}
-  private send(message:unknown){if(this.closed||this.ended||!this.child.stdin.writable)throw new Error('ACP 连接已断开，未发送操作');const line=JSON.stringify(message);if(Buffer.byteLength(line)>8*1024*1024)throw new Error('ACP 请求过大');this.child.stdin.write(line+'\n');}
+  private send(message:unknown){if(this.closed||this.ended||this.processExited||!this.child.stdin.writable)throw new Error('ACP 连接已断开，未发送操作');const line=JSON.stringify(message);if(Buffer.byteLength(line)>8*1024*1024)throw new Error('ACP 请求过大');this.child.stdin.write(line+'\n');}
   notify(method:string,params:Record<string,unknown>){this.send({jsonrpc:'2.0',method,params});}
   call<T=any>(method:string,params:Record<string,unknown>,timeout=30000):Promise<T>{
     const id=String(++this.sequence);
@@ -84,7 +89,7 @@ export class AcpTransport {
     const item=this.pending.get(String(message.id));if(!item)return;this.pending.delete(String(message.id));clearTimeout(item.timer);
     if(message.error)item.reject(new AcpRpcError(Number(message.error.code),String(message.error.message??'ACP 请求失败'),message.error.data));else item.resolve(message.result);
   }
-  private fail(error:Error){if(this.ended)return;this.ended=true;for(const item of this.pending.values()){clearTimeout(item.timer);item.reject(error);}this.pending.clear();if(!this.closed)this.onExit(error);}
+  private fail(error:Error){if(this.ended)return;clearTimeout(this.drainTimer);this.ended=true;for(const item of this.pending.values()){clearTimeout(item.timer);item.reject(error);}this.pending.clear();if(!this.closed)this.onExit(error);}
   async stop(){
     if(this.stopping)return this.stopping;
     this.closed=true;this.fail(new Error('ACP 连接已停止'));

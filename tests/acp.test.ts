@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,rm,writeFile,symlink} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
@@ -7,7 +8,7 @@ import path from 'node:path';
 import {DaemonServer} from '../src/daemon/server';
 import {DaemonConnection,connectDaemon} from '../src/main/connection';
 import {AcpClientTools} from '../src/daemon/acp-client-tools';
-import {acpExecutable,acpCommand} from '../src/daemon/acp-transport';
+import {AcpTransport,acpExecutable,acpCommand} from '../src/daemon/acp-transport';
 import {resolveExecutable} from '../src/daemon/executables';
 import type {AgentDefinition,Session,Run,State} from '../src/shared/protocol';
 import type {AcpSnapshot} from '../src/shared/acp';
@@ -56,6 +57,14 @@ test('ACP authentication and a provider without loadSession are negotiated hones
 test('ACP disconnect preserves partial output, marks unknown turns and never automatically resubmits them',async t=>{
   const f=await fixture(t),requestId=randomUUID();await f.send('disconnect',requestId);await until(f.snapshot,value=>value.phase==='disconnected');const output=await f.snapshot();assert.ok(output.events.some(event=>event.text.includes('partial before disconnect')));
   const duplicate=await f.send('disconnect',requestId);assert.equal(duplicate.duplicate,true);const log=await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8');assert.equal(log.split('\n').filter(line=>line.includes('"method":"prompt"')).length,1);
+});
+test('ACP drains buffered output before exit cleanup and refuses new writes after the process exits',async t=>{
+  const f=await fixture(t),events:string[]=[];
+  const transport=await AcpTransport.open({executable,args:[fixtureFile,path.join(f.dir,'agent')],env:{ELECTRON_RUN_AS_NODE:'1'}},f.root,async()=>{throw new Error('Unexpected client request');},(_method,params)=>{events.push(String(params.update?.content?.text??''));},()=>{events.push('closed');});
+  t.after(()=>transport.stop());await transport.call('initialize',{protocolVersion:1,clientCapabilities:{}});const session=await transport.call('session/new',{cwd:f.root,mcpServers:[]});
+  transport.child.stdout.pause();const exit=once(transport.child,'exit');const interrupted=transport.call('session/prompt',{sessionId:session.sessionId,prompt:[{type:'text',text:'disconnect'}]}).then(()=>null,error=>error);
+  await exit;assert.ok(!events.includes('closed'),'Cleanup must wait until buffered protocol output drains');await assert.rejects(transport.call('session/cancel',{sessionId:session.sessionId}),/断开/);
+  transport.child.stdout.resume();await transport.exited;assert.ok(await interrupted instanceof Error);assert.ok(events.includes('partial before disconnect'));assert.ok(events.indexOf('partial before disconnect')<events.indexOf('closed'));
 });
 test('ACP filesystem requests stay inside the canonical workspace, including symlink targets',async t=>{
   const dir=await mkdtemp(path.join(os.tmpdir(),'berth-acp-files-')),root=path.join(dir,'root'),outside=path.join(dir,'outside');await mkdir(root);await mkdir(outside);const tools=new AcpClientTools(root);t.after(async()=>{await tools.close();await rm(dir,{recursive:true,force:true});});

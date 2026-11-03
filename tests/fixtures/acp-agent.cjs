@@ -2,18 +2,18 @@ const readline=require('node:readline'),fs=require('node:fs'),path=require('node
 const directory=process.argv[2],log=path.join(directory,'calls.jsonl'),database=path.join(directory,'sessions.json');
 let sessions={};try{sessions=JSON.parse(fs.readFileSync(database,'utf8'));}catch{}
 let authenticated=!process.argv.includes('--auth'),model='small',mode='build',sequence=0,pending=new Map(),turns=new Map();
-const send=value=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\n');
+const send=(value,flushed)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\n',flushed);
 const record=value=>fs.appendFileSync(log,JSON.stringify(value)+'\n');
 const result=(id,value)=>send({id,result:value});
 const error=(id,code,message)=>send({id,error:{code,message}});
-const update=(sessionId,value)=>send({method:'session/update',params:{sessionId,update:value}});
-const text=(sessionId,value)=>update(sessionId,{sessionUpdate:'agent_message_chunk',content:{type:'text',text:value}});
+const update=(sessionId,value,flushed)=>send({method:'session/update',params:{sessionId,update:value}},flushed);
+const text=(sessionId,value,flushed)=>update(sessionId,{sessionUpdate:'agent_message_chunk',content:{type:'text',text:value}},flushed);
 const configs=()=>[{id:process.argv.includes('--named-model')?'provider-model':'model',name:'模型',type:'select',category:'model',currentValue:model,options:[{value:'small',name:'Small'},{value:'large',name:'Large'}]},...(process.argv.includes('--config-modes')?[{id:'mode',name:'Session Mode',category:'mode',type:'select',currentValue:mode,options:[{value:'build',name:'Build'},{value:'plan',name:'Plan'}]}]:[])];
 const metadata=()=>({...(!process.argv.includes('--config-modes')?{modes:{currentModeId:mode,availableModes:[{id:'build',name:'Build'},{id:'plan',name:'Plan'}]}}:{}),configOptions:configs()});
 const call=(method,params)=>new Promise((resolve,reject)=>{const id='client-'+ ++sequence;pending.set(id,{resolve,reject});send({id,method,params});});
 const permission=sessionId=>call('session/request_permission',{sessionId,toolCall:{toolCallId:'file-write',title:'Write note.txt',kind:'edit',status:'pending'},options:[{optionId:'allow',kind:'allow_once',name:'允许一次'},{optionId:'reject',kind:'reject_once',name:'拒绝'}]});
 async function prompt(message){const p=message.params,content=p.prompt.map(item=>item.text??'').join(''),sessionId=p.sessionId;record({method:'prompt',sessionId,model,text:content});
-  if(content==='disconnect'){text(sessionId,'partial before disconnect');setTimeout(()=>process.exit(1),30);return;}
+  if(content==='disconnect'){text(sessionId,'partial before disconnect',()=>process.exit(1));return;}
   if(content==='pagination'){for(let i=1;i<=240;i++)update(sessionId,{sessionUpdate:'tool_call',toolCallId:'page-'+i,title:'历史工具 '+i,kind:'read',status:'completed'});text(sessionId,'pagination ready');result(message.id,{stopReason:'end_turn'});return;}
   if(content==='long'){let n=0;const timer=setInterval(()=>text(sessionId,'stream '+ ++n+'\n'),20);turns.set(sessionId,{id:message.id,timer});return;}
   if(process.argv.includes('--hold-worker')&&content.includes('你是 Superagent 的独立执行器')&&!sessions[sessionId].workerSeen){sessions[sessionId].workerSeen=true;fs.writeFileSync(database,JSON.stringify(sessions));const timer=setInterval(()=>text(sessionId,'worker running\n'),150);turns.set(sessionId,{id:message.id,timer});return;}
