@@ -50,10 +50,21 @@ test('a real CPU/memory child is included in the session tree and sampling shuts
  assert.ok(descendant>0);assert.ok(value.sessions.real.cpuPercent!>0);assert.equal(value.projects.project.memoryBytes,value.sessions.real.memoryBytes);assert.ok(value.workspace.memoryBytes!>=value.sessions.real.memoryBytes!);
 });
 
-test('closing during a pending process read releases the Windows helper and its pipes', {timeout:15000},async()=>{
+test('closing during a pending process read releases the Windows helper and its pipes', {timeout:25000},async()=>{
  const reader=new ProcessReader();try{
   const rows=await reader.read(),helpers=process.platform==='win32'?rows.filter(row=>row.parent===process.pid).map(row=>row.pid):[];
   const pending=reader.read();void pending.catch(()=>{});await reader.close();await Promise.allSettled([pending]);
-  for(const pid of helpers)assert.throws(()=>process.kill(pid,0),/ESRCH/);
+  await assert.rejects(reader.read(),/资源采样已停止/);
+  if(process.platform==='win32'){
+   assert.ok(helpers.length>0,'The initial sample must include the Windows helper');
+   // An EPERM result from kill(pid, 0) is ambiguous on Windows. Query
+   // actual process existence instead; keep
+   // our own PID as a positive control so an empty/failed query cannot pass.
+   const ids=[process.pid,...helpers],filter=ids.map(pid=>'ProcessId = '+pid).join(' OR ');
+   const script="$ErrorActionPreference='Stop';Get-CimInstance Win32_Process -Filter '"+filter+"' -Property ProcessId | ForEach-Object {[Console]::WriteLine([int]$_.ProcessId)}";
+   const {stdout}=await promisify(execFile)(path.join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000});
+   const live=stdout.trim().split(/\s+/).filter(Boolean).map(Number);assert.ok(live.includes(process.pid),'The process query must see this test process');
+   for(const pid of helpers)assert.ok(!live.includes(pid),'Windows resource helper survived close: '+pid);
+  }
  }finally{await reader.close();}
 });
