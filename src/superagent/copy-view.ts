@@ -1,11 +1,11 @@
 import {DEFAULT_COPY_EXCLUDES} from '../shared/isolated-workspaces';
 export const copyWorkspaceMarkup=String.raw`<section id="copyWorkspace" hidden>
 <div class="page-heading"><div><span class="eyebrow">隔离工作区</span><h2 id="copyTitle">管道工作区</h2><p id="copyDescription" class="muted"></p></div><button id="copyBack">返回管道</button></div>
-<p id="copyLocation" class="copy-location"></p><div id="copyGit" hidden>Git Worktree 在管道首次运行时建立。文件与分支可在 Git 视图管理。</div>
+<p id="copyLocation" class="copy-location"></p><pre id="copyResult" class="copy-result" role="status"></pre><div id="copyGit" hidden>Git Worktree 在管道首次运行时建立。文件与分支可在 Git 视图管理。</div>
 <section id="copyBody"><details id="copyConfig"><summary>复制范围与容量</summary><label>排除规则（每行一项）<textarea id="copyExcludes" rows="4" spellcheck="false"></textarea></label><label>副本容量上限（GiB）<input id="copyBudget" type="number" min="0.01" max="128" step="0.01" value="8"></label><p class="muted">支持目录名称和 glob。隐藏配置文件默认包含；依赖与构建产物默认排除。</p></details>
 <div class="row copy-actions"><button id="copyScan">扫描复制范围</button><button id="copyCreate" class="primary" hidden>建立隔离副本</button><button id="copyReset" hidden>重新建立副本</button><button id="copyExport" hidden>导出修改</button><button id="copyRefresh" hidden>刷新差异</button><button id="copyRemove" class="danger-action" hidden>清理副本</button></div>
 <section id="copyScanResult" hidden><p id="copyScanSummary"></p><pre id="copyScanSample"></pre><label id="copySkipLabel" class="checkbox" hidden><input type="checkbox" id="copySkip">跳过所列链接及特殊文件</label><pre id="copyWarnings"></pre></section>
-<div id="copyProgress" class="copy-progress" role="status" hidden><p id="copyProgressText"></p><button id="copyCancel">取消操作</button></div><pre id="copyResult" class="copy-result" role="status"></pre>
+<div id="copyProgress" class="copy-progress" role="status" hidden><p id="copyProgressText"></p><button id="copyCancel">取消操作</button></div>
 <div id="copyDiff" hidden><div class="row"><h3>待应用修改</h3><small id="copyChangeCount"></small><button id="copyApply" class="primary" disabled>应用所选到原项目</button></div><p class="muted">仅应用所选文件；原项目已变化的文件会保留为冲突。每次最多选择 32 项。</p><div id="copyChanges"></div><div class="row copy-pages"><button id="copyPrevious">上一页</button><small id="copyPage"></small><button id="copyNext">下一页</button></div><section id="copyPreview" hidden><h3 id="copyPreviewTitle"></h3><p id="copyPreviewHint" class="muted"></p><div class="copy-compare"><section><h4>基线</h4><pre id="copyBefore"></pre></section><section><h4>副本</h4><pre id="copyAfter"></pre></section></div></section></div></section>
 <section id="copyOrphans" hidden><h3>保留的隔离副本</h3><p class="muted">管道删除后文件仍会保留。清理前可查看差异或导出。</p><div id="copyOrphanList"></div></section></section>`;
 export const copyWorkspaceScript=String.raw`
