@@ -1,8 +1,11 @@
 import { z } from 'zod';
 
 const line=z.string().max(4096).refine(value=>!/[\r\n\x00]/.test(value),'须为单行文本');
+export const ACP_STARTUP_TIMEOUT_MS=180000;
+export const ACP_MAX_STARTUP_TIMEOUT_MS=600000;
 export const acpConfigSchema=z.object({
   executable:line.refine(value=>!!value.trim(),'请填写 ACP 启动程序'),
+  startupTimeoutMs:z.number().int().min(5000).max(ACP_MAX_STARTUP_TIMEOUT_MS).optional(),
   args:z.array(line).max(64).default([]),
   env:z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),line).default({}),
 }).strict();

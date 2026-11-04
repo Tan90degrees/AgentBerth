@@ -174,7 +174,7 @@ try {
   await hook(b, runB, 'waiting');
   await pet.waitForFunction(id => document.querySelector('.desktop-pet').dataset.sessionId === id && document.querySelector('.pet-state-waiting'), b.id);
   await chooseMenu('打开当前会话');
-  await page.waitForFunction(id => document.querySelector('.session-header')?.dataset.sessionId === id, b.id);
+  await page.waitForFunction(id => document.querySelector('.workbench-header')?.dataset.sessionId === id, b.id);
   await application.evaluate(({ BrowserWindow }) => { for (const target of BrowserWindow.getAllWindows()) if (!target.webContents.getURL().includes('view=pet')) target.hide(); });
   await hook(b, runB, 'completed');
   await pet.waitForFunction(() => document.querySelector('.pet-state-completed'));

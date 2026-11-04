@@ -85,10 +85,25 @@ export function launchCommand(session: Session, resume: boolean): string {
     if (session.agent === 'opencode') return `opencode --session ${session.nativeSessionId}`;
     throw new Error('当前 Agent 不支持原生会话恢复');
   }
-  if (session.agent === 'shell') return '';
+  if (session.agent === 'shell') return session.service ? session.command : '';
   if (session.agent === 'custom' || session.agent.startsWith('agent:')) {
     if (!session.command.trim() || /[\r\n\x00]/.test(session.command)) throw new Error('自定义启动命令须为非空单行命令');
     return session.command;
   }
   return session.agent;
+}
+
+/** Execute services as a shell job, never leave an interactive shell behind. */
+export function serviceShell(file:string,args:string[],command:string):{file:string;args:string[]|string}{
+  const shell=file.replaceAll('\\','/').split('/').at(-1)!.replace(/\.exe$/i,'').toLowerCase();
+  if(['powershell','pwsh'].includes(shell)){
+    if(args.some(arg=>/^-(?:command|c|file|f|encodedcommand|enc|e)$/i.test(arg)))throw new Error('服务终端参数不能另外指定脚本或命令');
+    const script=command+'\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }';
+    return {file,args:[...args.filter(arg=>!/^-(?:noexit|noninteractive)$/i.test(arg)),'-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')]};
+  }
+  // CMD parses its own command language, not the C runtime's escaped argv.
+  // node-pty accepts a raw command line on Windows; keep all nested quotes.
+  if(shell==='cmd')return {file,args:'/d /s /c "'+command+'"'};
+  if(['bash','sh','dash','zsh','ksh','fish'].includes(shell))return {file,args:[...args.filter(arg=>!['-i','--interactive'].includes(arg)),'-c',command]};
+  throw new Error('服务模式请选择 PowerShell、CMD、Bash 或兼容 Shell');
 }

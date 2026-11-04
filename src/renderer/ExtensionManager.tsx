@@ -1,5 +1,6 @@
+import { HarnessSettings } from '../plugins/deepseek-harness/Settings';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { extensionEnabled, type ExtensionInfo, type ExtensionSnapshot, type ExtensionConfig } from '../shared/extensions';
+import { extensionEnabled, resolveExtensionConfig, type ExtensionInfo, type ExtensionSnapshot, type ExtensionConfig } from '../shared/extensions';
 import { ExtensionView } from './ExtensionView';
 import { PluginSettingsPanel } from './PluginSettingsPanel';
 import { Dialog } from './Dialog';
@@ -21,9 +22,9 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
   const exportKit=async()=>{setBusy('$kit');try{const folder=await window.berth.exportPluginKit();if(folder){await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(folder));setMessage('开发套件已导出，开发指令已复制：'+folder);}}catch(error){onError(String(error));}finally{setBusy('');}};
   const plugins=current?.plugins.filter(plugin=>mode==='agents'?plugin.isAgent:!plugin.isAgent)??[];
   const configured=current?.plugins.find(plugin=>plugin.manifest.id===editing);
-  const dirty=!!configured&&JSON.stringify(draft)!==JSON.stringify(configured.config);
+  const dirty=!!configured&&JSON.stringify(draft)!==JSON.stringify(resolveExtensionConfig(configured.manifest,configured.config));
   const canConfigure=(plugin:ExtensionInfo)=>plugin.installed;
-  const openConfig=(plugin:ExtensionInfo)=>{opener.current=document.activeElement as HTMLElement;setDraft({...plugin.config});setEditing(plugin.manifest.id);setConfigError('');onError('');};
+  const openConfig=(plugin:ExtensionInfo)=>{opener.current=document.activeElement as HTMLElement;setDraft(resolveExtensionConfig(plugin.manifest,plugin.config));setEditing(plugin.manifest.id);setConfigError('');onError('');};
   useEffect(()=>{
     if(!openId||!current)return;
     const plugin=current.plugins.find(value=>value.manifest.id===openId);
@@ -51,17 +52,17 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
     {configured&&<Dialog key={configured.manifest.id} title={'配置插件 · '+configured.manifest.name} busy={!!busy} dirty={dirty} error={configError} returnFocus={opener.current} onClose={()=>setEditing(null)}>
       <div className="extension-config-dialog">
         {configured.manifest.id==='pet'&&<PluginSettingsPanel projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion}/>}
-        <details className="plugin-development"><summary>开发文档与工具</summary>
+        {configured.manifest.id!=='deepseek-harness'&&<details className="plugin-development"><summary>开发文档与工具</summary>
           {['superagent','superagent.custom'].includes(configured.manifest.id)?<SourceDevelopmentGuide/>:<p className="form-hint">插件开发规范、示例与类型定义。</p>}
           {!['superagent','superagent.custom'].includes(configured.manifest.id)&&<button type="button" className="extension-button subtle" disabled={!!busy} aria-busy={busy==='$kit'} onClick={()=>void exportKit()}>导出插件开发套件并复制指令</button>}
           {message&&<p role="status">{message}</p>}
-        </details>
+        </details>}
         <form onSubmit={event=>{event.preventDefault();void saveConfig();}}>
-          {Object.entries(configured.manifest.config).map(([key,field])=><label key={key}>{field.title}
+          {configured.manifest.id==='deepseek-harness'?<HarnessSettings value={draft} onChange={setDraft} disabled={!!busy}/>:Object.entries(configured.manifest.config).map(([key,field])=><label key={key}>{field.title}
             {field.type==='boolean'?<input aria-label={configured.manifest.name+' '+field.title} type="checkbox" checked={!!draft[key]} onChange={event=>setDraft({...draft,[key]:event.target.checked})}/>:field.enum?<select aria-label={configured.manifest.name+' '+field.title} value={String(draft[key]??'')} onChange={event=>setDraft({...draft,[key]:event.target.value})}>{field.enum.map(value=><option key={value} value={value}>{value}</option>)}</select>:<input aria-label={configured.manifest.name+' '+field.title} type={field.type==='number'?'number':'text'} min={field.minimum} max={field.maximum} value={draft[key] as string|number??''} onChange={event=>setDraft({...draft,[key]:field.type==='number'?Number(event.target.value):event.target.value})}/>}
             {field.description&&<small>{field.description}</small>}
           </label>)}
-          {configured.status==='active'&&configured.manifest.views.filter(view=>view.location==='settings').map(view=><section className="extension-dialog-view" key={view.id}><h3>{view.title}</h3><ExtensionView key={configured.generation+view.id} plugin={configured} viewId={view.id} onError={setConfigError}/></section>)}
+          {configured.manifest.id!=='deepseek-harness'&&configured.status==='active'&&configured.manifest.views.filter(view=>view.location==='settings').map(view=><section className="extension-dialog-view" key={view.id}><h3>{view.title}</h3><ExtensionView key={configured.generation+view.id} plugin={configured} viewId={view.id} onError={setConfigError}/></section>)}
           <footer><button className="extension-button subtle" type="button" onClick={()=>setEditing(null)} disabled={!!busy}>关闭</button>{dirty&&<button className="extension-button primary" type="submit" disabled={!!busy}>保存配置</button>}</footer>
         </form>
       </div>

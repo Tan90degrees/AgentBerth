@@ -1,6 +1,6 @@
 # ACP Agent 与 Superagent
 
-适用 AgentBerth 0.18 / 后台 API 50。ACP 使用稳定 v1 的逐行 JSON-RPC stdio 协议，不捆绑模型或 Agent 运行时。已有 CLI / TUI 接入继续可用。
+适用 AgentBerth 0.18 / 后台 API 51。ACP 使用稳定 v1 的逐行 JSON-RPC stdio 协议，不捆绑模型或 Agent 运行时。已有 CLI / TUI 接入继续可用。
 
 ## 配置已有 ACP Agent
 
@@ -186,7 +186,7 @@ ACP 和 Superagent 自动驱动桌宠，不需要修改 Agent 配置或安装 ho
 
 执行前，工作台会再次核验并设置该角色的模型。所选模型被上游移除或不可用时，任务会明确中断且不会发送任务 prompt，不静默换模型。协调者的 plan 模式与模型分别设置，不会为改变模型而修改用户全局 Agent 配置。
 
-后台 API 更新为 47；当前架构的 API 44 / 45 / 46 后台可先保持连接，停止运行中的会话后使用提示中的「更新空闲后台」。不清空当前 schema 7 的项目、会话或任务数据；更早架构继续遵循原来的数据隔离要求。
+后台 API 51；当前架构的 API 44–50 后台可先保持连接，服务终端与原生 Web 视图需要更新后台。停止运行中的会话后可使用「更新空闲后台」。Schema 6/7 的项目、会话和任务数据保留，新会话字段自动迁移为 schema 8；更早架构继续遵循原来的数据隔离要求。
 
 
 ## 在哪里回答 Superagent
@@ -248,3 +248,13 @@ Superagent 任务对话、ACP 对话和 CLI 历史统一支持滚动到顶部自
 完成或取消任务后查看新增、修改、删除及冲突，预览基线和副本，再选择文件应用到原项目。应用前重新检查，变化项不覆盖。每次最多 32 个选择项，列表按 50 项分页；每侧文本预览最多 8 KiB，应用使用完整文件。可导出修改到独立目录，或重新扫描并确认重建。管道删除后，在“保留的工作区”查看、导出或清理副本。
 
 协议 isolatedWorkspace 提供 scan/create/reset/changes/preview/apply/export/delete/status/job/cancel/list。长操作返回后台 job，读取同一 job 不重放操作；取消保留已经成功应用的项。副本绑定校验覆盖会话创建、启动、历史目录和文件预览。实现边界见 [非 Git 工作区设计](design/non-git-pipeline-workspaces.md)。
+
+
+### ACP 启动与会话恢复
+
+自定义 ACP 接入的“高级配置”可设置启动等待时间（5–600 秒，默认 180 秒），涵盖 npx
+首次下载与协议初始化；超时错误包含末尾启动日志，不自动重复执行。启动参数仍需使用
+JSON 数组，普通 TUI 或 Web 服务不能作为 ACP 启动程序。
+
+AgentBerth 根据 Agent 声明协商 `session/resume` 或 `session/load`，本地记录保留；
+两者均未声明时才建立新会话，且不会重放旧消息。

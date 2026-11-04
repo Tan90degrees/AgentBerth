@@ -49,7 +49,8 @@ export class AcpSessions {
   async start(session:Session,definition:AgentDefinition,cwd:string,cols:number,rows:number):Promise<Run>{
     if(this.closed)throw new Error('ACP 后台正在退出');if(this.live.has(session.id))throw new Error('ACP 会话已连接');if(!definition.acp)throw new Error('此 Agent 未配置 ACP');
     const run=this.store.createRun(session.id,'ACP',cols,rows,definition.acp.executable),saved=this.store.acpState(session.id);
-    const fingerprint=createHash('sha256').update(JSON.stringify([definition.id,definition.acp,cwd])).digest('hex');
+    const {startupTimeoutMs:_,...launchConfig}=definition.acp;
+    const fingerprint=createHash('sha256').update(JSON.stringify([definition.id,launchConfig,cwd])).digest('hex');
     const value:Live={session,run,cwd,definition,transport:null,tools:new AcpClientTools(cwd,view=>this.append(value,'terminal','',{...view})),toolStates:new Map(),permissions:new Map(),stopping:false,cancelled:false,fingerprint,serial:Promise.resolve(),state:{sessionId:session.id,nativeSessionId:saved.fingerprint===fingerprint?saved.nativeSessionId??null:null,phase:'connecting',turnId:null,permissions:[]}};
     this.live.set(session.id,value);this.publish(value);this.changed();
     try{
@@ -71,11 +72,13 @@ export class AcpSessions {
   private async prepare(value:Live){
     value.state.phase='connecting';
     const transport=value.transport!,savedId=value.state.nativeSessionId;
-    if(savedId&&!value.state.capabilities?.loadSession){
-      value.state.nativeSessionId=null;this.append(value,'notice','此 Agent 未声明 session/load；保留历史记录并创建新会话，不会重放旧消息。');
+    const sessions=value.state.capabilities?.sessionCapabilities as Record<string,unknown>|undefined;
+    const canResume=!!sessions&&Object.hasOwn(sessions,'resume');
+    if(savedId&&!value.state.capabilities?.loadSession&&!canResume){
+      value.state.nativeSessionId=null;this.append(value,'notice','此 Agent 未声明会话恢复能力；保留历史记录并创建新会话，不会重放旧消息。');
     }
     const nativeId=value.state.nativeSessionId;
-    const response=await transport.call(nativeId?'session/load':'session/new',{...(nativeId?{sessionId:nativeId}:{}),cwd:value.cwd,mcpServers:[]});
+    const response=await transport.call(nativeId?(canResume?'session/resume':'session/load'):'session/new',{...(nativeId?{sessionId:nativeId}:{}),cwd:value.cwd,mcpServers:[]});
     if(!nativeId&&typeof response.sessionId!=='string')throw new Error('ACP session/new 未返回会话 ID');
     value.state.nativeSessionId=nativeId??response.sessionId;value.state.configOptions=Array.isArray(response.configOptions)?response.configOptions:[];value.state.modes=response.modes;
     value.state.phase='ready';value.state.error=undefined;
@@ -188,6 +191,8 @@ export class AcpSessions {
     const ending=(async()=>{
       if(value.state.turnId){this.store.finishAcpTurn(value.state.turnId,'interrupted');value.state.lastTurnStatus='interrupted';}
       if(error)this.append(value,'error',error.message);
+      const capabilities=value.state.capabilities?.sessionCapabilities as Record<string,unknown>|undefined;
+      if(!error&&value.transport&&value.state.nativeSessionId&&capabilities&&Object.hasOwn(capabilities,'close')){try{await value.transport.call('session/close',{sessionId:value.state.nativeSessionId},3000);}catch{/* Always terminate our own transport, including failed graceful closes. */}}
       const results=await Promise.allSettled([value.tools.close(),value.transport?.stop()]);
       const failed=results.find(result=>result.status==='rejected');
       if(failed?.status==='rejected')throw failed.reason;

@@ -168,12 +168,14 @@ jobs:
         run: |
           xvfb-run -a node scripts/smoke-acp.mjs
           xvfb-run -a node scripts/smoke-isolated.mjs
+          xvfb-run -a node scripts/smoke-services.mjs
         timeout-minutes: 3
       - name: ACP and Superagent smoke (Windows)
         if: runner.os == 'Windows'
         run: |
           node scripts/smoke-acp.mjs
           node scripts/smoke-isolated.mjs
+          node scripts/smoke-services.mjs
         timeout-minutes: 3
       - uses: actions/upload-artifact@v4
         if: always()
@@ -245,6 +247,7 @@ jobs:
         run: |
           node scripts/smoke-acp.mjs --packaged
           node scripts/smoke-isolated.mjs --packaged
+          node scripts/smoke-services.mjs --packaged
         timeout-minutes: 3
       - name: Test packaged legacy database startup and exit
         run: node scripts/smoke-startup-failure.mjs --packaged

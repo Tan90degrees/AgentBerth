@@ -10,7 +10,7 @@ const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['
 const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
 const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 50;
+export const API_VERSION = 51;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -88,7 +88,7 @@ export interface RemoteTransfer {id:string;spec:TransferSpec;sessionId:string;ru
 export const remoteManageSchema=z.object({action:z.enum(['create','update','close','delete','reconnect']),alias:z.string().min(1).max(100).optional(),sessionId:id.optional(),runId:id.optional(),title:title.optional(),directory:remoteSchema.shape.directory.optional()}).strict().refine(value=>value.action==='create'?!!value.alias:!!value.alias||!!value.sessionId,'请提供服务器别名或会话 ID').refine(value=>!(value.alias&&value.sessionId),'别名和会话 ID 二选一');
 export const remoteKeySchema = z.enum(['Enter', 'Tab', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Ctrl+C', 'Ctrl+D', 'Ctrl+Z', 'Backspace']);
 export type RemoteKey = z.infer<typeof remoteKeySchema>;
-const sessionConfig = { title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null), remote: remoteSchema.nullable().default(null), worktreePath: z.string().min(1).max(4096).nullable().default(null) };
+const sessionConfig = { service: z.boolean().default(false), title, agent: agentSchema, command: singleLine.default(''), terminal: terminalSchema.nullable().default(null), remote: remoteSchema.nullable().default(null), worktreePath: z.string().min(1).max(4096).nullable().default(null) };
 export const nativeSessionIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 export const historyQuerySchema = z.object({ cursor: z.string().max(2048).nullable().default(null), limit: z.number().int().min(1).max(50).default(10), query: z.string().trim().max(100).default('') }).strict();
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
@@ -181,6 +181,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('renameSession'), params: z.object({ sessionId: id, title }).strict() }),
   z.object({ id, method: z.literal('archiveSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('start'), params: z.object({ sessionId: id, resume: z.boolean().default(false), ...size }).strict() }),
+  z.object({ id, method: z.literal('serviceAction'), params: z.object({ sessionId:id, action:z.enum(['start','stop','restart']), ...size }).strict() }),
   z.object({ id, method: z.literal('stop'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('attach'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('detach'), params: z.object({ sessionId: id }).strict() }),
@@ -220,7 +221,7 @@ export interface Run { id: string; sessionId: string; pid: number | null; status
 export const managedSessionsSchema=z.object({kind:z.literal('superagent'),taskId:z.uuid(),projectId:z.uuid(),sessionIds:z.array(z.uuid()).min(1).max(2)}).strict();
 export type ManagedSessions=z.infer<typeof managedSessionsSchema>;
 export interface SessionOwner {kind:'superagent';pluginId:string;taskId:string;projectId:string}
-export interface Session { owner?:SessionOwner; remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
+export interface Session { service?:boolean; owner?:SessionOwner; remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface WorkspaceRecovery { id: string; status: 'restoring' | 'completed'; total: number; restored: number; resumed: number; skipped: number; errors: {sessionId: string; title: string; message: string}[] }
 export interface State { agentActivities?:import('./pet').AgentActivity[];extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
@@ -257,6 +258,7 @@ export interface RuntimeInfo { version: number; pid: number; port: number; token
 export interface AppInfo { version: string; platform: string; arch: string; osRelease: string; electron: string; node: string; packaged: boolean }
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
+  pluginBrowser:(request:import('./extensions').PluginBrowserRequest)=>Promise<void>;
   extensions<T=ExtensionSnapshot>(request:ExtensionRequest):Promise<T>;
   installExtension(development?:boolean):Promise<ExtensionSnapshot|null>;
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;

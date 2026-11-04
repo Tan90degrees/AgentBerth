@@ -6,7 +6,7 @@ export const extensionManifestSchema=z.object({
   apiVersion:z.literal(1),id:extensionId,name:z.string().min(1).max(100),version:z.string().regex(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/),description:z.string().max(1000).default(''),kind:z.enum(['feature','agent']).default('feature'),
   entry:z.string().min(1).max(500).default('index.cjs'),desktopEntry:z.string().min(1).max(500).optional(),dependencies:z.array(extensionId).max(32).default([]),
   config:z.record(z.string().regex(/^[a-zA-Z][\w]*$/),configField).default({}),
-  views:z.array(z.object({id:extensionId,title:z.string().min(1).max(100),location:z.enum(['sidebar','panel','settings']),entry:z.string().min(1).max(500)}).strict()).max(20).default([]),
+  views:z.array(z.object({id:extensionId,title:z.string().min(1).max(100),location:z.enum(['sidebar','panel','settings']),entry:z.string().max(500).default(''),web:z.object({command:z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),project:z.boolean().optional()}).strict().optional()}).strict().refine(v=>!!v.entry!==!!v.web,'视图须指定 HTML entry 或原生 Web 命令')).max(20).default([]),
 }).strict();
 export type ExtensionManifest=z.infer<typeof extensionManifestSchema>;
 export type ExtensionConfig=Record<string,string|number|boolean>;
@@ -32,4 +32,19 @@ export function resolveExtensionConfig(manifest:ExtensionManifest,input:Extensio
     result[name]=value;
   }
   return result;
+}
+
+// Native Web surfaces are separate, sandboxed browsers. The plugin supplies a
+// local endpoint; the host never reads or rewrites the application's HTML.
+export const pluginWebStateSchema=z.object({
+  state:z.enum(['stopped','starting','running','failed','stopping']),
+  url:z.string().max(8192).nullable(),projectId:z.string().uuid().nullable(),
+  pid:z.number().int().positive().nullable(),exitCode:z.number().int().nullable(),
+  error:z.string().max(4000).nullable(),log:z.string().max(24000),
+}).strict();
+export type PluginWebState=z.infer<typeof pluginWebStateSchema>;
+export const pluginBrowserRequestSchema=z.object({id:extensionId,view:extensionId,generation:z.number().int().nonnegative(),action:z.enum(['show','hide','reload']),bounds:z.object({x:z.number().finite(),y:z.number().finite(),width:z.number().finite(),height:z.number().finite()}).strict().optional()}).strict();
+export type PluginBrowserRequest=z.infer<typeof pluginBrowserRequestSchema>;
+export function localPluginUrl(value:string):URL{
+  const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||!['127.0.0.1','localhost','[::1]'].includes(url.hostname)||url.username||url.password)throw new Error('原生 Web 视图只允许本机 HTTP 服务');return url;
 }

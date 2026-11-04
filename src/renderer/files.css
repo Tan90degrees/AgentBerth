@@ -203,3 +203,8 @@
 
 .preview-tab [role="tab"] { flex:1; overflow:hidden; }
 .preview-tab-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Content-sized navigation chips instead of three stretched columns. */
+.sidebar .sidebar-tabs{align-self:flex-start;flex:0 0 auto;width:max-content;max-width:calc(100% - 8px);margin:8px 4px 6px;padding:2px;gap:2px}
+.sidebar .sidebar-tabs button{flex:0 0 auto;min-height:27px;padding:4px 7px;gap:4px;font-size:11px;line-height:17px}
+.sidebar .sidebar-tabs button svg{width:15px;height:15px}

@@ -40,7 +40,7 @@ export function AcpConversation({session,connected,onOpenFile,task}:{session:Ses
     catch(error){setError(String(error));}finally{setPending(false);}
   }
   return <section className="acp-conversation" aria-label="ACP 对话">
-    <header className="acp-toolbar"><span className="badge">ACP · {snapshot?phases[snapshot.phase]:'读取记录…'}</span>
+    <header className="acp-toolbar">{snapshot?.phase==='connecting'&&<AsyncButton className="subtle" onError={setError} onAction={()=>call('stop')}>取消连接</AsyncButton>}<span className="badge">ACP · {snapshot?phases[snapshot.phase]:'读取记录…'}</span>
       {snapshot?.nativeSessionId&&<small title={snapshot.nativeSessionId}>{snapshot.nativeSessionId.slice(0,16)}</small>}
       {snapshot?.modes&&!snapshot.configOptions?.some(option=>option.id==='mode'||option.category==='mode')&&<label>模式<select aria-label="ACP 会话模式" disabled={snapshot.phase!=='ready'||pending} value={snapshot.modes.currentModeId} onChange={event=>void configure('mode',event.target.value)}>{snapshot.modes.availableModes.map(mode=><option key={mode.id} value={mode.id}>{mode.name}</option>)}</select></label>}
       {snapshot?.configOptions?.map(option=>{const choices=acpOptionChoices(option);return <label key={option.id}>{option.name}<select aria-label={'ACP '+option.name} disabled={snapshot.phase!=='ready'||pending||!choices.length} value={option.currentValue??''} onChange={event=>void configure(option.id,event.target.value)}>{choices.length?choices.map(item=><option key={item.value} value={item.value}>{item.name}</option>):<option value={option.currentValue??''}>暂无可选项</option>}</select></label>;})}

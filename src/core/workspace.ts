@@ -6,7 +6,7 @@ import { resolveTerminal } from '../daemon/paths';
 import { directory } from '../daemon/paths';
 import { sameDirectory } from '../daemon/history';
 import { RunLog } from '../daemon/logs';
-export const methods=["restoreWorkspace", "createProject", "updateProject", "deleteProject", "createSession", "updateSession", "deleteSession", "saveSettings", "renameSession", "archiveSession", "start", "stop", "attach", "detach", "input", "resize", "runs", "deleteRun", "clearFinishedRuns", "output"] as const;
+export const methods=["restoreWorkspace", "createProject", "updateProject", "deleteProject", "createSession", "updateSession", "deleteSession", "saveSettings", "renameSession", "archiveSession", "start", "stop", "serviceAction", "attach", "detach", "input", "resize", "runs", "deleteRun", "clearFinishedRuns", "output"] as const;
 export function mount(ctx:Context,server:DaemonServer){
  const host=server.workspaceCorePort();
  server.registerCoreRoutes(ctx,methods,async(request:Request,client:Client)=>{switch(request.method){
@@ -45,11 +45,11 @@ export function mount(ctx:Context,server:DaemonServer){
         const project = host.store.project(request.params.projectId);
         const worktreePath = request.params.worktreePath ? await host.resolveWorkspace(project.id,project.path, request.params.worktreePath) : null;
         if (host.worktreeBusy.has(request.params.projectId)) throw new Error('Worktree 删除期间请稍后创建会话');
-        const session = host.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote, worktreePath,request.params.requestId);
+        const session = host.store.createSession(request.params.projectId, request.params.title, request.params.agent, request.params.command, request.params.terminal, request.params.remote, worktreePath,request.params.requestId,request.params.service);
         host.changed(); return session;
       }
       case 'updateSession': {
-        const { sessionId, title, agent, command, terminal, remote } = request.params;
+        const { sessionId, title, agent, command, terminal, remote, service } = request.params;
         const previous = host.store.session(sessionId);
         host.requireProjectAvailable(previous.projectId);
         if (host.worktreeBusy.has(previous.projectId)) throw new Error('Worktree 删除期间请稍后编辑会话');
@@ -59,10 +59,10 @@ export function mount(ctx:Context,server:DaemonServer){
         const project = host.store.project(previous.projectId);
         const worktreePath = request.params.worktreePath ? await host.resolveWorkspace(project.id,project.path, request.params.worktreePath) : null;
         if (host.worktreeBusy.has(previous.projectId)) throw new Error('Worktree 删除期间请稍后编辑会话');
-        const launchChanged = JSON.stringify(remote) !== JSON.stringify(previous.remote ?? null) || agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal) || (previous.worktreePath ?? null) !== worktreePath;
+        const launchChanged = service !== !!previous.service || JSON.stringify(remote) !== JSON.stringify(previous.remote ?? null) || agent !== previous.agent || command !== previous.command || JSON.stringify(terminal) !== JSON.stringify(previous.terminal) || (previous.worktreePath ?? null) !== worktreePath;
         if (launchChanged) host.requireIdle(sessionId);
         if (agent === 'custom' && !command.trim()) throw new Error('请填写单行启动命令');
-        const session = host.store.updateSession(sessionId, title, agent, command, terminal, remote, worktreePath); host.changed(); return session;
+        const session = host.store.updateSession(sessionId, title, agent, command, terminal, remote, worktreePath, service); host.changed(); return session;
       }
       case 'deleteSession': {
         const id = request.params.sessionId;
@@ -82,11 +82,13 @@ export function mount(ctx:Context,server:DaemonServer){
         host.requireIdle(request.params.sessionId);
         host.store.archive(request.params.sessionId); host.changed(); return null;
       case 'start': return host.start(request.params.sessionId, request.params.resume, request.params.cols, request.params.rows);
+      case 'serviceAction': return host.serviceAction(request.params.sessionId,request.params.action,request.params.cols,request.params.rows);
       case 'stop': await host.stop(request.params.sessionId); return null;
       case 'attach': client.activity.delete(request.params.sessionId); client.subscriptions.add(request.params.sessionId); return host.attach(request.params.sessionId);
       case 'detach': client.activity.delete(request.params.sessionId); client.subscriptions.delete(request.params.sessionId); return null;
       case 'input': {
         if (!client.subscriptions.has(request.params.sessionId)) throw new Error('请先连接终端');
+        if(host.store.session(request.params.sessionId).service)throw new Error('服务输出为只读，请使用启停操作');
         const live = host.terminal(request.params.sessionId, request.params.runId);
         if (live.remote?.activity.info.owner === 'agent') throw new Error('Agent 正在操作，请先点击“接管”');
         const { data, binary } = request.params;

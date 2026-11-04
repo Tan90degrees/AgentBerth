@@ -109,3 +109,33 @@ ID 均为 UUID，单次 1–2 个会话。宿主自动绑定调用插件 ID，�
 
 
 任务删除时调用 `ctx.berth.removeActivity(taskId)` 移除本插件对应的桌宠/侧栏待办状态。宿主按调用插件命名空间隔离，不能移除其他插件的状态；此操作不解除持久会话归属。
+
+
+## 原生本机 Web 视图
+
+当扩展需要嵌入已有 Web 应用而不是编写 HTML 沙箱视图时，清单可声明：
+
+```json
+{"id":"workbench","title":"原生工作台","location":"sidebar","web":{"command":"web"}}
+```
+
+`entry` 与 `web` 二选一。注册 `mcp: false` 的 `web` 命令，接收
+`{action: "status" | "start" | "stop" | "restart", projectId?: string}`，返回：
+
+```ts
+{
+  state: 'stopped' | 'starting' | 'running' | 'failed' | 'stopping',
+  url: string | null, projectId: string | null, pid: number | null,
+  exitCode: number | null, error: string | null, log: string,
+}
+```
+
+`status` 不得启动或重启服务。启动应在创建进程后立即返回 `starting`，后台确定就绪后才返回
+`running` 和 URL。宿主提供启停、重启、刷新页面和日志界面；默认显示项目选择，应用自带工作区管理时可在 `web` 中设置 `project: false`，此时启动命令不接收项目 ID。请对日志限长（最多
+24000 字符）、隐藏认证 URL 中的令牌，并通过 `ctx.berth.effect()` 清理由扩展创建的进程。
+服务退出须清除 URL；不得停止不属于扩展的进程。
+
+宿主只接收本机 HTTP(S) URL，通过独立、持久化隔离的 Electron WebContentsView 显示
+应用原生页面。页面没有 AgentBerth preload 和 Node 能力，不能调用宿主 RPC。可以使用
+Cookie、相对静态资源及 WebSocket；无需绕过应用的 CSP 或嵌入限制。切换视图保留浏览器与
+服务，插件停用或重载销毁浏览器并运行清理。不要向 MCP 暴露带令牌的状态命令。

@@ -82,7 +82,7 @@ async function contextItem(page, label, kind = 'session', title) {
 async function menuAction(page, label, kind = 'session', title) { await (await contextItem(page, label, kind, title)).click(); }
 async function waitRunState(page, running) {
   await eventually(async () => {
-    const id = await page.locator('.session-header').getAttribute('data-session-id');
+    const id = await page.locator('.workbench-header').getAttribute('data-session-id');
     const status = await page.evaluate(id => window.berth.rpc('state').then(value => value.sessions.find(item => item.id === id)?.latestRun?.status), id);
     return running ? status === 'running' : !['running', 'stopping'].includes(status ?? '');
   }, 'Run status did not update');
@@ -130,7 +130,7 @@ if (packaged && process.platform !== 'win32') throw new Error('Packaged smoke re
 const executablePath = packaged ? path.resolve('release/win-unpacked/AgentBerth.exe') : undefined;
 if (executablePath) await stat(executablePath);
 // Exercise real canvas glyphs on CI hosts without a physical GPU. Production chooses its native driver.
-const launchArgs = [...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+const launchArgs = [...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
 if (process.platform === 'linux' && process.getuid?.() === 0) launchArgs.push('--no-sandbox');
 const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-desktop-'));
 await mkdir('test-results', { recursive: true });
@@ -442,7 +442,7 @@ try {
 
   step('compact session, project and whole-workbench CPU/memory include process trees without remounting the terminal');
   await page.evaluate(()=>{window.resourceTerminal=document.querySelector('.xterm');});
-  const sessionResource=page.locator('.session-header [data-resource-scope="session"]');
+  const sessionResource=page.locator('.workbench-header [data-resource-scope="session"]');
   const projectResource=page.locator('.project-row [data-resource-scope="project"]');
   const workspaceResource=page.locator('.workspace-resources [data-resource-scope="workspace"]');
   await eventually(async()=>await sessionResource.getAttribute('data-resource-ready')==='true'&&await projectResource.first().getAttribute('data-resource-ready')==='true'&&await workspaceResource.getAttribute('data-resource-ready')==='true','Three resource levels did not receive memory readings');
@@ -452,7 +452,7 @@ try {
   assert.ok(resources.projects[before.sessions[0].projectId].memoryBytes>=resources.sessions[before.sessions[0].id].memoryBytes);
   assert.ok(resources.workspace.memoryBytes>=resources.projects[before.sessions[0].projectId].memoryBytes);
   assert.match(await workspaceResource.getAttribute('title'),/包含桌面/);
-  assert.ok((await page.locator('.session-header').boundingBox()).height<=38,'Resources enlarged the session header');
+  assert.ok((await page.locator('.workbench-header').boundingBox()).height<=44,'Resources enlarged the flat workspace header');
   assert.ok((await page.locator('.workspace-resources').boundingBox()).height<=22,'Workspace resource display takes too much height');
   assert.ok(await page.evaluate(()=>window.resourceTerminal===document.querySelector('.xterm')),'Resource samples remounted the terminal');
   assert.equal((await page.evaluate(()=>window.berth.rpc('state'))).sessions[0].latestRun.pid,original.pid);
@@ -483,19 +483,16 @@ try {
   assert.equal(await (await contextItem(page, '删除项目', 'project')).isEnabled(), false);
   await page.keyboard.press('Escape');
   await assertTerminalGutter(page);
-  step('compact chrome folds without recreating the terminal or changing its PID');
+  step('flat workspace context keeps the terminal mounted without a fold control');
   const terminalTop = await page.locator('.terminal-mount').evaluate(el => el.getBoundingClientRect().top);
-  assert.ok(terminalTop <= 215, 'Compact terminal top: ' + terminalTop);
-  await page.evaluate(() => { window.smokeHeaderTerminal = document.querySelector('.xterm'); });
-  await page.getByRole('button', { name: '折叠顶部信息', exact: true }).click();
-  await page.getByRole('button', { name: '展开顶部信息', exact: true }).waitFor();
-  assert.ok(await page.locator('.terminal-mount').evaluate((el, top) => el.getBoundingClientRect().top <= top - 30, terminalTop));
-  assert.ok(await page.evaluate(() => window.smokeHeaderTerminal === document.querySelector('.xterm')));
+  assert.ok(terminalTop <= 150, 'Flat terminal top: ' + terminalTop);
+  assert.equal(await page.getByRole('button',{name:'折叠顶部信息',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'展开顶部信息',exact:true}).count(),0);
+  assert.equal(await page.locator('.main>.workbench-header').count(),1);
+  assert.equal(await page.locator('.project-header,.session-header').count(),0);
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   await assertTerminalGutter(page);
-  await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-compact-folded' : 'compact-folded'}.png` });
-  await page.getByRole('button', { name: '展开顶部信息', exact: true }).click();
-  await assertTerminalGutter(page);
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}compact-workspace.png`});
   step('explicit clipboard paste preserves large Unicode input, order and bracketed paste');
   const pasteScript = path.join(folder, 'paste-reader.cjs'), pasteReady = path.join(folder, 'paste.ready'), pasteResult = path.join(folder, 'paste.json');
   await writeFile(pasteScript, `const fs=require('node:fs');process.stdin.setRawMode(true);process.stdin.setEncoding('utf8');let text='';process.stdin.on('data',data=>{text+=data;if(text.endsWith('\\x1b[201~')){const end=text.indexOf('|BERTH_PASTE_END|');fs.writeFileSync(${JSON.stringify(pasteResult)},JSON.stringify({text:text.slice(6,end),bracketed:text.startsWith('\\x1b[200~')&&end>=6}));process.stdout.write('\\x1b[?2004l');process.stdin.setRawMode(false);process.exit(0);}});process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');fs.writeFileSync(${JSON.stringify(pasteReady)},'ready');`);
@@ -653,23 +650,23 @@ try {
   const otherState = await page.evaluate(() => window.berth.rpc('state'));
   const otherProject = otherState.projects.find(item => item.name === '切换测试项目');
   const temporarySession = await page.evaluate(projectId => window.berth.rpc('createSession', { projectId, title: '右键临时会话', agent: 'shell' }), otherProject.id);
-  const selectedBefore = await page.locator('.session-header').getAttribute('data-session-id');
+  const selectedBefore = await page.locator('.workbench-header').getAttribute('data-session-id');
   await menuAction(page, '重命名会话', 'session', '右键临时会话');
   assert.equal(await page.getByLabel('会话名称', { exact: true }).inputValue(), '右键临时会话');
   await page.getByLabel('会话名称', { exact: true }).fill('右键目标已改名');
   await page.getByRole('button', { name: '保存名称', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('.session-header').getAttribute('data-session-id'), selectedBefore);
+  assert.equal(await page.locator('.workbench-header').getAttribute('data-session-id'), selectedBefore);
   await menuAction(page, '编辑项目', 'project', '切换测试项目');
   assert.equal(await page.getByLabel('项目目录', { exact: true }).inputValue(), otherProject.path);
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('.session-header').getAttribute('data-session-id'), selectedBefore);
+  assert.equal(await page.locator('.workbench-header').getAttribute('data-session-id'), selectedBefore);
   await menuAction(page, '删除会话', 'session', '右键目标已改名');
   await page.getByRole('button', { name: '确认删除会话', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   assert.ok(!(await page.evaluate(() => window.berth.rpc('state'))).sessions.some(item => item.id === temporarySession.id));
-  assert.equal(await page.locator('.session-header').getAttribute('data-session-id'), selectedBefore);
+  assert.equal(await page.locator('.workbench-header').getAttribute('data-session-id'), selectedBefore);
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.id === before.sessions[0].id).latestRun.pid, original.pid);
   await page.locator('.project-row.current-project .project-item').focus(); await page.keyboard.press('Shift+F10');
   await page.getByRole('menu', { name: '项目操作', exact: true }).waitFor();
@@ -968,7 +965,6 @@ try {
   assert.equal(errors.length, 0, errors.join('\n'));
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   // Playwright's close exits the entire Electron main process, not just the window.
-  await page.getByRole('button', { name: '折叠顶部信息', exact: true }).click();
   await page.getByRole('button', { name: '切换为深色模式', exact: true }).click();
   step('tray quit path stops all terminals and the detached daemon');
   await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
@@ -985,9 +981,8 @@ try {
   page = await application.firstWindow({ timeout: 20000 });
   page.setDefaultTimeout(15000);
   await page.getByRole('heading', { name: '后台驻留验证', exact: true }).waitFor();
-  await page.getByRole('button', { name: '展开顶部信息', exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => localStorage.getItem('berth.headerCollapsed')), 'true');
-  await page.getByRole('button', { name: '展开顶部信息', exact: true }).click();
+  assert.equal(await page.getByRole('button',{name:'展开顶部信息',exact:true}).count(),0);
+  assert.equal(await page.locator('.main>.workbench-header').count(),1);
   await eventually(async () => (await page.evaluate(() => window.berth.rpc('state'))).recovery?.status === 'completed', 'Workspace restoration did not complete');
   const after = await page.evaluate(() => window.berth.rpc('state'));
   assert.notEqual(after.sessions[0].latestRun.id, original.id);
@@ -1422,7 +1417,7 @@ try {
   await page.getByRole('button',{name:'关闭对话框',exact:true}).click();
   await dock.getByRole('button',{name:'收起 SSH 面板',exact:true}).click();
   await stat(exportPath); await stat(moved);
-  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: Git branch/status, fetch/pull/push/publication/switch with real bare remote, native dirty-file protection and live pull/switch/sync with unchanged PTY, project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, multi-ID saved history pagination/search, plugin list pagination, independent previews, runtime ID association/unlink with unchanged PTY, PowerShell discovery, clean stopped/exited states, Cordis Agent integration, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, compact/folded header persistence, first-class Agent plugins and modal configuration, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
+  console.log(`${packaged ? 'Packaged' : 'Desktop'} smoke passed: Git branch/status, fetch/pull/push/publication/switch with real bare remote, native dirty-file protection and live pull/switch/sync with unchanged PTY, project/session CRUD, keyboard switcher and focus, remembered selections, config copy, draft and dirty-form protection, native clipboard/picker errors, window-hide persistence, full quit cleanup, resizable project/session tree, OpenCode history, idle backend upgrade, multi-ID saved history pagination/search, plugin list pagination, independent previews, runtime ID association/unlink with unchanged PTY, PowerShell discovery, clean stopped/exited states, Cordis Agent integration, reserved scrollbar space, large Unicode bracketed paste, terminal/output search and selection copy, Ctrl-click web links and filtered session cycling, single-row workspace context without a fold control, first-class Agent plugins and modal configuration, finished-run deletion and log cleanup, embedded Node runtime, developer kit and Agent instructions, automatic names, Shell-only output recording, sidebar right-click CRUD, unselected-target protection and keyboard menus, ordered resize/output boundaries, full-screen Unicode TUI resize and reattach, visible native/EXE brand icons, app version and diagnostic privacy, fixed data-directory opener, disconnected plugin developer help.`);
 } catch (error) {
   console.error(error);
   const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
