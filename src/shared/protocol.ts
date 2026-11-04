@@ -5,7 +5,7 @@ import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest }
 import { acpConfigSchema, type AcpSnapshot, type AcpEvent } from './acp';
 
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 48;
+export const API_VERSION = 49;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);

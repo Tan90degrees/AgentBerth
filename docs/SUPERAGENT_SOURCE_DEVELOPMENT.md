@@ -1,12 +1,12 @@
 # Superagent 信息源插件开发指南
 
-适用 AgentBerth 0.18 / API 48。信息源插件负责把渠道消息变成任务事件，并按用户审核的内容回传消息；Superagent 负责项目绑定、身份准入、任务编排与审计。无需修改 Agent、工作台核心或 Agent 的配置。不附带任何 GitHub、飞书渠道。
+适用 AgentBerth 0.18 / API 49。信息源插件负责把渠道消息变成任务事件，并按用户审核的内容回传消息；Superagent 负责项目绑定、身份准入、任务编排与审计。无需修改 Agent、工作台核心或 Agent 的配置。不附带任何 GitHub、飞书渠道。
 
 ## 1. 先跑通本地示例
 
-1. 在 Superagent → 来源管道 → 信息源插件与开发指南 →「开发指南 / 复制给 Agent」中导出开发套件。插件中心也有「Superagent 信息源开发指南」入口。
+1. 在 插件中心 → Superagent → 配置 → 开发文档与工具中阅读、复制信息源指南或导出开发套件。任务工作台的「设置」打开同一插件配置。
 2. 插件中心 → 加载开发目录 → 选择导出的 `superagent-source-local`。保持 Superagent 已启用。
-3. Superagent → 来源管道 → 新建管道，填写名称，选择「本地模拟源」、目标项目、协调 ACP Agent 和执行 ACP Agent，保存后会显示独立管道卡片。先保留逐条批准；同一来源需要路由到不同项目时，分别配置不同的来源会话 ID（`threadId`）或人员名单。
+3. Superagent → 来源管道 → 新建管道，填写名称，选择「本地模拟源」、目标项目、协调 ACP Agent 和执行 ACP Agent，保存后会显示独立管道卡片。先保留逐条批准。可勾选多个信息源，并分别设置会话范围。同一来源可被多个管道订阅；匹配消息会在每个管道创建独立任务。
 4. 让连接 AgentBerth MCP 的 Agent 调用描述为「向 Superagent 提交一个本地模拟事件」的扩展工具，参数如下。工具实际名称由插件 ID 确定，不要猜测工具名。未配置 MCP 时，可在应用开发者工具控制台执行下面的本机验证代码：
 
 ```js
@@ -64,10 +64,10 @@ const receipt = await source.emit({
 
 | 返回/状态 | 插件应做什么 |
 | --- | --- |
-| `{accepted:true, duplicate:false, ticketId}` | 任务已经持久化，可以推进来源游标 |
+| `{accepted:true, duplicate:false, ticketId, ticketIds, deliveries}` | 所有匹配管道的任务已持久化，可以推进来源游标；`ticketId` 保留首项以兼容旧插件 |
 | `{accepted:true, duplicate:true, ticketId}` | 已接收过同一事件，不重复创建任务，可以确认 |
 | `{accepted:false, duplicate, reason}` | 明确拒绝；记录原因并按渠道约定确认或进入死信队列，不盲目循环重试 |
-| `emit()` 抛错 | 尚未确认接收；持久保留事件，以相同 `id` 稍后重试，不先推进来源游标 |
+| `emit()` 抛错 | 可能部分管道已接收；持久保留事件并以相同 `id` 重试，不先推进游标；成功管道不会重复建任务 |
 | 来源未绑定项目/Agent、停用、暂时断开 | 保留待发事件，等待配置或恢复；禁止每次重试生成新事件 ID |
 
 事件字段严格校验，不接受额外字段：`id` / `actorId` 1–200 字、`threadId` 1–500 字、`title` 1–100 字、`text` 1–16000 字。超长正文在渠道侧提取任务相关摘要，附件的权限与获取由插件管理；不要偷偷截断身份或事件 ID。

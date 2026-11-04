@@ -279,7 +279,7 @@ function openPetMenu() {
     select: selectedSessionId => change({ selectedSessionId }), scale: scale => change({ scale }),
     alwaysOnTop: alwaysOnTop => change({ alwaysOnTop }), autoSwitch: autoSwitch => change({ autoSwitch }),
     open: () => showPetSession(), settings: () => petNavigate('berth:petSettings'),
-    copyGuide: () => clipboard.writeText(petGuide()), hide: () => change({ enabled: false }),
+    hide: () => change({ enabled: false }),
   })).popup({ window: petWindow });
 }
 ipcMain.handle('berth:pet', async (event, raw: unknown) => {

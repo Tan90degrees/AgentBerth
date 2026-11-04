@@ -49,7 +49,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
   };
   const activeAgents=agents.filter(agent=>agent.id!=='custom');
   return <section className="settings-page settings-workbench" aria-label="应用设置">
-    <header className="settings-toolbar"><div className="settings-title"><h1>核心设置</h1><span>基础功能由工作台直接提供；插件中心只管理 Agent 接入和可选扩展</span></div>
+    <header className="settings-toolbar"><div className="settings-title"><h1>核心设置</h1><span>终端、外观与资源设置</span></div>
       <div className="settings-search"><svg aria-hidden="true" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input ref={search} aria-label="搜索设置" placeholder="搜索主题、Agent、SSH、终端、文件预览…" value={query} onChange={event => { setQuery(event.target.value); setCategory('all'); content.current?.scrollTo(0, 0); }} onKeyDown={event => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery(''); } }} />{query ? <button className="icon-button" aria-label="清除设置搜索" onClick={() => { setQuery(''); search.current?.focus(); }}>×</button> : <kbd>Ctrl+F</kbd>}</div>
     </header>
     <div className="settings-layout">
@@ -95,6 +95,6 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
         {item('about', <AboutCard connected={connected} apiVersion={apiVersion} running={running} onError={onError} />)}
       </div>
     </div>
-    <footer className="settings-savebar"><div><strong role="status">{saved && !dirty ? '设置已保存' : dirty ? `${pending} 项启动或资源设置未保存` : '基础功能设置'}</strong><small>{dirty ? '草稿已保留，切换分类不会丢失。' : '可选扩展和 Agent 插件请到插件中心管理。'}</small></div><div className="settings-save-actions">{dirty && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false);setSaveState('idle'); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled || JSON.stringify(draft)===JSON.stringify(DEFAULT_SETTINGS)} title="恢复默认终端、Agent 及会话上限；保存后应用" onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button form="workspace-settings-form" className="primary" aria-busy={saveState==='pending'} data-feedback={saveState} disabled={disabled || !dirty}>保存设置</button></div></footer>
+    <footer className="settings-savebar"><div><strong role="status">{saved && !dirty ? '设置已保存' : dirty ? `${pending} 项启动或资源设置未保存` : '设置已同步'}</strong><small>{dirty ? '草稿已保留，切换分类不会丢失。' : '修改后保存以应用设置。'}</small></div><div className="settings-save-actions">{dirty && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false);setSaveState('idle'); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled || JSON.stringify(draft)===JSON.stringify(DEFAULT_SETTINGS)} title="恢复默认终端、Agent 及会话上限；保存后应用" onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button form="workspace-settings-form" className="primary" aria-busy={saveState==='pending'} data-feedback={saveState} disabled={disabled || !dirty}>保存设置</button></div></footer>
   </section>;
 }

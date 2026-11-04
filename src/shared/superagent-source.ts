@@ -5,7 +5,7 @@ export const sourceEventSchema=z.object({
   title:z.string().trim().min(1).max(100),text:z.string().trim().min(1).max(16000),
 }).strict();
 export type SuperagentSourceEvent=z.infer<typeof sourceEventSchema>;
-export interface SourceReceipt {accepted:boolean;duplicate:boolean;ticketId?:string;reason?:string}
+export interface SourceReceipt {accepted:boolean;duplicate:boolean;ticketId?:string;ticketIds?:string[];deliveries?:{pipelineId:string;pipelineName:string;ticketId?:string;error?:string}[];reason?:string}
 export interface SourceReply {threadId:string;text:string;idempotencyKey:string}
 export const sourceThreadsSchema=z.array(z.object({id:z.string().min(1).max(500),name:z.string().trim().min(1).max(100)}).strict()).max(256);
 export interface SourceContribution {

@@ -10,4 +10,4 @@
 
 完整用法、ACP 配置、来源 SDK、回执与恢复语义见应用资源 `docs/ACP_SUPERAGENT.md` 或仓库同名文档。上游设计参考及 MIT 声明见包内 `UPSTREAM-NOTICE.txt`。
 
-从零实现信息源请读 `docs/SUPERAGENT_SOURCE_DEVELOPMENT.md`；插件页面「信息源 → 开发指南 / 复制给 Agent」可直接阅读、复制及导出完整开发示例。
+从零实现信息源请读 `docs/SUPERAGENT_SOURCE_DEVELOPMENT.md`；插件中心 → Superagent → 配置 → 开发文档与工具可直接阅读、复制及导出完整开发示例。

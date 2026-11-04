@@ -4,7 +4,7 @@ import { petLabels, petScales, type PetSnapshot } from '../shared/pet';
 export interface PetMenuActions {
   select(id: string): void; scale(value: number): void;
   alwaysOnTop(value: boolean): void; autoSwitch(value: boolean): void;
-  open(): void; settings(): void; copyGuide(): void; hide(): void;
+  open(): void; settings(): void; hide(): void;
 }
 
 export function petMenuTemplate(snapshot: PetSnapshot, actions: PetMenuActions): MenuItemConstructorOptions[] {
@@ -21,7 +21,6 @@ export function petMenuTemplate(snapshot: PetSnapshot, actions: PetMenuActions):
     { label: '保持置顶', type: 'checkbox', checked: preferences.alwaysOnTop, click: item => actions.alwaysOnTop(item.checked) },
     { label: '自动关注待处理会话', type: 'checkbox', checked: preferences.autoSwitch, click: item => actions.autoSwitch(item.checked) },
     { type: 'separator' },
-    { label: '复制 hook 自动配置教程', click: () => actions.copyGuide() },
     { label: '桌宠设置…', click: () => actions.settings() },
     { label: '隐藏桌宠', click: () => actions.hide() },
   ];

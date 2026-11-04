@@ -1,6 +1,6 @@
 # AgentBerth Cordis 插件开发指南
 
-适用：AgentBerth 0.18 / 后台 API 48。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
+适用：AgentBerth 0.18 / 后台 API 49。插件框架使用固定版本 Cordis 4.0.0-rc.12；借鉴 DeepSeek Harness 的作用域与副作用管理，不承诺直接加载 DSH 的业务插件。
 
 用户只需在 **插件中心 → 扩展插件 → 安装扩展插件** 或 **Agent 接入 → 安装 Agent 插件** 选择 ZIP，也可用 **加载开发目录** 选择目录。每个 Agent 提供者（Codex、Claude Code、OpenCode、自定义 Agent）都是独立 Cordis 插件；Agent 注册中心本身由工作台核心提供。插件自动启用，点击有配置项的插件卡片可打开独立配置弹窗。开发目录保存后自动重载；失败保留上一版代码与配置，页面显示错误。无需修改 Agent 的配置来安装工作台插件。
 
@@ -82,7 +82,7 @@ exports.apply = ctx => {
 
 ## ACP 与 Superagent
 
-信息源从零接入、可运行示例和验收步骤见 [信息源开发指南](SUPERAGENT_SOURCE_DEVELOPMENT.md)。应用内 Superagent → 信息源提供查看、复制给 Agent 和导出入口。
+信息源从零接入、可运行示例和验收步骤见 [信息源开发指南](SUPERAGENT_SOURCE_DEVELOPMENT.md)。应用内插件中心 → Superagent → 配置 → 开发文档与工具提供查看、复制和导出入口。
 
 可在 `definition.acp` 注册标准 ACP Agent，Skills 与接入一并声明；也支持界面直接添加。Superagent 使用选定的 ACP Agent。来源完全由插件扩展，不预装 GitHub、飞书。参见 [ACP 与 Superagent 开发指南](ACP_SUPERAGENT.md) 和可选本地示例 `examples/superagent-source-local`。
 
@@ -94,7 +94,7 @@ exports.apply = ctx => {
 同 ID 更新会覆盖当前状态。注册由 Cordis 作用域托管，停用或卸载自动移除；每插件最多 200 项，会优先淘汰旧的已完成/空闲条目。Superagent 已使用该接口，无需依赖桌宠插件本身；桌宠启用后读取宿主状态即可。此接口要求后台 API 45。
 
 
-### 特性内部会话归属（API 48）
+### 特性内部会话归属（API 48 起）
 
 独立任务插件在创建会话前声明归属：
 

@@ -145,7 +145,7 @@ test('terminal display output survives release and disconnect and cannot be read
   const other=await f.connection.rpc<Session>('createSession',{projectId:f.project.id,title:'Other',agent:f.agent.id});await assert.rejects(f.connection.rpc('acpTerminal',{sessionId:other.id,terminalId}),/不属于|保留范围/);
 });
 
-for(const previousApi of [44,45,46,47])test(`a compatible API ${previousApi} backend remains attachable without stopping a running ACP session`,async t=>{
+for(const previousApi of [44,45,46,47,48])test(`a compatible API ${previousApi} backend remains attachable without stopping a running ACP session`,async t=>{
   const f=await fixture(t);await f.send('long');await until(f.snapshot,value=>value.phase==='running');
   const store=f.server.agentsCorePort().store,original=store.state.bind(store);store.state=()=>({...original(),apiVersion:previousApi});
   const connection=await connectDaemon(f.data,'must-not-launch-another-daemon','must-not-launch',()=>{});try{assert.equal((await connection.rpc<State>('state')).apiVersion,previousApi);assert.equal((await f.snapshot()).phase,'running');}finally{connection.close();store.state=original;}

@@ -200,13 +200,13 @@ test('source inbox approval and rejection are explicit; task deletion preserves 
   await f.extension({action:'reload',id:'superagent'});assert.equal((await f.call('tasks',{filter:'all'})).total,0);assert.equal((await emit('approval-a','Old event')).duplicate,true);
 });
 
-test('named source pipelines route the same source to distinct projects, reject overlap and retain history after edits or deletion',async t=>{
+test('named source pipelines route to distinct projects and retain history after edits or deletion',async t=>{
   const f=await fixture(t);await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});
   const secondRoot=path.join(f.dir,'second-project');await mkdir(secondRoot);const second=await f.connection.rpc<any>('createProject',{name:'Second route',path:secondRoot});
   const save=(extra:any={})=>f.call('save_pipeline',{name:'Project A requests',sourceId,enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],threadIds:['project-a'],autoApprove:false,isolated:false,...extra});
   assert.deepEqual((await f.call('source_threads',{sourceId})).threads,[{id:'thread-1',name:'本地演示会话'},{id:'thread-2',name:'另一组演示会话'}]);
   const one=await save(),two=await save({name:'Project B requests',projectId:second.id,threadIds:['project-b']});assert.notEqual(one.id,two.id);
-  await assert.rejects(save({name:'Overlapping route',threadIds:[]}),/范围重叠/);await assert.rejects(save({name:'Unsafe automatic admission',threadIds:['auto'],autoApprove:true}),/授权身份/);
+await assert.rejects(save({name:'Unsafe automatic admission',threadIds:['auto'],autoApprove:true}),/授权身份/);
   const emit=(id:string,threadId:string,actorId='alice')=>f.extension({action:'call',id:'example.superagent.source.local',command:'emit',params:{id,threadId,actorId,title:'Pipeline request',text:'Check source routing'}});
   const a=await emit('route-a','project-a'),b=await emit('route-b','project-b');assert.equal((await f.task(a.ticketId)).projectId,f.project.id);assert.equal((await f.task(b.ticketId)).projectId,second.id);assert.equal((await f.task(a.ticketId)).source.pipelineId,one.id);assert.equal((await f.task(b.ticketId)).source.pipelineName,'Project B requests');assert.equal((await f.task(a.ticketId)).approved,false);
   assert.equal((await emit('no-route','other')).reason,'no_matching_pipeline');assert.equal((await f.call('source_events',{})).length,3);assert.equal((await f.call('source_events',{pipelineId:one.id})).length,1);
@@ -233,4 +233,32 @@ test('bulk task approval, rejection and deletion report partial failures and nev
   const removed=await f.call('bulk_tasks',{ids:[four,ordinary.id],action:'delete',cancelRunning:true});assert.equal(removed.success,2);await assert.rejects(f.task(ordinary.id),/已删除/);assert.equal((await f.call('bulk_tasks',{ids:[four,ordinary.id],action:'delete',cancelRunning:true})).skipped,2);
   for(const key of [one,two])await f.call('action',{id:key,action:'cancel'});
   const receipts=await readFile(path.join(f.data,'extensions','data','example.superagent.source.local','receipts.json'),'utf8').catch(error=>{if(error.code==='ENOENT')return '{}';throw error;});assert.deepEqual(JSON.parse(receipts),{},'Batch approval/rejection/deletion never posts channel replies');
+});
+
+test('multi-source fanout owns persistent per-pipeline worktrees and serializes review across independent ACP sessions',async t=>{
+  const f=await fixture(t);await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});
+  const secondDir=path.join(f.dir,'second-source');await mkdir(secondDir);const manifest=JSON.parse(await readFile('examples/superagent-source-local/agentberth.extension.json','utf8'));manifest.id='example.superagent.source.second';await writeFile(path.join(secondDir,'agentberth.extension.json'),JSON.stringify(manifest));await writeFile(path.join(secondDir,'index.cjs'),await readFile('examples/superagent-source-local/index.cjs','utf8'));await f.extension({action:'install',path:secondDir});
+  const otherId=manifest.id+'/local',save=(name:string,inputs:any[])=>f.call('save_pipeline',{name,inputs,enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],autoApprove:false});
+  const pipe=await save('Shared inbox',[{sourceId,threadIds:[]},{sourceId:otherId,threadIds:['other-room']}]),parallel=await save('Independent review',[{sourceId,threadIds:[]}]);
+  const emit=(pluginId:string,id:string,threadId='thread-1')=>f.extension({action:'call',id:pluginId,command:'emit',params:{id,threadId,actorId:'alice',title:'Request '+id,text:'Create result and validate it'}});
+  const [first,duplicate]=await Promise.all([emit('example.superagent.source.local','fanout'),emit('example.superagent.source.local','fanout')]);assert.equal(first.ticketIds.length,2);assert.deepEqual(first.ticketIds,duplicate.ticketIds);assert.equal(duplicate.duplicate,true);
+  const firstId=first.deliveries.find((item:any)=>item.pipelineId===pipe.id).ticketId,parallelId=first.deliveries.find((item:any)=>item.pipelineId===parallel.id).ticketId;
+  const second=await emit(manifest.id,'from-second','other-room');assert.equal(second.ticketIds.length,1);assert.equal((await f.task(second.ticketId)).pipelineId,pipe.id);
+  assert.equal((await f.call('tasks',{pipelineId:pipe.id})).total,2);assert.equal((await f.call('tasks',{pipelineId:parallel.id})).counts.approval,1);assert.equal((await f.call('tasks',{pipelineId:'unassigned'})).total,0);
+  for(const id of [firstId,parallelId,second.ticketId])await f.call('action',{id,action:'approve'});
+  const permissions=await until(()=>f.worker(firstId),value=>value.permissions.length===1);await until(()=>f.worker(parallelId),value=>value.permissions.length===1);
+  const owned=await f.task(firstId),independent=await f.task(parallelId);assert.notEqual(owned.worktreePath,independent.worktreePath);assert.equal((await f.task(second.ticketId)).phase,'queued');assert.equal((await f.task(second.ticketId)).blockedBy,firstId);
+  const state=await f.connection.rpc<State>('state');assert.equal(state.sessions.find(session=>session.id===owned.coordinatorSession)?.worktreePath,owned.worktreePath);assert.equal(state.sessions.find(session=>session.id===owned.workerSession)?.worktreePath,owned.worktreePath);
+  await f.connection.rpc('acpPermission',{sessionId:owned.workerSession,permissionId:permissions.permissions[0].id,optionId:'allow'});await until(()=>f.task(firstId),value=>value.waitingFor==='review');await new Promise(resolve=>setTimeout(resolve,1100));assert.equal((await f.task(second.ticketId)).phase,'queued','Review keeps the shared pipeline workspace locked');
+  await assert.rejects(f.call('save_pipeline',{pipelineId:pipe.id,name:'Changed project',inputs:[{sourceId,threadIds:[]}],enabled:true,projectId:randomUUID(),coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],autoApprove:false}),/不能更换项目/);
+  await f.call('action',{id:firstId,action:'complete'});await until(()=>f.worker(second.ticketId),value=>value.permissions.length===1);assert.equal((await f.task(second.ticketId)).worktreePath,owned.worktreePath);assert.notEqual((await f.task(second.ticketId)).workerSession,owned.workerSession);
+  await f.call('action',{id:second.ticketId,action:'cancel'});await f.call('action',{id:parallelId,action:'cancel'});
+  await f.call('save_pipeline',{pipelineId:pipe.id,name:'Renamed inbox',inputs:[{sourceId,threadIds:[]},{sourceId:otherId,threadIds:['other-room']}],enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],autoApprove:false});assert.equal((await f.call('tasks',{pipelineId:pipe.id})).tasks[0].pipelineName,'Renamed inbox');
+  await f.extension({action:'reload',id:'superagent'});assert.equal((await f.call('state')).pipelines.find((item:any)=>item.id===pipe.id).workspacePath,owned.worktreePath);assert.equal((await emit('example.superagent.source.local','fanout')).duplicate,true);
+});
+
+test('non-Git pipelines never silently run in the shared project directory',async t=>{
+  const f=await fixture(t),folder=path.join(f.dir,'plain');await mkdir(folder);const project=await f.connection.rpc<any>('createProject',{name:'Plain folder',path:folder});
+  await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});const pipe=await f.call('save_pipeline',{name:'Plain pipeline',inputs:[{sourceId,threadIds:[]}],enabled:true,projectId:project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],autoApprove:false});
+  const task=await f.create({pipelineId:pipe.id});const stopped=await until(()=>f.task(task.id),value=>value.phase==='interrupted');assert.match(stopped.error,/非 Git|Git 工作区/);assert.equal(stopped.worktreePath,undefined);assert.equal((await f.connection.rpc<State>('state')).sessions.some(session=>session.owner?.taskId===task.id),false);
 });

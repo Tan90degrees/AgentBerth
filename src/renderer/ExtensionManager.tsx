@@ -16,14 +16,13 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
 }){
   const [current,setCurrent]=useState(snapshot),[busy,setBusy]=useState(''),[query,setQuery]=useState(''),[editing,setEditing]=useState<string|null>(null),[draft,setDraft]=useState<ExtensionConfig>({}),[message,setMessage]=useState(''),[configError,setConfigError]=useState('');
   const opener=useRef<HTMLElement|null>(null);
-  const [sourceGuide,setSourceGuide]=useState(false);
   useEffect(()=>setCurrent(snapshot),[snapshot]);
   const perform=async(id:string,action:()=>Promise<ExtensionSnapshot|null>)=>{setBusy(id);setMessage('');onError('');try{const next=await action();if(next){setCurrent(next);setEditing(null);setMessage('插件已更新，即时生效');}}catch(error){onError(String(error));}finally{setBusy('');}};
   const exportKit=async()=>{setBusy('$kit');try{const folder=await window.berth.exportPluginKit();if(folder){await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(folder));setMessage('开发套件已导出，开发指令已复制：'+folder);}}catch(error){onError(String(error));}finally{setBusy('');}};
   const plugins=current?.plugins.filter(plugin=>mode==='agents'?plugin.isAgent:!plugin.isAgent)??[];
   const configured=current?.plugins.find(plugin=>plugin.manifest.id===editing);
   const dirty=!!configured&&JSON.stringify(draft)!==JSON.stringify(configured.config);
-  const canConfigure=(plugin:ExtensionInfo)=>Object.keys(plugin.manifest.config).length>0||plugin.manifest.id==='pet'||plugin.manifest.views.some(view=>view.location==='settings');
+  const canConfigure=(plugin:ExtensionInfo)=>plugin.installed;
   const openConfig=(plugin:ExtensionInfo)=>{opener.current=document.activeElement as HTMLElement;setDraft({...plugin.config});setEditing(plugin.manifest.id);setConfigError('');onError('');};
   useEffect(()=>{
     if(!openId||!current)return;
@@ -33,12 +32,11 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
   const saveConfig=async()=>{if(!configured)return;setBusy(configured.manifest.id);onError('');try{const next=await window.berth.extensions({action:'configure',id:configured.manifest.id,config:draft});setCurrent(next);setEditing(null);setMessage('插件配置已保存，即时生效');}catch(error){setConfigError(String(error));}finally{setBusy('');}};
   if(!current)return <p>插件后台未连接。请检查后台服务。</p>;
   return <section className="extension-manager" aria-label="插件管理">
-    <header><div><h2>{mode==='agents'?'Agent 接入':'扩展插件'}</h2><p>{mode==='agents'?'每个 Agent 都是独立的 Cordis 接入插件；Agent 注册、选择、历史和 Skills 管理由工作台核心提供。':'扩展用于增加功能或增强已有能力。项目、文件、Git、主题、SSH 等基础功能不在此管理。'}</p></div><div className="extension-actions"><button type="button" className="extension-button primary" disabled={!!busy} onClick={()=>void perform('$install',()=>window.berth.installExtension(false))}>{mode==='agents'?'安装 Agent 插件':'安装扩展插件'}</button><button type="button" className="extension-button subtle" disabled={!!busy} onClick={()=>void perform('$develop',()=>window.berth.installExtension(true))}>加载开发目录</button></div></header>
-    <p className="form-hint">插件只负责提供可选接入或新增能力，不承载工作台基础服务。插件运行本机代码，请仅安装可信来源。</p>
-    <div className="extension-utilities"><input aria-label="搜索插件" placeholder={mode==='agents'?'搜索 Agent 名称或插件 ID':'搜索扩展功能或插件 ID'} value={query} onChange={event=>setQuery(event.target.value)}/><button type="button" className="extension-button subtle" disabled={!!busy} aria-busy={busy==='$kit'} onClick={()=>void exportKit()}>导出插件开发套件并复制指令</button></div>
+    <header><div><h2>{mode==='agents'?'Agent 接入':'扩展插件'}</h2><p>{mode==='agents'?'管理 Agent 接入与 Skills。':'安装、配置和管理扩展。'}</p></div><div className="extension-actions"><button type="button" className="extension-button primary" disabled={!!busy} onClick={()=>void perform('$install',()=>window.berth.installExtension(false))}>{mode==='agents'?'安装 Agent 插件':'安装扩展插件'}</button><button type="button" className="extension-button subtle" disabled={!!busy} onClick={()=>void perform('$develop',()=>window.berth.installExtension(true))}>加载开发目录</button></div></header>
+    <p className="form-hint">插件可运行本机代码，请安装可信来源。</p>
+    <div className="extension-utilities"><input aria-label="搜索插件" placeholder={mode==='agents'?'搜索 Agent 名称或插件 ID':'搜索扩展功能或插件 ID'} value={query} onChange={event=>setQuery(event.target.value)}/></div>
     {message&&<p role="status">{message}</p>}
     {current.warnings?.map(warning=><p className="form-error" key={warning}>{warning}</p>)}
-    {mode!=='agents'&&current.plugins.some(plugin=>plugin.manifest.id==='superagent')&&<button type="button" className="extension-button subtle" onClick={()=>setSourceGuide(true)}>Superagent 信息源开发指南</button>}
     <ul className="extension-list">{plugins.filter(plugin=>`${plugin.manifest.name} ${plugin.manifest.id} ${plugin.manifest.description}`.toLowerCase().includes(query.toLowerCase())).map(plugin=>{
       const {manifest}=plugin;
       const action=(action:'enable'|'disable'|'uninstall'|'reload')=>perform(manifest.id,()=>window.berth.extensions({action,id:manifest.id}));
@@ -50,10 +48,14 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
       </li>;
     })}</ul>
     {!plugins.length&&<p className="form-hint">{mode==='agents'?'尚无 Agent 接入插件。可安装内置 CLI 对应的接入，或导入自定义 Agent 插件。':'尚无扩展插件。可安装插件包或加载开发目录。'}</p>}
-    {sourceGuide&&<SourceDevelopmentGuide onClose={()=>setSourceGuide(false)}/>}
     {configured&&<Dialog key={configured.manifest.id} title={'配置插件 · '+configured.manifest.name} busy={!!busy} dirty={dirty} error={configError} returnFocus={opener.current} onClose={()=>setEditing(null)}>
       <div className="extension-config-dialog">
         {configured.manifest.id==='pet'&&<PluginSettingsPanel projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion}/>}
+        <details className="plugin-development"><summary>开发文档与工具</summary>
+          {['superagent','superagent.custom'].includes(configured.manifest.id)?<SourceDevelopmentGuide/>:<p className="form-hint">插件开发规范、示例与类型定义。</p>}
+          {!['superagent','superagent.custom'].includes(configured.manifest.id)&&<button type="button" className="extension-button subtle" disabled={!!busy} aria-busy={busy==='$kit'} onClick={()=>void exportKit()}>导出插件开发套件并复制指令</button>}
+          {message&&<p role="status">{message}</p>}
+        </details>
         <form onSubmit={event=>{event.preventDefault();void saveConfig();}}>
           {Object.entries(configured.manifest.config).map(([key,field])=><label key={key}>{field.title}
             {field.type==='boolean'?<input aria-label={configured.manifest.name+' '+field.title} type="checkbox" checked={!!draft[key]} onChange={event=>setDraft({...draft,[key]:event.target.checked})}/>:field.enum?<select aria-label={configured.manifest.name+' '+field.title} value={String(draft[key]??'')} onChange={event=>setDraft({...draft,[key]:event.target.value})}>{field.enum.map(value=><option key={value} value={value}>{value}</option>)}</select>:<input aria-label={configured.manifest.name+' '+field.title} type={field.type==='number'?'number':'text'} min={field.minimum} max={field.maximum} value={draft[key] as string|number??''} onChange={event=>setDraft({...draft,[key]:field.type==='number'?Number(event.target.value):event.target.value})}/>}

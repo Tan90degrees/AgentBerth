@@ -13,9 +13,10 @@ async function buildSuperagent(){
   const manifest={...superagentManifest,id:'superagent.custom',name:'Superagent（独立插件）',entry:'index.cjs',views:superagentManifest.views.map(view=>({...view,entry:'view.html'}))};
   await writeFile(directory+'/agentberth.extension.json',JSON.stringify(manifest,null,2)+'\n');
   await writeFile(directory+'/view.html',superagentView);
+  for(const name of ['SUPERAGENT_SOURCE_DEVELOPMENT.md','ACP_SUPERAGENT.md'])await copyFile('docs/'+name,directory+'/'+name);
   await copyFile('docs/SUPERAGENT_PLUGIN.md',directory+'/README.md');
   await copyFile('docs/third-party/dsh-superagent-MIT.txt',directory+'/UPSTREAM-NOTICE.txt');
-  const files=Object.fromEntries(await Promise.all(['index.cjs','agentberth.extension.json','view.html','README.md','UPSTREAM-NOTICE.txt'].map(async name=>[name,await readFile(directory+'/'+name)])));
+  const files=Object.fromEntries(await Promise.all(['index.cjs','agentberth.extension.json','view.html','README.md','UPSTREAM-NOTICE.txt','SUPERAGENT_SOURCE_DEVELOPMENT.md','ACP_SUPERAGENT.md'].map(async name=>[name,await readFile(directory+'/'+name)])));
   await writeFile('dist/superagent-plugin.zip',zipSync(files));
 }
 

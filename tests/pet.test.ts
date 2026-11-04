@@ -193,7 +193,7 @@ test('pet size settings persist the full supported range and reject invalid dime
 
 test('image context menu exposes Agent operations, checked preferences and empty-state settings', t => {
   const { pet, a, b } = fixture(t), calls: unknown[] = [];
-  const actions: PetMenuActions = { select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), copyGuide: () => calls.push('copy'), hide: () => calls.push('hide') };
+  const actions: PetMenuActions = { select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), hide: () => calls.push('hide') };
   const items = petMenuTemplate(pet.snapshot(), actions);
   const choose = (label: string) => { const item = items.find(item => item.label === label)!; assert.ok(item); return item; };
   const sessions = choose('切换 Agent 会话').submenu as Electron.MenuItemConstructorOptions[];
@@ -204,8 +204,8 @@ test('image context menu exposes Agent operations, checked preferences and empty
   const scales = choose('桌宠大小').submenu as Electron.MenuItemConstructorOptions[];
   assert.equal(scales.find(item => item.label === '100%')?.checked, true);
   click(scales.find(item => item.label === '200%')!);
-  for (const label of ['保持置顶', '自动关注待处理会话', '打开当前会话', '桌宠设置…', '复制 hook 自动配置教程', '隐藏桌宠']) click(choose(label));
-  assert.deepEqual(calls, [b.id, 2, false, false, 'open', 'settings', 'copy', 'hide']);
+  for (const label of ['保持置顶', '自动关注待处理会话', '打开当前会话', '桌宠设置…', '隐藏桌宠']) click(choose(label));
+  assert.deepEqual(calls, [b.id, 2, false, false, 'open', 'settings', 'hide']);
   const empty = petMenuTemplate({ ...pet.snapshot(), sessions: [] }, actions);
   assert.equal(empty.find(item => item.label === '打开当前会话')?.enabled, false);
   assert.equal(empty.find(item => item.label === '切换 Agent 会话')?.enabled, false);
