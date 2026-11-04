@@ -187,8 +187,7 @@ try {
   const guide = await page.evaluate(() => window.berth.readClipboard());
   assert.ok(guide.includes(JSON.stringify(runtime.exec)) && guide.includes(JSON.stringify(script)));
   assert.ok(guide.includes('AGENTBERTH_SESSION_ID') && guide.includes('备份') && guide.includes('去重'));
-  await chooseMenu('复制 hook 自动配置教程');
-  assert.equal(await page.evaluate(() => window.berth.readClipboard()), guide);
+  assert.equal(await application.evaluate(()=>globalThis.petSmokeMenu.items.some(item=>item.label==='复制 hook 自动配置教程')),false,'Hook guide belongs to pet settings');
   await page.getByText('查看完整自动配置教程', { exact: true }).click();
   assert.equal((await page.locator('.pet-hook-guide pre').innerText()).trimEnd(), guide.trimEnd());
   console.log('Pet smoke: install/update both provider adapters, preserve hooks and expose OpenCode MCP');
