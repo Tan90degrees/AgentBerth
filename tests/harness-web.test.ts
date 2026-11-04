@@ -13,7 +13,7 @@ import {DaemonConnection} from '../src/main/connection';
 const wait=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(read:()=>Promise<PluginWebState>|PluginWebState){const end=Date.now()+10000;while(Date.now()<end){const value=await read();if(value.state==='running')return value;await wait(30);}throw new Error('Web startup timed out');}
 test('native Web manifests remain additive, reject ambiguous views and only accept loopback endpoints',()=>{
-  const manifest=extensionManifestSchema.parse(harnessManifest);assert.equal(manifest.views[0].web?.command,'web');assert.equal(manifest.kind,'feature');
+  const manifest=extensionManifestSchema.parse(harnessManifest);assert.equal(manifest.views[0].web?.command,'web');assert.equal(manifest.kind,'feature');assert.equal(manifest.views.filter(view=>view.location==='settings').length,0);
   assert.ok(!manifest.dependencies.includes('acp'));assert.ok(!manifest.config.model);
   assert.ok(defaultHarnessArgs.includes('--no-open'));assert.deepEqual(defaultHarnessArgs.slice(-2),['--port','0']);
   assert.equal(localPluginUrl('http://127.0.0.1:3080/?token=x').port,'3080');

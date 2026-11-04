@@ -35,7 +35,7 @@ const step = message => console.log(`File smoke: ${message}`);
 async function coreSettings(page,category){await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:category,exact:true}).click();}
 try {
   step('launch and keep a real terminal running throughout file navigation');
-  const args = [...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--user-data-dir=' + path.join(folder, 'profile')];
+  const args = [...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--user-data-dir=' + path.join(folder, 'profile')];
   if (process.platform === 'linux' && process.getuid?.() === 0) args.push('--no-sandbox');
   const env = { ...process.env, AGENTBERTH_DATA_DIR: path.join(folder, 'data') }; delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ executablePath: packaged ? path.resolve('release/win-unpacked/AgentBerth.exe') : undefined, args, env, timeout: 20000 });
@@ -46,11 +46,11 @@ try {
   await page.getByRole('button', { name: '添加第一个项目' }).waitFor({timeout:25000});
   const project = await page.evaluate(root => window.berth.rpc('createProject', { name: '文件工作台', path: root }), root);
   step('compact project heading keeps final glyphs visible and truncates long names with a tooltip');
-  const projectTitle = page.locator('.project-header h1');
+  const projectTitle = page.locator('.workbench-header .project-name');
   for (const name of ['文件工作台f', 'AgentBerth 项目管理', '项目名称很长时应该明确显示省略号并允许悬停查看全部名称'.repeat(3)]) {
     await page.evaluate(({ projectId, name, path }) => window.berth.rpc('updateProject', { projectId, name, path }), { projectId: project.id, name, path: root });
-    await page.waitForFunction(name => document.querySelector('.project-header h1')?.textContent === name, name);
-    assert.equal(await projectTitle.getAttribute('title'), name);
+    await page.waitForFunction(name => document.querySelector('.workbench-header .project-name')?.textContent === name, name);
+    assert.ok((await projectTitle.getAttribute('title')).startsWith(name+'\n'));
     const layout = await projectTitle.evaluate(element => {
       const style = getComputedStyle(element), rect = element.getBoundingClientRect();
       const range = document.createRange(); range.selectNodeContents(element);
@@ -60,10 +60,10 @@ try {
       const ink = context.measureText(element.textContent);
       return { width: rect.width, right: rect.right, textRight: text.right, inkRight: text.left + ink.actualBoundingBoxRight,
         pathLeft: element.nextElementSibling.getBoundingClientRect().left, ellipsis: style.textOverflow,
-        rowHeight: element.closest('.project-header').getBoundingClientRect().height };
+        rowHeight: element.closest('.workbench-header').getBoundingClientRect().height };
     });
-    assert.ok(layout.rowHeight <= 40, `project row stays compact: ${JSON.stringify(layout)}`);
-    assert.ok(layout.right <= layout.pathLeft, 'project name and path must not overlap');
+    assert.ok(layout.rowHeight <= 44, `project row stays compact: ${JSON.stringify(layout)}`);
+    assert.ok(layout.right <= layout.pathLeft, 'project name and session context must not overlap');
     if (name.length < 40) {
       assert.ok(layout.textRight <= layout.right && layout.inkRight <= layout.right, `complete final glyph: ${JSON.stringify(layout)}`);
     } else {
@@ -73,7 +73,7 @@ try {
     }
   }
   await page.evaluate(({ projectId, path }) => window.berth.rpc('updateProject', { projectId, name: '文件工作台', path }), { projectId: project.id, path: root });
-  await page.waitForFunction(() => document.querySelector('.project-header h1')?.textContent === '文件工作台');
+  await page.waitForFunction(() => document.querySelector('.workbench-header .project-name')?.textContent === '文件工作台');
   const session = await page.evaluate(projectId => window.berth.rpc('createSession', { projectId, title: '保持运行的终端', agent: 'shell' }), project.id);
   const run = await page.evaluate(sessionId => window.berth.rpc('start', { sessionId, cols: 90, rows: 30 }), session.id);
   await page.locator('.terminal-mount .xterm').waitFor();
@@ -304,7 +304,7 @@ try {
   // Use the session tree: the old file-project dropdown already cleared navigation.
   await sideTabs.getByRole('tab', { name: '会话', exact: true }).click();
   await page.locator('.projects .project-item').filter({ hasText: '另一个文件项目' }).click();
-  await page.waitForFunction(() => document.querySelector('.project-header h1')?.textContent === '另一个文件项目');
+  await page.waitForFunction(() => document.querySelector('.workbench-header .project-name')?.textContent === '另一个文件项目');
   await page.locator('.projects .project-item').filter({ hasText: '文件工作台' }).click();
   await page.waitForTimeout(350);
   assert.equal(await page.getByRole('dialog', { name: '定位文件或目录', exact: true }).count(), 0);

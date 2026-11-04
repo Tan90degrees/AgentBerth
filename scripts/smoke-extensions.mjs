@@ -1,3 +1,4 @@
+import {openExtensionView} from './smoke-navigation.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
@@ -59,7 +60,7 @@ try {
   // Observe plugin messages independently of the React bridge so a failure
   // distinguishes iframe initialization from parent dispatch or daemon RPC.
   await page.evaluate(()=>{window.__pluginSmokeMessages=[];window.addEventListener('message',event=>{if(typeof event.data?.kind==='string'&&event.data.kind.startsWith('agentberth-plugin-'))window.__pluginSmokeMessages.push({kind:event.data.kind,id:event.data.id,command:event.data.command,error:event.data.error});});});
-  await page.getByRole('button',{name:'Plugin info',exact:true}).click();
+  await openExtensionView(page,'Plugin info');
   const frame=page.frameLocator('iframe[title="Plugin info"]');
   // Explicitly verify the sandboxed view can reach its parent before calling
   // an Agent command. The readiness probe may retry; the command never does.
@@ -86,7 +87,7 @@ try {
   assert.equal(await frame.locator('#read').getAttribute('data-calls'),'1','Plugin command must run once without automatic replay');
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-view.png`});
   await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
-  await card.getByRole('button',{name:'停用',exact:true}).click();await card.getByText('已停用',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Plugin info',exact:true}).count(),0);
+  await card.getByRole('button',{name:'停用',exact:true}).click();await card.getByText('已停用',{exact:true}).waitFor();await page.getByRole('button',{name:'扩展应用',exact:true}).click();assert.equal(await page.getByRole('dialog',{name:'扩展应用',exact:true}).getByRole('button',{name:'Plugin info',exact:true}).count(),0);await page.keyboard.press('Escape');
   for(let i=0;i<100&&await nativeCount()!==0;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),0);
   await card.getByRole('button',{name:'启用',exact:true}).click();await card.getByText('已启用',{exact:true}).waitFor();
   for(const id of ['workspace','agents','ssh','files','git','resources','appearance'])assert.equal(await page.locator('[data-plugin-id="'+id+'"]').count(),0,`${id} is a core capability, not an extension`);

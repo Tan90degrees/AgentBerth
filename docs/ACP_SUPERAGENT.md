@@ -256,8 +256,5 @@ Superagent 任务对话、ACP 对话和 CLI 历史统一支持滚动到顶部自
 首次下载与协议初始化；超时错误包含末尾启动日志，不自动重复执行。启动参数仍需使用
 JSON 数组，普通 TUI 或 Web 服务不能作为 ACP 启动程序。
 
-DeepSeek Harness 可自行配置程序 `npx`，参数
-`["--yes", "@deepseek-ai/dsh", "--profile", "acp"]`，无需内置接入插件。
-`@deepseek-ai/dsh-acp` 是 Harness 的协议插件，不是独立可执行程序。
 AgentBerth 根据 Agent 声明协商 `session/resume` 或 `session/load`，本地记录保留；
 两者均未声明时才建立新会话，且不会重放旧消息。

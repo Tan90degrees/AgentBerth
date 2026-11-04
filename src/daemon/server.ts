@@ -1,5 +1,4 @@
 import { mountHarness } from '../plugins/deepseek-harness';
-import { harnessGuide } from '../plugins/deepseek-harness/guide';
 import { serviceShell } from './paths';
 import { randomUUID } from 'node:crypto';
 import { openCodeLaunch } from './opencode-launch';
@@ -112,7 +111,7 @@ export class DaemonServer {
     this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
-      builtinView:(id,view)=>id==='deepseek-harness'&&view==='guide'?harnessGuide:id==='superagent'&&view==='tasks'?superagentView:undefined,
+      builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:undefined,
       beforeChange:async ids=>{
         const sessions=this.store.state().sessions;
         for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)||this.acp.active(session.id)){

@@ -7,5 +7,5 @@ export const harnessManifest=extensionManifestSchema.parse({
     executable:{type:'string',title:'启动程序',default:'npx'},
     args:{type:'string',title:'启动参数（JSON 数组）',default:'["--yes","@deepseek-ai/dsh","web","--no-open","--host","127.0.0.1","--port","0"]'},
   },
-  views:[{id:'web',title:'DeepSeek Harness',location:'sidebar',web:{command:'web',project:false}},{id:'guide',title:'使用说明',location:'settings',entry:'builtin'}],
+  views:[{id:'web',title:'DeepSeek Harness',location:'sidebar',web:{command:'web',project:false}}],
 });

@@ -93,10 +93,10 @@ export const ProjectTree = memo(function ProjectTree({ unread, projects, session
     return children.length || (filter === 'all' && matchesQuery(`${project.name} ${project.path}`, query)) ? [{ project, all, children }] : [];
   }), [projects, grouped, query, filter, names]);
   return <nav className="projects" aria-label="项目与会话"><ul className="project-tree">{visible.map(({ project, all, children }) => {
-    const expanded = searching || !collapsed.includes(project.id), count = all.filter(active).length;
+    const expanded = !collapsed.includes(project.id), count = all.filter(active).length;
     return <li key={project.id} className="project-branch" data-project-id={project.id}>
       <div className={`project-row ${projectId === project.id ? 'current-project' : ''}`} onContextMenu={event => { event.preventDefault(); menu('project', project.id, event.currentTarget.querySelector<HTMLElement>('.project-item')!, event.clientX, event.clientY); }}>
-        <button className="project-toggle icon-button" aria-label={`${expanded ? '收起' : '展开'}项目 ${project.name}`} aria-expanded={expanded} aria-controls={`sessions-${project.id}`} disabled={searching} onClick={() => onToggle(project.id)}>
+        <button className="project-toggle icon-button" aria-label={`${expanded ? '收起' : '展开'}项目 ${project.name}`} aria-expanded={expanded} aria-controls={`sessions-${project.id}`} onClick={() => onToggle(project.id)}>
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" aria-hidden="true"><path d={expanded ? 'm4 6 4 4 4-4' : 'm6 4 4 4-4 4'} /></svg>
         </button>
         <button className="project-item" onKeyDown={event => { if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') { event.preventDefault(); menu('project', project.id, event.currentTarget); } }} onClick={() => onProject(project.id)} title={`${project.path}${count?`\n${count} 个终端运行中`: ''}`}>
