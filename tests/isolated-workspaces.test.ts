@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,stat,readdir,rename} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,stat,readdir,rename,realpath} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';
 import {IsolatedWorkspaces} from '../src/daemon/isolated-workspaces';
 import {DEFAULT_COPY_EXCLUDES} from '../src/shared/isolated-workspaces';
@@ -40,4 +40,13 @@ test('restart recovers the previous workspace if a replacement was interrupted b
 
 test('scan consent is scoped to its workspace and broken working directories remain explicitly cleanable',async t=>{
  const f=await fixture(t);await writeFile(path.join(f.root,'file'),'original');const report=await f.scan(),foreign='b'.repeat(32),refused=await f.job(f.copies.create(foreign,projectId,f.root,'Other pipeline',report.token,false));assert.equal(refused.state,'failed');assert.match(refused.error!,/扫描已过期/);const created=await f.job(f.copies.create(id,projectId,f.root,'P',report.token,false));assert.equal(created.state,'completed',created.error);await rm(created.result.path,{recursive:true});assert.equal((await f.copies.status(id,projectId,f.root)).healthy,false);assert.equal((await f.copies.list()).length,1);const removed=await f.job(f.copies.remove(id,projectId,f.root));assert.equal(removed.state,'completed',removed.error);assert.equal(await readFile(path.join(f.root,'file'),'utf8'),'original');
+});
+
+
+test('registry and session paths stay canonical when the data directory has an alternate spelling',async t=>{
+ const f=await fixture(t);await writeFile(path.join(f.root,'file'),'original');await f.copies.list();const alias=path.join(f.temp,'data-alias');try{await symlink(await realpath(path.join(f.temp,'data')),alias,process.platform==='win32'?'junction':'dir');}catch(error){if(['EPERM','EACCES'].includes((error as NodeJS.ErrnoException).code??'')){t.skip('Directory alias unavailable');return;}throw error;}
+ const copies=new IsolatedWorkspaces(alias);try{
+  const wait=async(initial:any)=>{const end=Date.now()+10000;for(;;){const value=copies.job(initial.id);if(value.state!=='running')return value;if(Date.now()>end)throw new Error('Aliased workspace job timed out');await new Promise(resolve=>setTimeout(resolve,5));}};
+  const scan=await wait(copies.scan(id,projectId,f.root,f.options));assert.equal(scan.state,'completed',scan.error);const created=await wait(copies.create(id,projectId,f.root,'Aliased pipeline',scan.result.token,false));assert.equal(created.state,'completed',created.error);const working=created.result.path,canonical=await realpath(working),aliased=path.join(alias,'isolated-workspaces',id,'working');assert.equal(working,canonical);assert.equal(await copies.resolve(projectId,f.root,working),canonical);assert.equal(await copies.resolve(projectId,f.root,aliased),canonical);assert.equal((await copies.status(id,projectId,f.root)).path,canonical);assert.equal((await copies.list())[0].path,canonical);await assert.rejects(copies.resolve('foreign-project',f.root,aliased),/不匹配/);
+ }finally{await copies.close();}
 });
