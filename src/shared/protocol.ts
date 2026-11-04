@@ -1,10 +1,16 @@
 import { z } from 'zod';
+import {DEFAULT_COPY_EXCLUDES} from './isolated-workspaces';
 import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest } from './extensions';
+import { acpConfigSchema, type AcpSnapshot, type AcpEvent } from './acp';
 
+const copyEntrySchema=z.object({hash:z.string().regex(/^[a-f0-9]{64}$/),size:z.number().int().min(0),mode:z.number().int().min(0).max(511)}).nullable();
+const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['added','modified','deleted','blocked']),before:copyEntrySchema,after:copyEntrySchema,conflict:z.boolean(),reason:z.string().max(2000).optional()}).strict();
+const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
+const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 43;
+export const API_VERSION = 50;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -32,6 +38,7 @@ const id = z.uuid();
 const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
   name: title,
+  acp: acpConfigSchema.optional(),
   integration: z.enum(['codex', 'claude', 'opencode']).optional(),
   skills: agentSkillsSchema.optional(),
   sourceId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
@@ -130,7 +137,17 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({id,method:z.literal('mcpMetrics'),params:z.object({}).strict()}),
   z.object({id,method:z.literal('mcpRecordCall'),params:z.object({callId:id,tool:z.string().min(1).max(80),success:z.boolean()}).strict()}),
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
+  z.object({id,method:z.literal('acpSnapshot'),params:z.object({sessionId:id,before:z.number().int().positive().optional(),after:z.number().int().nonnegative().optional(),limit:z.number().int().min(1).max(200).default(100)}).strict()}),
+  z.object({id,method:z.literal('acpSend'),params:z.object({sessionId:id,requestId:id,text:z.string().trim().min(1).max(40000)}).strict()}),
+  z.object({id,method:z.literal('acpCancel'),params:z.object({sessionId:id}).strict()}),
+  z.object({id,method:z.literal('acpPermission'),params:z.object({sessionId:id,permissionId:z.string().min(1).max(200),optionId:z.string().max(500).nullable()}).strict()}),
+  z.object({id,method:z.literal('acpConfigure'),params:z.object({sessionId:id,configId:z.string().min(1).max(200),value:z.string().max(1000)}).strict()}),
+  z.object({id,method:z.literal('acpAuthenticate'),params:z.object({sessionId:id,methodId:z.string().min(1).max(500)}).strict()}),
+  z.object({id,method:z.literal('acpProbe'),params:acpConfigSchema}),
+  z.object({id,method:z.literal('acpOptions'),params:z.object({agentId:z.string().min(1).max(200),projectId:id}).strict()}),
+  z.object({id,method:z.literal('acpTerminal'),params:z.object({sessionId:id,terminalId:z.string().min(1).max(200)}).strict()}),
   z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
+  z.object({id,method:z.literal('isolatedWorkspace'),params:copyRequestSchema}),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id, worktreePath: z.string().min(1).max(4096).nullable().default(null) }).strict() }),
   z.object({ id, method: z.literal('gitWorktrees'), params: z.object({ projectId: id }).strict() }),
   z.object({ id, method: z.literal('gitCreateWorktree'), params: z.object({ projectId: id, branch: z.string().trim().min(1).max(255).refine(value=>!value.startsWith('-')&&!/[\\\s\x00-\x1f]/.test(value),'分支名称无效'), createBranch: z.boolean().default(true), baseRef: z.string().trim().min(1).max(255).refine(value=>!value.startsWith('-')&&!/[\\\s\x00-\x1f]/.test(value),'起始引用无效').optional() }).strict() }),
@@ -143,7 +160,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('createProject'), params: z.object({ name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('updateProject'), params: z.object({ projectId: id, name: title, path: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('deleteProject'), params: z.object({ projectId: id }).strict() }),
-  z.object({ id, method: z.literal('createSession'), params: z.object({ projectId: id, ...sessionConfig }).strict() }),
+  z.object({ id, method: z.literal('createSession'), params: z.object({ projectId: id, requestId:id.optional(), ...sessionConfig }).strict() }),
   z.object({ id, method: z.literal('updateSession'), params: z.object({ sessionId: id, ...sessionConfig }).strict() }),
   z.object({ id, method: z.literal('deleteSession'), params: z.object({ sessionId: id }).strict() }),
   z.object({ id, method: z.literal('saveSettings'), params: settingsSchema }),
@@ -200,10 +217,13 @@ export interface GitWorktree { path:string; workingPath:string; branch:string|nu
 export interface GitResult { status: GitStatus; message: string; output: string }
 export interface GitDiff { path: string; staged: boolean; patch: string; binary: boolean; truncated: boolean; message?: string }
 export interface Run { id: string; sessionId: string; pid: number | null; status: RunStatus; startedAt: string; endedAt: string | null; exitCode: number | null; command: string; shell: string; error: string | null; recordOutput?: number }
-export interface Session { remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
+export const managedSessionsSchema=z.object({kind:z.literal('superagent'),taskId:z.uuid(),projectId:z.uuid(),sessionIds:z.array(z.uuid()).min(1).max(2)}).strict();
+export type ManagedSessions=z.infer<typeof managedSessionsSchema>;
+export interface SessionOwner {kind:'superagent';pluginId:string;taskId:string;projectId:string}
+export interface Session { owner?:SessionOwner; remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface WorkspaceRecovery { id: string; status: 'restoring' | 'completed'; total: number; restored: number; resumed: number; skipped: number; errors: {sessionId: string; title: string; message: string}[] }
-export interface State { extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface State { agentActivities?:import('./pet').AgentActivity[];extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }
@@ -222,6 +242,7 @@ export interface McpMetrics {since:string;total:number;succeeded:number;failed:n
 export interface RemoteCommandOutput { search?:OutputSearchResult; text: string; nextCursor: number; earliestCursor: number | null; truncated: boolean; hasMore: boolean; available: boolean; format: 'terminal'; mode?:'summary'|'page'; omitted?:boolean; cacheLost?:boolean; totalBytes?:number;totalLines?:number;returnedBytes?:number }
 export interface RemoteCommandResult extends RemoteAction { output: RemoteCommandOutput; info: RemoteInfo; elapsedMs: number; requestMs?: number }
 export type ServerEvent =
+  | {event:'acp';data:{sessionId:string;event?:AcpEvent;state?:Omit<AcpSnapshot,'events'|'before'|'hasMore'>}}
   | {event:'mcpMetrics';data:McpMetrics}
   | { event: 'terminalActivity'; data: { sessionId: string; runId: string; seq: number } }
   | { event: 'sshChallenge'; data: SshChallenge }
@@ -257,9 +278,9 @@ export interface DesktopApi {
   skills(request: import('./skills').SkillRequest): Promise<import('./skills').SkillPage | { content: string }>;
   chooseDirectory(): Promise<string | null>;
   chooseTranscript(): Promise<string | null>;
-  chooseExecutable(): Promise<string | null>;
+  chooseExecutable(kind?:'acp'): Promise<string | null>;
   exportPluginKit(): Promise<string | null>;
-  pluginDevelopmentPrompt(folder?: string): Promise<string>;
+  pluginDevelopmentPrompt(folder?: string,topic?:'superagent-source'): Promise<string>;
   copyText(text: string): Promise<void>;
   readClipboard(): Promise<string>;
   openExternal(url: string): Promise<void>;

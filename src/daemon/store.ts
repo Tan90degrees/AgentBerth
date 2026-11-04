@@ -8,6 +8,8 @@ import path from 'node:path';
 import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 import { restartPlanSchema, type RestartEntry } from './recovery';
+import type {ManagedSessions,SessionOwner} from '../shared/protocol';
+import type { AcpEvent } from '../shared/acp';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
 
@@ -68,7 +70,13 @@ export class Store {
       id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, value TEXT NOT NULL
     )`);
     this.db.exec('CREATE TABLE IF NOT EXISTS ssh_connections (id TEXT PRIMARY KEY, value TEXT NOT NULL, fingerprint TEXT)');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS session_owners(sessionId TEXT PRIMARY KEY,projectId TEXT NOT NULL,pluginId TEXT NOT NULL,taskId TEXT NOT NULL,kind TEXT NOT NULL);CREATE TRIGGER IF NOT EXISTS remove_session_owner AFTER DELETE ON sessions BEGIN DELETE FROM session_owners WHERE sessionId=old.id;END;`);
     this.db.exec('PRAGMA user_version = 7');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS acp_sessions(sessionId TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS acp_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS acp_events_session ON acp_events(sessionId,sequence);
+      CREATE TABLE IF NOT EXISTS acp_turns(id TEXT PRIMARY KEY,sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,state TEXT NOT NULL);
+      UPDATE acp_turns SET state='interrupted' WHERE state='running';`);
     for (const table of ['remote_actions', 'remote_requests']) for (const row of this.db.prepare(`SELECT id,value FROM ${table}`).all()) { const a = JSON.parse(String(row.value)); if (a.status === 'running') this.db.prepare(`UPDATE ${table} SET value=? WHERE id=?`).run(JSON.stringify({ ...a, status: 'unknown', endedAt: new Date().toISOString() }), row.id); }
     // A new daemon cannot reattach a PTY owned by a previous process.
     this.db.prepare("UPDATE runs SET status = 'interrupted', endedAt = ?, error = '后台进程曾退出；可重新启动或通过 Agent 原生会话恢复' WHERE status IN ('running', 'stopping')").run(new Date().toISOString());
@@ -105,8 +113,9 @@ export class Store {
       FROM sessions s JOIN runs r ON r.rowid = (SELECT rowid FROM runs WHERE sessionId = s.id ORDER BY rowid DESC LIMIT 1)
       WHERE s.archived = 0`).all() as unknown as Run[];
     const bySession = new Map(latest.map(run => [run.sessionId, run]));
+    const owners=new Map(this.db.prepare('SELECT sessionId,kind,pluginId,taskId,projectId FROM session_owners').all().map(({sessionId,...owner})=>[String(sessionId),owner]));
     const sessions = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE archived = 0 ORDER BY updatedAt DESC').all()
-      .map(row => ({ ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
+      .map(row => ({ ...row, owner:owners.get(String(row.id)), remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun: bySession.get(String(row.id)) ?? null })) as unknown as Session[];
     const settings=this.settings();
     return { projects, sessions, agents: this.agents(), maxActiveTerminals: settings.maxActiveTerminals, maxSshTerminals: settings.maxSshTerminals, platform: process.platform, windowsPty: windowsPtyFor(process.platform, release()), settings, apiVersion: API_VERSION };
   }
@@ -152,6 +161,7 @@ export class Store {
     this.transaction(() => {
       this.db.prepare('DELETE FROM runs WHERE sessionId IN (SELECT id FROM sessions WHERE projectId = ?)').run(id);
       this.db.prepare('DELETE FROM sessions WHERE projectId = ?').run(id);
+      this.db.prepare('DELETE FROM session_owners WHERE projectId=?').run(id);
       this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     });
     return runIds;
@@ -161,14 +171,24 @@ export class Store {
     const row = this.db.prepare('SELECT id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt, nativeSessionId, transcriptPath FROM sessions WHERE id = ?').get(id);
     if (!row) throw new Error('会话不存在');
     const latestRun = this.db.prepare('SELECT id, sessionId, pid, status, startedAt, endedAt, exitCode, command, shell, error, recordOutput FROM runs WHERE sessionId = ? ORDER BY rowid DESC LIMIT 1').get(id) ?? null;
-    return { ...row, remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
+    return { ...row, owner:this.sessionOwner(String(row.id)), remote: row.remote ? JSON.parse(String(row.remote)) : null, terminal: row.terminal ? JSON.parse(String(row.terminal)) : null, latestRun } as unknown as Session;
   }
 
-  createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null, remote: RemoteConfig | null = null, worktreePath: string | null = null): Session {
+  sessionOwner(sessionId:string):SessionOwner|undefined{const row=this.db.prepare('SELECT kind,pluginId,taskId,projectId FROM session_owners WHERE sessionId=?').get(sessionId);return row as unknown as SessionOwner|undefined;}
+  manageSessions(pluginId:string,value:ManagedSessions){
+    if(!this.db.prepare('SELECT id FROM projects WHERE id=?').get(value.projectId))return;this.transaction(()=>{for(const sessionId of value.sessionIds){const previous=this.sessionOwner(sessionId),session=this.db.prepare('SELECT projectId,remote FROM sessions WHERE id=?').get(sessionId);if(previous&&(previous.pluginId!==pluginId||previous.taskId!==value.taskId||previous.projectId!==value.projectId))throw new Error('会话已由其他任务管理');if(session&&(session.projectId!==value.projectId||session.remote))throw new Error('不能接管其他项目或 SSH 会话');if(!previous)this.db.prepare('INSERT INTO session_owners VALUES (?,?,?,?,?)').run(sessionId,value.projectId,pluginId,value.taskId,value.kind);}});
+  }
+  createSession(projectId: string, title: string, agent: Agent, command: string, terminal: TerminalConfig | null = null, remote: RemoteConfig | null = null, worktreePath: string | null = null,requestedId?:string): Session {
     this.project(projectId);
+    const owner=requestedId?this.sessionOwner(requestedId):undefined;if(owner&&(owner.projectId!==projectId||remote))throw new Error('任务会话归属与项目不匹配');
     command = this.sessionCommand(agent, command);
+    if(requestedId&&this.db.prepare('SELECT id FROM sessions WHERE id=?').get(requestedId)){
+      const previous=this.session(requestedId),saved=this.db.prepare('SELECT archived FROM sessions WHERE id=?').get(requestedId);
+      if(saved?.archived||JSON.stringify([previous.projectId,previous.agent,previous.command,previous.terminal,previous.remote??null,previous.worktreePath??null])!==JSON.stringify([projectId,agent,command,terminal,remote,worktreePath]))throw new Error('会话创建请求 ID 已用于不同的启动配置');
+      return previous;
+    }
     if (Number(this.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE archived = 0').get()!.count) >= 2000) throw new Error('最多管理 2000 个未归档会话');
-    const id = randomUUID();
+    const id = requestedId??randomUUID();
     const now = new Date().toISOString();
     this.db.prepare('INSERT INTO sessions (id, projectId, title, agent, command, terminal, remote, worktreePath, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, agent, command, terminal ? JSON.stringify(terminal) : null, remote ? JSON.stringify(remote) : null, worktreePath, now, now);
     return this.session(id);
@@ -250,6 +270,21 @@ export class Store {
   agents(): AgentDefinition[] {
     return this.db.prepare('SELECT id, value FROM agents ORDER BY rowid').all().map(row => ({ id: String(row.id), ...agentDefinitionSchema.parse(JSON.parse(String(row.value))) }));
   }
+  acpState(sessionId:string):Record<string,any>{this.session(sessionId);const row=this.db.prepare('SELECT value FROM acp_sessions WHERE sessionId=?').get(sessionId);return row?JSON.parse(String(row.value)):{};}
+  saveAcpState(sessionId:string,value:Record<string,unknown>):void{this.session(sessionId);this.db.prepare('INSERT INTO acp_sessions VALUES (?,?) ON CONFLICT(sessionId) DO UPDATE SET value=excluded.value').run(sessionId,JSON.stringify(value));}
+  appendAcp(sessionId:string,turnId:string|null,kind:AcpEvent['kind'],text:string,data?:Record<string,unknown>):AcpEvent{
+    const value={id:randomUUID(),sessionId,turnId,kind,text:text.slice(0,8192),...(data?{data}:{}),createdAt:new Date().toISOString()};
+    const result=this.db.prepare('INSERT INTO acp_events(id,sessionId,value) VALUES (?,?,?)').run(value.id,sessionId,JSON.stringify(value));
+    this.db.prepare('DELETE FROM acp_events WHERE sessionId=? AND sequence < COALESCE((SELECT sequence FROM acp_events WHERE sessionId=? ORDER BY sequence DESC LIMIT 1 OFFSET 4999),0)').run(sessionId,sessionId);
+    return {...value,sequence:Number(result.lastInsertRowid)};
+  }
+  acpEvents(sessionId:string,{before,after,limit=100}:{before?:number;after?:number;limit?:number}={}):{events:AcpEvent[];before:number|null;hasMore:boolean}{
+    this.session(sessionId);const rows=this.db.prepare(`SELECT sequence,value FROM acp_events WHERE sessionId=? AND sequence ${after!==undefined?'>':'<'} ? ORDER BY sequence ${after!==undefined?'ASC':'DESC'} LIMIT ?`).all(sessionId,after??before??Number.MAX_SAFE_INTEGER,limit+1);
+    const hasMore=rows.length>limit,items=rows.slice(0,limit).map(row=>({...JSON.parse(String(row.value)),sequence:Number(row.sequence)}));if(after===undefined)items.reverse();return {events:items,before:items[0]?.sequence??null,hasMore};
+  }
+  acpTurn(id:string):{sessionId:string;state:string}|null{return this.db.prepare('SELECT sessionId,state FROM acp_turns WHERE id=?').get(id) as {sessionId:string;state:string}|undefined??null;}
+  beginAcpTurn(sessionId:string,id:string):void{this.db.prepare('INSERT INTO acp_turns VALUES (?,?,?)').run(id,sessionId,'running');}
+  finishAcpTurn(id:string,state:string):void{this.db.prepare('UPDATE acp_turns SET state=? WHERE id=?').run(state,id);}
   agent(id: string): AgentDefinition {
     const row = this.db.prepare('SELECT value FROM agents WHERE id = ?').get(id);
     if (!row) throw new Error('Agent 类型不存在，请重新选择');

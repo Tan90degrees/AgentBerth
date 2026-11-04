@@ -1,6 +1,6 @@
 {
   "name": "agentberth",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "private": true,
   "type": "module",
   "description": "A project workspace for persistent terminals, agents, files and history",
@@ -131,6 +131,10 @@
       {
         "from": "dist/opencode-pet-v2.mjs",
         "to": "pet/opencode-pet-v2.mjs"
+      },
+      {
+        "from": "dist/superagent-plugin.zip",
+        "to": "examples/superagent-plugin.zip"
       }
     ]
   }

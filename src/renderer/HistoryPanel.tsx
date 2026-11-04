@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useDeferredValue,useEffect,useLayoutEffect, useRef, useState } from 'react';
 import type { History, NativeHistoryPage, Session } from '../shared/protocol';
 import { HistoryDiagnostics } from './HistoryDiagnostics';
+import {captureHistoryAnchor,restoreHistoryAnchor} from './history-scroll';
+import {ConversationMessage} from './ConversationMessage';
 
 const emptyPage: NativeHistoryPage = { items: [], nextCursor: null, warnings: [] };
 const date = (value: string | null) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
@@ -9,6 +11,8 @@ export function HistoryPanel({ session, history, label, canHistory, canAssociate
   onImport: () => Promise<void>; onRefresh: () => Promise<void>; onManual: () => void;
   onLink: (id: string) => Promise<History | undefined>; onUnlink: () => Promise<History | undefined>; onCopy: (id: string) => void;
 }) {
+  const [messageQuery,setMessageQuery]=useState(''),[libraryOpen,setLibraryOpen]=useState(true);
+  const [visibleCount,setVisibleCount]=useState(50),deferredMessageQuery=useDeferredValue(messageQuery),reader=useRef<HTMLDivElement>(null),prependAnchor=useRef<ReturnType<typeof captureHistoryAnchor>|null>(null),loadingEarlier=useRef(false),previousTop=useRef(0),initialScroll=useRef<string|null>(null);
   const [source, setSource] = useState<'saved' | 'discover'>('saved');
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(5);
@@ -62,13 +66,19 @@ export function HistoryPanel({ session, history, label, canHistory, canAssociate
   const shown = preview ?? history;
   const selectedId = shown?.nativeSessionId;
   const linked = selectedId === session.nativeSessionId && !!selectedId;
+  const matches=(shown?.messages??[]).map((message,index)=>({message,index})).filter(({message})=>!deferredMessageQuery||message.text.toLocaleLowerCase().includes(deferredMessageQuery.toLocaleLowerCase()));
+  const readerScope=JSON.stringify([session.id,selectedId,shown?.path]);
+  useLayoutEffect(()=>{prependAnchor.current=null;loadingEarlier.current=false;previousTop.current=0;initialScroll.current=readerScope;setVisibleCount(50);setMessageQuery('');},[readerScope]);
+  useLayoutEffect(()=>{const host=reader.current;if(initialScroll.current!==readerScope||!host||visibleCount!==50||deferredMessageQuery||working||!shown?.messages.length)return;host.scrollTop=host.scrollHeight;previousTop.current=host.scrollTop;initialScroll.current=null;},[readerScope,visibleCount,deferredMessageQuery,working,shown?.messages]);
+  useLayoutEffect(()=>{if(prependAnchor.current&&reader.current){restoreHistoryAnchor(reader.current,prependAnchor.current);previousTop.current=reader.current.scrollTop;prependAnchor.current=null;}loadingEarlier.current=false;},[visibleCount]);
+  function loadEarlier(){if(working||loadingEarlier.current||matches.length<=visibleCount||!reader.current)return;loadingEarlier.current=true;prependAnchor.current=captureHistoryAnchor(reader.current);setVisibleCount(value=>value+50);}
   return <div className="history-panel">
-    <div className="panel-toolbar"><span>原生对话历史</span><div>
+    <div className="panel-toolbar"><span>原生对话历史 <small>· 只读记录</small></span><div><button className="subtle" aria-expanded={libraryOpen} onClick={()=>setLibraryOpen(value=>!value)}>{libraryOpen?'收起会话列表':'浏览会话'}</button>
       <button className="subtle" disabled={blocked || (!session.transcriptPath && !autoRead)} onClick={() => void onRefresh()}>{history?.messages.length || session.transcriptPath ? '刷新记录' : '读取对话'}</button>
       <button className="subtle" disabled={blocked || !canAssociate || (!supported && ['running', 'stopping'].includes(session.latestRun?.status ?? ''))} onClick={onManual}>关联会话 ID</button>
       <button className="subtle" disabled={blocked || !canHistory} onClick={() => void onImport()}>{session.agent.startsWith('agent:') ? '选择记录文件' : session.agent === 'opencode' ? '关联 JSON' : '关联 JSONL'}</button>
     </div></div>
-    {supported ? <section className="native-browser" aria-label="原生会话列表">
+    {supported ? <section className="native-browser" aria-label="原生会话列表" hidden={!libraryOpen}>
       <div className="native-browser-controls"><div className="native-sources" role="group" aria-label="历史来源"><button className={source === 'saved' ? 'selected' : ''} aria-pressed={source === 'saved'} disabled={blocked} onClick={() => { setSource('saved'); setCursors([null]); }}>已保存的会话</button>{canDiscover && <button className={source === 'discover' ? 'selected' : ''} aria-pressed={source === 'discover'} disabled={blocked} onClick={() => { setSource('discover'); setCursors([null]); }}>发现会话</button>}</div><input aria-label="搜索原生会话" value={query} maxLength={100} onChange={event => { setQuery(event.target.value); setCursors([null]); }} placeholder="搜索标题或会话 ID" /><button className="subtle" disabled={blocked || loading} onClick={() => { setCursors([null]); setRevision(value => value + 1); }}>刷新列表</button></div>
       <div className="native-list" aria-busy={loading}>
         {loading ? <p className="native-list-hint" role="status">正在读取会话列表…</p> : page.items.map(item => <div className={`native-item ${selectedId === item.nativeSessionId ? 'selected' : ''}`} key={item.nativeSessionId} data-native-id={item.nativeSessionId}>
@@ -83,6 +93,7 @@ export function HistoryPanel({ session, history, label, canHistory, canAssociate
     {session.nativeSessionId && <div className="history-meta"><div className="history-id"><span>当前关联：</span><code>{session.nativeSessionId}</code><button className="text-button" onClick={() => onCopy(session.nativeSessionId!)}>复制 ID</button>{supported && <button className="text-button" disabled={blocked} onClick={() => void associate(null)}>解除当前关联</button>}</div>{['running', 'stopping'].includes(session.latestRun?.status ?? '') && <small>运行中可更新关联；新的 ID 用于历史查看和下次恢复，不切换当前 CLI。</small>}</div>}
     {preview && <div className="history-meta"><div className="history-id"><span>{linked ? '查看已关联会话' : '预览会话（尚未关联）'}：</span><code>{selectedId}</code>{canHistory && <button className="text-button" disabled={blocked} onClick={() => void show(selectedId!, true)}>刷新此会话</button>}{!linked && <button className="text-button" disabled={blocked || !canAssociate} onClick={() => void associate(selectedId!)}>关联此会话</button>}<button className="text-button" onClick={() => { request.current++; setPreview(null); }}>返回当前关联</button></div></div>}
     <HistoryDiagnostics key={`${session.id}:${source}:${selectedId??''}:${shown?.path??''}`} path={working?null:shown?.path} warnings={[...(supported&&!loading?page.warnings:[]),...(!working?shown?.warnings??[]:[])]} />
-    <div className="messages">{working ? <p className="native-list-hint" role="status">正在读取会话…</p> : shown?.messages.length ? shown.messages.map((message,index) => <article className={`message ${message.role}`} key={index}><header><strong>{message.role === 'user' ? '你' : label}</strong><time>{date(message.timestamp)}</time></header><p>{message.text}</p></article>) : <div className="empty-page"><h2>{selectedId ? '尚无对话文本' : '选择一条原生会话'}</h2><p>{selectedId ? '可刷新已关联记录，或选择原生记录文件导入。' : '导入的多个会话会分别保留。点选可预览，点击关联用于下次恢复。'}</p></div>}</div>
+    {!!shown?.messages.length&&<div className="history-reading-tools"><span>{label} · {shown.messages.length} 条消息</span><input aria-label="搜索当前对话" placeholder="搜索当前对话" value={messageQuery} onChange={event=>setMessageQuery(event.target.value)}/><span>支持 Markdown、代码高亮和复制</span></div>}
+    <div className="messages conversation-transcript" ref={reader} style={{overflowAnchor:'none'}} onWheel={event=>{initialScroll.current=null;if(event.deltaY<0&&(reader.current?.scrollTop??0)<80)loadEarlier();}} onScroll={()=>{const box=reader.current!,up=box.scrollTop<previousTop.current;previousTop.current=box.scrollTop;if(up&&box.scrollTop<80)loadEarlier();}}>{working ? <p className="native-list-hint" role="status">正在读取会话…</p> : shown?.messages.length ? <><p className="history-load-status" role="status">{matches.length>visibleCount?'向上滚动查看更早消息':'已到对话开头'}</p>{matches.slice(-visibleCount).map(({message,index})=><ConversationMessage key={index} role={message.role} text={message.text} label={label} timestamp={message.timestamp} onError={setError}/>)}{deferredMessageQuery&&!matches.length&&<p className="native-list-hint">没有匹配的消息</p>}</> : <div className="empty-page"><h2>{selectedId ? '尚无对话文本' : '选择一条原生会话'}</h2><p>{selectedId ? '可刷新已关联记录，或选择原生记录文件导入。' : '导入的多个会话会分别保留。点选可预览，点击关联用于下次恢复。'}</p></div>}</div>
   </div>;
 }

@@ -16,6 +16,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { PROTOCOL_VERSION, requestSchema, agentDefinitionSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
 import { ResourceSampler } from './resources';
+import {IsolatedWorkspaces} from './isolated-workspaces';
+import {mount as mountIsolated} from '../core/isolated-workspaces';
 import { GitWorkspace } from './git';
 import { ProjectFiles } from './files';
 import { AgentPlugins } from './plugins';
@@ -40,6 +42,9 @@ import { mount as mountAgents } from '../core/agents';
 import { mount as mountGit } from '../core/git';
 import { mount as mountFiles } from '../core/files';
 import { mount as mountResources } from '../core/resources';
+import { mount as mountAcp } from '../core/acp';
+import { AcpSessions } from './acp';
+import { apply as mountSuperagent, superagentView } from '../superagent';
 import { Context } from 'cordis';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -63,10 +68,13 @@ export class DaemonServer {
   private agentOwners = new Map<string, Client>();
   private openingAliases = new Map<string, Promise<{sessionId:string;runId:string;info: import('../shared/protocol').RemoteInfo}>>();
   private store: Store;
+  private acp:AcpSessions;
+  private startingRuns=new Map<string,Promise<Run>>();
   private transfers: RemoteTransfers;
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
   private git = new GitWorkspace();
+  private copies:IsolatedWorkspaces;
   private files = new ProjectFiles(this.git);
   private resources = new ResourceSampler();
   private mcpStats=new McpCallStats();
@@ -97,17 +105,21 @@ export class DaemonServer {
   constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery) {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
     this.store = new Store(dataDirectory);
+    this.copies=new IsolatedWorkspaces(dataDirectory);
+    this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
+      builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:undefined,
       beforeChange:async ids=>{
         const sessions=this.store.state().sessions;
-        for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)){
+        for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)||this.acp.active(session.id)){
           if(ids.includes('agent.'+session.agent)||ids.some(id=>this.extensionAgents.get(session.agent)===id))throw new Error(`插件仍有运行会话“${session.title}”，请先停止该会话；其他插件无需停止`);
         }
         if(ids.some(id=>id.startsWith('agent.'))&&this.historyBusy.size)throw new Error('会话历史正在读取，请完成后再停用接入插件');
       },
       call:async(method,params)=>{const caller=this.extensionCaller.getStore();if(!caller&&/^(remote|ssh|mcp)/i.test(method))throw new Error('SSH 操作必须由明确的调用会话发起');const request=requestSchema.parse({id:randomUUID(),method,params});return this.dispatch(request,caller??{id:'extension',disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort:new AbortController()});},
       validateAgent:(pluginId,agent)=>{const sourceId='ext.'+createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex').slice(0,32);if(this.store.agents().some(value=>value.sourceId!==sourceId&&value.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('Agent 名称已被其他接入使用：'+agent.definition.name);},
+      manageSessions:(pluginId,value)=>this.store.manageSessions(pluginId,value),
       agentsChanged:values=>{
         const names=new Set<string>();for(const {agent} of values){const name=agent.definition.name.toLocaleLowerCase();if(names.has(name))throw new Error('插件 Agent 名称重复：'+agent.definition.name);names.add(name);}
         const next=new Map<string,string>();
@@ -120,7 +132,7 @@ export class DaemonServer {
       const profile=this.store.sshConnection(this.store.session(endpoint.sessionId).remote!.connectionId!);
       return `ssh:${profile.hostname.toLowerCase()}:${profile.port}:${profile.username}`;
     });
-    mountWorkspace(this.coreContext,this);mountSsh(this.coreContext,this);mountAgents(this.coreContext,this);mountGit(this.coreContext,this);mountFiles(this.coreContext,this);mountResources(this.coreContext,this);
+    mountIsolated(this.coreContext,this);mountWorkspace(this.coreContext,this);mountSsh(this.coreContext,this);mountAgents(this.coreContext,this);mountGit(this.coreContext,this);mountFiles(this.coreContext,this);mountResources(this.coreContext,this);mountAcp(this.coreContext,this);
     rmSync(path.join(dataDirectory,'command-output'),{recursive:true,force:true});
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
@@ -186,13 +198,16 @@ export class DaemonServer {
     }
   }
   private changed(): void {
+    // Shutdown's acknowledgement must remain the final application message.
+    // Cleanup still persists state, but must not publish after that reply.
+    if(this.closing)return;
     const state = this.snapshot(), valid = new Set(state.sessions.map(session => session.id));
     for (const id of this.agentOwners.keys()) if (!valid.has(id)) this.agentOwners.delete(id);
     for (const [id, restored] of this.restoredRuns) if (!state.sessions.some(session => session.id === id && session.latestRun?.id === restored.runId)) this.restoredRuns.delete(id);
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
   }
-  private snapshot(): State { const state=this.store.state();return {...state,extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private snapshot(): State { const state=this.store.state();return {...state,agentActivities:[...this.acp.activities(state.sessions.filter(session=>!session.owner),state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
   workspaceCorePort() {
     const self=this;
     return {
@@ -204,6 +219,7 @@ export class DaemonServer {
       flushOutput:self.flushOutput.bind(self),
       get gitBusy(){return self.gitBusy;},
       get worktreeBusy(){return self.worktreeBusy;},
+      resolveWorkspace:self.resolveWorkspace.bind(self),
       get git(){return self.git;},
       get historyBusy(){return self.historyBusy;},
       get live(){return self.live;},
@@ -257,6 +273,7 @@ export class DaemonServer {
     const self=this;
     return {
       agentVersion:self.agentVersion.bind(self),
+      requireIdle:self.requireIdle.bind(self),
       get agentVersions(){return self.agentVersions;},
       assertAgentVersion:self.assertAgentVersion.bind(self),
       changed:self.changed.bind(self),
@@ -278,6 +295,7 @@ export class DaemonServer {
     const self=this;
     return {
       get closing(){return self.closing;},
+      resolveWorkspace:self.resolveWorkspace.bind(self),
       get git(){return self.git;},
       get gitBusy(){return self.gitBusy;},
       get worktreeBusy(){return self.worktreeBusy;},
@@ -292,6 +310,7 @@ export class DaemonServer {
     const self=this;
     return {
       get files(){return self.files;},
+      resolveWorkspace:self.resolveWorkspace.bind(self),
       get git(){return self.git;},
       get store(){return self.store;}
     };
@@ -300,12 +319,17 @@ export class DaemonServer {
     const self=this;
     return {
       get live(){return self.live;},
+      get acp(){return self.acp;},
       get resources(){return self.resources;},
       get store(){return self.store;}
     };
   }
+  isolatedCorePort(){return {copies:this.copies,store:this.store,requireIdle:this.requireIdle.bind(this)};}
+  private async resolveWorkspace(projectId:string,projectPath:string,target?:string|null){if(!target)return projectPath;return await this.copies.resolve(projectId,projectPath,target)??this.git.resolveWorktree(projectPath,target);}
+  acpCorePort(){return {acp:this.acp,store:this.store,ensureStarted:(id:string)=>this.startingRuns.get(id)??(this.acp.active(id)?Promise.resolve():this.start(id,true,100,30))};}
   registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
+    if(id==='superagent'){mountSuperagent(ctx,_config as Record<string,string|number|boolean>);return;}
     const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
       'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'},plugin:null}},
       'agent.claude':{id:'claude',definition:{name:'Claude Code',command:'claude',integration:'claude',resumeCommand:'claude --resume {sessionId}',skills:{project:'.claude/skills',user:'~/.claude/skills'},plugin:null}},
@@ -322,7 +346,7 @@ export class DaemonServer {
     const entries = new Map(this.recoveryPending);
     for (const session of this.store.state().sessions) {
       const live = this.live.get(session.id);
-      if ((!live && !this.starting.has(session.id)) || live?.closed || live?.stopping || this.agentOwners.get(session.id)?.disposing) continue;
+      if ((!live && !this.starting.has(session.id)&&!this.acp.active(session.id)) || live?.closed || live?.stopping || this.agentOwners.get(session.id)?.disposing) continue;
       entries.set(session.id, {sessionId:session.id,runId:session.latestRun?.id ?? null,cols:live?.terminal.cols ?? 100,rows:live?.terminal.rows ?? 30,
         configuration:this.recoveryConfiguration(session),...(session.remote ? {remoteOwner:live?.remote?.activity.info.owner ?? 'user'} : {})});
     }
@@ -459,7 +483,7 @@ export class DaemonServer {
         await this.stopAll(request.params.restoreOnOpen);
         return null;
       case 'shutdownIdle':
-        if (this.live.size || this.starting.size) throw new Error('请先停止全部终端，再更新后台');
+        if (this.live.size || this.starting.size || this.acp.live.size) throw new Error('请先停止全部终端和 ACP 会话，再更新后台');
         if (this.historyBusy.size || this.editingProjects.size || this.pendingWork > 1) throw new Error('后台正在处理数据，请稍后重试');
         this.closing = true;
         return null;
@@ -486,7 +510,7 @@ export class DaemonServer {
   private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:')||['codex','claude','opencode'].includes(session.agent) ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
   private async sessionProjectPath(session: import('../shared/protocol').Session): Promise<string> {
     const projectPath = this.store.project(session.projectId).path;
-    return session.remote || !session.worktreePath ? projectPath : this.git.resolveWorktree(projectPath, session.worktreePath);
+    return session.remote || !session.worktreePath ? projectPath : this.resolveWorkspace(session.projectId,projectPath, session.worktreePath);
   }
   private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
     const project = await this.sessionProjectPath(session);
@@ -585,17 +609,18 @@ export class DaemonServer {
     const session = this.store.session(sessionId);
     if(!session.remote)this.requireSessionAgent(session);
     this.requireProjectAvailable(session.projectId);
-    if (this.live.has(sessionId) || this.starting.has(sessionId)) throw new Error('此会话的终端已在运行或正在启动');
+    if (this.live.has(sessionId) || this.starting.has(sessionId)||this.acp.active(sessionId)) throw new Error('此会话已在运行或正在启动');
     if (this.historyWrites.has(sessionId)) throw new Error('会话正在关联对话记录，请稍后启动');
     const ssh=!!session.remote,settings=this.store.settings(),limit=ssh?settings.maxSshTerminals:settings.maxActiveTerminals;
     // A connecting SSH is in both maps. Reserve each session exactly once and
     // keep local/SSH capacity independent, including concurrent starts.
-    const reserved=new Set([...this.live.keys(),...this.starting]);
+    const reserved=new Set([...this.live.keys(),...this.starting,...this.acp.live.keys()]);
     const count=[...reserved].filter(id=>!this.live.get(id)?.closed&&!!this.store.session(id).remote===ssh).length;
     if(count>=limit)throw new Error(`${ssh?'SSH 会话':'本机终端'}已达上限 ${limit}，请在设置中调整或停止一个${ssh?' SSH 会话':'本机终端'}`);
     this.starting.add(sessionId);
-    try { return await this.spawn(sessionId, resume, cols, rows, remoteOwner); }
-    finally { this.starting.delete(sessionId); }
+    const task=this.spawn(sessionId,resume,cols,rows,remoteOwner);this.startingRuns.set(sessionId,task);
+    try { return await task; }
+    finally { this.starting.delete(sessionId);this.startingRuns.delete(sessionId); }
   }
 
   private validateRemote(config: { remote: unknown; agent: string; command: string }): void {
@@ -605,7 +630,9 @@ export class DaemonServer {
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     const project = this.store.project(session.projectId);
-    const projectPath = session.remote || !session.worktreePath ? project.path : await this.git.resolveWorktree(project.path, session.worktreePath);
+    const projectPath = session.remote || !session.worktreePath ? project.path : await this.resolveWorkspace(session.projectId,project.path, session.worktreePath);
+    const acpDefinition=this.store.agents().find(agent=>agent.id===session.agent&&agent.acp);
+    if(acpDefinition){if(session.remote||project.remoteWorkspace)throw new Error('ACP 接入目前仅支持本机项目，请使用本机 ACP 会话');return this.acp.start(session,acpDefinition,await directory(projectPath),cols,rows);}
     const version = this.agentVersion(session.agent);
     let command = resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
@@ -760,7 +787,7 @@ export class DaemonServer {
     if (this.editingProjects.has(id)) throw new Error('项目正在更新，请稍后重试');
   }
   private requireIdle(id: string): void {
-    if (this.live.has(id) || this.starting.has(id)) throw new Error('请先停止终端，再编辑启动配置或删除');
+    if (this.live.has(id) || this.starting.has(id)||this.acp.active(id)) throw new Error('请先停止终端或断开 Agent，再编辑启动配置或删除');
     if (this.historyBusy.has(id)) throw new Error('会话正在读取对话记录，请稍后重试');
   }
   private removeLogs(runIds: string[]): void {
@@ -832,6 +859,7 @@ export class DaemonServer {
   }
   private async stop(sessionId: string): Promise<void> {
     this.store.session(sessionId);
+    if(this.acp.active(sessionId)){await this.acp.stop(sessionId);return;}
     const live = this.live.get(sessionId);
     if (!live || live.closed || live.stopping) return;
     live.stopping = true; this.store.stopping(live.run.id); this.changed();
@@ -877,6 +905,7 @@ export class DaemonServer {
       if (this.starting.size) throw new Error('远端连接尚未完成，请稍后再次退出；后台保留以便确认清理');
       if (this.recovering) await this.recovering;
       await this.resources.close();
+      await this.acp.close();
       await this.transfers.close();
       await this.git.close();
       const results = await Promise.allSettled([...this.live.keys()].map(sessionId => this.stop(sessionId)));
@@ -886,9 +915,10 @@ export class DaemonServer {
       const deadline = Date.now() + 5000;
       while (this.live.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
       if (this.live.size) throw new Error('部分终端尚未停止，请重试退出；后台已保留以便继续清理');
-    } catch (error) { this.closing = false; throw error; }
+    } catch (error) { this.closing = false;this.changed(); throw error; }
   }
   async close(): Promise<void> {
+    this.closing=true;await this.copies.close();
     if (this.nativeTimer) clearTimeout(this.nativeTimer);
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;

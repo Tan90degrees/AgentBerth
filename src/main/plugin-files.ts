@@ -7,6 +7,9 @@ export async function exportPluginKit(directory:string,resourceRoot:string):Prom
   try{
     await copyFile(path.join(resourceRoot,'docs','CORDIS_PLUGIN_DEVELOPMENT.md'),path.join(destination,'CORDIS_PLUGIN_DEVELOPMENT.md'));
     await cp(path.join(resourceRoot,'examples','cordis-agent'),path.join(destination,'cordis-agent'),{recursive:true});
+    await copyFile(path.join(resourceRoot,'docs','ACP_SUPERAGENT.md'),path.join(destination,'ACP_SUPERAGENT.md'));
+    await copyFile(path.join(resourceRoot,'docs','SUPERAGENT_SOURCE_DEVELOPMENT.md'),path.join(destination,'SUPERAGENT_SOURCE_DEVELOPMENT.md'));
+    await cp(path.join(resourceRoot,'examples','superagent-source-local'),path.join(destination,'superagent-source-local'),{recursive:true});
     return destination;
   }catch(error){await rm(destination,{recursive:true,force:true});throw error;}
 }
@@ -14,6 +17,7 @@ export async function exportPluginKit(directory:string,resourceRoot:string):Prom
 export function developmentPrompt(guide:string,folder?:string):string{
   return [
     '请为 AgentBerth 编写 Cordis 插件。只接受 agentberth.extension.json + index.cjs（打包 ZIP 或开发目录）。',
+    '也支持 ACP Agent：按指南注册 definition.acp，并与真实 Skills 目录一并声明。自定义 Superagent 信息源请先读取 SUPERAGENT_SOURCE_DEVELOPMENT.md 和 superagent-source-local，再查 ACP_SUPERAGENT.md 的完整契约；不内置 GitHub 或飞书信息源。',
     '所有 Agent（包括 Codex、Claude Code、OpenCode、自定义 Agent）均为同级插件，由 ctx.berth.agent({id,definition}) 注册；Skills 与启动、历史、恢复能力在同一插件声明。',
     '不要生成旧版 Agent JSON 配置、自描述单文件导入或独立 Agent 类型管理器，不做旧版兼容。',
     '先询问需要适配的 CLI、启动和恢复命令、原生历史能力及 Skill 的真实目录。不假设私有历史协议，不读取 TUI 屏幕伪造对话。',

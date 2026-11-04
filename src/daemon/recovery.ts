@@ -17,6 +17,6 @@ export function restartConfiguration(session: Session, projectPath: string, agen
 }
 export function shouldResume(session: Session, agent?: AgentDefinition): boolean {
   if (session.remote || session.agent === 'shell' || !session.nativeSessionId) return false;
-  if (['codex','claude','opencode'].includes(session.agent) || agent?.resumeCommand || agent?.plugin?.resume) return true;
+  if (['codex','claude','opencode'].includes(session.agent) || agent?.acp || agent?.resumeCommand || agent?.plugin?.resume) return true;
   throw new Error('已保留原生会话 ID，但此 Agent 未配置恢复命令；请更新插件后手动恢复，避免新建对话覆盖关联');
 }

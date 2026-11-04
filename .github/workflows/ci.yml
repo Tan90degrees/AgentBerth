@@ -120,6 +120,67 @@ jobs:
           name: screenshots-${{ runner.os }}
           path: test-results/*.png
           if-no-files-found: ignore
+  acp-check:
+    name: ACP and Superagent (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-dependencies
+      - name: Restore Linux CJK font
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/share/fonts/agentberth-ci
+          key: ${{ runner.os }}-agentberth-wqy-microhei-v1
+      - name: Refresh available Linux fonts
+        if: runner.os == 'Linux'
+        run: fc-cache -f
+        timeout-minutes: 1
+      - name: Cache isolated real ACP test CLI
+        id: opencode-cli
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/agentberth-opencode-test
+          key: opencode-acp-validation-v1-${{ runner.os }}-${{ runner.arch }}-1.19.5
+      - name: Install real ACP test CLI
+        if: steps.opencode-cli.outputs.cache-hit != 'true'
+        shell: bash
+        run: npm install --prefix "$RUNNER_TEMP/agentberth-opencode-test" --ignore-scripts --prefer-offline --no-audit --no-fund opencode-ai@1.19.5
+        timeout-minutes: 3
+      - name: Build ACP workbench
+        run: npm run typecheck && npm run build
+        timeout-minutes: 2
+      - name: Validate official OpenCode ACP without model calls
+        run: node scripts/test-opencode-acp.mjs
+        timeout-minutes: 2
+        env:
+          AGENTBERTH_OPENCODE_TEST_DIRECTORY: ${{ runner.temp }}/agentberth-opencode-test
+      - name: Validate ACP scripts and bidirectional sessions
+        run: node scripts/test.mjs tests/acp.test.ts
+        timeout-minutes: 2
+      - name: ACP and Superagent smoke (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a node scripts/smoke-acp.mjs
+          xvfb-run -a node scripts/smoke-isolated.mjs
+        timeout-minutes: 3
+      - name: ACP and Superagent smoke (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          node scripts/smoke-acp.mjs
+          node scripts/smoke-isolated.mjs
+        timeout-minutes: 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-acp-${{ runner.os }}
+          path: test-results/*.png
+          if-no-files-found: ignore
   windows-package:
     name: Windows x64 installer and ZIP
     runs-on: windows-latest
@@ -178,6 +239,13 @@ jobs:
         if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
         run: node scripts/smoke-extensions.mjs --packaged
         timeout-minutes: 2
+      - name: Test packaged ACP and Superagent
+        id: packaged-acp-smoke
+        if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
+        run: |
+          node scripts/smoke-acp.mjs --packaged
+          node scripts/smoke-isolated.mjs --packaged
+        timeout-minutes: 3
       - name: Test packaged legacy database startup and exit
         run: node scripts/smoke-startup-failure.mjs --packaged
         timeout-minutes: 2
@@ -189,6 +257,7 @@ jobs:
           PACKAGED_FILES_RESULT: ${{ steps.packaged-files-smoke.outcome }}
           PACKAGED_WORKTREES_RESULT: ${{ steps.packaged-worktrees-smoke.outcome }}
           PACKAGED_PET_RESULT: ${{ steps.packaged-pet-smoke.outcome }}
+          PACKAGED_ACP_RESULT: ${{ steps.packaged-acp-smoke.outcome }}
           PACKAGED_EXTENSIONS_RESULT: ${{ steps.packaged-extensions-smoke.outcome }}
           INSTALLER_SMOKE_RESULT: ${{ steps.installer-smoke.outcome }}
         run: |
@@ -200,8 +269,8 @@ jobs:
           }
           $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_WORKTREES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success' -and $env:PACKAGED_EXTENSIONS_RESULT -eq 'success') { 'success' } else { 'failure' }
-          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; worktrees = $env:PACKAGED_WORKTREES_RESULT; pet = $env:PACKAGED_PET_RESULT; extensions = $env:PACKAGED_EXTENSIONS_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
+          $packagedSmokeResult = if ($env:PACKAGED_WORKBENCH_RESULT -eq 'success' -and $env:PACKAGED_FILES_RESULT -eq 'success' -and $env:PACKAGED_WORKTREES_RESULT -eq 'success' -and $env:PACKAGED_PET_RESULT -eq 'success' -and $env:PACKAGED_EXTENSIONS_RESULT -eq 'success' -and $env:PACKAGED_ACP_RESULT -eq 'success') { 'success' } else { 'failure' }
+          @{ version = $version; commit = $env:GITHUB_SHA; ref = $env:GITHUB_REF_NAME; packagedSmoke = $packagedSmokeResult; packagedSuites = @{ workbench = $env:PACKAGED_WORKBENCH_RESULT; files = $env:PACKAGED_FILES_RESULT; worktrees = $env:PACKAGED_WORKTREES_RESULT; pet = $env:PACKAGED_PET_RESULT; extensions = $env:PACKAGED_EXTENSIONS_RESULT; acp = $env:PACKAGED_ACP_RESULT }; installerSmoke = $env:INSTALLER_SMOKE_RESULT; run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } |
             ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
@@ -236,7 +305,7 @@ jobs:
           if-no-files-found: ignore
   release:
     name: Publish verified release
-    needs: [check, windows-package]
+    needs: [check, acp-check, windows-package]
     if: github.repository == 'Tan90degrees/AgentBerth' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10

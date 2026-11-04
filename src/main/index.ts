@@ -279,7 +279,7 @@ function openPetMenu() {
     select: selectedSessionId => change({ selectedSessionId }), scale: scale => change({ scale }),
     alwaysOnTop: alwaysOnTop => change({ alwaysOnTop }), autoSwitch: autoSwitch => change({ autoSwitch }),
     open: () => showPetSession(), settings: () => petNavigate('berth:petSettings'),
-    copyGuide: () => clipboard.writeText(petGuide()), hide: () => change({ enabled: false }),
+    hide: () => change({ enabled: false }),
   })).popup({ window: petWindow });
 }
 ipcMain.handle('berth:pet', async (event, raw: unknown) => {
@@ -460,7 +460,7 @@ ipcMain.handle('berth:skills', async (event, input: unknown) => {
 });
 ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:transcript', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl', 'json'] }] }); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:executable', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: '终端程序', extensions: ['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:executable', async (event,kind?:unknown) => { trusted(event); if(kind!==undefined&&kind!=='acp')throw new Error('文件类型无效');const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: kind==='acp'?'ACP 程序或脚本':'终端程序', extensions: kind==='acp'?['exe','com','cmd','bat','ps1']:['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:copy', async (event, text: string) => { trusted(event); if (typeof text !== 'string' || text.length > MAX_CLIPBOARD_TEXT) throw new Error('复制内容过长或格式无效'); await clipboard.writeText(text); });
 ipcMain.handle('berth:clipboard', async event => { trusted(event); const text = await clipboard.readText(); if (text.length > MAX_PASTE_TEXT) throw new Error('剪贴板文字过长，请分段粘贴（每次最多 65536 个字符）'); return text; });
 ipcMain.handle('berth:external', async (event, url: string) => { trusted(event); await shell.openExternal(externalWebUrl(url)); });
@@ -496,9 +496,17 @@ ipcMain.handle('berth:exportPluginKit', async event => {
   const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { title: '选择插件开发目录的保存位置', properties: ['openDirectory', 'createDirectory'] });
   return result.canceled ? null : exportPluginKit(result.filePaths[0], resourceRoot);
 });
-ipcMain.handle('berth:pluginPrompt', async (event, folder?: string) => {
+ipcMain.handle('berth:pluginPrompt', async (event, folder?: string,topic?:unknown) => {
   trusted(event);
   if (folder !== undefined && (typeof folder !== 'string' || folder.length > 4096 || /[\r\n\x00]/.test(folder))) throw new Error('插件目录无效');
+  if(topic!==undefined&&topic!=='superagent-source')throw new Error('开发指南类型无效');
+  if(topic==='superagent-source')return [
+    '请按以下指南为 AgentBerth 开发 Superagent 信息源插件。先确认目标渠道、认证方式与授权用户，再实施；不要修改工作台核心或 Agent 配置。',
+    ...(folder?['开发套件目录：'+folder]:[]),
+    readFileSync(path.join(resourceRoot,'docs','SUPERAGENT_SOURCE_DEVELOPMENT.md'),'utf8'),
+    '以下是可直接加载的完整本地示例，不访问外部服务。将其复制为新插件后实现渠道接收与回传：',
+    ...['agentberth.extension.json','index.cjs'].map(name=>name+'\n```'+(name.endsWith('.json')?'json':'js')+'\n'+readFileSync(path.join(resourceRoot,'examples','superagent-source-local',name),'utf8')+'\n```'),
+  ].join('\n\n').replace(/\r\n?/g,'\n');
   return developmentPrompt(readFileSync(path.join(resourceRoot, 'docs', 'CORDIS_PLUGIN_DEVELOPMENT.md'), 'utf8'), folder);
 });
 

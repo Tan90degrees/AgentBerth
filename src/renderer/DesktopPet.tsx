@@ -121,7 +121,7 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
   const apply = async (change: Partial<PetPreferences>) => {
     setBusy(true); setError(''); try { await save(change); } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
-  return <section className="settings-card pet-settings"><h2>桌宠</h2><p>仅展示 Codex、Claude、OpenCode 和自定义 Agent 会话，普通终端与 SSH 不展示。按住桌宠图像拖动，右键图像打开会话与设置菜单。</p>
+  return <section className="settings-card pet-settings"><h2>桌宠</h2><p>展示 ACP、Superagent 任务以及 CLI Agent 会话，普通终端与 SSH 不展示。ACP 和 Superagent 直接同步状态，无需安装 hook。按住桌宠图像拖动，右键图像打开会话与设置菜单。</p>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.enabled} disabled={busy} onChange={event => void apply({ enabled: event.target.checked })} />显示桌宠</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.alwaysOnTop} disabled={busy} onChange={event => void apply({ alwaysOnTop: event.target.checked })} />保持在其他窗口上方</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.autoSwitch} disabled={busy} onChange={event => void apply({ autoSwitch: event.target.checked })} />等待处理或失败时，自动切换到对应会话</label>
@@ -140,7 +140,7 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const text = await window.berth.pet<string>({ action: 'hookGuide' }); setGuide(text); await window.berth.copyText(text); }}>复制给 Agent 自动配置</AsyncButton>
     <details className="pet-hook-guide"><summary>查看完整自动配置教程</summary><pre>{guide || '正在生成本机配置教程…'}</pre></details>
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const config = await window.berth.pet<string>({ action: 'hookConfig' }); await window.berth.copyText(config); }}>复制 Claude Code hook 配置</AsyncButton>
-    <p className="form-hint">未接入 hook 的 Agent 显示“状态待确认”。教程指导保留已有配置和 hook，不会把当前会话 ID 固定写入配置。</p>
+    <p className="form-hint">CLI Agent 需配置 hook 才能显示精确状态；ACP 与 Superagent 自动同步状态。</p>
     <h3>形象与动作</h3><p>内置完整角色动画，悬停或聚焦可预览动作。可为每种状态导入自己的 GIF；恢复默认只替换对应动作。</p>
     <div className="pet-animation-grid">{petStatuses.map(status => <div className="pet-animation" key={status}><PetImage preview status={status} custom={snapshot.images[status]} revision={String(snapshot.imageVersion) + revision} /><strong>{petLabels[status]}</strong><small>{snapshot.images[status] ?? '默认形象'}</small><div><AsyncButton className="subtle" onError={setError} onAction={async () => { const value = await window.berth.pet<PetSnapshot | null>({ action: 'importImage', status }); if (!value) return 'cancelled'; setSnapshot(value); setRevision(value => value + 1); }}>导入 GIF</AsyncButton><AsyncButton className="text-button" disabled={!snapshot.images[status]} onError={setError} onAction={async () => { setSnapshot(await window.berth.pet({ action: 'resetImage', status })); setRevision(value => value + 1); }}>恢复默认</AsyncButton></div></div>)}</div>
     <p className="form-hint">默认形象来自 dsh-pet（MIT），动作帧由 dsh-dafeiyu 提供。<AsyncButton className="text-button" onError={setError} onAction={() => window.berth.openExternal('https://github.com/PC2005-cloud/dsh-pet')}>素材来源</AsyncButton></p>

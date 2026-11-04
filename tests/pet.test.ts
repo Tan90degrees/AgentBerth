@@ -21,6 +21,15 @@ function fixture(t: import('node:test').TestContext) {
   return { folder, state, pet, a, b };
 }
 
+test('native ACP and Superagent activity needs no hooks, groups managed sessions and preserves manual selection',t=>{
+  const {state,pet,a,b}=fixture(t);
+  state.agentActivities=[{id:a.id,targetSessionId:a.id,title:a.title,projectId:'p',kind:'acp',status:'working',label:'执行中',updatedAt:1000,managedSessionIds:[]}];pet.update(state);assert.equal(pet.snapshot(99999999).sessions.find(value=>value.sessionId===a.id)?.status,'working');
+  const task={id:'activity:task',taskId:randomUUID(),pluginId:'superagent',targetSessionId:a.id,title:'Superagent · Task',projectId:'p',kind:'superagent' as const,status:'waiting' as const,label:'等待审核',updatedAt:2000,managedSessionIds:[a.id]};
+  state.agentActivities=[...state.agentActivities,task];pet.update(state);assert.ok(!pet.snapshot().sessions.some(value=>value.sessionId===a.id));assert.equal(pet.preferences.selectedSessionId,task.id);
+  pet.save({...pet.preferences,selectedSessionId:b.id});pet.update({...state});assert.equal(pet.preferences.selectedSessionId,b.id,'Existing waiting tasks must not steal a manual selection on every state event');
+  pet.connection(false);assert.equal(pet.snapshot().sessions.find(value=>value.sessionId===task.id)?.status,'unknown');
+});
+
 test('pet hooks isolate sessions/runs, highlight waiting and invalidate old launches', t => {
   const { pet, a, b, state } = fixture(t);
   const event = { sessionId: a.id, runId: a.latestRun!.id, status: 'working' as const };
@@ -184,7 +193,7 @@ test('pet size settings persist the full supported range and reject invalid dime
 
 test('image context menu exposes Agent operations, checked preferences and empty-state settings', t => {
   const { pet, a, b } = fixture(t), calls: unknown[] = [];
-  const actions: PetMenuActions = { select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), copyGuide: () => calls.push('copy'), hide: () => calls.push('hide') };
+  const actions: PetMenuActions = { select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), hide: () => calls.push('hide') };
   const items = petMenuTemplate(pet.snapshot(), actions);
   const choose = (label: string) => { const item = items.find(item => item.label === label)!; assert.ok(item); return item; };
   const sessions = choose('切换 Agent 会话').submenu as Electron.MenuItemConstructorOptions[];
@@ -195,8 +204,8 @@ test('image context menu exposes Agent operations, checked preferences and empty
   const scales = choose('桌宠大小').submenu as Electron.MenuItemConstructorOptions[];
   assert.equal(scales.find(item => item.label === '100%')?.checked, true);
   click(scales.find(item => item.label === '200%')!);
-  for (const label of ['保持置顶', '自动关注待处理会话', '打开当前会话', '桌宠设置…', '复制 hook 自动配置教程', '隐藏桌宠']) click(choose(label));
-  assert.deepEqual(calls, [b.id, 2, false, false, 'open', 'settings', 'copy', 'hide']);
+  for (const label of ['保持置顶', '自动关注待处理会话', '打开当前会话', '桌宠设置…', '隐藏桌宠']) click(choose(label));
+  assert.deepEqual(calls, [b.id, 2, false, false, 'open', 'settings', 'hide']);
   const empty = petMenuTemplate({ ...pet.snapshot(), sessions: [] }, actions);
   assert.equal(empty.find(item => item.label === '打开当前会话')?.enabled, false);
   assert.equal(empty.find(item => item.label === '切换 Agent 会话')?.enabled, false);

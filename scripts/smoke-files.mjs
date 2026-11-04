@@ -43,7 +43,7 @@ try {
   const preview = page.locator('.preview-document:not([hidden])'); page.setDefaultTimeout(12000);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') console.error(message.text()); });
-  await page.getByRole('button', { name: '添加第一个项目' }).waitFor();
+  await page.getByRole('button', { name: '添加第一个项目' }).waitFor({timeout:25000});
   const project = await page.evaluate(root => window.berth.rpc('createProject', { name: '文件工作台', path: root }), root);
   step('compact project heading keeps final glyphs visible and truncates long names with a tooltip');
   const projectTitle = page.locator('.project-header h1');

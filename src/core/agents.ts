@@ -14,6 +14,7 @@ export function mount(ctx:Context,server:DaemonServer){
         const { params } = request;
         const { agentId, ...config } = 'agentId' in params ? params : { ...params, agentId: undefined };
         const previous = agentId ? host.store.agent(agentId) : null;
+        if(agentId&&(previous?.acp||config.acp))for(const session of host.store.state().sessions)if(session.agent===agentId)host.requireIdle(session.id);
         if(previous?.sourceId?.startsWith('ext.'))throw new Error('此 Agent 由 Cordis 插件管理，请在设置 → 插件中修改');
         if(config.sourceId?.startsWith('ext.'))throw new Error('ext. 是 Cordis 插件保留的来源 ID');
         const version = agentId ? host.agentVersion(agentId) : 0;

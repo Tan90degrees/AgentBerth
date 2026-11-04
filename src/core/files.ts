@@ -8,17 +8,17 @@ export function mount(ctx:Context,server:DaemonServer){
  server.registerCoreRoutes(ctx,methods,async(request:Request,client:Client)=>{switch(request.method){
       case 'projectFiles': {
         const project = host.store.project(request.params.projectId);
-        const cwd = await host.git.resolveWorktree(project.path, request.params.worktreePath);
+        const cwd = await host.resolveWorkspace(project.id,project.path, request.params.worktreePath);
         return host.files.list(cwd, request.params.path, request.params.offset, request.params.limit);
       }
       case 'findProjectFiles': {
         const project = host.store.project(request.params.projectId);
-        const cwd = await host.git.resolveWorktree(project.path, request.params.worktreePath);
+        const cwd = await host.resolveWorkspace(project.id,project.path, request.params.worktreePath);
         return host.files.search(cwd, request.params.query);
       }
       case 'previewFile': {
         const project = host.store.project(request.params.projectId);
-        const cwd = await host.git.resolveWorktree(project.path, request.params.worktreePath);
+        const cwd = await host.resolveWorkspace(project.id,project.path, request.params.worktreePath);
         return host.files.preview(cwd, request.params.path);
       }
 

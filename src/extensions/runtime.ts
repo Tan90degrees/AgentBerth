@@ -7,7 +7,9 @@ import path from 'node:path';
 import { builtinExtensions, coreCapabilities } from './builtins';
 import { commitPackage, packagePath, readManifest, stagePackage } from './packages';
 import { extensionManifestSchema, resolveExtensionConfig, type ExtensionConfig, type ExtensionInfo, type ExtensionManifest, type ExtensionSnapshot } from '../shared/extensions';
-import { agentDefinitionSchema } from '../shared/protocol';
+import { agentDefinitionSchema,managedSessionsSchema,type ManagedSessions } from '../shared/protocol';
+import {agentActivitySchema,type AgentActivity} from '../shared/pet';
+import {createHash} from 'node:crypto';
 import type { WorkbenchPlugin, WorkbenchPluginApi, ExtensionCommand, AgentContribution } from './sdk';
 
 interface RecordEntry {manifest:ExtensionManifest;installed:boolean;enabled:boolean;config:ExtensionConfig;root?:string;development?:boolean;agentContribution?:boolean}
@@ -18,7 +20,9 @@ export interface ExtensionHost {
   call(method:string,params:Record<string,unknown>):Promise<unknown>;
   agentsChanged(contributions:{pluginId:string;agent:AgentContribution}[]):void;
   validateAgent?(pluginId:string,agent:AgentContribution):void;
+  manageSessions?(pluginId:string,value:ManagedSessions):void;
   changed():void;
+  builtinView?(id:string,view:string):string|undefined;
 }
 export class ExtensionRuntime {
   readonly context=new Context();
@@ -27,6 +31,8 @@ export class ExtensionRuntime {
   private watchers=new Map<string,FSWatcher>();private timers=new Map<string,NodeJS.Timeout>();private generations=new Map<string,number>();private revision=0;private chain:Promise<unknown>=Promise.resolve();private closed=false;
   private ajv=new Ajv({strict:true,allErrors:true,addUsedSchema:false});
   readonly ready:Promise<void>;
+  private activityEntries=new Map<string,AgentActivity>();
+  activities(){return [...this.activityEntries.values()];}
   constructor(readonly directory:string,private host:ExtensionHost){for(const id of coreCapabilities)this.context.provide('extension_'+id.replaceAll(/[.-]/g,'_'),{});this.ready=this.initialize();}
   private async initialize(){
     await mkdir(this.directory,{recursive:true});
@@ -60,9 +66,14 @@ export class ExtensionRuntime {
       const plugin:Plugin={name:id,inject:record.manifest.dependencies.map(dep=>'extension_'+dep.replaceAll(/[.-]/g,'_')),apply:async(ctx:Context)=>{
         const dataDirectory=path.join(this.directory,'data',id);await mkdir(dataDirectory,{recursive:true});
         const abort=new AbortController();ctx.effect(()=>()=>abort.abort());
+        ctx.effect(()=>()=>{let removed=false;for(const [key,value]of this.activityEntries)if(value.pluginId===id){this.activityEntries.delete(key);removed=true;}if(removed)this.host.changed();});
         const api:WorkbenchPluginApi={id,dataDirectory,signal:abort.signal,
           command:(description,execute)=>{if(!/^[a-z][a-z0-9_]{0,63}$/.test(description.name)||commands.has(description.name))throw new Error('插件命令名无效或重复');if((description.inputSchema.properties as Record<string,unknown>|undefined)?.agentId)throw new Error('agentId 是 MCP 的调用方标识，请改用其他参数名');if(description.inputSchema.type!=='object')throw new Error('插件命令 inputSchema 须为 object');const validate=this.ajv.compile(description.inputSchema);ctx.effect(()=>{commands.set(description.name,{description,execute,validate});return()=>{commands.delete(description.name);};});},
           agent:agent=>{if(!/^[a-z][a-z0-9.-]{0,63}$/.test(agent.id)||agents.has(agent.id))throw new Error('Agent 接入 ID 无效或重复');agent={...agent,definition:agentDefinitionSchema.parse(agent.definition)};if([...agents.values()].some(value=>value.definition.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('同一插件的 Agent 名称不能重复');this.host.validateAgent?.(id,agent);ctx.effect(()=>{agents.set(agent.id,agent);return()=>{agents.delete(agent.id);};});},
+          source:contribution=>{const service=this.context.superagentSources;if(!service||!record.manifest.dependencies.includes(service.id))throw new Error('信息源插件须在 dependencies 中声明已启用的 Superagent 插件');const handle=service.register(id,contribution,abort.signal);ctx.effect(()=>handle.dispose);return {emit:event=>{this.require(id);return handle.emit(event);},health:handle.health};},
+          manageSessions:input=>{if(abort.signal.aborted)throw new Error('插件已停止');if(!this.host.manageSessions)throw new Error('宿主不支持任务会话隔离，请更新后台');this.host.manageSessions(id,managedSessionsSchema.parse(input));},
+          activity:input=>{if(abort.signal.aborted)return;const {pluginId:_,taskId:__,...raw}=input,value=agentActivitySchema.parse(raw),key='activity:'+createHash('sha256').update(id+'/'+value.id).digest('hex').slice(0,32);if(!this.activityEntries.has(key)&&[...this.activityEntries.values()].filter(value=>value.pluginId===id).length>=200){const oldest=[...this.activityEntries].filter(([,value])=>value.pluginId===id&&['completed','idle'].includes(value.status)).sort((a,b)=>a[1].updatedAt-b[1].updatedAt)[0];if(oldest)this.activityEntries.delete(oldest[0]);else throw new Error('插件状态最多保留 200 项');}this.activityEntries.set(key,{...value,id:key,taskId:value.id,pluginId:id});this.host.changed();},
+          removeActivity:taskId=>{if(typeof taskId!=='string'||!taskId||taskId.length>100)throw new Error('任务状态 ID 无效');const key='activity:'+createHash('sha256').update(id+'/'+taskId).digest('hex').slice(0,32);if(this.activityEntries.delete(key))this.host.changed();},
           effect:setup=>{ctx.effect(async()=>{const dispose=await setup();return dispose??(()=>{});});},
           interval:(callback,milliseconds)=>{if(milliseconds<100||!Number.isFinite(milliseconds))throw new Error('定时器间隔至少 100 ms');ctx.effect(()=>{const timer=setInterval(()=>{try{callback();}catch(error){this.notices.set(id,'定时任务失败：'+String(error));this.publish();}},milliseconds);return()=>clearInterval(timer);});},
           call:(method,params={})=>this.host.call(method,params),
@@ -146,7 +157,7 @@ export class ExtensionRuntime {
   });}
   private assertIdle(ids:string[]){if(ids.some(id=>(this.mounted.get(id)?.pending??0)>0))throw new Error('插件仍有命令正在执行，完成后可重新配置、停用或卸载');}
   async call(id:string,name:string,params:Record<string,unknown>){await this.ready;this.require(id);const mounted=this.mounted.get(id)!,command=mounted.commands.get(name);if(!command)throw new Error('插件命令不存在');if(!command.validate(params))throw new Error('插件参数无效：'+this.ajv.errorsText(command.validate.errors));mounted.pending++;try{const value=await command.execute(params);if(Buffer.byteLength(JSON.stringify(value??null))>128*1024)throw new Error('插件结果超过 128 KiB，请返回摘要或分页');return value;}finally{mounted.pending--;}}
-  async view(id:string,viewId:string){await this.ready;this.require(id);const record=this.records.get(id)!,view=record.manifest.views.find(v=>v.id===viewId);if(!record.root||!view)throw new Error('插件视图不存在');const file=packagePath(record.root,view.entry);if(!(await realpath(file)).startsWith(await realpath(record.root)+path.sep))throw new Error('视图不能引用包外文件');const text=await readFile(file,'utf8');if(Buffer.byteLength(text)>2*1024*1024)throw new Error('插件视图超过 2 MiB');return text;}
+  async view(id:string,viewId:string){await this.ready;this.require(id);const record=this.records.get(id)!,view=record.manifest.views.find(v=>v.id===viewId);if(!view)throw new Error('插件视图不存在');if(!record.root){const text=this.host.builtinView?.(id,viewId);if(text===undefined)throw new Error('插件视图不存在');return text;}const file=packagePath(record.root,view.entry);if(!(await realpath(file)).startsWith(await realpath(record.root)+path.sep))throw new Error('视图不能引用包外文件');const text=await readFile(file,'utf8');if(Buffer.byteLength(text)>2*1024*1024)throw new Error('插件视图超过 2 MiB');return text;}
   private installWatchers(){for(const watcher of this.watchers.values())watcher.close();this.watchers.clear();for(const [id,record] of this.records)if(record.root&&record.development&&record.installed&&record.enabled){try{const watcher=watch(record.root,{recursive:true},()=>{clearTimeout(this.timers.get(id));this.timers.set(id,setTimeout(()=>{this.timers.delete(id);void this.change('reload',id).catch(error=>{this.notices.set(id,String(error));this.publish();});},350));});watcher.on('error',()=>{this.notices.set(id,'开发目录监听失效，请重新加载');this.publish();});this.watchers.set(id,watcher);}catch{this.notices.set(id,'无法监听开发目录，请使用重新加载');}}}
   async close(){this.closed=true;await this.ready;for(const timer of this.timers.values())clearTimeout(timer);for(const watcher of this.watchers.values())watcher.close();await this.chain.catch(()=>{});await this.dispose([...this.mounted.keys()]);}
 }

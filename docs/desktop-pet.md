@@ -92,3 +92,10 @@ hook 接口仅监听本机回环地址，随机端口，鉴权信息在当前数
 角色与动画来自 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的 MIT 授权素材；透明帧来自 [QCYTSN/dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu)，固定版本见 assets/pet/source.json。两份 MIT 许可证随软件安装。动作、原始视频校验值和离线输出校验值保存在 src/renderer/pet-assets/provenance.json；安装后无需下载素材，也不需要 Python。
 
 有 Pillow 12.0.0 的开发环境可运行 `python scripts/build-pet-assets.py` 重建，或加 `--check` 离线校验。完成与失败动作完整播放一次；循环动作保留原片段，不用静态图缩放代替动作。
+
+
+## ACP 与 Superagent 的原生状态
+
+ACP 会话和 Superagent 任务直接由后台状态驱动，无需 hook。只有 CLI 接入继续需要现有 hook 适配。桌宠不包含普通 Shell 和 SSH。
+
+Superagent 以任务为单位显示，隐藏该任务内部重复的协调、执行会话；在桌宠右键切换任务后，可直接打开对应任务。原生状态不会套用 CLI hook 的十分钟未上报超时，长任务会持续显示执行中；后台断开显示未知。插件停用、卸载或重载时，旧任务状态注册随 Cordis 生命周期清理。
