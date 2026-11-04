@@ -2667,3 +2667,15 @@ textarea:focus-visible {
 @media(max-width:1100px){.workbench-header{padding:0 10px;gap:8px}.workbench-header .topbar-status{gap:5px}.workbench-header .resource-usage{font-size:9px;gap:3px}}
 
 .workbench-page-title{font-size:13px;line-height:24px;color:var(--text-secondary)}
+
+.project-item[draggable=true],.session-item[draggable=true]{cursor:grab}
+.project-item[draggable=true]:active,.session-item[draggable=true]:active{cursor:grabbing}
+.project-row,.session-row{position:relative}
+.project-row[data-drop-edge]::after,.session-row[data-drop-edge]::after{content:'';position:absolute;left:2px;right:2px;height:2px;background:var(--focus);border-radius:2px;pointer-events:none;z-index:2}
+[data-drop-edge=before]::after{top:0}[data-drop-edge=after]::after{bottom:0}
+.extension-active .workbench-header{height:34px;min-height:34px}
+.extension-active .workbench-header .ssh-toggle{height:26px;min-height:26px;padding:3px 8px;font-size:11px;line-height:18px}
+.extension-active .extension-page{padding:0}
+.plugin-web-toolbar{padding:4px 10px;gap:6px;min-height:34px}
+.plugin-web-actions{margin-left:0;gap:4px}
+.plugin-web-toolbar button{height:26px;min-height:26px;padding:3px 8px;font-size:11px;line-height:18px}

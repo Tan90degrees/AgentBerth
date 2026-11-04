@@ -46,6 +46,32 @@ try{
   await page.getByRole('button',{name:'全部折叠',exact:true}).click();assert.equal(await treeSearch.inputValue(),'Other');assert.equal(await page.locator('.project-toggle[aria-expanded=true]').count(),0);
   await page.getByRole('button',{name:'全部展开',exact:true}).click();assert.equal(await treeSearch.inputValue(),'Other');await treeSearch.fill('');
   await page.locator(`.session-row[data-session-id="${session.id}"]`).waitFor();
+  // Native drag ordering preserves selection, process identity and hidden siblings.
+  const orderA=await rpc('createSession',{projectId:project.id,title:'Order A',agent:'shell'}),orderB=await rpc('createSession',{projectId:project.id,title:'Order B',agent:'shell'});
+  const projectRow=id=>page.locator(`.project-branch[data-project-id="${id}"]>.project-row`),sessionRow=id=>page.locator(`.session-row[data-session-id="${id}"]`);
+  const projectOrder=()=>page.locator('.project-branch').evaluateAll(nodes=>nodes.map(node=>node.dataset.projectId));
+  const sessionOrder=()=>page.locator(`.project-branch[data-project-id="${project.id}"] .session-row`).evaluateAll(nodes=>nodes.map(node=>node.dataset.sessionId));
+  async function dragEntry(source,target,edge){const box=await target.boundingBox();assert.ok(box);await source.dragTo(target,{targetPosition:{x:Math.min(90,box.width-4),y:edge==='before'?2:box.height-2}});}
+  await sessionRow(orderB.id).waitFor();
+  await dragEntry(projectRow(other.id).locator('.project-item'),projectRow(project.id),'after');await until(async()=>JSON.stringify(await projectOrder())===JSON.stringify([project.id,other.id]));
+  await dragEntry(sessionRow(session.id).locator('.session-item'),sessionRow(orderB.id),'before');await until(async()=>(await sessionOrder())[0]===session.id);
+  await dragEntry(sessionRow(orderB.id).locator('.session-item'),sessionRow(orderA.id),'after');await until(async()=>JSON.stringify(await sessionOrder())===JSON.stringify([session.id,orderA.id,orderB.id]));
+  assert.equal(await page.locator('.workbench-header').getAttribute('data-session-id'),session.id,'Dragging must not select another session');
+  await treeSearch.fill('Order');await sessionRow(session.id).waitFor({state:'hidden'});
+  await dragEntry(sessionRow(orderB.id).locator('.session-item'),sessionRow(orderA.id),'before');await until(async()=>JSON.stringify(await sessionOrder())===JSON.stringify([orderB.id,orderA.id]));
+  await treeSearch.fill('');await until(async()=>JSON.stringify(await sessionOrder())===JSON.stringify([session.id,orderB.id,orderA.id]));
+  await sessionRow(orderB.id).locator('.session-item').focus();await page.keyboard.press('Alt+ArrowDown');await until(async()=>JSON.stringify(await sessionOrder())===JSON.stringify([session.id,orderA.id,orderB.id]));
+  // Updating the backend's default updatedAt ordering cannot reset the manual order.
+  await rpc('updateSession',{sessionId:orderB.id,title:'Order B renamed',agent:'shell'});await sessionRow(orderB.id).getByText('Order B renamed',{exact:true}).waitFor();assert.deepEqual(await sessionOrder(),[session.id,orderA.id,orderB.id]);
+  const foreign=await rpc('state').then(state=>state.sessions.find(value=>value.projectId===other.id));
+  await dragEntry(sessionRow(orderA.id).locator('.session-item'),sessionRow(foreign.id),'before');assert.deepEqual(await sessionOrder(),[session.id,orderA.id,orderB.id]);assert.equal((await rpc('state')).sessions.find(value=>value.id===orderA.id).projectId,project.id);
+  // Project keyboard moves and reload retain both order and the same running service.
+  await projectRow(other.id).locator('.project-item').focus();await page.keyboard.press('Alt+ArrowUp');await until(async()=>JSON.stringify(await projectOrder())===JSON.stringify([other.id,project.id]));
+  await until(()=>page.evaluate(({project,other,session,a,b})=>{const saved=JSON.parse(localStorage.getItem('berth.sidebarOrder')||'{}');return JSON.stringify(saved.projects)===JSON.stringify([other,project])&&JSON.stringify(saved.sessions?.[project])===JSON.stringify([session,a,b]);},{project:project.id,other:other.id,session:session.id,a:orderA.id,b:orderB.id}));
+  await page.reload();await sessionRow(session.id).waitFor();assert.deepEqual(await projectOrder(),[other.id,project.id]);assert.deepEqual(await sessionOrder(),[session.id,orderA.id,orderB.id]);assert.equal(await page.locator('.workbench-header').getAttribute('data-session-id'),session.id);
+  const afterOrdering=(await rpc('state')).sessions.find(value=>value.id===session.id).latestRun;assert.equal(afterOrdering.id,stable.id);assert.equal(afterOrdering.pid,stable.pid);assert.equal((await readFile(counter,'utf8')).trim().split('\n').length,2);
+  const chips=await page.locator('.sidebar-tabs').boundingBox(),sidebar=await page.locator('.sidebar').boundingBox();assert.ok(chips.width<sidebar.width-30,'Sidebar navigation must size to content');
+  await page.screenshot({path:'test-results/sidebar-reorder-dark.png'});
   const beforePlugins=await page.locator('.sidebar-panel:visible').boundingBox(),pluginRoot=path.join(folder,'layout-extension');await mkdir(pluginRoot);
   await writeFile(path.join(pluginRoot,'agentberth.extension.json'),JSON.stringify({apiVersion:1,id:'layout.smoke',name:'Layout extension',version:'1.0.0',entry:'index.cjs',views:Array.from({length:16},(_,i)=>({id:'view'+i,title:'Layout view '+i,location:'sidebar',entry:'view.html'}))}));
   await writeFile(path.join(pluginRoot,'index.cjs'),'exports.apply=()=>{};');await writeFile(path.join(pluginRoot,'view.html'),'<h2>Layout extension</h2>');
@@ -63,6 +89,8 @@ try{
   assert.equal(await page.getByLabel('终端模式',{exact:true}).inputValue(),'service');assert.equal(await page.getByLabel('启动命令',{exact:true}).inputValue(),command);await page.getByRole('button',{name:'取消',exact:true}).click();
   // Fresh plugins display effective defaults, without creating a dirty draft.
   await openExtensionView(page,'DeepSeek Harness');
+  assert.ok((await page.locator('.workbench-header').boundingBox()).height<=34);assert.ok((await page.locator('.plugin-web-toolbar').boundingBox()).height<=36);assert.equal(await page.locator('.extension-page').evaluate(node=>getComputedStyle(node).padding),'0px');
+  const extensionHeader=await page.locator('.workbench-header').boundingBox(),sshButton=await page.locator('.workbench-header .ssh-toggle').boundingBox();assert.ok(sshButton.y>=extensionHeader.y&&sshButton.y+sshButton.height<=extensionHeader.y+extensionHeader.height,'Compact header controls must fit without clipping');
   await page.locator('.plugin-web-actions').getByRole('button',{name:'设置',exact:true}).click();
   const harnessSettings=page.getByRole('dialog',{name:'配置插件 · DeepSeek Harness',exact:true});await harnessSettings.waitFor();
   const executable=harnessSettings.getByLabel('DeepSeek Harness 启动程序',{exact:true}),arguments_=harnessSettings.getByLabel('DeepSeek Harness 启动参数',{exact:true});
