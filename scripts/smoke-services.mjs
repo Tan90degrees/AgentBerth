@@ -50,8 +50,12 @@ try{
   await page.screenshot({path:'test-results/harness-native-web-dark.png'});
   await nativePage.screenshot({path:'test-results/harness-original-frontend.png'});
   // Resize and native authentication must not cause a second service launch.
-  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.getTitle()==='AgentBerth · 泊栈')?.setSize(1200,820));
-  await until(async()=>(await native())?.bounds.width<original.bounds.width);
+  await app.evaluate(({BrowserWindow})=>{const target=BrowserWindow.getAllWindows().find(w=>w.getTitle()==='AgentBerth · 泊栈');if(!target)throw new Error('Workbench window missing');const [width]=target.getSize();target.setSize(width>1100?1000:1200,820);});
+  await until(async()=>Math.abs(((await native())?.bounds.width??original.bounds.width)-original.bounds.width)>10);
+  const resized=await native(),hostBounds=await page.locator('.plugin-web-host').boundingBox();
+  const zoom=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.getTitle()==='AgentBerth · 泊栈').webContents.getZoomFactor());
+  assert.ok(Math.abs(resized.bounds.width-hostBounds.width*zoom)<=1,'Native browser width must follow its host after resize');
+  assert.ok(Math.abs(resized.bounds.x-hostBounds.x*zoom)<=1,'Native browser position must follow its host after resize');
   // Open a workbench modal while the native browser is active: it must hide.
   await page.locator('.plugin-web-toolbar').click({position:{x:5,y:5}});await page.keyboard.press('Control+Shift+p');await page.getByRole('dialog').waitFor();await until(async()=>(await native())?.visible===false);await page.keyboard.press('Escape');await until(async()=>(await native())?.visible===true);
   await page.locator('.sidebar-settings button[aria-label="设置"]').focus();await page.locator('.sidebar-settings button[aria-label="设置"]').press('Enter');await until(async()=>(await native())?.visible===false);
