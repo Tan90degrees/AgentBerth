@@ -28,7 +28,7 @@ for(const keptFile of [null,'runtime.json','daemon.lock'])test(`lost shutdown re
   assert.equal(existsSync(runtimeFile),keptFile==='runtime.json');assert.equal(existsSync(lock),keptFile==='daemon.lock');
 });
 
-for(const trackedActivity of [false,true])test('daemon completes the WebSocket close handshake after delivering its shutdown reply'+(trackedActivity?' with plugin task activity':''), {timeout:5000}, async t => {
+for(const trackedActivity of [false,true])test('daemon completes the WebSocket close handshake after delivering its shutdown reply'+(trackedActivity?' with plugin task activity':''), {timeout:15000}, async t => {
   const folder=mkdtempSync(path.join(os.tmpdir(),'berth-quit-close-'));
   let closing:Promise<void>|undefined;
   const server=new DaemonServer(folder,()=>{closing=server.close();});
@@ -45,8 +45,11 @@ for(const trackedActivity of [false,true])test('daemon completes the WebSocket c
   const events:unknown[]=[];
   socket.on('message',data=>events.push(JSON.parse(data.toString())));
   const closed=new Promise<number>(resolve=>socket.once('close',code=>resolve(code)));
+  // Budget plugin startup separately from the shutdown protocol itself.
   const id=randomUUID();socket.send(JSON.stringify({id,method:'shutdown',params:{}}));
-  assert.equal(await closed,1000,'The final reply must use a graceful close, not a reset');
+  let timer:NodeJS.Timeout|undefined;
+  try{assert.equal(await Promise.race([closed,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Shutdown reply and close handshake exceeded 3 seconds')),3000);})]),1000,'The final reply must use a graceful close, not a reset');}
+  finally{clearTimeout(timer);}
   assert.deepEqual(events.at(-1),{id,result:null});
   await closing;
 });
