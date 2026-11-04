@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopApi, ServerEvent, SshWindowState } from '../shared/protocol';
 
 const api: DesktopApi = {
+  pluginBrowser:request=>ipcRenderer.invoke('berth:pluginBrowser',request),
   extensions:request=>ipcRenderer.invoke('berth:extensions',request),
   installExtension:development=>ipcRenderer.invoke('berth:installExtension',development),
   pet: request => ipcRenderer.invoke('berth:pet', request),

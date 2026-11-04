@@ -1,3 +1,6 @@
+import { mountHarness } from '../plugins/deepseek-harness';
+import { harnessGuide } from '../plugins/deepseek-harness/guide';
+import { serviceShell } from './paths';
 import { randomUUID } from 'node:crypto';
 import { openCodeLaunch } from './opencode-launch';
 import { SshTerminal } from './ssh-terminal';
@@ -109,7 +112,7 @@ export class DaemonServer {
     this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
-      builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:undefined,
+      builtinView:(id,view)=>id==='deepseek-harness'&&view==='guide'?harnessGuide:id==='superagent'&&view==='tasks'?superagentView:undefined,
       beforeChange:async ids=>{
         const sessions=this.store.state().sessions;
         for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)||this.acp.active(session.id)){
@@ -229,6 +232,7 @@ export class DaemonServer {
       requireProjectAvailable:self.requireProjectAvailable.bind(self),
       restoreWorkspace:self.restoreWorkspace.bind(self),
       start:self.start.bind(self),
+      serviceAction:self.serviceAction.bind(self),
       stop:self.stop.bind(self),
       get store(){return self.store;},
       terminal:self.terminal.bind(self),
@@ -329,6 +333,7 @@ export class DaemonServer {
   acpCorePort(){return {acp:this.acp,store:this.store,ensureStarted:(id:string)=>this.startingRuns.get(id)??(this.acp.active(id)?Promise.resolve():this.start(id,true,100,30))};}
   registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
+    if(id==='deepseek-harness'){mountHarness(ctx,_config);return;}
     if(id==='superagent'){mountSuperagent(ctx,_config as Record<string,string|number|boolean>);return;}
     const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
       'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'},plugin:null}},
@@ -685,7 +690,7 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
+      } else child = this.spawnPty(selected.file, session.service ? serviceShell(selected.file,selected.args,command).args : selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
     }
     catch (error) {
       terminal.dispose();
@@ -736,7 +741,7 @@ export class DaemonServer {
         this.live.delete(sessionId); terminal.dispose();
         this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
       }
-    } else if (command) child.write(`${command}\r`);
+    } else if (command && !session.service) child.write(`${command}\r`);
     connectedRun = true;
     if (startupExit !== null) await this.finish(sessionId, live, startupExit);
     this.changed();
@@ -857,6 +862,20 @@ export class DaemonServer {
     });
     return live.finishing;
   }
+  private serviceOperations=new Map<string,Promise<unknown>>();
+  private serviceAction(sessionId:string,action:'start'|'stop'|'restart',cols:number,rows:number):Promise<unknown>{
+    const session=this.store.session(sessionId);if(!session.service)throw new Error('此会话不是服务');
+    if(this.serviceOperations.has(sessionId))throw new Error('服务操作正在进行');
+    const operation=(async()=>{
+      const pending=this.startingRuns.get(sessionId);if(pending)await pending.catch(()=>{});
+      if(action!=='start')await this.stop(sessionId);
+      if(action==='stop')return null;
+      const previous=this.live.get(sessionId);if(previous?.finishing)await previous.finishing;
+      if(this.live.has(sessionId)){if(action==='start')return this.live.get(sessionId)!.run;throw new Error('服务尚未停止，请稍后重试');}
+      return this.start(sessionId,false,cols,rows);
+    })().finally(()=>this.serviceOperations.delete(sessionId));
+    this.serviceOperations.set(sessionId,operation);return operation;
+  }
   private async stop(sessionId: string): Promise<void> {
     this.store.session(sessionId);
     if(this.acp.active(sessionId)){await this.acp.stop(sessionId);return;}
@@ -871,7 +890,7 @@ export class DaemonServer {
         // Tree termination includes an actual PID-exit check. ConPTY may not
         // deliver onExit when stopped before its first output; do not leave a
         // confirmed-dead process in "stopping" waiting for that notification.
-        if (process.platform === 'win32') await this.finish(sessionId, live, null);
+        await this.finish(sessionId, live, null);
       }
       // Remote stop emits exit synchronously; await the queued screen flush
       // and durable status update before acknowledging that stop completed.

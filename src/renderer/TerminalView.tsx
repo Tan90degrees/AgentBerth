@@ -58,7 +58,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
     const element = document.activeElement;
     if (inputEnabled && mayFocus.current && host.current?.clientWidth && (!element || element === document.body || host.current.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
   }, [inputEnabled]);
-  const { bind, setReady, controls } = useTerminalActions(onError, false, !!windowsPty, inputEnabled);
+  const { bind, setReady, controls } = useTerminalActions(onError, !inputEnabled, !!windowsPty, inputEnabled);
   useEffect(() => {
     const terminal = new Terminal({ ...options, disableStdin: !allowedInput.current, theme: palette.current, fontSize, windowsPty });
     instance.current=terminal;
@@ -87,7 +87,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
       if (event.event === 'state' && runId) {
         const latest = event.data.sessions.find(session => session.id === sessionId)?.latestRun;
         running = latest?.id === runId && latest.status === 'running';
-        setReady(ready && running);
+        setReady(ready && (running || !allowedInput.current));
       }
       if ((event.event !== 'output' && event.event !== 'resize') || event.data.sessionId !== sessionId) return;
       if (!ready) {
@@ -153,7 +153,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
       terminal.write(attachment.snapshot, () => {
         if (disposed) return;
         ready = true;
-        setReady(running);
+        setReady(running || !allowedInput.current);
         for (const event of pending) apply(event);
         pending = []; pendingBytes = 0;
         if (!attachment.run) terminal.writeln('\x1b[2m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');

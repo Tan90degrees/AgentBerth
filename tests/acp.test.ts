@@ -52,7 +52,7 @@ test('ACP client terminal methods return complete command output and release own
 });
 test('ACP authentication and a provider without loadSession are negotiated honestly',async t=>{
   const f=await fixture(t,['--auth','--no-load']);await f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30});assert.equal((await f.snapshot()).phase,'error');await f.connection.rpc('acpAuthenticate',{sessionId:f.session.id,methodId:'login'});assert.equal((await f.snapshot()).phase,'ready');
-  const first=(await f.snapshot()).nativeSessionId;await f.connection.rpc('stop',{sessionId:f.session.id});await f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30});await f.connection.rpc('acpAuthenticate',{sessionId:f.session.id,methodId:'login'});assert.notEqual((await f.snapshot()).nativeSessionId,first);assert.ok((await f.snapshot()).events.some(event=>event.text.includes('未声明 session/load')));
+  const first=(await f.snapshot()).nativeSessionId;await f.connection.rpc('stop',{sessionId:f.session.id});await f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30});await f.connection.rpc('acpAuthenticate',{sessionId:f.session.id,methodId:'login'});assert.notEqual((await f.snapshot()).nativeSessionId,first);assert.ok((await f.snapshot()).events.some(event=>event.text.includes('未声明会话恢复能力')));
 });
 test('ACP disconnect preserves partial output, marks unknown turns and never automatically resubmits them',async t=>{
   const f=await fixture(t),requestId=randomUUID();await f.send('disconnect',requestId);await until(f.snapshot,value=>value.phase==='disconnected');const output=await f.snapshot();assert.ok(output.events.some(event=>event.text.includes('partial before disconnect')));
@@ -145,8 +145,35 @@ test('terminal display output survives release and disconnect and cannot be read
   const other=await f.connection.rpc<Session>('createSession',{projectId:f.project.id,title:'Other',agent:f.agent.id});await assert.rejects(f.connection.rpc('acpTerminal',{sessionId:other.id,terminalId}),/不属于|保留范围/);
 });
 
-for(const previousApi of [44,45,46,47,48,49])test(`a compatible API ${previousApi} backend remains attachable without stopping a running ACP session`,async t=>{
+for(const previousApi of [44,45,46,47,48,49,50])test(`a compatible API ${previousApi} backend remains attachable without stopping a running ACP session`,async t=>{
   const f=await fixture(t);await f.send('long');await until(f.snapshot,value=>value.phase==='running');
   const store=f.server.agentsCorePort().store,original=store.state.bind(store);store.state=()=>({...original(),apiVersion:previousApi});
   const connection=await connectDaemon(f.data,'must-not-launch-another-daemon','must-not-launch',()=>{});try{assert.equal((await connection.rpc<State>('state')).apiVersion,previousApi);assert.equal((await f.snapshot()).phase,'running');}finally{connection.close();store.state=original;}
+});
+
+
+test('ACP uses declared session/resume and close, retaining its journal without replay',async t=>{
+  const f=await fixture(t,['--resume']);await f.send('hello');const first=await until(f.snapshot,value=>value.phase==='ready');
+  await f.connection.rpc('stop',{sessionId:f.session.id});const count=(await f.snapshot()).events.length;
+  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,startupTimeoutMs:10000},resumeCommand:'',plugin:null});
+  await f.connection.rpc('start',{sessionId:f.session.id,resume:true,cols:100,rows:30});
+  const next=await f.snapshot();assert.equal(next.nativeSessionId,first.nativeSessionId);assert.equal(next.events.length,count);
+  const calls=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(calls.filter(c=>c.method==='resume').length,1);assert.equal(calls.filter(c=>c.method==='load').length,0);assert.equal(calls.filter(c=>c.method==='close').length,1);
+});
+test('ACP startup timeout includes launch diagnostics and never retries or creates a session',async t=>{
+  const f=await fixture(t,['--never-init']);
+  await f.connection.rpc('updateAgent',{agentId:f.agent.id,name:f.agent.name,command:f.agent.command,acp:{...f.agent.acp,startupTimeoutMs:5000},resumeCommand:'',plugin:null});
+  await assert.rejects(f.connection.rpc('start',{sessionId:f.session.id,resume:false,cols:100,rows:30}),error=>{
+    assert.match(String(error),/initialize.*5 秒/);assert.match(String(error),/FIXTURE_BOOTSTRAP_WAIT/);return true;
+  });
+  const state=await f.snapshot();assert.equal(state.phase,'disconnected');assert.match(state.error??'',/initialize/);assert.equal(state.nativeSessionId,null);assert.equal(f.server.acpCorePort().acp.live.size,0);
+});
+
+
+test('an ACP connection can be cancelled during initialization without submitting a prompt or retaining its process',async t=>{
+  const f=await fixture(t,['--never-init']);const started=f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30}).catch(error=>error);
+  await until(f.snapshot,value=>value.phase==='connecting');
+  await f.connection.rpc('stop',{sessionId:f.session.id});await started;
+  assert.equal(f.server.acpCorePort().acp.live.size,0);const state=await f.snapshot();assert.equal(state.nativeSessionId,null);assert.equal(state.events.filter(event=>event.kind==='user').length,0);assert.equal(state.phase,'disconnected');
 });

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { resolveExecutable } from './executables';
 import { terminalEnvironment } from './paths';
 import { terminateWindowsTree } from './processes';
-import type { AcpConfig } from '../shared/acp';
+import { ACP_STARTUP_TIMEOUT_MS,type AcpConfig } from '../shared/acp';
 
 /** Treat a path as one file, including spaces; never split it as a shell command. */
 export function acpExecutable(value:string){
@@ -47,11 +47,11 @@ export class AcpTransport {
   static async open(config:AcpConfig,cwd:string,request:Handler,notify:(method:string,params:Record<string,any>)=>void,onExit:(error:Error)=>void){
     const {file,args}=await acpCommand(config.executable,config.args);
     const child=spawn(file,args,{cwd,env:{...terminalEnvironment(file),...config.env},shell:false,windowsHide:true,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
-    const transport=new AcpTransport(child,request,notify,onExit);
+    const transport=new AcpTransport(child,request,notify,onExit,config.startupTimeoutMs??ACP_STARTUP_TIMEOUT_MS);
     try{await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});}
     catch(error){throw new Error(`无法启动 ACP 程序“${config.executable}”：${String(error)}。请检查完整路径、脚本解释器和项目工作目录；启动参数须单独填写，不会按空格拆分程序路径。`,{cause:error});}return transport;
   }
-  private constructor(child:ChildProcessWithoutNullStreams,private request:Handler,private notification:(method:string,params:Record<string,any>)=>void,private onExit:(error:Error)=>void){
+  private constructor(child:ChildProcessWithoutNullStreams,private request:Handler,private notification:(method:string,params:Record<string,any>)=>void,private onExit:(error:Error)=>void,private startupTimeoutMs:number){
     this.child=child;this.exited=new Promise(resolve=>child.once('close',()=>resolve()));
     child.stdout.setEncoding('utf8');child.stdout.on('data',(chunk:string)=>{
       try{this.buffer+=chunk;if(Buffer.byteLength(this.buffer)>8*1024*1024)throw new Error('ACP 消息超过 8 MiB');let end:number;while((end=this.buffer.indexOf('\n'))>=0){const line=this.buffer.slice(0,end).trim();this.buffer=this.buffer.slice(end+1);if(line)this.receive(JSON.parse(line));}}
@@ -68,11 +68,12 @@ export class AcpTransport {
   get pid(){return this.child.pid??null;}
   private send(message:unknown){if(this.closed||this.ended||this.processExited||!this.child.stdin.writable)throw new Error('ACP 连接已断开，未发送操作');const line=JSON.stringify(message);if(Buffer.byteLength(line)>8*1024*1024)throw new Error('ACP 请求过大');this.child.stdin.write(line+'\n');}
   notify(method:string,params:Record<string,unknown>){this.send({jsonrpc:'2.0',method,params});}
-  call<T=any>(method:string,params:Record<string,unknown>,timeout=30000):Promise<T>{
+  call<T=any>(method:string,params:Record<string,unknown>,timeout?:number):Promise<T>{
+    const deadline=timeout??(method==='initialize'?this.startupTimeoutMs:30000);
     const id=String(++this.sequence);
     return new Promise((resolve,reject)=>{
       const entry:{resolve:(v:any)=>void;reject:(e:Error)=>void;timer?:NodeJS.Timeout}={resolve,reject};
-      if(timeout)entry.timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(`ACP ${method} 响应超时；执行结果未知，不会自动重放`));},timeout);
+      if(deadline)entry.timer=setTimeout(()=>{this.pending.delete(id);const detail=method==='initialize'?`ACP initialize 在 ${Math.round(deadline/1000)} 秒内未响应。请检查启动程序、npx 下载或代理，或在 ACP 高级配置中调整启动等待时间。${this.stderr?'\n启动日志：'+this.stderr.slice(-2000):'启动程序未提供错误日志。'}`:`ACP ${method} 响应超时；执行结果未知，不会自动重放`;reject(new Error(detail));},deadline);
       this.pending.set(id,entry);try{this.send({jsonrpc:'2.0',id,method,params});}catch(error){this.pending.delete(id);clearTimeout(entry.timer);reject(error);}
     });
   }

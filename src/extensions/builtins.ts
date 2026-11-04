@@ -1,3 +1,4 @@
+import { harnessManifest } from '../plugins/deepseek-harness/manifest';
 import { superagentManifest } from '../superagent/manifest';
 import { CORE_CAPABILITIES, extensionManifestSchema, type ExtensionManifest } from '../shared/extensions';
 
@@ -6,6 +7,7 @@ import { CORE_CAPABILITIES, extensionManifestSchema, type ExtensionManifest } fr
 export const coreCapabilities=CORE_CAPABILITIES;
 
 export const builtinExtensions:ExtensionManifest[]=[
+  harnessManifest,
   {kind:'agent',id:'agent.codex',name:'Codex',description:'Codex CLI 接入、原生会话历史与 Skills。',dependencies:['agents'],config:{}},
   {kind:'agent',id:'agent.claude',name:'Claude Code',description:'Claude Code 接入、原生会话历史与 Skills。',dependencies:['agents'],config:{}},
   {kind:'agent',id:'agent.opencode',name:'OpenCode',description:'OpenCode 接入、原生会话历史与 Skills。',dependencies:['agents'],config:{}},

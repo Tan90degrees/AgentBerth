@@ -23,7 +23,7 @@ export async function terminateWindowsTree(pid:number,stillOwned:()=>boolean,ope
   }
 }
 
-export async function terminateTree(terminal: IPty, stillOwned: () => boolean): Promise<void> {
+export async function terminateTree(terminal: Pick<IPty,'pid'|'kill'>, stillOwned: () => boolean): Promise<void> {
   if (process.platform === 'win32') {
     await terminateWindowsTree(terminal.pid,stillOwned);
     return;

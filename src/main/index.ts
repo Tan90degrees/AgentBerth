@@ -1,3 +1,5 @@
+import { PluginBrowser } from './plugin-browser';
+import { pluginBrowserRequestSchema } from '../shared/extensions';
 import { PetState } from './pet-state';
 import { petMenuTemplate } from './pet-menu';
 import { keepPetAboveWindows } from './pet-window';
@@ -30,6 +32,7 @@ protocol.registerSchemesAsPrivileged([{scheme:'agentberth-plugin',privileges:{st
 nativeTheme.themeSource = 'dark';
 
 let window: BrowserWindow | null = null;
+let pluginBrowser:PluginBrowser|null=null;
 let sshWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
 let petDrag: { x: number; y: number } | null = null;
@@ -154,7 +157,7 @@ function publishDesktopDiagnostics(){if(!desktopState)return;const event={event:
 function emit(event: ServerEvent) {
   if(event.event==='state'){
     const sshWasEnabled=extensionEnabled(extensionSnapshot,'ssh'),sshGeneration=extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation;extensionSnapshot=event.data.extensions;
-    desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};if(!quitting)void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
+    pluginBrowser?.reconcile();desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};if(!quitting)void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
     if(!quitting&&(!sshWasEnabled||sshGeneration!==extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation)&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
   }
   if (event.event === 'state') pet?.update(event.data);
@@ -187,6 +190,7 @@ async function reconnect(): Promise<void> {
   return connecting;
 }
 function secureWindow(target: BrowserWindow, detached = false) {
+  if(!detached){pluginBrowser?.dispose();pluginBrowser=new PluginBrowser(target,()=>extensionSnapshot,async(id,command)=>{if(!connection?.connected)throw new Error('后台连接已断开');return connection.rpc('extensions',{request:{action:'call',id,command,params:{action:'status'}}});});}
   target.setMenuBarVisibility(false);
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   target.webContents.on('will-navigate', event => { event.preventDefault(); });
@@ -358,6 +362,7 @@ function createWindow() {
 function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (![window, sshWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问本地接口');
 }
+ipcMain.handle('berth:pluginBrowser',async(event,raw:unknown)=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口支持原生 Web 视图');return pluginBrowser?.request(pluginBrowserRequestSchema.parse(raw));});
 ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();return connection!.rpc('extensions',{request});});
 ipcMain.handle('berth:installExtension',async(event,development:unknown=false)=>{
   trusted(event);if(typeof development!=='boolean')throw new Error('无效插件安装方式');

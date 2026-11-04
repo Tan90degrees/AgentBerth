@@ -1,7 +1,11 @@
+import { WebExtensionView } from './WebExtensionView';
 import { useLayoutEffect, useRef } from 'react';
 import type { ExtensionInfo } from '../shared/extensions';
 
-export function ExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void;initialTaskId?:string}){
+export function ExtensionView(props:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void;initialTaskId?:string;suspended?:boolean}){
+  return props.plugin.manifest.views.find(v=>v.id===props.viewId)?.web?<WebExtensionView {...props}/>:<HtmlExtensionView {...props}/>;
+}
+function HtmlExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void;initialTaskId?:string}){
   const frame=useRef<HTMLIFrameElement>(null);
   // Attach the message bridge before paint: a fast iframe can otherwise send
   // its first command before the passive effect subscribes to window messages.

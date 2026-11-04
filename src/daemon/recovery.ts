@@ -13,7 +13,7 @@ export type RestartEntry = z.infer<typeof restartPlanSchema>[number];
 // Native identity is deliberately read AFTER shutdown has flushed final history.
 // Persist a hash of launch settings, not commands, credentials or terminal input.
 export function restartConfiguration(session: Session, projectPath: string, agent?: AgentDefinition, ssh?: SshConnection): string {
-  return createHash('sha256').update(JSON.stringify({projectPath,worktreePath:session.worktreePath??null,agent:session.agent,command:session.command,terminal:session.terminal,remote:session.remote,definition:agent,ssh})).digest('hex');
+  return createHash('sha256').update(JSON.stringify({projectPath,...(session.service?{service:true}:{}),worktreePath:session.worktreePath??null,agent:session.agent,command:session.command,terminal:session.terminal,remote:session.remote,definition:agent,ssh})).digest('hex');
 }
 export function shouldResume(session: Session, agent?: AgentDefinition): boolean {
   if (session.remote || session.agent === 'shell' || !session.nativeSessionId) return false;

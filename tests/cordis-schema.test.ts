@@ -20,7 +20,7 @@ test('Cordis-only store rejects old databases without migrating or deleting them
   reopened.close();
 });
 
-test('fresh stores carry schema 7 and reopen normally', t=>{
+test('fresh stores carry schema 8 and reopen normally', t=>{
   const root=mkdtempSync(path.join(os.tmpdir(),'berth-schema-fresh-'));
   t.after(()=>rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
   let store=new Store(root);
@@ -28,7 +28,7 @@ test('fresh stores carry schema 7 and reopen normally', t=>{
   store.close();
   assert.equal(existsSync(path.join(root,'berth.sqlite')),true);
   const db=new DatabaseSync(path.join(root,'berth.sqlite'));
-  assert.equal(Number(db.prepare('PRAGMA user_version').get()?.user_version),7);
+  assert.equal(Number(db.prepare('PRAGMA user_version').get()?.user_version),8);
   db.close();
   store=new Store(root);
   assert.equal(store.state().projects.length,1);

@@ -19,7 +19,7 @@ export async function readManifest(root:string):Promise<ExtensionManifest> {
   if(!stat.isFile()||stat.isSymbolicLink()||stat.size>128*1024)throw new Error('插件清单必须是小于 128 KiB 的普通文件');
   const manifest=extensionManifestSchema.parse(JSON.parse(await readFile(file,'utf8')));
   if(!manifest.entry.endsWith('.cjs')||manifest.desktopEntry&&!manifest.desktopEntry.endsWith('.cjs'))throw new Error('插件入口须为已打包的 .cjs 文件');
-  for(const relative of [manifest.entry,...(manifest.desktopEntry?[manifest.desktopEntry]:[]),...manifest.views.map(v=>v.entry)]){
+  for(const relative of [manifest.entry,...(manifest.desktopEntry?[manifest.desktopEntry]:[]),...manifest.views.filter(v=>!v.web).map(v=>v.entry)]){
     const file=packagePath(root,relative),stat=await lstat(file),actual=await realpath(file);
     if(!stat.isFile()||stat.isSymbolicLink()||!actual.startsWith(await realpath(root)+path.sep))throw new Error('插件入口或视图不能是链接或包外文件');
   }

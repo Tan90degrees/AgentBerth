@@ -2624,3 +2624,16 @@ textarea:focus-visible {
 .extension-nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 5px;margin-left:auto;border-radius:10px;background:var(--selected);color:var(--focus);font-size:10px;font-weight:600}
 
 .history-load-status{text-align:center;color:var(--muted);font-size:11px;padding:10px 0;min-height:34px;flex-shrink:0;}
+
+.service-terminal,.plugin-web{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;height:100%;overflow:hidden}
+.service-toolbar,.plugin-web-toolbar{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;min-width:0;flex-wrap:wrap}
+.service-toolbar>div{display:flex;align-items:center;gap:12px;flex:1;min-width:100px}
+.service-toolbar code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:12px}
+.service-toolbar>span,.plugin-web-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.service-toolbar strong,.plugin-web-status{font-size:12px;white-space:nowrap}
+.service-terminal>.terminal-surface{flex:1;min-height:0}
+.plugin-web-toolbar select{max-width:240px;min-width:120px}
+.plugin-web-actions{margin-left:auto}
+.plugin-web-host{position:relative;flex:1;min-height:100px;overflow:hidden}
+.plugin-web-log{flex-shrink:0;max-height:180px;overflow:auto;margin:0;padding:12px;font:12px/1.5 var(--font-mono,monospace);white-space:pre-wrap;overflow-wrap:anywhere;border-bottom:1px solid var(--border);background:var(--surface-muted)}
+.plugin-web .launch-error,.service-terminal .launch-error{margin:0;padding:8px 12px}
