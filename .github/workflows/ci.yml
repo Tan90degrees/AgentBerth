@@ -177,6 +177,14 @@ jobs:
           node scripts/smoke-isolated.mjs
           node scripts/smoke-services.mjs
         timeout-minutes: 3
+      - name: UI recovery and keyboard smoke (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/smoke-ui.mjs
+        timeout-minutes: 2
+      - name: UI recovery and keyboard smoke (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-ui.mjs
+        timeout-minutes: 2
       - uses: actions/upload-artifact@v4
         if: always()
         with:

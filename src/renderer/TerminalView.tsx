@@ -49,14 +49,14 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
   const pathHandler = useRef(onOpenPath); pathHandler.current = onOpenPath;
-  useEffect(() => { if (autoFocus && host.current?.clientWidth) instance.current?.focus(); }, [autoFocus]);
+  useEffect(() => { if (autoFocus && host.current?.clientWidth && !document.activeElement?.closest('[role="tablist"]')) instance.current?.focus(); }, [autoFocus]);
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
   useEffect(() => {
     const terminal = instance.current;
     if (!terminal) return;
     terminal.options.disableStdin = !inputEnabled;
     const element = document.activeElement;
-    if (inputEnabled && mayFocus.current && host.current?.clientWidth && (!element || element === document.body || host.current.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
+    if (inputEnabled && mayFocus.current && host.current?.clientWidth && (!element || element === document.body || host.current.contains(element) || !element.matches('input, select, textarea, [role="tab"]'))) terminal.focus();
   }, [inputEnabled]);
   const { bind, setReady, controls } = useTerminalActions(onError, !inputEnabled, !!windowsPty, inputEnabled);
   useEffect(() => {
@@ -159,7 +159,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
         if (!attachment.run) terminal.writeln('\x1b[2m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');
         requestResize();
         const element = document.activeElement;
-        if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea'))) terminal.focus();
+        if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea, [role="tab"]'))) terminal.focus();
       });
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
     void document.fonts.ready.then(() => { if (!disposed) requestResize(); });

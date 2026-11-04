@@ -75,9 +75,9 @@ export function ResizableSidebar({ children, collapsed = false }: { children: Re
   </aside>;
 }
 
-export const ProjectTree = memo(function ProjectTree({ unread, projects, sessions, projectId, sessionId, collapsed, query, filter, names = agentNames, disabled, onToggle, onProject, onSession, onNewSession, onMenu, onMove }: {
+export const ProjectTree = memo(function ProjectTree({ unread, projects, sessions, projectId, sessionId, collapsed, query, filter, names = agentNames, disabled, onToggle, onProject, onSession, onNewSession, onMenu, onMove, onClearFilter }: {
   unread: ReadonlySet<string>; projects: Project[]; sessions: Session[]; projectId: string; sessionId: string; collapsed: string[]; query: string; filter: string; names?: Record<string, string>; disabled: boolean;
-  onToggle: (id: string) => void; onProject: (id: string) => void; onSession: (projectId: string, sessionId: string) => void; onNewSession: (id: string) => void; onMenu: (target: TreeMenuTarget) => void; onMove:(move:SidebarMove)=>void;
+  onToggle: (id: string) => void; onProject: (id: string) => void; onSession: (projectId: string, sessionId: string) => void; onNewSession: (id: string) => void; onMenu: (target: TreeMenuTarget) => void; onMove:(move:SidebarMove)=>void; onClearFilter?: () => void;
 }) {
   type Entry={kind:'project'|'session';id:string;projectId?:string};
   const drag=useRef<Entry|null>(null),[drop,setDrop]=useState<(Entry&{edge:'before'|'after'})|null>(null);
@@ -125,5 +125,5 @@ export const ProjectTree = memo(function ProjectTree({ unread, projects, session
         <span className={`dot ${active(session) ? 'live' : ''}`} /><span className="session-title">{session.remote && <span title={`SSH · ${session.remote.host}`}>↗ </span>}{session.title}</span>{unread.has(session.id) && <OutputBadge />}{active(session)&&session.remote?<span className="session-agent" title="远端 CPU / 内存尚未采集">SSH</span>:active(session)?<ResourceBadge scope="session" id={session.id} runId={session.latestRun?.id} />:<span className="session-agent">{session.service?'服务终端':names[session.agent] ?? '自定义 Agent'}</span>}
       </button><button className="tree-more icon-button" aria-label={`会话操作 ${session.title}`} title="会话操作（也可右键）" onClick={event => menu('session', session.id, event.currentTarget)}>⋯</button></li>)}{!children.length && <li className="tree-empty">{searching ? '没有匹配的会话' : <button className="text-button" disabled={disabled} onClick={() => onNewSession(project.id)}>新建第一个会话</button>}</li>}</ul>}
     </li>;
-  })}</ul>{!visible.length && <p className="sidebar-empty">{searching ? '没有匹配的项目或会话' : '添加项目目录，开始第一个会话。'}</p>}</nav>;
+  })}</ul>{!visible.length && (searching ? <div className="sidebar-empty"><span>没有匹配的项目或会话</span>{onClearFilter && <button type="button" className="subtle" onClick={onClearFilter}>清除筛选</button>}</div> : <p className="sidebar-empty">添加项目目录，开始第一个会话。</p>)}</nav>;
 });
