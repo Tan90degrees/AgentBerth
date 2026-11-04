@@ -38,13 +38,14 @@ try {
   assert.equal(new Set(actionStyles.map(({height,radius,fontSize,borderWidth})=>[height,radius,fontSize,borderWidth].join(':'))).size,1,JSON.stringify(actionStyles));
   assert.equal(actionStyles[0].height>=34,true,'Plugin actions should meet the common minimum height');
   assert.equal(actionStyles.at(-1).classes.includes('danger'),true,'Uninstall must use the destructive action variant');
-  assert.equal(await page.locator('.extension-utilities .extension-button').count(),1,'Development kit action belongs with search tools');
+  assert.equal(await page.locator('.extension-utilities .extension-button').count(),0,'Developer tools must stay inside owner plugin settings');
   await page.waitForFunction(()=>window.berth.rpc('state').then(s=>s.agents.some(a=>a.name==='Plugin Agent')));
   const nativeCount=()=>application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().filter(w=>w.getTitle().startsWith('Plugin native ')).length);
   for(let i=0;i<100&&await nativeCount()!==1;i++)await new Promise(r=>setTimeout(r,50));assert.equal(await nativeCount(),1);
   assert.equal(await card.getByLabel('Smoke extension Agent name').count(),0,'Plugin configuration must not be embedded in settings');
   await card.getByRole('button',{name:'配置',exact:true}).click();
   const configDialog=page.getByRole('dialog',{name:'配置插件 · Smoke extension'});
+  await configDialog.locator('.plugin-development > summary').click();await configDialog.getByRole('button',{name:'导出插件开发套件并复制指令',exact:true}).waitFor();await configDialog.locator('.plugin-development > summary').click();
   const mode=configDialog.getByLabel('Smoke extension Mode');await mode.focus();
   const spacing=await mode.evaluate(select=>{const host=select.closest('.extension-config-dialog'),box=host.getBoundingClientRect(),rect=select.getBoundingClientRect(),style=getComputedStyle(select),ring=parseFloat(style.outlineWidth)+parseFloat(style.outlineOffset);return {right:rect.right+ring,edge:box.left+host.clientLeft+host.clientWidth,left:rect.left-ring,start:box.left+host.clientLeft,scrolls:host.scrollHeight>host.clientHeight};});
   assert.ok(spacing.scrolls,'Use a genuinely scrolling plugin configuration');

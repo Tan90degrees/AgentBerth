@@ -16,6 +16,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { PROTOCOL_VERSION, requestSchema, agentDefinitionSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
 import { ResourceSampler } from './resources';
+import {IsolatedWorkspaces} from './isolated-workspaces';
+import {mount as mountIsolated} from '../core/isolated-workspaces';
 import { GitWorkspace } from './git';
 import { ProjectFiles } from './files';
 import { AgentPlugins } from './plugins';
@@ -72,6 +74,7 @@ export class DaemonServer {
   private plugins = new AgentPlugins();
   private agentVersions = new Map<string, number>();
   private git = new GitWorkspace();
+  private copies:IsolatedWorkspaces;
   private files = new ProjectFiles(this.git);
   private resources = new ResourceSampler();
   private mcpStats=new McpCallStats();
@@ -102,6 +105,7 @@ export class DaemonServer {
   constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery) {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
     this.store = new Store(dataDirectory);
+    this.copies=new IsolatedWorkspaces(dataDirectory);
     this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
@@ -128,7 +132,7 @@ export class DaemonServer {
       const profile=this.store.sshConnection(this.store.session(endpoint.sessionId).remote!.connectionId!);
       return `ssh:${profile.hostname.toLowerCase()}:${profile.port}:${profile.username}`;
     });
-    mountWorkspace(this.coreContext,this);mountSsh(this.coreContext,this);mountAgents(this.coreContext,this);mountGit(this.coreContext,this);mountFiles(this.coreContext,this);mountResources(this.coreContext,this);mountAcp(this.coreContext,this);
+    mountIsolated(this.coreContext,this);mountWorkspace(this.coreContext,this);mountSsh(this.coreContext,this);mountAgents(this.coreContext,this);mountGit(this.coreContext,this);mountFiles(this.coreContext,this);mountResources(this.coreContext,this);mountAcp(this.coreContext,this);
     rmSync(path.join(dataDirectory,'command-output'),{recursive:true,force:true});
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
@@ -215,6 +219,7 @@ export class DaemonServer {
       flushOutput:self.flushOutput.bind(self),
       get gitBusy(){return self.gitBusy;},
       get worktreeBusy(){return self.worktreeBusy;},
+      resolveWorkspace:self.resolveWorkspace.bind(self),
       get git(){return self.git;},
       get historyBusy(){return self.historyBusy;},
       get live(){return self.live;},
@@ -290,6 +295,7 @@ export class DaemonServer {
     const self=this;
     return {
       get closing(){return self.closing;},
+      resolveWorkspace:self.resolveWorkspace.bind(self),
       get git(){return self.git;},
       get gitBusy(){return self.gitBusy;},
       get worktreeBusy(){return self.worktreeBusy;},
@@ -304,6 +310,7 @@ export class DaemonServer {
     const self=this;
     return {
       get files(){return self.files;},
+      resolveWorkspace:self.resolveWorkspace.bind(self),
       get git(){return self.git;},
       get store(){return self.store;}
     };
@@ -317,6 +324,8 @@ export class DaemonServer {
       get store(){return self.store;}
     };
   }
+  isolatedCorePort(){return {copies:this.copies,store:this.store,requireIdle:this.requireIdle.bind(this)};}
+  private async resolveWorkspace(projectId:string,projectPath:string,target?:string|null){if(!target)return projectPath;return await this.copies.resolve(projectId,projectPath,target)??this.git.resolveWorktree(projectPath,target);}
   acpCorePort(){return {acp:this.acp,store:this.store,ensureStarted:(id:string)=>this.startingRuns.get(id)??(this.acp.active(id)?Promise.resolve():this.start(id,true,100,30))};}
   registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
@@ -501,7 +510,7 @@ export class DaemonServer {
   private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:')||['codex','claude','opencode'].includes(session.agent) ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
   private async sessionProjectPath(session: import('../shared/protocol').Session): Promise<string> {
     const projectPath = this.store.project(session.projectId).path;
-    return session.remote || !session.worktreePath ? projectPath : this.git.resolveWorktree(projectPath, session.worktreePath);
+    return session.remote || !session.worktreePath ? projectPath : this.resolveWorkspace(session.projectId,projectPath, session.worktreePath);
   }
   private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
     const project = await this.sessionProjectPath(session);
@@ -621,7 +630,7 @@ export class DaemonServer {
   private async spawn(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
     const project = this.store.project(session.projectId);
-    const projectPath = session.remote || !session.worktreePath ? project.path : await this.git.resolveWorktree(project.path, session.worktreePath);
+    const projectPath = session.remote || !session.worktreePath ? project.path : await this.resolveWorkspace(session.projectId,project.path, session.worktreePath);
     const acpDefinition=this.store.agents().find(agent=>agent.id===session.agent&&agent.acp);
     if(acpDefinition){if(session.remote||project.remoteWorkspace)throw new Error('ACP 接入目前仅支持本机项目，请使用本机 ACP 会话');return this.acp.start(session,acpDefinition,await directory(projectPath),cols,rows);}
     const version = this.agentVersion(session.agent);
@@ -909,6 +918,7 @@ export class DaemonServer {
     } catch (error) { this.closing = false;this.changed(); throw error; }
   }
   async close(): Promise<void> {
+    this.closing=true;await this.copies.close();
     if (this.nativeTimer) clearTimeout(this.nativeTimer);
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;

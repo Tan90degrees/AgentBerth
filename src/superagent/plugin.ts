@@ -5,7 +5,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Context } from 'cordis';
-import type { State, Session, GitWorktree } from '../shared/protocol';
+import {DEFAULT_COPY_EXCLUDES,type CopyJob} from '../shared/isolated-workspaces';
+import type { State, Session, GitWorktree,GitStatus } from '../shared/protocol';
 import { acpOptionChoices,acpModelOption, type AcpSnapshot,type AcpModels } from '../shared/acp';
 import {sourceAdmission,receiptView} from './admission';
 import {taskQuestions,type TaskQuestion} from '../shared/task-questions';
@@ -111,6 +112,9 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     return {id:ticket.id,duplicate:false};
   };
   const pipelines=pipelineStore(db);
+  const copyKey=(pipeline:string)=>createHash('sha256').update(api.id+'\0'+pipeline).digest('hex').slice(0,32);
+  const workspaceJobs=new Map<string,string>();
+  const finishWorkspaceJob=(job:CopyJob)=>{if(job.state==='running')return job;const pipelineId=[...workspaceJobs].find(([,id])=>id===job.id)?.[0];if(pipelineId){const current=pipelines.get(pipelineId);if(current&&job.state==='completed'){if(job.action==='delete')pipelines.clearWorkspace(pipelineId);else if(['create','reset'].includes(job.action))pipelines.save({...current,workspaceKind:'copy',workspacePath:job.result.path});}workspaceJobs.delete(pipelineId);}return job;};
   const admission=sourceAdmission(db,pipelines,(policy,source,event)=>create({...policy,title:event.title,objective:event.text},JSON.stringify([source,policy.id]),event.id,policy.autoApprove,{id:source,eventId:event.id,threadId:event.threadId,actorId:event.actorId,policyVersion:policy.version,pipelineId:policy.id,pipelineName:policy.name}),()=>!closed&&!api.signal.aborted);
   const sources=new SuperagentSources(api.id,async(source,event)=>{
     // Recover a legacy admission committed just before a crash, before fanout existed.
@@ -143,13 +147,19 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     const pipeline=pipelines.get(ticket.pipelineId!);if(!pipeline)throw new Error('任务所属管道已删除；请取消任务或恢复管道');
     if(pipeline.projectId!==ticket.projectId)throw new Error('管道项目已变化，请新建任务');
     const branch=pipeline.workspaceBranch??'superagent/pipeline-'+createHash('sha256').update(api.id+'\0'+pipeline.id).digest('hex').slice(0,16);
+    if(pipeline.workspaceKind==='copy'||!pipeline.workspacePath&&(await host<GitStatus>('gitStatus',{projectId:ticket.projectId})).kind==='not-repository'){
+      const copy=await host<any>('isolatedWorkspace',{action:'status',workspaceId:copyKey(pipeline.id),projectId:ticket.projectId});
+      if(!copy.exists)throw new Error('请先在来源管道的“工作区”中扫描并建立隔离副本，再重试任务');
+      if(copy.job?.state==='running')throw new Error('隔离副本正在处理操作，请完成后重试');
+      const current=pipelines.get(pipeline.id)!;pipelines.save({...current,workspaceKind:'copy',workspacePath:copy.path});return change(ticket.id,{worktreePath:copy.path},'使用管道隔离副本：'+copy.path)!;
+    }
     let trees:GitWorktree[];
     try{trees=await host<GitWorktree[]>('gitWorktrees',{projectId:ticket.projectId});}catch(error){throw new Error('无法打开管道 Git 工作区：'+String(error));}
     const existing=trees.find(tree=>tree.branch===branch);
     if(pipeline.workspacePath&&(!existing||existing.workingPath!==pipeline.workspacePath))throw new Error('管道工作区已移动或删除，请恢复原 worktree 后重试');
     const tree=existing??await host<GitWorktree>('gitCreateWorktree',{projectId:ticket.projectId,branch,createBranch:true});
     if(closed)throw new Error('插件已停止');const current=pipelines.get(pipeline.id);if(!current||current.projectId!==ticket.projectId)throw new Error('管道已删除或更换项目，请检查已创建的 worktree');
-    pipelines.save({...current,workspacePath:tree.workingPath,workspaceBranch:branch});
+    pipelines.save({...current,workspaceKind:'git',workspacePath:tree.workingPath,workspaceBranch:branch});
     return change(ticket.id,{worktreePath:tree.workingPath},'使用管道工作区：'+tree.workingPath)!;
   };
   const pipelineKey=(ticket:Pick<Ticket,'pipelineId'|'source'>)=>ticket.pipelineId??ticket.source?.pipelineId;
@@ -230,12 +240,13 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   const tick=()=>{
     if(closed||ticking)return;
     ticking=(async()=>{
+      for(const [pipeline,jobId]of workspaceJobs){try{const job=await host<CopyJob>('isolatedWorkspace',{action:'job',jobId});finishWorkspaceJob(job);}catch{workspaceJobs.delete(pipeline);}}
       for(const ticket of all())if(ticket.phase==='needs_attention'&&ticket.approved&&pendingInput(ticket.id))queueNext(ticket);
       const tickets=all().reverse(),active=tickets.filter(ticket=>['planning','working'].includes(ticket.phase));
       for(const ticket of active){if(closed)return;try{await advance(ticket);}catch(error){if(!closed)await interrupt(ticket,error,'处理结果失败；等待显式重试');}}
       let occupied=all().filter(ticket=>['planning','working'].includes(ticket.phase)).length;
       for(const ticket of tickets.filter(ticket=>ticket.phase==='queued'&&ticket.approved)){
-        if(closed)return;if(occupied>=Number(config.maxConcurrent??2))break;let current=get(ticket.id);if(current.phase!=='queued'||acting.has(ticket.id)||blocker(current))continue;if(!current.lastInput&&pendingInput(current.id)){queueNext(current);current=get(ticket.id);}
+        if(closed)return;if(occupied>=Number(config.maxConcurrent??2))break;let current=get(ticket.id);if(current.phase!=='queued'||acting.has(ticket.id)||workspaceJobs.has(pipelineKey(current)??'')||blocker(current))continue;if(!current.lastInput&&pendingInput(current.id)){queueNext(current);current=get(ticket.id);}
         const worker=current.continuing&&current.stage==='worker';
         const next=change(ticket.id,{phase:worker?'working':'planning',stage:worker?'worker':'coordinator',attention:false,waitingFor:undefined,error:undefined},'取得执行槽')!;
         try{if(worker)await launchWorker(next);else await launchCoordinator(next);occupied++;}catch(error){if(!closed)await interrupt(next,error,'启动当前阶段失败；不会自动重新发送');}
@@ -258,15 +269,30 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     const policy:SourcePolicy={enabled:!!p.enabled,projectId:String(p.projectId),coordinatorId:String(p.coordinatorId),executorId:String(p.executorId),...(p.coordinatorModel?{coordinatorModel:String(p.coordinatorModel)}:{}),...(p.executorModel?{executorModel:String(p.executorModel)}:{}),allowedActors:p.allowedActors as string[],autoApprove:!!p.autoApprove,isolated:!!p.isolated,version:randomUUID()};const key='legacy:'+p.sourceId,previous=pipelines.get(key),now=new Date().toISOString();pipelines.save({...previous,...policy,inputs:[{sourceId:String(p.sourceId),threadIds:previous?.threadIds??[]}],id:key,name:previous?.name??'已有来源管道',sourceId:String(p.sourceId),threadIds:previous?.threadIds??[],createdAt:previous?.createdAt??now,updatedAt:now});return {version:policy.version};
   });
   const pipelineId={type:'string',minLength:1,maxLength:256};
-  const pipelineProps={inputs:{type:'array',minItems:1,maxItems:64,items:{...object,properties:{sourceId:{type:'string',minLength:1,maxLength:200},threadIds:{type:'array',maxItems:128,items:{type:'string',minLength:1,maxLength:500}}},required:['sourceId','threadIds']}},pipelineId,expectedVersion:id,name:{type:'string',minLength:1,maxLength:100},sourceId:{type:'string',minLength:1,maxLength:200},enabled:{type:'boolean'},projectId:id,coordinatorId:id,executorId:id,coordinatorModel:model,executorModel:model,threadIds:{type:'array',items:{type:'string',minLength:1,maxLength:500},maxItems:128},allowedActors:{type:'array',items:{type:'string',minLength:1,maxLength:200},maxItems:128},autoApprove:{type:'boolean'},isolated:{type:'boolean'}};
+  const pipelineProps={copyOptions:{...object,properties:{excludes:{type:'array',maxItems:128,items:{type:'string',minLength:1,maxLength:300}},maxBytes:{type:'integer',minimum:1048576,maximum:137438953472},skipLinks:{type:'boolean'}},required:['excludes','maxBytes','skipLinks']},inputs:{type:'array',minItems:1,maxItems:64,items:{...object,properties:{sourceId:{type:'string',minLength:1,maxLength:200},threadIds:{type:'array',maxItems:128,items:{type:'string',minLength:1,maxLength:500}}},required:['sourceId','threadIds']}},pipelineId,expectedVersion:id,name:{type:'string',minLength:1,maxLength:100},sourceId:{type:'string',minLength:1,maxLength:200},enabled:{type:'boolean'},projectId:id,coordinatorId:id,executorId:id,coordinatorModel:model,executorModel:model,threadIds:{type:'array',items:{type:'string',minLength:1,maxLength:500},maxItems:128},allowedActors:{type:'array',items:{type:'string',minLength:1,maxLength:200},maxItems:128},autoApprove:{type:'boolean'},isolated:{type:'boolean'}};
   api.command({mcp:false,name:'save_pipeline',description:'Create or edit a named multi-source pipeline with its own persistent Git worktree. Sources may feed multiple pipelines.',inputSchema:{...object,properties:pipelineProps,required:['name','enabled','projectId','coordinatorId','executorId','allowedActors','autoApprove']}},async p=>{
     const previous=p.pipelineId?pipelines.get(String(p.pipelineId)):undefined;if(p.pipelineId&&!previous)throw new Error('管道不存在，请刷新列表');if(p.expectedVersion&&previous?.version!==p.expectedVersion)throw new Error('管道已在其他窗口修改，请取消编辑后重新打开');
     if(!String(p.name).trim())throw new Error('请填写管道名称');if(p.autoApprove&&!(p.allowedActors as string[]).length)throw new Error('自动准入必须配置明确的授权身份列表');
     const routeInputs=p.inputs as {sourceId:string;threadIds:string[]}[]??(p.sourceId?[{sourceId:String(p.sourceId),threadIds:(p.threadIds??[]) as string[]}]:[]);if(!routeInputs.length)throw new Error('请选择至少一个信息源');if(new Set(routeInputs.map(input=>input.sourceId)).size!==routeInputs.length)throw new Error('管道内的信息源不能重复');
+    if(previous&&workspaceJobs.has(previous.id))throw new Error('工作区操作进行中，请等待完成后编辑管道');
     if(previous?.workspacePath&&p.projectId!==previous.projectId)throw new Error('管道已有工作区，不能更换项目；请新建管道');
     if(p.enabled){if(routeInputs.some(input=>!sources.has(input.sourceId)))throw new Error('来源插件未启用，请启用插件后再启用管道');await validate(p);}
-    if(closed)throw new Error('插件已停止');if(!previous&&pipelines.list().length>=256)throw new Error('管道数量已达 256 个，请先清理已有配置');const now=new Date().toISOString(),pipeline:SourcePipeline={id:previous?.id??randomUUID(),name:String(p.name).trim(),sourceId:routeInputs[0].sourceId,inputs:routeInputs.map(input=>({...input,threadIds:[...new Set(input.threadIds)]})),workspacePath:previous?.workspacePath,workspaceBranch:previous?.workspaceBranch,enabled:!!p.enabled,projectId:String(p.projectId),coordinatorId:String(p.coordinatorId),executorId:String(p.executorId),...(p.coordinatorModel?{coordinatorModel:String(p.coordinatorModel)}:{}),...(p.executorModel?{executorModel:String(p.executorModel)}:{}),allowedActors:[...new Set(p.allowedActors as string[])],threadIds:routeInputs[0].threadIds,autoApprove:!!p.autoApprove,isolated:true,version:randomUUID(),createdAt:previous?.createdAt??now,updatedAt:now};
+    if(closed)throw new Error('插件已停止');if(!previous&&pipelines.list().length>=256)throw new Error('管道数量已达 256 个，请先清理已有配置');const now=new Date().toISOString(),pipeline:SourcePipeline={id:previous?.id??randomUUID(),name:String(p.name).trim(),sourceId:routeInputs[0].sourceId,inputs:routeInputs.map(input=>({...input,threadIds:[...new Set(input.threadIds)]})),workspacePath:previous?.workspacePath,workspaceBranch:previous?.workspaceBranch,workspaceKind:previous?.workspaceKind,copyOptions:(p.copyOptions??previous?.copyOptions) as SourcePipeline['copyOptions'],enabled:!!p.enabled,projectId:String(p.projectId),coordinatorId:String(p.coordinatorId),executorId:String(p.executorId),...(p.coordinatorModel?{coordinatorModel:String(p.coordinatorModel)}:{}),...(p.executorModel?{executorModel:String(p.executorModel)}:{}),allowedActors:[...new Set(p.allowedActors as string[])],threadIds:routeInputs[0].threadIds,autoApprove:!!p.autoApprove,isolated:true,version:randomUUID(),createdAt:previous?.createdAt??now,updatedAt:now};
     if(previous&&pipelines.get(previous.id)?.version!==previous.version)throw new Error('管道已变更，请刷新后重新编辑');pipelines.save(pipeline);return {id:pipeline.id,version:pipeline.version};
+  });
+  api.command({mcp:false,name:'workspace',description:'Inspect and manage a pipeline isolated copy. Scan before creation; preview and explicitly select changes before applying. Long operations return cancellable jobs.',inputSchema:{...object,properties:{options:pipelineProps.copyOptions,pipelineId,workspaceId:{type:'string',pattern:'^[a-f0-9]{32}$'},jobId:{type:'string',minLength:1,maxLength:100},action:{type:'string',enum:['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']},token:{type:'string',minLength:1,maxLength:100},skipLinks:{type:'boolean'},path:{type:'string',maxLength:1024},changes:{type:'array',minItems:1,maxItems:32,items:{type:'object'}},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}},required:['action']}},async p=>{
+    if(['job','cancel'].includes(String(p.action)))return finishWorkspaceJob(await host<CopyJob>('isolatedWorkspace',{action:p.action,jobId:p.jobId}));
+    if(p.action==='list'){const copies=await host<any[]>('isolatedWorkspace',{action:'list'});return copies.filter(copy=>copy.owner===api.id).map(copy=>({...copy,pipelineId:pipelines.list().find(item=>copyKey(item.id)===copy.id)?.id}));}
+    const pipeline=p.pipelineId?pipelines.get(String(p.pipelineId)):undefined;
+    let workspaceId=pipeline?copyKey(pipeline.id):String(p.workspaceId??''),projectId=pipeline?.projectId;
+    if(!projectId){const copies=await host<any[]>('isolatedWorkspace',{action:'list'}),copy=copies.find(item=>item.id===workspaceId&&item.owner===api.id);if(!copy)throw new Error('隔离副本不存在');projectId=copy.projectId;}
+    if(['create','reset','apply','delete'].includes(String(p.action))&&all().some(ticket=>pipeline?.id&&pipelineKey(ticket)===pipeline.id&&ticket.approved&&ticket.stage&&!['completed','cancelled'].includes(ticket.phase)&&!(p.action==='create'&&ticket.phase==='interrupted'&&!ticket.worktreePath)))throw new Error('管道仍有执行中或待确认任务，请先完成或取消任务');
+    if(p.action==='status'&&pipeline){const git=await host<GitStatus>('gitStatus',{projectId});if(git.kind==='repository'&&pipeline.workspaceKind!=='copy')return {kind:'git',path:pipeline.workspacePath??null};}
+    const {pipelineId:_,workspaceId:__,...params}=p;const result=await host<any>('isolatedWorkspace',{...params,workspaceId,projectId,...(p.action==='scan'?{options:p.options??pipeline?.copyOptions??{excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}}:{}),...(['create','reset'].includes(String(p.action))?{name:pipeline?.name,owner:api.id}:{})});
+    if(result?.state==='running'&&pipeline&&['create','reset','apply','delete'].includes(String(p.action)))workspaceJobs.set(pipeline.id,result.id);
+    if(p.action==='status'&&pipeline&&result.exists&&!pipeline.workspacePath)pipelines.save({...pipeline,workspaceKind:'copy',workspacePath:result.path});
+    if(p.action==='scan'&&pipeline&&p.options)pipelines.save({...pipeline,copyOptions:p.options as SourcePipeline['copyOptions']});
+    return p.action==='status'?{kind:'copy',...result}:result;
   });
   api.command({mcp:false,name:'pipeline_action',description:'Explicitly enable, disable or delete a saved pipeline. Existing tasks and event deduplication are preserved.',inputSchema:{...object,properties:{pipelineId,action:{type:'string',enum:['enable','disable','delete']}},required:['pipelineId','action']}},async p=>{
     const pipeline=pipelines.get(String(p.pipelineId));if(!pipeline)throw new Error('管道不存在，请刷新列表');
@@ -381,6 +407,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   });
   api.interval(tick,1000);
   api.effect(()=>async()=>{
+    await Promise.allSettled([...workspaceJobs.values()].map(jobId=>api.call('isolatedWorkspace',{action:'cancel',jobId})));
     closed=true;const owned=all(),active=owned.filter(ticket=>['planning','working'].includes(ticket.phase));
     // Persist interruption before stopping anything; restart never replays a
     // half-acknowledged turn, and no worktree or journal is deleted.

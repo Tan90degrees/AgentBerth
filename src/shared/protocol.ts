@@ -1,11 +1,16 @@
 import { z } from 'zod';
+import {DEFAULT_COPY_EXCLUDES} from './isolated-workspaces';
 import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest } from './extensions';
 import { acpConfigSchema, type AcpSnapshot, type AcpEvent } from './acp';
 
+const copyEntrySchema=z.object({hash:z.string().regex(/^[a-f0-9]{64}$/),size:z.number().int().min(0),mode:z.number().int().min(0).max(511)}).nullable();
+const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['added','modified','deleted','blocked']),before:copyEntrySchema,after:copyEntrySchema,conflict:z.boolean(),reason:z.string().max(2000).optional()}).strict();
+const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
+const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 49;
+export const API_VERSION = 50;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -142,6 +147,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({id,method:z.literal('acpOptions'),params:z.object({agentId:z.string().min(1).max(200),projectId:id}).strict()}),
   z.object({id,method:z.literal('acpTerminal'),params:z.object({sessionId:id,terminalId:z.string().min(1).max(200)}).strict()}),
   z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
+  z.object({id,method:z.literal('isolatedWorkspace'),params:copyRequestSchema}),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id, worktreePath: z.string().min(1).max(4096).nullable().default(null) }).strict() }),
   z.object({ id, method: z.literal('gitWorktrees'), params: z.object({ projectId: id }).strict() }),
   z.object({ id, method: z.literal('gitCreateWorktree'), params: z.object({ projectId: id, branch: z.string().trim().min(1).max(255).refine(value=>!value.startsWith('-')&&!/[\\\s\x00-\x1f]/.test(value),'分支名称无效'), createBranch: z.boolean().default(true), baseRef: z.string().trim().min(1).max(255).refine(value=>!value.startsWith('-')&&!/[\\\s\x00-\x1f]/.test(value),'起始引用无效').optional() }).strict() }),

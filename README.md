@@ -6,7 +6,7 @@
 
 ## 当前能力
 
-- **ACP 对话与 Superagent**：接入已有 ACP Agent，以对话管理计划、工具、授权与流式回复；Superagent 插件选择 ACP 协调/执行者，支持命名管道、多来源汇入与多管道分发；每管道拥有固定独立 Worktree，任务串行并可按管道管理。信息源由插件自定义，不附带 GitHub、飞书适配器。见 [使用与开发指南](docs/ACP_SUPERAGENT.md)。
+- **ACP 对话与 Superagent**：接入已有 ACP Agent，以对话管理计划、工具、授权与流式回复；Superagent 插件选择 ACP 协调/执行者，支持命名管道、多来源汇入与多管道分发；每管道拥有固定独立工作区（Git Worktree 或非 Git 隔离副本），支持差异预览与选择应用，任务串行并可按管道管理。信息源由插件自定义，不附带 GitHub、飞书适配器。见 [使用与开发指南](docs/ACP_SUPERAGENT.md)。
 - 插件 ZIP 分块解压，支持 80 MiB 包；默认上限 256 MiB、展开 1 GiB、50000 条目。Cordis 通用不代表 DeepSeek Harness 宿主 API 通用。
 
 - **核心工作台 + Cordis 扩展**：项目、会话、Agent 注册中心、Skills、文件、Git、Worktree、主题、SSH/MCP、资源监控均为默认基础能力，不出现在插件开关中。Codex、Claude Code、OpenCode 和自定义 Agent 各自通过独立 Cordis Agent 插件接入；桌宠等可选增强在插件中心管理。插件支持独立配置、启停、重载、卸载和开发目录热重载。参见 [插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)。
