@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Terminal, IDisposable } from '@xterm/xterm';
 import { TerminalSearch } from './terminal-search';
 
-interface Owner { terminal: Terminal; search: TerminalSearch; canPaste: () => boolean; disposed: boolean; subscriptions: IDisposable[] }
+interface Owner { terminal: Terminal; search: TerminalSearch; canPaste: () => boolean; disposed: boolean; searchNeedsRefresh: boolean; subscriptions: IDisposable[] }
 export function useTerminalActions(onError: (error: string) => void, readOnly = false, inferWindowsWrap = false, inputEnabled = true) {
   const owner = useRef<Owner | null>(null);
   const error = useRef(onError); error.current = onError;
@@ -15,12 +15,22 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   const [query, setQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [found, setFound] = useState<boolean | null>(null);
+  const [searchRevision, setSearchRevision] = useState(0);
+  const searchState = useRef({ open: searchOpen, query, caseSensitive }); searchState.current = { open: searchOpen, query, caseSensitive };
   const [message, setMessage] = useState('');
   useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 2200); return () => clearTimeout(timer); }, [message]);
 
   const copy = useCallback(async () => {
-    const current = owner.current, text = current?.search.selectionText();
+    const current = owner.current;
     if (!current || current.disposed) return;
+    // A delayed font/layout fit can invalidate a located match just before
+    // click. Re-find on the current grid before reading its selected text.
+    const active = searchState.current;
+    if (current.searchNeedsRefresh && active.open && active.query) {
+      current.searchNeedsRefresh = false;
+      setFound(current.search.findNext(active.query, { incremental: true, caseSensitive: active.caseSensitive }));
+    }
+    const text = current.search.selectionText();
     if (!text) { setMessage('请先选中文本'); return; }
     try { await window.berth.copyText(text); if (!current.disposed) setMessage('已复制选中文本'); }
     catch (reason) { if (!current.disposed) error.current(String(reason)); }
@@ -40,10 +50,15 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
   const openSearch = useCallback(() => { setSearchOpen(true); requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); }); }, []);
   const bind = useCallback((terminal: Terminal, canPaste: () => boolean) => {
     const search = new TerminalSearch(terminal, inferWindowsWrap);
-    const current: Owner = { terminal, search, canPaste, disposed: false, subscriptions: [] };
+    const current: Owner = { terminal, search, canPaste, disposed: false, searchNeedsRefresh: false, subscriptions: [] };
     owner.current = current; setReady(false); setSelection(false); setMouseTracking(false); setFound(null);
     current.subscriptions.push(terminal.onSelectionChange(() => { if (!current.disposed) setSelection(terminal.hasSelection()); }));
     current.subscriptions.push(terminal.onWriteParsed(() => { if (!current.disposed) setMouseTracking(terminal.modes.mouseTrackingMode !== 'none'); }));
+    current.subscriptions.push(terminal.onResize(() => {
+      if (current.disposed) return;
+      current.searchNeedsRefresh = true;
+      if (searchState.current.open && searchState.current.query) { setFound(null); setSearchRevision(value => value + 1); }
+    }));
     terminal.attachCustomKeyEventHandler(event => {
       if (event.defaultPrevented) return false;
       if (event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey) || !event.shiftKey) return true;
@@ -65,14 +80,16 @@ export function useTerminalActions(onError: (error: string) => void, readOnly = 
     const timer = setTimeout(() => {
       const current = owner.current;
       if (!current || current.disposed) return;
+      current.searchNeedsRefresh = false;
       setFound(query ? current.search.findNext(query, { incremental: true, caseSensitive }) : null);
       if (!query) { current.search.clearDecorations(); current.terminal.clearSelection(); }
     }, 100);
     return () => clearTimeout(timer);
-  }, [query, caseSensitive, searchOpen, ready]);
+  }, [query, caseSensitive, searchOpen, ready, searchRevision]);
   const find = (previous: boolean) => {
     const current = owner.current;
     if (!current || !query) return;
+    current.searchNeedsRefresh = false;
     setFound(previous ? current.search.findPrevious(query, { caseSensitive }) : current.search.findNext(query, { caseSensitive }));
   };
   const closeSearch = () => { setSearchOpen(false); setFound(null); owner.current?.search.clearDecorations(); owner.current?.terminal.clearSelection(); owner.current?.terminal.focus(); };

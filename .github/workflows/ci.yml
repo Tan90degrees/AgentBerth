@@ -174,8 +174,11 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           node scripts/smoke-acp.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/smoke-isolated.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/smoke-services.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         timeout-minutes: 3
       - name: UI recovery and keyboard smoke (Linux)
         if: runner.os == 'Linux'
@@ -254,8 +257,11 @@ jobs:
         if: ${{ !cancelled() && (steps.packaged-smoke.outcome == 'success' || steps.packaged-smoke.outcome == 'failure') }}
         run: |
           node scripts/smoke-acp.mjs --packaged
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/smoke-isolated.mjs --packaged
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/smoke-services.mjs --packaged
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         timeout-minutes: 3
       - name: Test packaged legacy database startup and exit
         run: node scripts/smoke-startup-failure.mjs --packaged
