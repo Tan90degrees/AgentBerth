@@ -13,7 +13,7 @@ import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, nativeImage, nativeTheme, safeStorage, shell, Tray, protocol } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, nativeImage, nativeTheme, safeStorage, shell, Tray, protocol,net } from 'electron';
 import path from 'node:path';
 import { release } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -36,6 +36,7 @@ let pluginBrowser:PluginBrowser|null=null;
 let sshWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
 let petDrag: { x: number; y: number } | null = null;
+let petAppearanceSequence=0;
 let pet: PetState;
 let petHooks: PetHooks;
 let petPublishTimer: NodeJS.Timeout | null = null;
@@ -255,6 +256,13 @@ function petGuide(): string {
   const script = app.isPackaged ? path.join(resourceRoot, 'pet', 'pet-hook.cjs') : path.join(__dirname, 'pet-hook.cjs');
   return petHookSetupGuide(process.execPath, script, dataDirectory, process.platform, app.isPackaged ? path.join(resourceRoot, 'pet') : __dirname);
 }
+async function selectPetAppearance(appearance:import('../shared/pet').PetAppearance){
+  const sequence=++petAppearanceSequence;
+  if(appearance==='naiwa')await pet.naiwa.install((url,init)=>net.fetch(url,init));
+  if(sequence!==petAppearanceSequence)return pet.snapshot();
+  requireExtension('pet');if(quitting)throw new Error('应用正在退出');
+  return savePetPreferences({...pet.preferences,appearance,customImages:false});
+}
 async function savePetPreferences(preferences: unknown) {
   pet.save(preferences);
   if (pet.preferences.enabled) {
@@ -281,6 +289,7 @@ function openPetMenu() {
   const change = (value: Partial<import('../shared/pet').PetPreferences>) => run(() => savePetPreferences({ ...pet.preferences, ...value }));
   Menu.buildFromTemplate(petMenuTemplate(pet.snapshot(), {
     select: selectedSessionId => change({ selectedSessionId }), scale: scale => change({ scale }),
+    appearance:appearance=>run(()=>selectPetAppearance(appearance)),customImages:customImages=>change({customImages}),
     alwaysOnTop: alwaysOnTop => change({ alwaysOnTop }), autoSwitch: autoSwitch => change({ autoSwitch }),
     open: () => showPetSession(), settings: () => petNavigate('berth:petSettings'),
     hide: () => change({ enabled: false }),
@@ -295,6 +304,8 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
   switch (request.action) {
     case 'state': return pet.snapshot();
     case 'save': return savePetPreferences(request.preferences);
+    case 'selectAppearance': return selectPetAppearance(request.appearance);
+    case 'appearanceImage': return pet.naiwa.image();
     case 'hookConfig': return petHookConfig();
     case 'hookGuide': return petGuide();
     case 'installHook': {

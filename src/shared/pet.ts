@@ -2,6 +2,14 @@ import { z } from 'zod';
 
 export const petStatuses = ['idle', 'working', 'waiting', 'completed', 'error', 'unknown'] as const;
 export type PetStatus = typeof petStatuses[number];
+export const petAppearances=['dafeiyu','naiwa'] as const;
+export type PetAppearance=typeof petAppearances[number];
+export const petAppearanceLabels:Record<PetAppearance,string>={dafeiyu:'大肥鱼',naiwa:'奶蛙 · 奶龙大笑'};
+export const naiwaClips:Record<PetStatus,{row:number;frames:number;duration:number;loop:boolean}>={
+  idle:{row:0,frames:6,duration:1100,loop:true},working:{row:7,frames:6,duration:820,loop:true},
+  waiting:{row:6,frames:6,duration:1200,loop:true},completed:{row:4,frames:5,duration:900,loop:false},
+  error:{row:5,frames:8,duration:1400,loop:false},unknown:{row:8,frames:6,duration:1200,loop:true},
+};
 export const agentActivitySchema=z.object({id:z.string().min(1).max(100),title:z.string().min(1).max(100),projectId:z.uuid(),targetSessionId:z.uuid().optional(),status:z.enum(petStatuses),label:z.string().max(120),kind:z.enum(['acp','superagent']),managedSessionIds:z.array(z.uuid()).max(2).default([]),updatedAt:z.number().finite()}).strict();
 export type AgentActivity=z.infer<typeof agentActivitySchema>&{pluginId?:string;taskId?:string};
 export const petLabels: Record<PetStatus, string> = { idle: '空闲', working: '执行中', waiting: '等待你处理', completed: '已完成', error: '执行失败', unknown: '状态待确认' };
@@ -11,6 +19,7 @@ export const petPreferencesSchema = z.object({
   enabled: z.boolean().default(false), alwaysOnTop: z.boolean().default(true),
   autoSwitch: z.boolean().default(true), scale: z.number().min(0.5).max(2).default(1),
   selectedSessionId: z.string().max(100).default(''),
+  appearance:z.enum(petAppearances).default('dafeiyu'),customImages:z.boolean().default(true),
 }).strict();
 export type PetPreferences = z.infer<typeof petPreferencesSchema>;
 export const defaultPetPreferences = petPreferencesSchema.parse({});
@@ -27,11 +36,13 @@ export type PetHook = z.infer<typeof petHookSchema>;
 export interface PetSession { sessionId: string; runId: string; title: string; project: string; status: PetStatus; label: string; hooked: boolean; updatedAt: number;targetSessionId?:string;pluginId?:string;taskId?:string;kind?:'acp'|'superagent' }
 export interface PetSnapshot {
   preferences: PetPreferences; sessions: PetSession[]; connected: boolean;
-  images: Partial<Record<PetStatus, string>>; imageVersion: number;
+  images: Partial<Record<PetStatus, string>>; imageVersion: number; availableAppearances?:PetAppearance[];
 }
 export const petRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.enum(['state', 'hookConfig', 'hookGuide', 'showSession', 'menu', 'dragStart', 'dragMove', 'dragEnd']) }).strict(),
   z.object({ action: z.literal('save'), preferences: petPreferencesSchema }).strict(),
+  z.object({action:z.literal('selectAppearance'),appearance:z.enum(petAppearances)}).strict(),
+  z.object({action:z.literal('appearanceImage'),appearance:z.literal('naiwa')}).strict(),
   z.object({ action: z.enum(['importImage', 'resetImage', 'image']), status: z.enum(petStatuses) }).strict(),
   z.object({ action: z.literal('installHook'), provider: z.enum(['claude', 'opencode']), projectId: z.uuid().nullable(), opencodeVersion: z.enum(['auto', '1', '2']).default('auto') }).strict(),
 ]);

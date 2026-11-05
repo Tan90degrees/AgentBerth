@@ -1,5 +1,5 @@
 import { _electron as electron } from 'playwright';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm,copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
@@ -7,8 +7,13 @@ import assert from 'node:assert/strict';
 const packaged = process.argv.includes('--packaged');
 const folder = await mkdtemp(path.join(os.tmpdir(), "berth pet's "));
 const dataDirectory = path.join(folder, 'data');
+// Personal-use atlas is intentionally not redistributed in this repository.
+// Developers can exercise the complete offline path with a local upstream copy.
+const naiwaFixture=process.env.AGENTBERTH_TEST_NAIWA_PATH;
+if(naiwaFixture){const cache=path.join(dataDirectory,'pet/presets/naiwa');await mkdir(cache,{recursive:true});await copyFile(naiwaFixture,path.join(cache,'spritesheet.webp'));}
+
 const executablePath = packaged ? path.resolve('release/win-unpacked/AgentBerth.exe') : undefined;
-const args = [...(packaged ? [] : [path.resolve('.')]), '--user-data-dir=' + path.join(folder, 'profile')];
+const args = [...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged ? [] : [path.resolve('.')]), '--user-data-dir=' + path.join(folder, 'profile')];
 if (process.platform === 'linux' && process.getuid?.() === 0) args.push('--no-sandbox');
 const fixtureBin = path.join(folder, 'bin'); await mkdir(fixtureBin);
 const exported = JSON.stringify({ info: { id: 'smoke-native', directory: folder }, messages: [] });
@@ -23,6 +28,7 @@ try {
   console.log('Pet smoke: waiting for main window');
   const page = await application.firstWindow({timeout:20000}); page.setDefaultTimeout(15000);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
+  if(process.env.AGENTBERTH_TEST_NAIWA_DOWNLOAD==='1'&&process.env.HTTPS_PROXY)await application.evaluate(({session})=>session.defaultSession.setProxy({proxyRules:process.env.HTTPS_PROXY,proxyBypassRules:'<local>;127.0.0.1;localhost'}));
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.berth);
   console.log('Pet smoke: IPC ready; setting up fixtures');
@@ -53,6 +59,7 @@ try {
   console.log('Pet smoke: open settings/window');
   await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
   await page.locator('[data-plugin-id="pet"]').getByRole('button',{name:'配置',exact:true}).click();
+  assert.equal(await page.getByLabel('桌宠形象',{exact:true}).inputValue(),'dafeiyu');assert.equal(await page.getByLabel('桌宠形象',{exact:true}).locator('option').count(),2);
   await page.waitForFunction(() => [...document.querySelectorAll('.pet-animation .pet-character')].length === 6 && [...document.querySelectorAll('.pet-animation .pet-character')].every(image => image.src.endsWith('.png') && image.complete && image.naturalWidth === 288 && image.naturalHeight === 240));
   await page.locator('.pet-animation .pet-character').first().hover();
   await page.waitForFunction(() => document.querySelector('.pet-animation .pet-character')?.src.endsWith('.webp'));
@@ -87,6 +94,22 @@ try {
   };
   await openMenu();
   assert.deepEqual(await application.evaluate(() => globalThis.petSmokeMenu.items.find(item => item.label === '切换 Agent 会话').submenu.items.map(item => item.id).sort()), [a.id, b.id].sort());
+  assert.equal(await application.evaluate(()=>globalThis.petSmokeMenu.items.find(item=>item.label==='桌宠形象').submenu.items.length),2);
+  if(naiwaFixture||process.env.AGENTBERTH_TEST_NAIWA_DOWNLOAD==='1'){
+    console.log('Pet smoke: Naiwa source atlas, all status rows, reduced motion and cached menu switching');
+    const selectedSession=initialPet.preferences.selectedSessionId;
+    if(process.env.AGENTBERTH_TEST_NAIWA_DOWNLOAD==='1'){const result=await page.evaluate(async()=>{const pending=window.berth.pet({action:'selectAppearance',appearance:'naiwa'});await window.berth.pet({action:'selectAppearance',appearance:'dafeiyu'});await pending;return window.berth.pet({action:'state'});});assert.equal(result.preferences.appearance,'dafeiyu','A late download must not override the latest explicit selection');assert.ok(result.availableAppearances.includes('naiwa'));}
+    await page.getByLabel('桌宠形象',{exact:true}).selectOption('naiwa');
+    await pet.locator('.pet-naiwa[data-ready="true"]').waitFor({timeout:35000});await page.locator('.pet-animation .pet-naiwa[data-ready="true"]').nth(5).waitFor();
+    const state=await pet.evaluate(()=>window.berth.pet({action:'state'}));assert.equal(state.preferences.appearance,'naiwa');assert.equal(state.preferences.selectedSessionId,selectedSession);
+    const expected={idle:0,working:7,waiting:6,completed:4,error:5,unknown:8};for(const [status,row]of Object.entries(expected))assert.equal(await page.locator('.pet-animation [data-status="'+status+'"] .pet-naiwa-frame').evaluate(node=>node.style.getPropertyValue('--pet-row')),String(row));
+    await pet.emulateMedia({reducedMotion:'reduce'});await pet.waitForFunction(()=>getComputedStyle(document.querySelector('.pet-naiwa-frame')).animationName==='none');await pet.emulateMedia({reducedMotion:'no-preference'});await pet.waitForFunction(()=>getComputedStyle(document.querySelector('.pet-naiwa-frame')).animationName==='pet-naiwa-frames');
+    await mkdir('test-results',{recursive:true});await pet.screenshot({path:'test-results/naiwa-pet.png'});await page.getByLabel('桌宠形象',{exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/naiwa-settings.png'});
+    await chooseMenu('桌宠形象','大肥鱼');await pet.waitForFunction(()=>document.querySelector('img.pet-character')?.complete);
+    await chooseMenu('桌宠形象','奶蛙 · 奶龙大笑');await pet.locator('.pet-naiwa[data-ready="true"]').waitFor();
+    assert.equal((await pet.evaluate(()=>window.berth.pet({action:'state'}))).preferences.selectedSessionId,selectedSession);
+    await page.getByLabel('桌宠形象',{exact:true}).selectOption('dafeiyu');await pet.waitForFunction(()=>document.querySelector('img.pet-character')?.complete);
+  }
   console.log('Pet smoke: popup focus keeps the companion visible without stealing input');
   await application.evaluate(async ({ BrowserWindow }) => {
     const target = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet'));
@@ -264,6 +287,7 @@ try {
   await rpc('stop', { sessionId: a.id }); await rpc('stop', { sessionId: b.id }); await rpc('stop', { sessionId: shell.id });
   console.log('Pet smoke passed: independent window, actual PTY hook binding, Agent-only list, local navigation, copyable setup guide, image dragging and native context-menu operations, scaling, GIF import/reset and non-destructive hide');
 } catch (error) {
+  if(application)for(const window of application.windows())console.error('Pet errors:',await window.locator('.form-error,[role=alert]').allTextContents().catch(()=>[]));
   await mkdir('test-results', { recursive: true });
   for (const [index, page] of (application?.windows() ?? []).entries()) await page.screenshot({ path: `test-results/pet-failure-${process.platform}-${index}.png` }).catch(() => {});
   throw error;

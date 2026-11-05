@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { defaultPetPreferences, petLabels, petStatuses, petScales, petWindowSize, type PetPreferences, type PetSnapshot, type PetStatus } from '../shared/pet';
+import { useEffect, useRef, useState,type CSSProperties } from 'react';
+import { defaultPetPreferences, petAppearances,petAppearanceLabels,naiwaClips,type PetAppearance, petLabels, petStatuses, petScales, petWindowSize, type PetPreferences, type PetSnapshot, type PetStatus } from '../shared/pet';
 import { AsyncButton } from './AsyncButton';
 import './pet.css';
 
@@ -21,9 +21,12 @@ function usePet() {
     try { const value = await window.berth.pet({ action: 'save', preferences }); setSnapshot(value); }
     catch (reason) { setSnapshot(previous); throw reason; }
   };
-  return { snapshot, setSnapshot, error, setError, save };
+  const [atlas,setAtlas]=useState<string|null>(null);
+  const appearance=snapshot.preferences.appearance,available=snapshot.availableAppearances?.includes('naiwa');
+  useEffect(()=>{let alive=true;setAtlas(null);if(appearance==='naiwa'&&available)void window.berth.pet<string|null>({action:'appearanceImage',appearance:'naiwa'}).then(value=>{if(alive)setAtlas(value);}).catch(reason=>{if(alive)setError(String(reason));});return()=>{alive=false;};},[appearance,available]);
+  return { snapshot, setSnapshot, error, setError, save,atlas };
 }
-function PetImage({ status, custom, revision = '', preview = false }: { status: PetStatus; custom?: string; revision?: string; preview?: boolean }) {
+function PetImage({ status, custom, revision = '', preview = false,appearance='dafeiyu',atlas }: { status: PetStatus; custom?: string; revision?: string; preview?: boolean;appearance?:PetAppearance;atlas?:string|null }) {
   const [image, setImage] = useState<string | null>(null), [still, setStill] = useState<string | null>(null);
   const [hovered, setHovered] = useState(false), [focused, setFocused] = useState(false);
   const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -58,7 +61,15 @@ function PetImage({ status, custom, revision = '', preview = false }: { status: 
   }, [image]);
   const animation = defaults[`./pet-assets/${status}.webp`], poster = defaults[`./pet-assets/${status}.png`] ?? animation;
   const animate = !reduced && (!preview || hovered || focused);
-  return <img draggable={false} className={preview ? "pet-character pet-preview" : "pet-character"} src={animate ? image ?? animation : still ?? poster}
+  if(appearance==='naiwa'&&!custom){
+    const clip=naiwaClips[status],steps=clip.loop?clip.frames:clip.frames-1;
+    const style={'--pet-row':clip.row,'--pet-end':steps,'--pet-steps':steps,'--pet-duration':clip.duration+'ms','--pet-loop':clip.loop?'infinite':1,backgroundImage:atlas?'url('+atlas+')':undefined} as CSSProperties;
+    return <span role="img" aria-label={petLabels[status]} data-appearance="naiwa" data-status={status} data-ready={!!atlas} className={'pet-character pet-naiwa'+(preview?' pet-preview':'')} title={preview?'悬停或聚焦预览动作':undefined} tabIndex={preview?0:undefined}
+      onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)}>
+      <span key={status} className={'pet-naiwa-frame'+(animate?' animate':'')} style={style}/>
+    </span>;
+  }
+  return <img draggable={false} data-appearance={custom?'custom':'dafeiyu'} className={preview ? "pet-character pet-preview" : "pet-character"} src={animate ? image ?? animation : still ?? poster}
     alt={petLabels[status]} title={preview ? '悬停或聚焦预览动作' : undefined} tabIndex={preview ? 0 : undefined}
     onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
     onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onError={() => setImage(null)} />;
@@ -70,7 +81,7 @@ function PetScale({ value, disabled, onChange }: { value: number; disabled: bool
 }
 
 export function DesktopPet() {
-  const { snapshot, error, setError } = usePet();
+  const { snapshot, error, setError,atlas } = usePet();
   const dragging = useRef(false), frame = useRef(0);
   const selected = snapshot.sessions.find(session => session.sessionId === snapshot.preferences.selectedSessionId) ?? snapshot.sessions[0];
   const status = selected?.status ?? 'idle';
@@ -103,13 +114,13 @@ export function DesktopPet() {
       }}
       onPointerUp={event => { endDrag(); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
       onPointerCancel={endDrag} onLostPointerCapture={endDrag}>
-      <PetImage status={status} custom={snapshot.images[status]} revision={String(snapshot.imageVersion)} />
+      <PetImage status={status} custom={snapshot.preferences.customImages?snapshot.images[status]:undefined} revision={String(snapshot.imageVersion)} appearance={snapshot.preferences.appearance} atlas={atlas}/>
     </button>
   </main>;
 }
 
 export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }: { projects?: import('../shared/protocol').Project[]; currentProjectId?: string; apiVersion?: number }) {
-  const { snapshot, setSnapshot, error, setError, save } = usePet();
+  const { snapshot, setSnapshot, error, setError, save,atlas } = usePet();
   const [busy, setBusy] = useState(false), [revision, setRevision] = useState(0), [guide, setGuide] = useState('');
   const [provider, setProvider] = useState<'claude' | 'opencode'>('claude'), [scope, setScope] = useState(currentProjectId ?? ''), [notice, setNotice] = useState('');
   useEffect(() => {
@@ -126,6 +137,13 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     <label className="pet-toggle"><input type="checkbox" checked={preferences.alwaysOnTop} disabled={busy} onChange={event => void apply({ alwaysOnTop: event.target.checked })} />保持在其他窗口上方</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.autoSwitch} disabled={busy} onChange={event => void apply({ autoSwitch: event.target.checked })} />等待处理或失败时，自动切换到对应会话</label>
     <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label><p className="form-hint">支持 50%–200%，也可右键桌宠图像，在“桌宠大小”中调节，自动保存。</p>
+    <h3>形象与动作</h3><label>桌宠形象<select aria-label="桌宠形象" value={preferences.appearance} disabled={busy} onChange={event=>{const appearance=event.target.value as PetAppearance;setBusy(true);setError('');void window.berth.pet({action:'selectAppearance',appearance}).then(setSnapshot).catch(reason=>setError(String(reason))).finally(()=>setBusy(false));}}>{petAppearances.map(appearance=><option key={appearance} value={appearance}>{petAppearanceLabels[appearance]}{appearance==='naiwa'&&!snapshot.availableAppearances?.includes('naiwa')?'（首次下载）':''}</option>)}</select></label>
+    {busy&&<p role="status" className="form-hint">正在更新桌宠…</p>}
+    <p className="form-hint">奶蛙首次选择时下载完整动作图集，之后可离线使用。素材来源：<AsyncButton className="text-button" onError={setError} onAction={()=>window.berth.openExternal('https://github.com/timerring/codex-pet-naiwa')}>codex-pet-naiwa</AsyncButton>。</p>
+    {Object.keys(snapshot.images).length>0&&<label className="pet-toggle"><input type="checkbox" checked={preferences.customImages} disabled={busy} onChange={event=>void apply({customImages:event.target.checked})}/>使用已导入的自定义动作</label>}
+    <p>悬停或聚焦预览动作；导入 GIF 可替换对应状态，恢复默认回到当前形象的动作。</p>
+    <div className="pet-animation-grid">{petStatuses.map(status => <div className="pet-animation" key={status}><PetImage preview status={status} custom={preferences.customImages?snapshot.images[status]:undefined} revision={String(snapshot.imageVersion) + revision} appearance={preferences.appearance} atlas={atlas}/><strong>{petLabels[status]}</strong><small>{preferences.customImages&&snapshot.images[status]||petAppearanceLabels[preferences.appearance]}</small><div><AsyncButton className="subtle" onError={setError} onAction={async () => { const value = await window.berth.pet<PetSnapshot | null>({ action: 'importImage', status }); if (!value) return 'cancelled'; setSnapshot(value); setRevision(value => value + 1); }}>导入 GIF</AsyncButton><AsyncButton className="text-button" disabled={!snapshot.images[status]} onError={setError} onAction={async () => { setSnapshot(await window.berth.pet({ action: 'resetImage', status })); setRevision(value => value + 1); }}>恢复默认</AsyncButton></div></div>)}</div>
+    <p className="form-hint">大肥鱼形象来自 dsh-pet（MIT），动作帧由 dsh-dafeiyu 提供。<AsyncButton className="text-button" onError={setError} onAction={() => window.berth.openExternal('https://github.com/PC2005-cloud/dsh-pet')}>素材来源</AsyncButton></p>
     <h3>Agent hook 自动配置</h3><p>适配已安装的 Claude Code 和 OpenCode，不安装 Agent、不修改模型与账号。安装后重新启动对应 Agent 会话。</p>
     <div className="skill-filters"><label>适配 Agent<select aria-label="桌宠适配 Agent" value={provider} onChange={event => { setProvider(event.target.value as typeof provider); setNotice(''); }}><option value="claude">Claude Code</option><option value="opencode">OpenCode</option></select></label><label>安装范围<select aria-label="桌宠适配范围" value={scope} onChange={event => { setScope(event.target.value); setNotice(''); }}><option value="">用户级 · 所有项目</option>{projects.map(project => <option key={project.id} value={project.id}>项目 · {project.name}</option>)}</select></label></div>
     <AsyncButton className="subtle" disabled={apiVersion < 38} onError={setError} onAction={async () => {
@@ -141,9 +159,6 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     <details className="pet-hook-guide"><summary>查看完整自动配置教程</summary><pre>{guide || '正在生成本机配置教程…'}</pre></details>
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const config = await window.berth.pet<string>({ action: 'hookConfig' }); await window.berth.copyText(config); }}>复制 Claude Code hook 配置</AsyncButton>
     <p className="form-hint">CLI Agent 需配置 hook 才能显示精确状态；ACP 与 Superagent 自动同步状态。</p>
-    <h3>形象与动作</h3><p>内置完整角色动画，悬停或聚焦可预览动作。可为每种状态导入自己的 GIF；恢复默认只替换对应动作。</p>
-    <div className="pet-animation-grid">{petStatuses.map(status => <div className="pet-animation" key={status}><PetImage preview status={status} custom={snapshot.images[status]} revision={String(snapshot.imageVersion) + revision} /><strong>{petLabels[status]}</strong><small>{snapshot.images[status] ?? '默认形象'}</small><div><AsyncButton className="subtle" onError={setError} onAction={async () => { const value = await window.berth.pet<PetSnapshot | null>({ action: 'importImage', status }); if (!value) return 'cancelled'; setSnapshot(value); setRevision(value => value + 1); }}>导入 GIF</AsyncButton><AsyncButton className="text-button" disabled={!snapshot.images[status]} onError={setError} onAction={async () => { setSnapshot(await window.berth.pet({ action: 'resetImage', status })); setRevision(value => value + 1); }}>恢复默认</AsyncButton></div></div>)}</div>
-    <p className="form-hint">默认形象来自 dsh-pet（MIT），动作帧由 dsh-dafeiyu 提供。<AsyncButton className="text-button" onError={setError} onAction={() => window.berth.openExternal('https://github.com/PC2005-cloud/dsh-pet')}>素材来源</AsyncButton></p>
     {error && <p className="form-error" role="alert">{error.replace(/^Error: /, '')}</p>}
   </section>;
 }

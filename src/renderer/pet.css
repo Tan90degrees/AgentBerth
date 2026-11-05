@@ -20,3 +20,9 @@ html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { b
 
 .pet-preview { pointer-events: auto; cursor: help; border-radius: 8px; }
 .pet-preview:focus-visible { outline: 2px solid var(--focus,#8cdec4); outline-offset: 3px; }
+
+.pet-naiwa { display:flex; align-items:center; justify-content:center; --pet-frame-height:160px; --pet-frame-width:calc(var(--pet-frame-height) * .9230769231); }
+.pet-animation .pet-naiwa { --pet-frame-height:100px; }
+.pet-naiwa-frame { display:block; width:var(--pet-frame-width); height:var(--pet-frame-height); flex:none; background-repeat:no-repeat; background-size:calc(var(--pet-frame-width) * 8) calc(var(--pet-frame-height) * 11); background-position:0 calc(var(--pet-frame-height) * var(--pet-row) * -1); }
+.pet-naiwa-frame.animate { animation:pet-naiwa-frames var(--pet-duration) steps(var(--pet-steps),end) var(--pet-loop) forwards; }
+@keyframes pet-naiwa-frames { from { background-position-x:0; } to { background-position-x:calc(var(--pet-frame-width) * var(--pet-end) * -1); } }

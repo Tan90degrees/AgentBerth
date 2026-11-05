@@ -1,8 +1,9 @@
 import type { MenuItemConstructorOptions } from 'electron';
-import { petLabels, petScales, type PetSnapshot } from '../shared/pet';
+import { petLabels, petScales,petAppearances,petAppearanceLabels,type PetAppearance, type PetSnapshot } from '../shared/pet';
 
 export interface PetMenuActions {
   select(id: string): void; scale(value: number): void;
+  appearance(value:PetAppearance):void;customImages(value:boolean):void;
   alwaysOnTop(value: boolean): void; autoSwitch(value: boolean): void;
   open(): void; settings(): void; hide(): void;
 }
@@ -17,6 +18,8 @@ export function petMenuTemplate(snapshot: PetSnapshot, actions: PetMenuActions):
     { type: 'separator' },
     { label: selected?.kind==='superagent'?'打开当前任务':'打开当前会话', enabled: !!selected, click: () => actions.open() },
     { label: '切换 Agent 会话', enabled: sessions.length > 0, submenu: sessions.map(session => ({ id: session.sessionId, label: label(`${session.project} / ${session.title} · ${petLabels[session.status]}`), type: 'radio', checked: session.sessionId === selected?.sessionId, click: () => actions.select(session.sessionId) })) },
+    {label:'桌宠形象',submenu:petAppearances.map(appearance=>({label:petAppearanceLabels[appearance]+(appearance==='naiwa'&&!snapshot.availableAppearances?.includes(appearance)?'（首次下载）':''),type:'radio' as const,checked:preferences.appearance===appearance,click:()=>actions.appearance(appearance)}))},
+    {label:'使用自定义动作',type:'checkbox',enabled:Object.keys(snapshot.images).length>0,checked:preferences.customImages,click:item=>actions.customImages(item.checked)},
     { label: '桌宠大小', submenu: scales.map(scale => ({ label: `${Math.round(scale * 100)}%`, type: 'radio', checked: preferences.scale === scale, click: () => actions.scale(scale) })) },
     { label: '保持置顶', type: 'checkbox', checked: preferences.alwaysOnTop, click: item => actions.alwaysOnTop(item.checked) },
     { label: '自动关注待处理会话', type: 'checkbox', checked: preferences.autoSwitch, click: item => actions.autoSwitch(item.checked) },
