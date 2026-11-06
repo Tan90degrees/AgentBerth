@@ -6,6 +6,17 @@ exports.apply = (ctx, config) => {
   try { receipts = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const source = ctx.berth.source({
     id: 'local', name: '本地模拟源', description: '只用于验证协议；通过 emit 命令提交事件。',
+    // These values belong to each pipeline, not to this plugin's global config.
+    pipelineConfigSchema: {
+      requiredText: {type:'string',title:'消息需包含',description:'仅此管道的来源规则；留空不过滤。',default:''},
+      minLength: {type:'number',title:'最短正文长度',minimum:0,maximum:16000,default:0},
+      allowMessages: {type:'boolean',title:'接收消息',default:true},
+      textField: {type:'string',title:'匹配字段',enum:['text','title'],default:'text'},
+    },
+    match(event, {config}, signal) {
+      if(signal.aborted)throw new Error('来源已停止');
+      return config.allowMessages && event.text.length >= config.minLength && (!config.requiredText || event[config.textField].includes(config.requiredText));
+    },
     async listThreads(signal) {
       if (signal.aborted) throw new Error('来源已停止');
       return [{id:'thread-1',name:'本地演示会话'}, {id:'thread-2',name:'另一组演示会话'}];

@@ -109,7 +109,7 @@ input:hover, select:hover, textarea:hover { border-color: var(--text-muted); }
 .sidebar .brand { gap: 9px; margin-bottom: 22px; }
 .brand-mark { width: 28px; height: 28px; }
 .brand strong { font-size: 15px; font-weight: 600; letter-spacing: -.3px; }
-.brand small { font-size: 10px; color: var(--text-muted); letter-spacing: 0; }
+.brand small { font-size: 11px; color: var(--text-muted); letter-spacing: 0; }
 .sidebar .quick-link {
   background: transparent;
   border: 1px solid var(--border);
@@ -229,3 +229,8 @@ input:hover, select:hover, textarea:hover { border-color: var(--text-muted); }
 
 .agent-definitions [role='alert'] { display: block; margin-top: 6px; color: var(--danger); }
 .plugin-check.plugin-check-failed { color: var(--danger) !important; }
+
+kbd { font-family: inherit; font-size: 10px; line-height: 1.6; padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-muted); color: var(--text-secondary); white-space: nowrap; }
+.quick-link kbd, .welcome-shortcuts-link kbd { background: transparent; color: var(--text-muted); }
+.success-toast button { color: var(--text-secondary); }
+.success-toast .toast-copy { color: var(--text); }

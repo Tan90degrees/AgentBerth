@@ -13,7 +13,7 @@ export function ServiceTerminal({session,connected,fontSize,windowsPty,onError}:
   }
   return <section className="service-terminal" aria-label="服务终端">
     <header className="service-toolbar"><div><strong>{stopping?'正在停止':running?'运行中':run?.status==='failed'?'启动失败':'已停止'}</strong><code title={session.command}>{session.command}</code></div><span>
-      <button className="subtle" disabled={!connected||pending||running||stopping} onClick={()=>void control('start')}>启动服务</button>
+      <button className="primary" disabled={!connected||pending||running||stopping} aria-busy={pending&&!running&&!stopping} onClick={()=>void control('start')}>{pending&&!running&&!stopping?'正在启动…':'启动服务'}</button>
       <button className="subtle" disabled={!connected||pending||!running} onClick={()=>void control('stop')}>停止服务</button>
       <button className="subtle" disabled={!connected||pending||stopping} onClick={()=>void control('restart')}>重启服务</button>
     </span></header>

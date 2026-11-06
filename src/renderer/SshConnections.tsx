@@ -36,15 +36,15 @@ export function SshConnectionEditor({ value, disabled, onSaved, onCancel, onErro
   </fieldset>;
 }
 
-export function SshConnections({disabled,onError}: {disabled:boolean;onError:(error:string)=>void}) {
+export function SshConnections({disabled,onError,onOpen}: {disabled:boolean;onError:(error:string)=>void;onOpen?:(alias:string)=>unknown|Promise<unknown>}) {
   const [notice,setNotice]=useState('');
   const [connections,setConnections]=useState<SshConnection[]>([]), [editing,setEditing]=useState<SshConnection|null|undefined>(undefined);
   const load=()=>window.berth.rpc<SshConnection[]>('sshConnections').then(value=>{setConnections(value);return true;}).catch(error=>{onError(String(error));return false;});
   useEffect(()=>{if(!disabled)void load();},[disabled]);
-  return <section className="settings-card" id="ssh-connections"><h2>服务器信息</h2><p>填写服务器别名和登录信息即可。Agent 通过 MCP 创建、打开、关闭和管理会话，远端操作实时显示在 SSH 面板。</p>
+  return <section className="settings-card" id="ssh-connections"><h2>服务器信息</h2><p>保存别名和登录信息后，可直接打开远端终端；允许 Agent 使用时，也可通过 MCP 按别名管理会话。</p>
     {notice&&<p role="status">{notice}</p>}
     {connections.length === 0 && <p className="form-hint">尚未保存连接。地址、用户名和密码均由你填写。</p>}
-    {connections.map(value=><div className="ssh-profile" key={value.id}><span><strong>{value.alias}</strong><small>{authLabels[value.authentication]} · {value.allowAgent?'允许 Agent 打开':'仅手动使用'}</small></span><button type="button" className="subtle" disabled={disabled} onClick={()=>setEditing(value)}>编辑</button><AsyncButton className="subtle danger-text" disabled={disabled} onError={onError} onAction={async()=>{await window.berth.deleteSshConnection(value.id);const ok=await load();if(ok)setNotice('连接已删除');return ok;}}>删除</AsyncButton></div>)}
+    {connections.map(value=><div className="ssh-profile" key={value.id}><span><strong>{value.alias}</strong><small>{authLabels[value.authentication]} · {value.allowAgent?'允许 Agent 打开':'仅手动使用'}</small></span>{onOpen&&<AsyncButton className="subtle" disabled={disabled} onError={onError} onAction={()=>onOpen(value.alias)}>打开终端</AsyncButton>}<button type="button" className="subtle" disabled={disabled} onClick={()=>setEditing(value)}>编辑</button><AsyncButton className="subtle danger-text" disabled={disabled} onError={onError} onAction={async()=>{await window.berth.deleteSshConnection(value.id);const ok=await load();if(ok)setNotice('连接已删除');return ok;}}>删除</AsyncButton></div>)}
     {editing === undefined ? <button type="button" className="subtle" disabled={disabled} onClick={()=>setEditing(null)}>新建 SSH 连接</button> : <SshConnectionEditor key={editing?.id??'new'} value={editing??undefined} disabled={disabled} onError={onError} onCancel={()=>setEditing(undefined)} onSaved={()=>{setEditing(undefined);setNotice('连接已保存');void load();}} />}
   </section>;
 }

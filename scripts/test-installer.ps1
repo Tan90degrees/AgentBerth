@@ -165,24 +165,30 @@ function Answer-Abort([bool]$yes) {
     return $false
   } 'Cancel confirmation did not appear' 5
   [SetupUi]::Capture($script:abortWindow,(Join-Path $result ('cancel-' + $yes + '.png')))
-  foreach($window in [SetupUi]::Dialogs()) {
-    if([SetupUi]::GetDlgItem($window,1) -ne [IntPtr]::Zero){
-      Assert ([SetupUi]::DetailsVisible($window)) 'Installation details are hidden'
-      Assert ([SetupUi]::ChildText($window).Contains('Preparing files:')) 'Byte percentage is not visible in the installer'
-      [SetupUi]::Capture($window,(Join-Path $result ('progress-' + $yes + '.png')))
-    }
-  }
+  # Inspect the actual progress page, not another visible installer/UAC dialog.
+  [SetupUi]::Capture($script:progressWindow,(Join-Path $result ('progress-' + $yes + '.png')))
+  Assert ([SetupUi]::DetailsVisible($script:progressWindow)) 'Installation details are hidden'
+  $caption = [SetupUi]::Text([SetupUi]::GetDlgItem($script:progressWindow,1038))
+  Assert ($caption -match 'Preparing files: \d+% \(') "Byte percentage is not visible in the installer: $caption"
   [SetupUi]::Click($script:abortWindow,$(if($yes){6}else{7}))
 }
 function Cancel-Preparation([bool]$yes) {
   Drive-To 'Preparing files:'
-  Assert (!(Has-Log 'COMMIT:')) 'Preparation completed before cancel could be tested'
-  foreach ($window in [SetupUi]::Dialogs()) {
-    if ([SetupUi]::GetDlgItem($window,1) -ne [IntPtr]::Zero) {
-      Assert ([SetupUi]::IsWindowEnabled([SetupUi]::GetDlgItem($window,2))) 'Cancel is disabled during preparation'
-      [SetupUi]::Click($window,2)
+  # A flushed progress log can precede the UI message; wait for both before
+  # opening the modal, which intentionally pauses further progress updates.
+  $script:progressWindow = [IntPtr]::Zero
+  Wait-Until {
+    foreach ($window in [SetupUi]::Dialogs()) {
+      if ([SetupUi]::DetailsVisible($window) -and [SetupUi]::Text([SetupUi]::GetDlgItem($window,1038)) -match 'Preparing files: \d+% \(') {
+        $script:progressWindow = $window
+        return $true
+      }
     }
-  }
+    return $false
+  } 'Installer progress caption did not become ready' 5
+  Assert (!(Has-Log 'COMMIT:')) 'Preparation completed before cancel could be tested'
+  Assert ([SetupUi]::IsWindowEnabled([SetupUi]::GetDlgItem($script:progressWindow,2))) 'Cancel is disabled during preparation'
+  [SetupUi]::Click($script:progressWindow,2)
   Answer-Abort $yes
 }
 function Move-LegacyFixture([string]$source, [string]$destination) {

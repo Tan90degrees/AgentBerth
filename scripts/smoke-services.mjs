@@ -11,10 +11,29 @@ import {cleanupSmoke} from './smoke-cleanup.mjs';
 const packaged=process.argv.includes('--packaged'),execute=promisify(execFile);
 const folder=await mkdtemp(path.join(os.tmpdir(),'berth-services-smoke-')),root=path.join(folder,'project');await mkdir(root);await mkdir('test-results',{recursive:true});
 let app,daemonPid,failure;const errors=[];
+const diagnostics=path.resolve('test-results/services-diagnostics',packaged?'packaged':'source');await mkdir(diagnostics,{recursive:true});
 try{
   const env={...process.env,AGENTBERTH_DATA_DIR:path.join(folder,'data')};delete env.ELECTRON_RUN_AS_NODE;
   const args=[...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged?[]:[path.resolve('.')]),'--user-data-dir='+path.join(folder,'profile'),'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader',...(process.platform==='linux'?['--no-sandbox']:[])];
   app=await electron.launch({executablePath:packaged?path.resolve('release/win-unpacked/AgentBerth.exe'):undefined,args,env,timeout:30000});
+  app.process().once('exit',(code,signal)=>{void writeFile(path.join(diagnostics,'process-exit.json'),JSON.stringify({code,signal})).catch(()=>{});});
+  // Preserve native crash and lifecycle evidence even if the main process exits
+  // before Playwright can collect a screenshot. No remote URL/query is logged.
+  await app.evaluate(({app,crashReporter},{diagnostics})=>{
+    const fs=process.getBuiltinModule('fs'),path=process.getBuiltinModule('path'),file=path.join(diagnostics,'lifecycle.jsonl');
+    const log=(event,detail={})=>fs.appendFileSync(file,JSON.stringify({at:new Date().toISOString(),event,...detail})+'\n');
+    app.setPath('crashDumps',diagnostics);crashReporter.start({uploadToServer:false});
+    app.on('web-contents-created',(_event,contents)=>{
+      const id=contents.id;log('created',{id,type:contents.getType()});
+      contents.on('did-finish-load',()=>log('loaded',{id}));
+      contents.on('render-process-gone',(_event,detail)=>log('renderer-gone',{id,...detail}));
+      contents.once('destroyed',()=>log('destroyed',{id}));
+    });
+    app.on('child-process-gone',(_event,detail)=>log('child-gone',detail));
+    app.on('before-quit',()=>log('before-quit'));app.on('will-quit',()=>log('will-quit'));
+    process.on('uncaughtExceptionMonitor',error=>log('uncaught',{message:error.message,stack:error.stack}));
+    log('ready');
+  },{diagnostics});
   const page=await app.firstWindow();page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(15000);
   const rpc=(method,params={})=>page.evaluate(({method,params})=>window.berth.rpc(method,params),{method,params});
   async function until(check){const end=Date.now()+20000;while(Date.now()<end){if(await check())return;await new Promise(r=>setTimeout(r,50));}throw new Error('Smoke condition timed out');}
@@ -107,11 +126,15 @@ try{
   await page.evaluate(({node,starts,fixture})=>window.berth.extensions({action:'configure',id:'deepseek-harness',config:{executable:node,args:JSON.stringify([fixture,starts])}}),{node,starts,fixture:path.resolve('tests/fixtures/harness-web.cjs')});
   await openExtensionView(page,'DeepSeek Harness');
   assert.equal(await page.getByLabel('Web 服务项目',{exact:true}).count(),0);await page.getByRole('button',{name:'启动',exact:true}).click();
-  await until(()=>app.evaluate(({webContents})=>webContents.getAllWebContents().some(w=>!w.isDestroyed()&&w.getTitle()==='Harness Native Fixture')));
+  // Wait on the browser target/DOM, rather than polling the main-process
+  // debugger for a WebContents title while Chromium is creating that target.
+  let nativePage;
+  await until(()=>{nativePage=app.context().pages().find(p=>p.url().startsWith('http://127.0.0.1:'));return !!nativePage;});
+  await nativePage.getByRole('heading',{name:'Harness Native',exact:true}).waitFor();
   const native=()=>app.evaluate(({webContents,BrowserWindow})=>{const w=webContents.getAllWebContents().find(w=>!w.isDestroyed()&&w.getTitle()==='Harness Native Fixture');if(!w)return null;const owner=BrowserWindow.getAllWindows().find(win=>win.getTitle().startsWith('AgentBerth')&&win.contentView.children.some(v=>v.webContents?.id===w.id));const view=owner?.contentView.children.find(v=>v.webContents?.id===w.id);return {id:w.id,url:w.getURL(),visible:view?.getVisible(),bounds:view?.getBounds(),preferences:w.getLastWebPreferences()};});
   await until(async()=>(await native())?.visible===true);
   const original=await native();assert.ok(original.bounds.width>400&&original.bounds.height>200);assert.equal(original.preferences.nodeIntegration,false);assert.equal(original.preferences.sandbox,true);assert.ok(!original.preferences.preload);
-  const nativePage=app.context().pages().find(p=>p.url().startsWith('http://127.0.0.1:'));assert.ok(nativePage,'Native web view must have an independent browser page');
+  assert.ok(nativePage,'Native web view must have an independent browser page');
   await nativePage.getByText('undefined/undefined/undefined',{exact:true}).waitFor();await nativePage.getByLabel('原生输入').fill('Native interaction works');await nativePage.getByRole('button',{name:'发送',exact:true}).click();await nativePage.locator('#result').getByText('Native interaction works',{exact:true}).waitFor();
   await page.screenshot({path:'test-results/harness-native-web-dark.png'});
   await nativePage.screenshot({path:'test-results/harness-original-frontend.png'});

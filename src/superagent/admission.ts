@@ -1,10 +1,10 @@
 import type {DatabaseSync} from 'node:sqlite';
 import type {SourceReceipt,SuperagentSourceEvent} from '../shared/superagent-source';
-import type {pipelineStore,SourcePipeline} from './pipelines';
+import {pipelineInputs,type pipelineStore,type SourcePipeline} from './pipelines';
 interface Envelope {source:string;eventId:string;threadId:string;actorId:string;at:string;event?:SuperagentSourceEvent;routes?:SourcePipeline[];receipt:SourceReceipt}
 export const receiptView=({event,routes,...value}:Envelope)=>value;
 /** Freeze subscribers before asynchronous admission. Each delivery has its own durable trigger. */
-export function sourceAdmission(db:DatabaseSync,pipelines:ReturnType<typeof pipelineStore>,create:(policy:SourcePipeline,source:string,event:SuperagentSourceEvent)=>Promise<{id:string;duplicate:boolean}>,alive:()=>boolean){
+export function sourceAdmission(db:DatabaseSync,pipelines:ReturnType<typeof pipelineStore>,create:(policy:SourcePipeline,source:string,event:SuperagentSourceEvent)=>Promise<{id:string;duplicate:boolean}>,alive:()=>boolean,match?:(source:string,event:SuperagentSourceEvent,pipeline:SourcePipeline)=>Promise<boolean>){
   const pending=new Map<string,Promise<SourceReceipt>>();
   const read=(source:string,eventId:string):Envelope|undefined=>{const row=db.prepare('SELECT value FROM source_events WHERE source=? AND eventId=?').get(source,eventId);return row?JSON.parse(String(row.value)):undefined;};
   const save=(value:Envelope)=>{if(!alive())throw new Error('插件已停止，请使用原事件 ID 确认结果');db.prepare('INSERT INTO source_events VALUES (?,?,?) ON CONFLICT(source,eventId) DO UPDATE SET value=excluded.value').run(value.source,value.eventId,JSON.stringify(value));};
@@ -12,20 +12,25 @@ export function sourceAdmission(db:DatabaseSync,pipelines:ReturnType<typeof pipe
     if(!alive())throw new Error('Superagent 已停止，事件尚未接收');
     let envelope=read(source,event.id),duplicate=!!envelope;
     if(envelope&&!envelope.event)return {...envelope.receipt,duplicate:true};
-    if(!envelope){const match=pipelines.match(source,event);envelope={source,eventId:event.id,threadId:event.threadId,actorId:event.actorId,at:new Date().toISOString(),event,routes:match.pipelines,receipt:{accepted:false,duplicate:false,deliveries:[],reason:match.reason}};save(envelope);}
+    if(!envelope){const match=pipelines.match(source,event);envelope={source,eventId:event.id,threadId:event.threadId,actorId:event.actorId,at:new Date().toISOString(),event,routes:match.pipelines,receipt:{accepted:false,duplicate:false,deliveries:match.filtered.map(item=>({pipelineId:item.id,pipelineName:item.name,filtered:true})),reason:match.reason}};save(envelope);}
     const deliveries=envelope.receipt.deliveries??[];
     for(const frozen of envelope.routes??[]){
-      if(deliveries.some(item=>item.pipelineId===frozen.id&&item.ticketId))continue;
+      if(deliveries.some(item=>item.pipelineId===frozen.id&&(item.ticketId||item.filtered)))continue;
       const delivery={pipelineId:frozen.id,pipelineName:frozen.name} as NonNullable<SourceReceipt['deliveries']>[number];
       try{
         const current=pipelines.get(frozen.id);if(!current)throw new Error('管道已删除');
         if(!current.enabled)throw new Error('管道已停用');
         if(current.projectId!==frozen.projectId)throw new Error('管道项目已更换；请恢复原项目后重试');
         // Keep admission scope frozen, but allow repairing credentials / agent settings before retry.
-        const task=await create({...current,projectId:frozen.projectId,autoApprove:frozen.autoApprove&&current.autoApprove},source,envelope.event!);delivery.ticketId=task.id;
+        if(match&&!await match(source,envelope.event!,frozen))delivery.filtered=true;
+        else {
+          // A source can be removed while its asynchronous matcher is running.
+          const latest=pipelines.get(frozen.id);if(!latest?.enabled||latest.projectId!==frozen.projectId||!pipelineInputs(latest).some(input=>input.sourceId===source)||!alive())throw new Error('管道已变更或停止，请确认后重试');
+          const task=await create({...latest,projectId:frozen.projectId,autoApprove:frozen.autoApprove&&latest.autoApprove},source,envelope.event!);delivery.ticketId=task.id;
+        }
       }catch(error){delivery.error=String(error).slice(0,500);}
       const index=deliveries.findIndex(item=>item.pipelineId===frozen.id);if(index<0)deliveries.push(delivery);else deliveries[index]=delivery;
-      const ticketIds=deliveries.flatMap(item=>item.ticketId?[item.ticketId]:[]);envelope.receipt={accepted:ticketIds.length>0,duplicate,ticketId:ticketIds[0],ticketIds,deliveries,reason:deliveries.some(item=>item.error)?'delivery_failed':undefined};save(envelope);
+      const ticketIds=deliveries.flatMap(item=>item.ticketId?[item.ticketId]:[]);envelope.receipt={accepted:ticketIds.length>0,duplicate,ticketId:ticketIds[0],ticketIds,deliveries,reason:deliveries.some(item=>item.error)?'delivery_failed':!ticketIds.length&&deliveries.some(item=>item.filtered)?'filtered':undefined};save(envelope);
     }
     if(deliveries.some(item=>item.error))throw new Error('部分管道接收失败；请修复接收记录中的错误，并使用原事件 ID 重试。已接收任务不会重复创建');
     delete envelope.event;delete envelope.routes;envelope.receipt.duplicate=duplicate;save(envelope);return envelope.receipt;

@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import {NaiwaPreset} from './pet-preset';
 import { defaultPetPreferences, petPreferencesSchema, type PetHook, type PetPreferences, type PetSession, type PetSnapshot, type PetStatus } from '../shared/pet';
 import type { State, Session } from '../shared/protocol';
 
@@ -13,6 +14,7 @@ export function gifData(bytes: Buffer): string {
 }
 
 export class PetState {
+  readonly naiwa:NaiwaPreset;
   preferences: PetPreferences = { ...defaultPetPreferences };
   private state: State | null = null;
   private connected = false;
@@ -22,7 +24,9 @@ export class PetState {
   private images: Partial<Record<PetStatus, string>> = {};
   constructor(private folder: string, private changed: () => void = () => {}) {
     mkdirSync(folder, { recursive: true, mode: 0o700 });
+    this.naiwa=new NaiwaPreset(path.join(folder,'presets','naiwa'));
     try { this.preferences = petPreferencesSchema.parse(JSON.parse(readFileSync(path.join(folder, 'settings.json'), 'utf8'))); } catch { /* Missing or invalid preferences use safe defaults. */ }
+    if(this.preferences.appearance==='naiwa'&&!this.naiwa.ready)this.preferences={...this.preferences,appearance:'dafeiyu'};
   }
   private persist(preferences: PetPreferences) {
     const file = path.join(this.folder, 'settings.json');
@@ -34,7 +38,7 @@ export class PetState {
     const selectedSessionId = sessions.some(session => session.sessionId === preferences.selectedSessionId) ? preferences.selectedSessionId : sessions[0]?.sessionId ?? '';
     return selectedSessionId === preferences.selectedSessionId ? preferences : { ...preferences, selectedSessionId };
   }
-  save(value: unknown) { const preferences = this.selection(petPreferencesSchema.parse(value)); this.persist(preferences); this.preferences = preferences; this.changed(); }
+  save(value: unknown) { const preferences = this.selection(petPreferencesSchema.parse(value));if(preferences.appearance==='naiwa'&&!this.naiwa.ready)throw new Error('请先下载奶蛙素材'); this.persist(preferences); this.preferences = preferences; this.changed(); }
   connection(connected: boolean) { this.connected = connected; this.changed(); }
   update(state: State) {
     const previous=this.activityStatuses;this.activityStatuses=new Map((state.agentActivities??[]).map(value=>[value.id,value.status]));
@@ -65,12 +69,12 @@ export class PetState {
       return { sessionId: session.id, runId: run.id, title: session.title, project: projects.get(session.projectId) ?? '', status, label, hooked: !!hook, updatedAt: hook?.updatedAt ?? Date.parse(run.startedAt) };
     });
     for(const value of activities){if(managed.has(value.id))continue;sessions.push({sessionId:value.id,runId:value.id,title:value.title,project:projects.get(value.projectId)??'',status:this.connected?value.status:'unknown',label:this.connected?value.label:'后台连接已断开',hooked:true,updatedAt:value.updatedAt,targetSessionId:value.targetSessionId,pluginId:value.pluginId,taskId:value.taskId,kind:value.kind});}
-    return { preferences: { ...this.preferences }, sessions, connected: this.connected, images: { ...this.images }, imageVersion: this.imageVersion };
+    return { preferences: { ...this.preferences }, sessions, connected: this.connected, images: { ...this.images }, imageVersion: this.imageVersion,availableAppearances:this.naiwa.ready?['dafeiyu','naiwa']:['dafeiyu'] };
   }
   importImage(status: PetStatus, bytes: Buffer, name: string) {
     gifData(bytes);
     writeFileSync(path.join(this.folder, status + '.gif'), bytes, { mode: 0o600 });
-    this.images[status] = path.basename(name); this.imageVersion++; this.changed();
+    this.images[status] = path.basename(name); this.imageVersion++; this.save({...this.preferences,customImages:true});
   }
   resetImage(status: PetStatus) { rmSync(path.join(this.folder, status + '.gif'), { force: true }); delete this.images[status]; this.imageVersion++; this.changed(); }
   image(status: PetStatus): string | null {

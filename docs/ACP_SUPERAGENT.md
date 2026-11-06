@@ -118,6 +118,12 @@ exports.apply = ctx => {
 
 此代码展示契约，`sendOnce` / `subscribe` / `acknowledge` 由插件实现；可直接运行的示例在 `examples/superagent-source-local`。
 
+### 管道扩展字段
+
+`ctx.berth.source()` 可声明 `pipelineConfigSchema`（字段类型与插件清单配置一致，另支持 `required`），并实现 `match(event, {pipelineId,pipelineName,config}, signal)`。宿主生成来源专属配置表单，在 `inputs[].config` 中按管道与来源分别保存、校验并补充默认值。`match` 返回 `false` 仅过滤此管道；异常保留失败回执，可用原事件 ID 重试。无 schema / match 的旧插件继续按原方式接收。
+
+管道另提供独立 `filter:{includeKeywords,excludeKeywords,mode:'any'|'all',caseSensitive}`；关键词先于插件匹配执行，不需要插件在全局过滤消息。完整字段约束、执行顺序、热更新和重试边界见 [开发指南](SUPERAGENT_SOURCE_DEVELOPMENT.md#管道专属配置与关键词过滤)。
+
 ### 契约与生命周期
 
 | 项目 | 约定 |

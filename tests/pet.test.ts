@@ -193,12 +193,13 @@ test('pet size settings persist the full supported range and reject invalid dime
 
 test('image context menu exposes Agent operations, checked preferences and empty-state settings', t => {
   const { pet, a, b } = fixture(t), calls: unknown[] = [];
-  const actions: PetMenuActions = { select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), hide: () => calls.push('hide') };
+  const actions: PetMenuActions = {appearance:value=>calls.push(value),customImages:value=>calls.push(value), select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), hide: () => calls.push('hide') };
   const items = petMenuTemplate(pet.snapshot(), actions);
   const choose = (label: string) => { const item = items.find(item => item.label === label)!; assert.ok(item); return item; };
   const sessions = choose('切换 Agent 会话').submenu as Electron.MenuItemConstructorOptions[];
   assert.deepEqual(sessions.map(item => item.id), [a.id, b.id]);
   assert.equal(sessions[0].checked, true);
+  const appearances=choose('桌宠形象').submenu as Electron.MenuItemConstructorOptions[];assert.equal(appearances[0].label,'大肥鱼');assert.equal(appearances[0].checked,true);assert.equal(appearances[1].label,'奶蛙 · 奶龙大笑（首次下载）');assert.equal(choose('使用自定义动作').enabled,false);
   const click = (item: Electron.MenuItemConstructorOptions) => item.click!({ checked: false } as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
   click(sessions[1]);
   const scales = choose('桌宠大小').submenu as Electron.MenuItemConstructorOptions[];

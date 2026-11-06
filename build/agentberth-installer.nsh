@@ -165,8 +165,10 @@ FunctionEnd
         StrCpy $BerthProgress $BerthPercent
         StrCpy $BerthMessage "准备文件 / Preparing files: $BerthProgress% ($BerthCompleted / $BerthTotal bytes)"
         StrCpy $BerthLine "[progress] $BerthMessage"
-        Call BerthAppend
+        ; Publish the visible progress before the log acknowledges this stage.
+        ; Cancellation can pause the worker as soon as another thread sees it.
         SendMessage $BerthProgressHeader ${WM_SETTEXT} 0 "STR:$BerthMessage" /TIMEOUT=500
+        Call BerthAppend
       ${EndIf}
     ${EndIf}
   FunctionEnd

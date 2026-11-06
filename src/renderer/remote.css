@@ -17,9 +17,10 @@
 .ssh-editor label {display:flex;flex-direction:column;gap:6px;}
 .ssh-editor .ssh-check {flex-direction:row;align-items:center;}
 .ssh-check input {width:auto;flex:none;}
-.ssh-profile {display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);}
-.ssh-profile>span {flex:1;min-width:0;}
+.ssh-profile {display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);}
+.ssh-profile>span {flex:1 1 180px;min-width:0;}
 .ssh-profile small {display:block;color:var(--text-muted);margin-top:4px;}
+.ssh-profile button {flex-shrink:0;white-space:nowrap;}
 
 .workbench-split {display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden;}
 .workbench-split[hidden], .workspace-host[hidden], .ssh-dock-slot[hidden], .ssh-dock[hidden] {display:none!important;}
@@ -34,11 +35,13 @@
 .ssh-dock-header h2 {font-size:12px;line-height:20px;margin:0;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ssh-dock-header select {flex:1;min-width:100px;max-width:340px;font-size:11px;padding:4px 8px;}
 .ssh-dock-header button {white-space:nowrap;font-size:11px;}
-.ssh-dock-empty {padding:16px;color:var(--text-secondary);font-size:12px;}
-.ssh-dock-empty small {color:var(--text-muted);}
+.ssh-dock-empty {display:flex;flex:1;flex-direction:column;align-items:flex-start;justify-content:center;gap:10px;padding:24px;color:var(--text-secondary);font-size:12px;}
+.ssh-dock-empty p {margin:0;line-height:1.6;}
+.ssh-dock-empty small {color:var(--text-muted);line-height:1.5;}
+.ssh-empty-actions {display:flex;flex-wrap:wrap;gap:8px;}
 .ssh-toggle {display:inline-flex;gap:6px;align-items:center;}
-.ssh-toggle.selected {background:var(--surface-hover);color:var(--text);}
-.ssh-count {font-size:10px;min-width:14px;border-radius:4px;background:var(--surface-hover);}
+.ssh-toggle.selected {background:var(--selected);color:var(--text);}
+.ssh-count {font-size:10px;min-width:14px;border-radius:4px;background:var(--selected);}
 .remote-current {display:flex;align-items:center;gap:10px;padding:3px 12px 6px;font-size:11px;color:var(--text-muted);min-width:0;}
 .remote-current code {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;color:var(--text-secondary);}
 
