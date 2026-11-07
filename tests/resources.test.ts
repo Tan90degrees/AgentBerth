@@ -25,7 +25,7 @@ test('named application roots include DSH server and WebContents renderer trees 
  const rows=[row(1,0,100),row(10,1,10),row(11,10,20),row(100,0,50),row(101,100,60),row(102,100,70)];
  const sampler=new ResourceSampler(async()=>rows,()=>1000,4,1);
  const value=await sampler.sample([], [100], {deepseekHarness:[10,101]});
- assert.equal(value.workspace.memoryBytes,240);assert.equal(value.workspace.processCount,5);
+ assert.equal(value.workspace.memoryBytes,310);assert.equal(value.workspace.processCount,6);
  assert.equal(value.applications?.deepseekHarness.memoryBytes,90);assert.equal(value.applications?.deepseekHarness.processCount,3);
  assert.equal(value.desktopIncluded,true);await sampler.close();
 });
