@@ -61,7 +61,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   useEffect(()=>{if(!sshWindow)saveStored('berth.rightSidebarView',rightSidebarView);},[rightSidebarView,sshWindow]);
   const [fileTreeHost, setFileTreeHost] = useState<HTMLDivElement | null>(null);
   const [filePreviewHost, setFilePreviewHost] = useState<HTMLDivElement | null>(null);
-  const [filesActivated, setFilesActivated] = useState(false);
+  const [filesActivated, setFilesActivated] = useState(()=>rightSidebarView==='files'&&!rightSidebarCollapsed);
   const [fileTarget, setFileTarget] = useState<{ projectId: string; query: string; nonce: number } | null>(null);
   const fileTargetSequence = useRef(0);
   const consumeFileTarget = useCallback((nonce: number) => setFileTarget(current => current?.nonce === nonce ? null : current), []);
