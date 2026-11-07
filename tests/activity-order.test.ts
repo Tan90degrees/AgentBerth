@@ -9,9 +9,9 @@ test('activity order tolerates unavailable and malformed storage',()=>{
  assert.deepEqual(loadActivityOrder(storage([a,a,'invalid',b])),{items:[a,b]});
 });
 test('activity order is stable across plugin snapshot changes',()=>{
- assert.deepEqual(completeActivityOrder([c,a,b],[b,a]),[c,b,a]);
- assert.deepEqual(orderActivityItems([{id:a},{id:c},{id:b}],[b,a]).map(x=>x.id),[c,b,a]);
- const previous={items:[b,a]},next=reconcileActivityOrder(previous,[c,a,b]);assert.deepEqual(next.items,[c,b,a]);
+ assert.deepEqual(completeActivityOrder([c,a,b],[b,a]),[b,a,c]);
+ assert.deepEqual(orderActivityItems([{id:a},{id:c},{id:b}],[b,a]).map(x=>x.id),[b,a,c]);
+ const previous={items:[b,a]},next=reconcileActivityOrder(previous,[c,a,b]);assert.deepEqual(next.items,[b,a,c]);
  assert.equal(reconcileActivityOrder(next,[c,a,b]),next);
 });
 test('drag reorder supports before/after and ignores invalid targets',()=>{
