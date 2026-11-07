@@ -2,7 +2,6 @@ import { SuccessToast, type ToastAction } from './SuccessToast';
 import { dismissNotice, pushNotice, type Notice } from './notice-queue';
 import { WorkspaceSkeleton } from './WorkspaceSkeleton';
 import {reconcileSidebarOrder,loadSidebarOrder,orderSidebarItems,completeSidebarOrder,moveSidebarItem,type SidebarMove} from './sidebar-order';
-import { PluginLauncher } from './PluginLauncher';
 import { ExtensionsContext } from './ExtensionManager';
 import { ExtensionView } from './ExtensionView';
 import { extensionEnabled } from '../shared/extensions';
@@ -30,10 +29,10 @@ import type { Modal, ModalInitial, ModalRequest, ModalTarget, ProjectFormValues,
 import { QuickSwitcher, type SwitchTarget } from './QuickSwitcher';
 import { ShortcutsDialog } from './ShortcutsDialog';
 import { loadCollapsedProjects, loadSelections, loadSettingsDraft, readStored, saveStored, type SettingsDraft } from './storage';
-import { handleTabKeyDown } from './tab-navigation';
 import { getWorkspaceState, publishWorkspaceState, useStableCallback, useWorkspaceState } from './workspace-state';
 
 import { matchesSession, ProjectTree, ResizableSidebar } from './WorkspaceSidebar';
+import { ActivityBar } from './ActivityBar';
 
 const active = (session: Session) => ['running', 'stopping'].includes(session.latestRun?.status ?? '');
 const FileBrowser = lazy(() => import('./FileBrowser'));
@@ -47,7 +46,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const features={workspace:true,agents:true,ssh:true,pet:extensionEnabled(state.extensions,'pet'),files:true,git:true,resources:true,appearance:true};
   const [extensionView,setExtensionView]=useState<{pluginId:string;viewId:string;taskId?:string;sessionId?:string}|null>(null);
   const selectedExtension=state.extensions?.plugins.find(p=>p.manifest.id===extensionView?.pluginId&&p.status==='active');
-  useEffect(()=>{if(!features.files&&sidebarView==='files'||!features.git&&sidebarView==='git')setSidebarView('sessions');if(!features.files&&tab==='preview')setTab('terminal');if(!features.ssh)setSshOpen(false);if(!features.git)setGitPreview(null);if(!features.workspace){setPage('plugins');}if(extensionView&&!selectedExtension)setExtensionView(null);},[features.files,features.git,features.ssh,features.workspace,selectedExtension?.manifest.id]);
+  useEffect(()=>{if(!features.files&&tab==='preview')setTab('terminal');if(!features.ssh)setSshOpen(false);if(!features.git)setGitPreview(null);if(!features.workspace){setPage('plugins');}if(extensionView&&!selectedExtension)setExtensionView(null);},[features.files,features.git,features.ssh,features.workspace,selectedExtension?.manifest.id]);
   const [sidebarOrder,setSidebarOrder]=useState(loadSidebarOrder);
   const workspaceProjects=useMemo(()=>orderSidebarItems(state.projects.filter(project=>!project.remoteWorkspace),sidebarOrder.projects),[state.projects,sidebarOrder.projects]);
   const [projectId, setProjectId] = useState(() => readStored('berth.project') ?? '');
@@ -55,7 +54,11 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>readStored('berth.sidebarCollapsed')==='true');
   useEffect(()=>{if(!sshWindow)saveStored('berth.sidebarCollapsed',String(sidebarCollapsed));},[sidebarCollapsed]);
-  const [sidebarView, setSidebarView] = useState<'sessions' | 'files' | 'git'>(() => readStored('berth.sidebarView') === 'git' ? 'git' : readStored('berth.sidebarView') === 'files' || readStored('berth.filesOpen') === 'true' ? 'files' : 'sessions');
+  const sidebarView='sessions';
+  const [rightSidebarCollapsed,setRightSidebarCollapsed]=useState(()=>readStored('berth.rightSidebarCollapsed')!=='false');
+  const [rightSidebarView,setRightSidebarView]=useState<'files'|'git'>(()=>readStored('berth.rightSidebarView')==='git'?'git':'files');
+  useEffect(()=>{if(!sshWindow)saveStored('berth.rightSidebarCollapsed',String(rightSidebarCollapsed));},[rightSidebarCollapsed,sshWindow]);
+  useEffect(()=>{if(!sshWindow)saveStored('berth.rightSidebarView',rightSidebarView);},[rightSidebarView,sshWindow]);
   const [fileTreeHost, setFileTreeHost] = useState<HTMLDivElement | null>(null);
   const [filePreviewHost, setFilePreviewHost] = useState<HTMLDivElement | null>(null);
   const [filesActivated, setFilesActivated] = useState(false);
@@ -66,9 +69,9 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [gitPreview, setGitPreview] = useState<GitDiffRequest | null>(null);
   const openPreview = useCallback(() => { setGitPreview(null); setTab('preview'); }, []);
   const openDiff = useCallback((path: string, staged: boolean, projectPath = false) => { setPage('workspace'); setFilesActivated(true); setTab('preview'); setGitPreview({ projectId, worktreePath: selectedWorktreePath, path, staged, projectPath }); }, [projectId, selectedWorktreePath]);
-  const openGit = (value: Project) => { setSidebarCollapsed(false); if (value.id !== projectId) setSelectedWorktreePath(null); setProjectId(value.id); setSidebarView('git'); setPage('workspace'); };
+  const openGit = (value: Project) => { setRightSidebarView('git');setRightSidebarCollapsed(false);if (value.id !== projectId) setSelectedWorktreePath(null);setProjectId(value.id);setPage('workspace'); };
   useEffect(() => { setGitPreview(null); }, [projectId]);
-  const openPath = useCallback((query: string) => { setSidebarCollapsed(false);setPage('workspace'); setSidebarView('files'); setFilesActivated(true); setFileTarget({ projectId, query, nonce: ++fileTargetSequence.current }); }, [projectId]);
+  const openPath = useCallback((query: string) => { setRightSidebarView('files');setRightSidebarCollapsed(false);setPage('workspace');setFilesActivated(true);setFileTarget({ projectId, query, nonce: ++fileTargetSequence.current }); }, [projectId]);
   const [page, setPage] = useState<'workspace' | 'settings' | 'plugins'>('workspace');
   const [pluginTab,setPluginTab] = useState<PluginCenterTab>(()=>readStored('berth.pluginTab')==='agents'?'agents':'installed');
   const [requestedPlugin,setRequestedPlugin]=useState<string|null>(null);
@@ -194,7 +197,6 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     if (session) remembered.current[projectId] = session.id;
     saveStored('berth.selections', JSON.stringify(remembered.current));
   }, [workspaceProjects, state.sessions, projectId, sessionId, loading]);
-  useEffect(() => { if(sshWindow)return;saveStored('berth.sidebarView', sidebarView); saveStored('berth.filesOpen', null); if (sidebarView === 'files') setFilesActivated(true); }, [sidebarView]);
   useEffect(() => { if(sshWindow)return;saveStored('berth.project', projectId); }, [projectId]);
   useEffect(() => { if(sshWindow)return;saveStored('berth.session', sessionId); setTerminalVisible(true); }, [sessionId]);
 
@@ -295,11 +297,11 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       const current = shortcuts.current;
       if (event.isComposing || event.getModifierState('AltGraph') || current.modal || document.querySelector('[role="dialog"], [role="menu"]') || current.busy || !(event.ctrlKey || event.metaKey)) return;
       const value = event.key.toLowerCase();
-      if(value==='b'&&!event.shiftKey&&!event.altKey){if((event.target as HTMLElement)?.closest?.('.terminal-surface'))return;event.preventDefault();event.stopPropagation();document.querySelector<HTMLButtonElement>('.sidebar-collapse')?.focus();setSidebarCollapsed(value=>!value);}
+      if(value==='b'&&!event.shiftKey&&!event.altKey){if((event.target as HTMLElement)?.closest?.('.terminal-surface'))return;event.preventDefault();event.stopPropagation();document.querySelector<HTMLButtonElement>('.activity-bar button[aria-label*="侧栏"]')?.focus();setSidebarCollapsed(value=>!value);}
       else if (value === '/' && !event.shiftKey && !event.altKey) { if ((event.target as HTMLElement)?.closest?.('.terminal-surface')) return; event.preventDefault(); event.stopPropagation(); current.openShortcuts(); }
       else if (value === 'p' && event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); if (current.quickOpen) setQuickOpen(false); else current.openQuick(); }
-      else if (value === 'e' && event.shiftKey && !event.altKey && current.project && current.features.files) { event.preventDefault(); event.stopPropagation(); setSidebarCollapsed(false);setPage('workspace'); setSidebarView(value => value === 'files' ? 'sessions' : 'files'); }
-      else if (value === 'g' && event.shiftKey && !event.altKey && current.project && current.features.git) { event.preventDefault(); event.stopPropagation(); setSidebarCollapsed(false);setPage('workspace'); setSidebarView('git'); }
+      else if (value === 'e' && event.shiftKey && !event.altKey && current.project && current.features.files) { event.preventDefault(); event.stopPropagation(); setRightSidebarView('files');setRightSidebarCollapsed(false);setFilesActivated(true);setPage('workspace'); }
+      else if (value === 'g' && event.shiftKey && !event.altKey && current.project && current.features.git) { event.preventDefault(); event.stopPropagation(); setRightSidebarView('git');setRightSidebarCollapsed(false);setPage('workspace'); }
       else if (value === ',' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); setQuickOpen(false); setPage('settings'); setError(''); }
       else if ((value === 'n' || value === 'o') && event.shiftKey && !event.altKey && !current.manageDisabled && !current.quickOpen) { event.preventDefault(); event.stopPropagation(); if (value === 'o') current.newProject(); else if (current.project) current.newSession(); else notify('请先添加一个项目'); }
       else if (value === 'tab' && !event.altKey && !current.quickOpen && current.page === 'workspace') { event.preventDefault(); event.stopPropagation(); current.cycleSession(event.shiftKey); }
@@ -437,43 +439,21 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
 
   return <ExtensionsContext.Provider value={state.extensions}><div className={sshWindow?"ssh-window app":"app"}>
     {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= 14} />
-    <ResizableSidebar collapsed={sidebarCollapsed}>
-      <button type="button" className="sidebar-collapse icon-button" aria-label={sidebarCollapsed?'展开侧栏':'收起侧栏'} aria-expanded={!sidebarCollapsed} aria-controls="sidebar-content" aria-keyshortcuts="Control+B Meta+B" title={`${sidebarCollapsed?'展开':'收起'}侧栏 · Ctrl+B（终端外）`} onClick={()=>setSidebarCollapsed(value=>!value)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d={sidebarCollapsed?'m13 9 3 3-3 3':'m16 9-3 3 3 3'}/></svg></button>
-      <div className="sidebar-rail" hidden={!sidebarCollapsed}>
-        <nav aria-label="侧栏快捷切换">
-          <button type="button" className="icon-button" aria-label="会话" title="会话" aria-pressed={page==='workspace'&&sidebarView==='sessions'} onClick={()=>{setSidebarView('sessions');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="terminal" />{localUnread&&<span className="rail-unread" aria-label="有新输出" />}</button>
-          <button type="button" className="icon-button" aria-label="文件" title="文件 · Ctrl+Shift+E" disabled={!features.files||!project||state.apiVersion<16} aria-pressed={page==='workspace'&&sidebarView==='files'} onClick={()=>{setSidebarView('files');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="folder" /></button>
-          <button type="button" className="icon-button" aria-label="Git" title="Git · Ctrl+Shift+G" disabled={!features.git||!project} aria-pressed={page==='workspace'&&sidebarView==='git'} onClick={()=>{setSidebarView('git');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="git" /></button>
-        </nav>
-        <div className="sidebar-rail-bottom">{sidebarCollapsed&&<PluginLauncher compact snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} onSelect={stableSelectView} onManage={stableOpenPlugins}/>}<button type="button" className="icon-button" aria-label="插件" title="插件中心" aria-pressed={page==='plugins'} onClick={()=>openPlugins()}><Icon kind="plugins" /></button><button type="button" className="icon-button" aria-label="设置" title="设置 · Ctrl+," aria-pressed={page==='settings'} onClick={()=>{setPage('settings');setError('');}}><Icon kind="settings" /></button>{features.appearance&&<AppearanceToggle />}</div>
-      </div>
+    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
+    <ResizableSidebar collapsed={sidebarCollapsed} side="left">
       <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
-      <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>
-      <button className="quick-link" onClick={openQuick} title="Ctrl+Shift+P">快速切换<kbd>Ctrl+Shift+P</kbd></button>
-      <div className="sidebar-tabs" role="tablist" aria-label="侧栏视图" onKeyDown={handleTabKeyDown}>
-        <button id="sidebar-tab-sessions" role="tab" aria-label="会话" aria-controls="sidebar-panel-sessions" aria-selected={sidebarView === 'sessions'} tabIndex={sidebarView === 'sessions' ? 0 : -1} onClick={() => { setSidebarView('sessions'); setPage('workspace'); }}><Icon kind="terminal" />会话{localUnread && sidebarView !== 'sessions' && <OutputBadge />}</button>
-        <button id="sidebar-tab-files" role="tab" aria-controls="sidebar-panel-files" aria-selected={sidebarView === 'files'} tabIndex={sidebarView === 'files' ? 0 : -1} disabled={!features.files || !project || state.apiVersion < 16} title="项目文件 · Ctrl+Shift+E" onClick={() => { setSidebarView('files'); setPage('workspace'); }}><Icon kind="folder" />文件</button>
-        <button id="sidebar-tab-git" role="tab" aria-controls="sidebar-panel-git" aria-selected={sidebarView === 'git'} tabIndex={sidebarView === 'git' ? 0 : -1} disabled={!features.git||!project} title="源代码管理 · Ctrl+Shift+G" onClick={() => { setSidebarView('git'); setPage('workspace'); }}><Icon kind="git" />Git</button>
-      </div>
-      <div id="sidebar-panel-sessions" className="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-sessions" hidden={sidebarView !== 'sessions'}>
+        <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>
+        <button className="quick-link" onClick={openQuick} title="Ctrl+Shift+P">快速切换<kbd>Ctrl+Shift+P</kbd></button>
+      <div id="sidebar-panel-sessions" className="sidebar-panel" aria-label="会话管理">
       <div className="sidebar-heading"><span>项目与会话</span><div className="tree-actions"><button type="button" className="icon-button" aria-label="全部展开" title="全部展开" disabled={!workspaceProjects.length} onClick={()=>{setCollapsed([]);setSearchCollapsed([]);}}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><path d="m4 3 4 3 4-3M4 9l4 3 4-3"/></svg></button><button type="button" className="icon-button" aria-label="全部折叠" title="全部折叠" disabled={!workspaceProjects.length} onClick={()=>{const ids=workspaceProjects.map(project=>project.id);setCollapsed(ids);setSearchCollapsed(ids);}}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><path d="m4 6 4-3 4 3M4 12l4-3 4 3"/></svg></button><button className="icon-button" aria-label="添加项目" onClick={newProject} disabled={manageDisabled}><Icon kind="plus" /></button></div></div>
       {workspaceProjects.length > 0 && <div className="tree-search"><input className="search" placeholder="搜索项目、会话或目录…" value={search} onChange={event => setSearch(event.target.value)} aria-label="搜索项目和会话" /><select className="session-filter" aria-label="筛选会话" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部会话</option><option value="active">运行中</option><option value="inactive">未运行</option>{Object.entries(agentNames).filter(([value])=>value==='shell'||value!=='custom'&&features.agents&&(!['codex','claude','opencode'].includes(value)||extensionEnabled(state.extensions,'agent.'+value))).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{(search || filter !== 'all') && <button className="clear-filter" onClick={clearFilter}>清除筛选</button>}</div>}
       <ProjectTree unread={unread} projects={workspaceProjects} sessions={sidebarSessions} projectId={page === 'workspace' ? projectId : ''} sessionId={page === 'workspace' ? sessionId : ''} collapsed={treeSearching?(searchCollapsed??[]):collapsed} query={deferredSearch} filter={filter} names={agentNames} disabled={manageDisabled} onToggle={stableToggle} onProject={selectProject} onSession={selectSession} onNewSession={stableNewSession} onOpenFolder={stableOpenFolder} onMenu={setTreeMenu} onMove={reorderSidebar} onClearFilter={stableClearFilter} />
       </div>
-      <div id="sidebar-panel-files" className="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-files" hidden={sidebarView !== 'files'}>
-        <div className="file-project-picker"><select aria-label="文件所属项目" value={projectId} onChange={event => { selectProject(event.target.value); setFileTarget(null); }}>{workspaceProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-        <div className="sidebar-files-host" ref={setFileTreeHost} />
-      </div>
-      <div id="sidebar-panel-git" className="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-git" hidden={sidebarView !== 'git'}>
-        <div className="file-project-picker"><select aria-label="Git 所属项目" value={projectId} onChange={event => selectProject(event.target.value)}>{workspaceProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-        {features.git && project && <WorktreeManager key={`${project.id}:${project.path}`} project={project} enabled={connected && state.apiVersion >= 43} visible={sidebarView === 'git' && page === 'workspace'} selectedPath={selectedWorktreePath} onSelect={setSelectedWorktreePath} onNewSession={path => newSession(project.id, path)} onNotice={notify} onError={setError} />}
-        {features.git && project && <GitSidebar key={`${project.id}:${project.path}:git`} project={project} enabled={connected && state.apiVersion >= 13} visible={sidebarView === 'git' && page === 'workspace'} supported={state.apiVersion >= 18} worktreePath={selectedWorktreePath} onDiff={openDiff} onNotice={notify} onError={setError} />}
-      </div>
-      {!sidebarCollapsed&&<PluginLauncher snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} onSelect={stableSelectView} onManage={stableOpenPlugins}/>}<div className="sidebar-settings"><button className={`settings-link ${page === 'plugins' ? 'selected' : ''}`} onClick={()=>openPlugins()} title="管理插件与 Agent 接入" aria-label="插件"><Icon kind="plugins" />插件</button><button className={`settings-link ${page === 'settings' ? 'selected' : ''}`} onClick={() => { setPage('settings'); setError(''); }} title="Ctrl+," aria-label="设置"><Icon kind="settings" />设置{draftDirty && <span className="draft-dot" title="有未保存的设置草稿" />}</button>{features.appearance&&<AppearanceToggle />}</div>
-      <div className="workspace-resources"><span>工作台</span><ResourceBadge scope="workspace" full /></div>
-      <div className="sidebar-bottom"><span className={`dot ${connected ? 'live' : ''}`} /><span role="status">{connected ? '后台已连接' : '后台未连接'}</span><button className="text-button" disabled={busy} onClick={() => void window.berth?.reconnect().catch(reason => setError(String(reason)))}>重连</button></div>
+        <div className="workspace-resources"><span>工作台</span><ResourceBadge scope="workspace" full /></div>
+        <div className="sidebar-bottom"><span className={'dot '+(connected?'live':'')} /><span role="status">{connected ? '后台已连接' : '后台未连接'}</span><button className="text-button" disabled={busy} onClick={() => void window.berth?.reconnect().catch(reason => setError(String(reason)))}>重连</button></div>
       </div>
     </ResizableSidebar>
+
     <main className={extensionView&&page==='workspace'?'main extension-active':'main'}>
       {(busy || Object.keys(pendingActions).length > 0) && <div className="action-progress" role="progressbar" aria-label="正在处理" />}
       <header className="topbar workbench-header" data-session-id={page==='workspace'&&!extensionView?session?.id:undefined} aria-label="工作区信息">
@@ -517,7 +497,28 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
           </div>
         </section>
       </>}</div><div id="ssh-workspace-dock" className="ssh-dock-slot" hidden={!features.ssh||!sshOpen}>{features.ssh&&sshWindowReady&&!sshWindowState.detached&&<SshDock onWindow={()=>changeSshWindow('open')} unread={unread} state={state} visible={sshOpen&&page==='workspace'} connected={connected} sessionId={sshSessionId} onSelect={setSshSessionId} onClose={()=>setSshOpen(false)} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} onOpenConnection={openSavedSsh} onStart={startSsh} hasLocal={!!project} />}</div></div></>}
-    </main></>}
+    </main>
+    <ResizableSidebar collapsed={rightSidebarCollapsed} side="right">
+      {rightSidebarCollapsed?<div className="right-sidebar-rail" aria-label="右侧工具栏">
+        <button type="button" className="icon-button" aria-label="打开文件" title="文件 · Ctrl+Shift+E" disabled={!features.files||!project||state.apiVersion<16} onClick={()=>{setRightSidebarView('files');setRightSidebarCollapsed(false);setFilesActivated(true);setPage('workspace');}}><Icon kind="folder"/></button>
+        <button type="button" className="icon-button" aria-label="打开 Git" title="Git · Ctrl+Shift+G" disabled={!features.git||!project} onClick={()=>{setRightSidebarView('git');setRightSidebarCollapsed(false);setPage('workspace');}}><Icon kind="git"/></button>
+      </div>:<div className="right-sidebar-content">
+        <header className="right-sidebar-header"><div className="right-sidebar-tabs" role="tablist" aria-label="右侧工具">
+          <button type="button" role="tab" aria-selected={rightSidebarView==='files'} onClick={()=>{setRightSidebarView('files');setFilesActivated(true);}} disabled={!features.files||!project||state.apiVersion<16}><Icon kind="folder"/>文件</button>
+          <button type="button" role="tab" aria-selected={rightSidebarView==='git'} onClick={()=>setRightSidebarView('git')} disabled={!features.git||!project}><Icon kind="git"/>Git</button>
+        </div><button type="button" className="icon-button right-sidebar-collapse" aria-label="折叠右侧栏" title="折叠右侧栏" onClick={()=>setRightSidebarCollapsed(true)}>×</button></header>
+        <div id="right-sidebar-panel-files" className="right-sidebar-panel" hidden={rightSidebarView!=='files'}>
+          <div className="file-project-picker"><select aria-label="文件所属项目" value={projectId} onChange={event=>{selectProject(event.target.value);setFileTarget(null);}}>{workspaceProjects.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+          <div className="sidebar-files-host" ref={setFileTreeHost}/>
+        </div>
+        <div id="right-sidebar-panel-git" className="right-sidebar-panel" hidden={rightSidebarView!=='git'}>
+          <div className="file-project-picker"><select aria-label="Git 所属项目" value={projectId} onChange={event=>selectProject(event.target.value)}>{workspaceProjects.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+          {features.git&&project&&<WorktreeManager key={project.id+':'+project.path} project={project} enabled={connected&&state.apiVersion>=43} visible={rightSidebarView==='git'&&!rightSidebarCollapsed&&page==='workspace'} selectedPath={selectedWorktreePath} onSelect={setSelectedWorktreePath} onNewSession={path=>newSession(project.id,path)} onNotice={notify} onError={setError}/>}
+          {features.git&&project&&<GitSidebar key={project.id+':'+project.path+':git'} project={project} enabled={connected&&state.apiVersion>=13} visible={rightSidebarView==='git'&&!rightSidebarCollapsed&&page==='workspace'} supported={state.apiVersion>=18} worktreePath={selectedWorktreePath} onDiff={openDiff} onNotice={notify} onError={setError}/>}
+        </div>
+      </div>}
+    </ResizableSidebar>
+    </>}
     {features.ssh&&sshWindow&&sshWindowReady&&<SshDock unread={unread} state={state} visible connected={connected} sessionId={sshSessionId} onSelect={selectSsh} onClose={()=>void changeSshWindow('dock').catch(reason=>setError(String(reason)))} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} onOpenConnection={openSavedSsh} onStart={startSsh} hasLocal={false} detached onWindow={()=>changeSshWindow('dock')} />}
     {features.files && !sshWindow && project && state.apiVersion >= 16 && filesActivated && <Suspense fallback={null}><FileBrowser key={`${project.id}:${project.path}:${selectedWorktreePath ?? 'main'}`} project={project} worktreePath={selectedWorktreePath} connected={connected} treeHost={fileTreeHost} previewHost={filePreviewHost} previewHidden={gitPreview?.projectId === projectId} onDiff={features.git && state.apiVersion >= 18 ? openDiff : undefined} onPreview={openPreview} navigationSupported={state.apiVersion >= 17} onTargetConsumed={consumeFileTarget} target={fileTarget?.projectId === projectId ? fileTarget : null} /></Suspense>}
     {treeMenu && menuItems.length > 0 && <ContextMenu target={treeMenu} items={menuItems} onClose={closeTreeMenu} />}
