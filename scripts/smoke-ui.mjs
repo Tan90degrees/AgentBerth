@@ -50,6 +50,13 @@ try{
   const oldRun=await rpc('start',{sessionId:other.id,cols:90,rows:24});await rpc('stop',{sessionId:other.id});
   await until(()=>rpc('runs',{sessionId:other.id}).then(runs=>runs.every(run=>!['running','stopping'].includes(run.status))));
   await select(other.id);await tabs.getByRole('tab',{name:'运行记录',exact:true}).click();
+  const setVersion=async version=>app.evaluate(({BrowserWindow},{state,version})=>{for(const window of BrowserWindow.getAllWindows())window.webContents.send('berth:event',{event:'state',data:{...state,apiVersion:version}});},{state:await rpc('state'),version});
+  await setVersion(52);const deletesBefore=await count('deleteRun');
+  const deleteButton=page.locator('.run-row').filter({hasText:oldRun.id.slice(0,8)}).getByRole('button',{name:'删除运行记录 '+oldRun.id.slice(0,8),exact:true});
+  await deleteButton.click();const permanentDelete=page.getByRole('dialog',{name:'删除此运行记录？',exact:true});await permanentDelete.waitFor();
+  assert.equal(await count('deleteRun'),deletesBefore,'Old daemons must not delete before confirmation');
+  await permanentDelete.getByRole('button',{name:'取消',exact:true}).click();assert.equal((await rpc('runs',{sessionId:other.id})).length,1);
+  await setVersion(53);
   await faults({hold:'deleteRun'});await page.locator('.run-row').filter({hasText:oldRun.id.slice(0,8)}).getByRole('button',{name:'删除运行记录 '+oldRun.id.slice(0,8),exact:true}).click();
   await until(()=>app.evaluate(()=>!!globalThis.uiFaults.release));await select(shell.id);
   await tabs.getByRole('tab',{name:'运行记录',exact:true}).click();await row.locator('.run-item').click();

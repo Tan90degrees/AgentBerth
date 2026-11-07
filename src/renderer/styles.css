@@ -2784,13 +2784,8 @@ textarea:focus-visible {
 .toast{
   animation:toast-in var(--motion-base) var(--ease-out)
 }
-.sidebar{
-  transition:width var(--motion-base) var(--ease-out),padding var(--motion-base) var(--ease-out)
-}
-body.sidebar-resizing .sidebar{
-  transition:none
-}
+/* Sidebar geometry changes once: width animation would repeatedly resize PTYs. */
 @media(prefers-reduced-motion:reduce){
-  .status-summary,.tree-quick,.tree-more,.switch-result,.tabs>button,.sidebar-tabs button,.toast-actions button,.sidebar{transition:none}
+  .status-summary,.tree-quick,.tree-more,.switch-result,.tabs>button,.sidebar-tabs button,.toast-actions button{transition:none}
   .status-popover:not([hidden]),.toast{animation:none}
 }

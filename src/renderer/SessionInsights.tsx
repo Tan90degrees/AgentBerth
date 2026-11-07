@@ -116,7 +116,7 @@ export function SessionInsights(props: SessionInsightsProps) {
   return <div id="workspace-panel-runs" className="workspace-panel history-workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-runs">
     <RunHistory key={session.id} runs={runs} loading={runsLoading} error={runsError} outputError={runOutputError}
       onRetry={() => setRunsRevision(value => value + 1)} outputRunId={viewingRunId} output={runOutput}
-      windowsPty={windowsPty} fontSize={fontSize} disabled={disabled || apiVersion < 10} onError={props.onError}
+      windowsPty={windowsPty} fontSize={fontSize} undoSupported={apiVersion >= 53} disabled={disabled || apiVersion < 10} onError={props.onError}
       onView={runId => { setRunOutput(null); props.onViewingRun(runId, session.id); }}
       onDelete={async runId => {
         // Remember the output the user was reading so undo can reopen exactly
