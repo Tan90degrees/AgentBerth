@@ -74,13 +74,13 @@ export class ResourceSampler {
   private reader=new ProcessReader();private previous=new Map<number,ProcessSample>();private owners=new Map<string,{sessionId:string;runId:string}>();
   private roots=new Map<string,string>();private previousTime=0;private cached:ResourceSnapshot|null=null;private signature='';private pending:Promise<ResourceSnapshot>|null=null;private closed=false;
   constructor(private read=()=>this.reader.read(),private clock=()=>performance.now(),private logicalCpus=Math.max(1,cpus().length),private workspacePid=process.pid){}
-  sample(targets:ResourceTarget[],appPids:number[]=[]):Promise<ResourceSnapshot>{
-    const signature=JSON.stringify([targets,appPids]);
+  sample(targets:ResourceTarget[],appPids:number[]=[],namedApps:Record<string,number[]>={}):Promise<ResourceSnapshot>{
+    const signature=JSON.stringify([targets,appPids,namedApps]);
     if(this.cached&&signature===this.signature&&this.clock()-this.previousTime<2500)return Promise.resolve(this.cached);
     if(this.pending)return this.pending;
-    this.pending=this.collect(targets,appPids).finally(()=>{this.pending=null;});this.signature=signature;return this.pending;
+    this.pending=this.collect(targets,appPids,namedApps).finally(()=>{this.pending=null;});this.signature=signature;return this.pending;
   }
-  private async collect(targets:ResourceTarget[],appPids:number[]):Promise<ResourceSnapshot>{
+  private async collect(targets:ResourceTarget[],appPids:number[],namedApps:Record<string,number[]>):Promise<ResourceSnapshot>{
     try{
       const rows=(await this.read()).filter(valid);if(this.closed)throw new Error('资源采样已停止');
       const now=this.clock(),elapsed=(now-this.previousTime)/1000,table=new Map(rows.map(r=>[r.pid,r]));
@@ -88,10 +88,18 @@ export class ResourceSampler {
       const rootTargets=new Map<number,ResourceTarget>();const nextRoots=new Map<string,string>();
       for(const t of targets){const r=table.get(t.pid),identity=`${t.sessionId}:${t.runId}`,old=this.roots.get(identity);if(r&&(!old||old===key(r))){rootTargets.set(t.pid,t);nextRoots.set(identity,key(r));}else if(old)nextRoots.set(identity,old);}
       const aliveTargets=new Map(targets.map(t=>[t.sessionId,t])),owned=new Map<string,Set<number>>(),nextOwners=new Map<string,{sessionId:string;runId:string}>();
-      const workspace=new Set<number>(),workspaceRoots=new Set([this.workspacePid,...appPids]);
+      const applicationRoots=new Map(Object.entries(namedApps).map(([id,pids])=>[id,new Set(pids.filter(pid=>Number.isSafeInteger(pid)&&pid>0))]));
+      const applications=new Map([...applicationRoots.keys()].map(id=>[id,new Set<number>()]));
+      const allApplicationRoots=[...applicationRoots.values()].flatMap(pids=>[...pids]);
+      const workspace=new Set<number>(),workspaceRoots=new Set([this.workspacePid,...appPids,...allApplicationRoots]);
       for(const row of rows){
         let cursor:ProcessSample|undefined=row,target:ResourceTarget|undefined;const visited=new Set<number>();
-        while(cursor&&!visited.has(cursor.pid)){visited.add(cursor.pid);if(workspaceRoots.has(cursor.pid))workspace.add(row.pid);target??=rootTargets.get(cursor.pid);const parent=table.get(cursor.parent);cursor=parent&&parent.started<=cursor.started?parent:undefined;}
+        while(cursor&&!visited.has(cursor.pid)){
+          visited.add(cursor.pid);
+          if(workspaceRoots.has(cursor.pid))workspace.add(row.pid);
+          for(const [id,roots] of applicationRoots)if(roots.has(cursor.pid))applications.get(id)!.add(row.pid);
+          target??=rootTargets.get(cursor.pid);const parent=table.get(cursor.parent);cursor=parent&&parent.started<=cursor.started?parent:undefined;
+        }
         if(!target){const old=this.owners.get(key(row)),candidate=old&&aliveTargets.get(old.sessionId);if(candidate?.runId===old?.runId)target=candidate;}
         if(target){const set=owned.get(target.sessionId)??new Set<number>();set.add(row.pid);owned.set(target.sessionId,set);nextOwners.set(key(row),{sessionId:target.sessionId,runId:target.runId});workspace.add(row.pid);}
       }
@@ -104,9 +112,10 @@ export class ResourceSampler {
       for(const target of targets){const pids=owned.get(target.sessionId)??new Set<number>();sessions[target.sessionId]={runId:target.runId,...(pids.size?usage(pids):{cpuPercent:null,memoryBytes:null,processCount:0,partial:true})};const all=projectPids.get(target.projectId)??new Set<number>();for(const pid of pids)all.add(pid);projectPids.set(target.projectId,all);}
       for(const [id,pids] of projectPids){projects[id]=usage(pids);projects[id].partial=targets.some(t=>t.projectId===id&&sessions[t.sessionId].partial);if(!pids.size&&projects[id].partial){projects[id].memoryBytes=null;projects[id].cpuPercent=null;}}
       const workspaceUsage=usage(workspace);
+      const applicationUsage=Object.fromEntries([...applications].map(([id,pids])=>[id,pids.size?usage(pids):{cpuPercent:null,memoryBytes:null,processCount:0,partial:true}]));
       this.previous=table;this.previousTime=now;this.owners=nextOwners;this.roots=nextRoots;
-      return this.cached={sampledAt:new Date().toISOString(),cpuCount:this.logicalCpus,sessions,projects,workspace:workspaceUsage,desktopIncluded:appPids.length>0};
-    }catch{return {sampledAt:new Date().toISOString(),cpuCount:this.logicalCpus,sessions:{},projects:{},workspace:{cpuPercent:null,memoryBytes:null,processCount:0,partial:true},desktopIncluded:appPids.length>0,error:'资源信息暂不可用，稍后自动重试'};}
+      return this.cached={sampledAt:new Date().toISOString(),cpuCount:this.logicalCpus,sessions,projects,workspace:workspaceUsage,applications:applicationUsage,desktopIncluded:appPids.length>0};
+    }catch{return {sampledAt:new Date().toISOString(),cpuCount:this.logicalCpus,sessions:{},projects:{},workspace:{cpuPercent:null,memoryBytes:null,processCount:0,partial:true},applications:{},desktopIncluded:appPids.length>0,error:'资源信息暂不可用，稍后自动重试'};}
   }
   async close(){this.closed=true;await this.reader.close();if(this.pending)await this.pending;}
 }

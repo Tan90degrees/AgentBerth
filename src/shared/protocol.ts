@@ -146,7 +146,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({id,method:z.literal('acpProbe'),params:acpConfigSchema}),
   z.object({id,method:z.literal('acpOptions'),params:z.object({agentId:z.string().min(1).max(200),projectId:id}).strict()}),
   z.object({id,method:z.literal('acpTerminal'),params:z.object({sessionId:id,terminalId:z.string().min(1).max(200)}).strict()}),
-  z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
+  z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]), applicationPids: z.record(z.string().regex(/^[a-z][a-z0-9.-]{0,63}$/),z.array(z.number().int().positive()).max(16)).default({}) }).strict() }),
   z.object({id,method:z.literal('isolatedWorkspace'),params:copyRequestSchema}),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id, worktreePath: z.string().min(1).max(4096).nullable().default(null) }).strict() }),
   z.object({ id, method: z.literal('gitWorktrees'), params: z.object({ projectId: id }).strict() }),
@@ -206,7 +206,7 @@ export interface ProjectFile { name: string; path: string; kind: 'directory' | '
 export interface ProjectFilePage { path: string; entries: ProjectFile[]; nextOffset: number | null; total: number; truncated: boolean; gitAvailable: boolean; warning?: string }
 export interface FilePreview { path: string; name: string; size: number; modifiedAt: string; kind: 'text' | 'image' | 'binary'; content: string | null; truncated: boolean; encoding?: string; mime?: string; message?: string }
 export interface ResourceUsage {cpuPercent:number|null;memoryBytes:number|null;processCount:number;partial:boolean}
-export interface ResourceSnapshot {sampledAt:string;cpuCount:number;sessions:Record<string,ResourceUsage&{runId:string}>;projects:Record<string,ResourceUsage>;workspace:ResourceUsage;desktopIncluded:boolean;error?:string}
+export interface ResourceSnapshot {sampledAt:string;cpuCount:number;sessions:Record<string,ResourceUsage&{runId:string}>;projects:Record<string,ResourceUsage>;workspace:ResourceUsage;applications?:Record<string,ResourceUsage>;desktopIncluded:boolean;error?:string}
 export interface GitFile { path: string; originalPath?: string; index: string; worktree: string; conflict: boolean }
 export interface GitRemoteBranch { ref: string; remote: string; branch: string; head: string; localBranches: string[] }
 export interface GitStatus {
@@ -262,6 +262,7 @@ export interface AppInfo { version: string; platform: string; arch: string; osRe
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
   pluginBrowser:(request:import('./extensions').PluginBrowserRequest)=>Promise<void>;
+  resourcePids():Promise<{appPids:number[];applications:Record<string,number[]>}>;
   extensions<T=ExtensionSnapshot>(request:ExtensionRequest):Promise<T>;
   installExtension(development?:boolean):Promise<ExtensionSnapshot|null>;
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;

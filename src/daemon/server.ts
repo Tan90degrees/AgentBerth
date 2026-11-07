@@ -79,6 +79,7 @@ export class DaemonServer {
   private copies:IsolatedWorkspaces;
   private files = new ProjectFiles(this.git);
   private resources = new ResourceSampler();
+  private harnessPid:number|null=null;
   private mcpStats=new McpCallStats();
   private mcpStatsTimer:NodeJS.Timeout|null=null;
   private gitBusy = new Set<string>();
@@ -333,6 +334,7 @@ export class DaemonServer {
       get live(){return self.live;},
       get acp(){return self.acp;},
       get resources(){return self.resources;},
+      get appProcesses(){return self.harnessPid?{deepseekHarness:[self.harnessPid]}:{};},
       get store(){return self.store;}
     };
   }
@@ -341,7 +343,7 @@ export class DaemonServer {
   acpCorePort(){return {acp:this.acp,store:this.store,ensureStarted:(id:string)=>this.startingRuns.get(id)??(this.acp.active(id)?Promise.resolve():this.start(id,true,100,30))};}
   registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
-    if(id==='deepseek-harness'){mountHarness(ctx,_config);return;}
+    if(id==='deepseek-harness'){mountHarness(ctx,_config,pid=>{this.harnessPid=pid;});return;}
     if(id==='superagent'){mountSuperagent(ctx,_config as Record<string,string|number|boolean>);return;}
     const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
       'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'},plugin:null}},
