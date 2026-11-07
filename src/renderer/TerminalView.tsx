@@ -41,22 +41,23 @@ function fitTerminal(terminal: Terminal, fit: FitAddon) {
   return dimensions;
 }
 
-export const TerminalView = memo(function TerminalView({ sessionId, remoteSession = false, inputEnabled = true, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError, onOpenPath }: { sessionId: string; remoteSession?: boolean; inputEnabled?: boolean; onOpenPath?: (path: string) => void; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
+export const TerminalView = memo(function TerminalView({ sessionId, remoteSession = false, inputEnabled = true, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError, onOpenPath, onFocusReady }: { sessionId: string; remoteSession?: boolean; inputEnabled?: boolean; onOpenPath?: (path: string) => void; onFocusReady?:()=>void; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const allowedInput = useRef(inputEnabled); allowedInput.current = inputEnabled;
   const host = useRef<HTMLDivElement>(null);
   const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
   useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
+  const focusReadyHandler=useRef(onFocusReady);focusReadyHandler.current=onFocusReady;
   const pathHandler = useRef(onOpenPath); pathHandler.current = onOpenPath;
-  useEffect(() => { if (autoFocus && host.current?.clientWidth && !document.activeElement?.closest('[role="tablist"]')) instance.current?.focus(); }, [autoFocus]);
+  useEffect(() => { if (autoFocus && host.current?.clientWidth && !document.activeElement?.closest('[role="tablist"]')&&instance.current) {instance.current.focus();focusReadyHandler.current?.();} }, [autoFocus]);
   const mayFocus = useRef(autoFocus); mayFocus.current = autoFocus;
   useEffect(() => {
     const terminal = instance.current;
     if (!terminal) return;
     terminal.options.disableStdin = !inputEnabled;
     const element = document.activeElement;
-    if (inputEnabled && mayFocus.current && host.current?.clientWidth && (!element || element === document.body || host.current.contains(element) || !element.matches('input, select, textarea, [role="tab"]'))) terminal.focus();
+    if (inputEnabled && mayFocus.current && host.current?.clientWidth && (!element || element === document.body || host.current.contains(element) || !element.matches('input, select, textarea, [role="tab"]'))) {terminal.focus();focusReadyHandler.current?.();}
   }, [inputEnabled]);
   const { bind, setReady, controls } = useTerminalActions(onError, !inputEnabled, !!windowsPty, inputEnabled);
   useEffect(() => {
@@ -159,7 +160,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
         if (!attachment.run) terminal.writeln('\x1b[2m会话已就绪。右键左侧会话，选择“启动终端”。\x1b[0m');
         requestResize();
         const element = document.activeElement;
-        if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea, [role="tab"]'))) terminal.focus();
+        if (mayFocus.current && (!element || element === document.body || host.current?.contains(element) || !element.matches('input, select, textarea, [role="tab"]'))) {terminal.focus();focusReadyHandler.current?.();}
       });
     }).catch(error => { if (!disposed) errorHandler.current(String(error)); });
     void document.fonts.ready.then(() => { if (!disposed) requestResize(); });
