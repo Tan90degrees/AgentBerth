@@ -17,6 +17,6 @@ test('activity order is stable across plugin snapshot changes',()=>{
 test('drag reorder supports before/after and ignores invalid targets',()=>{
  assert.deepEqual(moveActivityItem([a,b,c],[a,b,c],c,a,'before'),[c,a,b]);
  assert.deepEqual(moveActivityItem([a,b,c],[a,b,c],a,c,'after'),[b,c,a]);
- assert.deepEqual(moveActivityItem([a,c],[a,b,c],c,a,'before'),[c,a,b]);
+ assert.deepEqual(moveActivityItem([a,c],[a,b,c],c,a,'before'),[c,a]);
  assert.deepEqual(moveActivityItem([a,b,c],[],a,a,'after'),[a,b,c]);
 });

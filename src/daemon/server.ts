@@ -334,7 +334,7 @@ export class DaemonServer {
       get live(){return self.live;},
       get acp(){return self.acp;},
       get resources(){return self.resources;},
-      get appProcesses(){return self.harnessPid?{deepseekHarness:[self.harnessPid]}:{};},
+      get appProcesses(){return self.harnessPid?{'deepseek-harness':[self.harnessPid]}:{};},
       get store(){return self.store;}
     };
   }
