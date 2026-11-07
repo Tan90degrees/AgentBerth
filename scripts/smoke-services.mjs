@@ -89,18 +89,25 @@ try{
   await until(()=>page.evaluate(({project,other,session,a,b})=>{const saved=JSON.parse(localStorage.getItem('berth.sidebarOrder')||'{}');return JSON.stringify(saved.projects)===JSON.stringify([other,project])&&JSON.stringify(saved.sessions?.[project])===JSON.stringify([session,a,b]);},{project:project.id,other:other.id,session:session.id,a:orderA.id,b:orderB.id}));
   await page.reload();await sessionRow(session.id).waitFor();assert.deepEqual(await projectOrder(),[other.id,project.id]);assert.deepEqual(await sessionOrder(),[session.id,orderA.id,orderB.id]);assert.equal(await page.locator('.workbench-header').getAttribute('data-session-id'),session.id);
   const afterOrdering=(await rpc('state')).sessions.find(value=>value.id===session.id).latestRun;assert.equal(afterOrdering.id,stable.id);assert.equal(afterOrdering.pid,stable.pid);assert.equal((await readFile(counter,'utf8')).trim().split('\n').length,2);
-  const chips=await page.locator('.sidebar-tabs').boundingBox(),sidebar=await page.locator('.sidebar').boundingBox();assert.ok(chips.width<sidebar.width-30,'Sidebar navigation must size to content');
+  const activity=await page.locator('.activity-bar').boundingBox(),sidebar=await page.locator('.sidebar:not(.sidebar-right)').boundingBox();assert.equal(Math.round(activity.width),48,'Activity Bar stays compact');assert.ok(sidebar.width>240,'Session tree remains independently resizable');
   await page.screenshot({path:'test-results/sidebar-reorder-dark.png'});
-  const beforePlugins=await page.locator('.sidebar-panel:visible').boundingBox(),pluginRoot=path.join(folder,'layout-extension');await mkdir(pluginRoot);
+  const beforePlugins=await page.locator('#sidebar-panel-sessions').boundingBox(),pluginRoot=path.join(folder,'layout-extension');await mkdir(pluginRoot);
   await writeFile(path.join(pluginRoot,'agentberth.extension.json'),JSON.stringify({apiVersion:1,id:'layout.smoke',name:'Layout extension',version:'1.0.0',entry:'index.cjs',views:Array.from({length:16},(_,i)=>({id:'view'+i,title:'Layout view '+i,location:'sidebar',entry:'view.html'}))}));
   await writeFile(path.join(pluginRoot,'index.cjs'),'exports.apply=()=>{};');await writeFile(path.join(pluginRoot,'view.html'),'<h2>Layout extension</h2>');
   await page.evaluate(path=>window.berth.extensions({action:'install',path,development:true}),pluginRoot);
-  assert.ok(Math.abs((await page.locator('.sidebar-panel:visible').boundingBox()).height-beforePlugins.height)<2,'Adding 16 extension views must not shrink the session tree');
-  await page.getByRole('button',{name:'扩展应用',exact:true}).click();const launcher=page.getByRole('dialog',{name:'扩展应用',exact:true});await launcher.waitFor();
-  assert.equal(await launcher.locator('.plugin-launcher-entry').count(),18);assert.ok(await launcher.locator('.plugin-launcher-list').evaluate(node=>node.scrollHeight>node.clientHeight));
-  await page.screenshot({path:'test-results/workbench-extension-launcher.png'});
-  await launcher.getByRole('textbox',{name:'搜索扩展应用',exact:true}).fill('Layout view 15');assert.equal(await launcher.locator('.plugin-launcher-entry').count(),1);await page.keyboard.press('Escape');await launcher.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'扩展应用',exact:true}).click();await launcher.waitFor();await page.locator('.quick-link').focus();await launcher.waitFor({state:'hidden'});assert.equal(await page.locator('.quick-link').evaluate(node=>node===document.activeElement),true);
+  assert.ok(Math.abs((await page.locator('#sidebar-panel-sessions').boundingBox()).height-beforePlugins.height)<2,'Adding 16 extension views must not shrink the session tree');
+  const extensionIcons=page.locator('.activity-bar .extension-activity');
+  assert.equal(await extensionIcons.evaluateAll(buttons=>buttons.filter(button=>button.getAttribute('aria-label')?.endsWith(' · Layout view 15')).length),1);
+  assert.ok(await page.locator('.activity-bar-main').evaluate(node=>node.scrollHeight>node.clientHeight),'Activity Bar scrolls when extension icons exceed the viewport');
+  await page.screenshot({path:'test-results/workbench-activity-bar.png'});
+  const icon0=page.locator('.activity-bar .extension-activity[aria-label$=" · Layout view 0"]');
+  const beforeOrder=await extensionIcons.evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')));
+  await icon0.focus();await page.keyboard.press('Alt+ArrowDown');
+  const afterOrder=await extensionIcons.evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')));
+  const icon0Label=beforeOrder.find(label=>label?.endsWith(' · Layout view 0'));
+  assert.equal(afterOrder.indexOf(icon0Label),beforeOrder.indexOf(icon0Label)+1,'Activity Bar supports keyboard reordering');
+  await openExtensionView(page,'Layout view 15');assert.equal(await page.locator('.workbench-header h1').innerText(),'Layout view 15');
+  await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();await page.locator('#sidebar-panel-sessions').waitFor();
   const retained=(await rpc('state')).sessions.find(value=>value.id===session.id).latestRun;assert.equal(retained.id,stable.id);assert.equal(retained.pid,stable.pid);
   await page.getByRole('button',{name:'停止服务',exact:true}).click();
   // Verify the persisted form exposes the service configuration, including its command.
@@ -147,7 +154,7 @@ try{
   assert.ok(Math.abs(resized.bounds.x-hostBounds.x*zoom)<=1,'Native browser position must follow its host after resize');
   // Open a workbench modal while the native browser is active: it must hide.
   await page.locator('.plugin-web-toolbar').click({position:{x:5,y:5}});await page.keyboard.press('Control+Shift+p');await page.getByRole('dialog').waitFor();await until(async()=>(await native())?.visible===false);await page.keyboard.press('Escape');await until(async()=>(await native())?.visible===true);
-  await page.locator('.sidebar-settings button[aria-label="设置"]').focus();await page.locator('.sidebar-settings button[aria-label="设置"]').press('Enter');await until(async()=>(await native())?.visible===false);
+  await page.locator('.activity-bar button[aria-label="设置"]').focus();await page.locator('.activity-bar button[aria-label="设置"]').press('Enter');await until(async()=>(await native())?.visible===false);
   await openExtensionView(page,'DeepSeek Harness');await until(async()=>(await native())?.visible===true);assert.equal((await native()).id,original.id);
   assert.equal((await readFile(starts,'utf8')).trim().split('\n').length,1);
   await page.getByRole('button',{name:'停止',exact:true}).click();await until(async()=>(await native())?.visible===false);assert.deepEqual(errors,[]);

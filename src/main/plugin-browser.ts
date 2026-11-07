@@ -20,6 +20,7 @@ export class PluginBrowser {
     window.webContents.on('render-process-gone',()=>this.dispose());
     window.webContents.on('did-start-navigation',(_event,_url,_inPlace,isMain)=>{if(isMain)this.dispose();});
   }
+  processIds():number[]{const item=this.current;if(!item||item.id!=='deepseek-harness'||item.view.webContents.isDestroyed())return [];const pid=item.view.webContents.getOSProcessId();return Number.isSafeInteger(pid)&&pid>0?[pid]:[];}
   reconcile(){const item=this.current;if(!item)return;const plugin=this.snapshot()?.plugins.find(p=>p.manifest.id===item.id);if(plugin?.status!=='active'||plugin.generation!==item.generation)this.dispose();}
   private hide(){this.current?.view.setVisible(false);}
   async request(request:PluginBrowserRequest){

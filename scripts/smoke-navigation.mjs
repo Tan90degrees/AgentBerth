@@ -1,6 +1,22 @@
 export async function openExtensionView(page,title){
-  const trigger=page.getByRole('button',{name:'扩展应用',exact:true});
-  if(await trigger.getAttribute('aria-expanded')!=='true'){await trigger.focus();await trigger.press('Enter');}
-  const launcher=page.getByRole('dialog',{name:'扩展应用',exact:true});await launcher.waitFor();
-  await launcher.getByRole('button',{name:title,exact:true}).click();await launcher.waitFor({state:'hidden'});
+  const buttons=page.locator('.activity-bar .extension-activity');
+  let target=-1;
+  for(let index=0;index<await buttons.count();index++){
+    if((await buttons.nth(index).getAttribute('aria-label'))?.endsWith(' · '+title)){target=index;break;}
+  }
+  if(target<0)throw new Error('Activity Bar extension icon not found: '+title);
+  await buttons.nth(target).click();
+  await page.locator('.extension-page').waitFor({state:'visible'});
+  const iframe=page.locator('.extension-page iframe[title="'+title+'"]');
+  if(await iframe.count())await iframe.waitFor({state:'visible'});
+}
+export async function openRightSidebar(page,panel){
+  const sessions=page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true});
+  if(await sessions.getAttribute('aria-pressed')!=='true')await sessions.click();
+  const tabs=page.getByRole('tablist',{name:'右侧工具',exact:true});
+  if(!await tabs.isVisible().catch(()=>false)){
+    await page.getByRole('button',{name:panel==='文件'?'打开文件':'打开 Git',exact:true}).click();
+    await tabs.waitFor();
+  }
+  await tabs.getByRole('tab',{name:panel,exact:true}).click();
 }

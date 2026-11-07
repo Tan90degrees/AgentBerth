@@ -17,12 +17,12 @@ export class HarnessService {
   private value:PluginWebState={state:'stopped',url:null,projectId:null,pid:null,exitCode:null,error:null,log:''};
   private lines=new Map<string,string>();
   private exited:Promise<void>=Promise.resolve();
-  constructor(private executable:string,private args:string[]){argumentsSchema.parse(args);}
-  static fromConfig(config:Record<string,unknown>){
+  constructor(private executable:string,private args:string[],private onPidChange:(pid:number|null)=>void=()=>{}){argumentsSchema.parse(args);}
+  static fromConfig(config:Record<string,unknown>,onPidChange:(pid:number|null)=>void=()=>{}){
     const executable=typeof config.executable==='string'?config.executable.trim():'npx';
     if(!executable||executable.length>4096||/[\r\n\0]/.test(executable))throw new Error('请填写有效的启动程序');
     let args:unknown;try{args=config.args===undefined?defaultHarnessArgs:JSON.parse(String(config.args));}catch{throw new Error('启动参数须为 JSON 字符串数组');}
-    return new HarnessService(executable,argumentsSchema.parse(args));
+    return new HarnessService(executable,argumentsSchema.parse(args),onPidChange);
   }
   snapshot():PluginWebState{return {...this.value};}
   private capture(chunk:string,stream:string){
@@ -56,10 +56,10 @@ export class HarnessService {
     try{
       const command=await acpCommand(this.executable,this.args);if(this.closed)throw new Error('插件已停用');
       const child=spawn(command.file,command.args,{cwd:project.path,env:terminalEnvironment(command.file),shell:false,windowsHide:true,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
-      this.child=child;this.value.pid=child.pid??null;
+      this.child=child;this.value.pid=child.pid??null;this.onPidChange(this.value.pid);
       this.exited=new Promise(resolve=>child.once('close',(code)=>{
         for(const stream of this.lines.keys())this.capture('\n',stream);
-        if(this.child===child){this.child=null;this.value.pid=null;this.value.url=null;this.value.exitCode=code;
+        if(this.child===child){this.child=null;this.value.pid=null;this.onPidChange(null);this.value.url=null;this.value.exitCode=code;
           if(this.value.state==='stopping')this.value.state='stopped';
           else {this.value.state='failed';this.value.error??=`Harness 服务已退出${code===null?'':'（'+code+'）'}，请检查启动日志`;}}
         resolve();

@@ -1,6 +1,7 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {pluginWebStateSchema,type ExtensionInfo,type PluginWebState} from '../shared/extensions';
 import type {Project,State} from '../shared/protocol';
+import {ResourceBadge} from './Resources';
 
 export function WebExtensionView({plugin,viewId,onError,suspended=false}:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void;suspended?:boolean}){
   const [status,setStatus]=useState<PluginWebState|null>(null),[projects,setProjects]=useState<Project[]>([]),[projectId,setProjectId]=useState(''),[pending,setPending]=useState(false),[logs,setLogs]=useState(false);
@@ -29,7 +30,8 @@ export function WebExtensionView({plugin,viewId,onError,suspended=false}:{plugin
     };
     const schedule=()=>{if(!frame)frame=requestAnimationFrame(send);};
     const resize=new ResizeObserver(schedule);resize.observe(element);
-    const mutation=new MutationObserver(schedule);mutation.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','class','style','open']});
+    // Dialogs, quick switcher and context menus are direct .app children. Observe only that boundary: subtree observation made terminal/UI churn schedule redundant native-view IPC.
+    const mutation=new MutationObserver(schedule);mutation.observe(element.closest('.app')??document.querySelector('.app')??document.body,{childList:true});
     window.addEventListener('resize',schedule);window.addEventListener('scroll',schedule,true);document.addEventListener('visibilitychange',schedule);
     send();return()=>{disposed=true;cancelAnimationFrame(frame);resize.disconnect();mutation.disconnect();window.removeEventListener('resize',schedule);window.removeEventListener('scroll',schedule,true);document.removeEventListener('visibilitychange',schedule);void window.berth.pluginBrowser({...target,action:'hide'}).catch(()=>{});};
   },[target.id,target.view,target.generation,status?.state,status?.url,suspended]);
@@ -41,6 +43,7 @@ export function WebExtensionView({plugin,viewId,onError,suspended=false}:{plugin
     <header className="plugin-web-toolbar">
       {needsProject&&<select aria-label="Web 服务项目" disabled={pending||active} value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">选择项目</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>}
       <span className="plugin-web-status" role="status">{status?{stopped:'未启动',starting:'正在启动',running:'运行中',stopping:'正在停止',failed:'已退出'}[status.state]:'正在连接'}</span>
+      {plugin.manifest.id==='deepseek-harness'&&<ResourceBadge scope="application" id="deepseek-harness" full/>}
       <div className="plugin-web-actions"><button className="subtle" disabled={!status||pending||needsProject&&!projectId||active} onClick={()=>void action('start')}>启动</button><button className="subtle" disabled={!status||pending||!active} onClick={()=>void action('stop')}>停止</button><button className="subtle" disabled={!status||pending||needsProject&&!projectId||status.state==='stopping'} onClick={()=>void action('restart')}>重启</button><button className="subtle" disabled={status?.state!=='running'} onClick={()=>void window.berth.pluginBrowser({...target,action:'reload',bounds:host.current?(()=>{const r=host.current!.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};})():undefined}).catch(error=>errors.current(String(error)))}>刷新页面</button><button className="text-button" aria-expanded={logs} onClick={()=>setLogs(v=>!v)}>启动日志</button><button className="text-button" onClick={()=>window.dispatchEvent(new CustomEvent('berth:plugin-settings',{detail:{pluginId:target.id,isAgent:plugin.isAgent}}))}>设置</button></div>
     </header>
     {status?.error&&<div className="launch-error" role="alert">{status.error}</div>}

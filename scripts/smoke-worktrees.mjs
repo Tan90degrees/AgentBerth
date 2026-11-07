@@ -7,6 +7,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { cleanupSmoke } from './smoke-cleanup.mjs';
+import {openRightSidebar} from './smoke-navigation.mjs';
 const execute=promisify(execFile);
 const git=async(cwd,...args)=>(await execute('git',['-c','commit.gpgsign=false','-C',cwd,...args],{windowsHide:true})).stdout.trim();
 
@@ -19,7 +20,7 @@ export async function checkWorktrees(page,{folder,root,project,session,run,packa
   await git(publisher,'add','.');await git(publisher,'commit','-m','remote fixture');await git(publisher,'push','-u','origin','feature/remote-worktree');
   const ids=await page.evaluate(()=>window.berth.rpc('state').then(s=>s.sessions.map(s=>s.id)));
   const beforeHead=await git(root,'rev-parse','HEAD');
-  await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'Git',exact:true}).click();
+  await openRightSidebar(page,'Git');
   const manager=page.locator('.worktree-manager');await manager.getByText('主工作区',{exact:true}).waitFor();
   await manager.getByRole('button',{name:'＋ 新建 Worktree',exact:true}).click();
   const create=()=>page.getByRole('dialog',{name:'创建 Worktree',exact:true});
@@ -43,7 +44,7 @@ export async function checkWorktrees(page,{folder,root,project,session,run,packa
   await create().getByLabel('分支来源',{exact:true}).selectOption('remote');
   await create().getByRole('button',{name:'获取远端分支',exact:true}).click();
   // Fetch includes several real Git processes; Windows runners can exceed the normal UI timeout.
-  await page.waitForFunction(()=>document.querySelector('.worktree-create-form button[aria-label="获取远端分支"]')?.getAttribute('aria-busy')==='false',null,{timeout:60000});
+  await page.waitForFunction(()=>document.querySelector('.worktree-create-form button[aria-label="获取远端分支"]')?.getAttribute('aria-busy')==='false',null,{timeout:135000});
   assert.equal(await create().getByRole('alert').count(),0,await create().innerText());
   const remoteSelect=create().getByLabel('远端分支',{exact:true});
   await remoteSelect.locator('option').filter({hasText:'origin/feature/remote-worktree'}).waitFor({state:'attached'});
@@ -87,6 +88,6 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===path.resolve(process.argv[1
     daemonPid=JSON.parse(await readFile(path.join(folder,'data','runtime.json'),'utf8')).pid;
     const project=await page.evaluate(root=>window.berth.rpc('createProject',{name:'Worktree fixture',path:root}),root),session=await page.evaluate(projectId=>window.berth.rpc('createSession',{projectId,title:'Original shell',agent:'shell'}),project.id),run=await page.evaluate(sessionId=>window.berth.rpc('start',{sessionId,cols:120,rows:25}),session.id);
     page.on('pageerror',error=>console.error(error));await checkWorktrees(page,{folder,root,project,session,run,packaged});
-  }catch(error){failure=error;if(app){const page=await app.firstWindow();console.error(await page.locator('body').innerText());await page.screenshot({path:`test-results/${packaged?'packaged-':''}worktree-failure.png`}).catch(()=>{});}console.error('Worktree smoke failure:',error);console.error('Daemon log:',await readFile(path.join(folder,'data','daemon.log'),'utf8').then(text=>text.slice(-6000)).catch(()=>''));throw error;}
+  }catch(error){failure=error;if(app){const page=await app.firstWindow();console.error(await page.locator('body').innerText());await page.screenshot({path:`test-results/${packaged?'packaged-':''}worktree-failure.png`}).catch(()=>{});}console.error('Worktree smoke failure:',error);console.error('Daemon log:',await readFile(path.join(folder,'data','logs','daemon.log'),'utf8').then(text=>text.slice(-6000)).catch(()=>''));throw error;}
   finally{try{await cleanupSmoke(app,daemonPid,folder);}catch(error){if(failure)console.error('Worktree smoke cleanup:',error);else throw error;}}
 }

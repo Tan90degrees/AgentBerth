@@ -57,7 +57,7 @@ try {
   const runA = await rpc('start', { sessionId: a.id, cols: 80, rows: 24 });
   const runB = await rpc('start', { sessionId: b.id, cols: 80, rows: 24 });
   console.log('Pet smoke: open settings/window');
-  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'扩展管理',exact:true}).click();
   await page.locator('[data-plugin-id="pet"]').getByRole('button',{name:'配置',exact:true}).click();
   assert.equal(await page.getByLabel('桌宠形象',{exact:true}).inputValue(),'dafeiyu');assert.equal(await page.getByLabel('桌宠形象',{exact:true}).locator('option').count(),2);
   await page.waitForFunction(() => [...document.querySelectorAll('.pet-animation .pet-character')].length === 6 && [...document.querySelectorAll('.pet-animation .pet-character')].every(image => image.src.endsWith('.png') && image.complete && image.naturalWidth === 288 && image.naturalHeight === 240));

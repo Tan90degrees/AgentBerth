@@ -10,7 +10,7 @@ const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['
 const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
 const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 53;
+export const API_VERSION = 54;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -146,7 +146,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({id,method:z.literal('acpProbe'),params:acpConfigSchema}),
   z.object({id,method:z.literal('acpOptions'),params:z.object({agentId:z.string().min(1).max(200),projectId:id}).strict()}),
   z.object({id,method:z.literal('acpTerminal'),params:z.object({sessionId:id,terminalId:z.string().min(1).max(200)}).strict()}),
-  z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]) }).strict() }),
+  z.object({ id, method: z.literal('resources'), params: z.object({ appPids: z.array(z.number().int().positive()).max(128).default([]), applicationPids: z.record(z.string().regex(/^[a-z][a-z0-9.-]{0,63}$/),z.array(z.number().int().positive()).max(16)).default({}) }).strict() }),
   z.object({id,method:z.literal('isolatedWorkspace'),params:copyRequestSchema}),
   z.object({ id, method: z.literal('gitStatus'), params: z.object({ projectId: id, worktreePath: z.string().min(1).max(4096).nullable().default(null) }).strict() }),
   z.object({ id, method: z.literal('gitWorktrees'), params: z.object({ projectId: id }).strict() }),
@@ -206,7 +206,7 @@ export interface ProjectFile { name: string; path: string; kind: 'directory' | '
 export interface ProjectFilePage { path: string; entries: ProjectFile[]; nextOffset: number | null; total: number; truncated: boolean; gitAvailable: boolean; warning?: string }
 export interface FilePreview { path: string; name: string; size: number; modifiedAt: string; kind: 'text' | 'image' | 'binary'; content: string | null; truncated: boolean; encoding?: string; mime?: string; message?: string }
 export interface ResourceUsage {cpuPercent:number|null;memoryBytes:number|null;processCount:number;partial:boolean}
-export interface ResourceSnapshot {sampledAt:string;cpuCount:number;sessions:Record<string,ResourceUsage&{runId:string}>;projects:Record<string,ResourceUsage>;workspace:ResourceUsage;desktopIncluded:boolean;error?:string}
+export interface ResourceSnapshot {sampledAt:string;cpuCount:number;sessions:Record<string,ResourceUsage&{runId:string}>;projects:Record<string,ResourceUsage>;workspace:ResourceUsage;applications?:Record<string,ResourceUsage>;desktopIncluded:boolean;error?:string}
 export interface GitFile { path: string; originalPath?: string; index: string; worktree: string; conflict: boolean }
 export interface GitRemoteBranch { ref: string; remote: string; branch: string; head: string; localBranches: string[] }
 export interface GitStatus {
@@ -262,6 +262,7 @@ export interface AppInfo { version: string; platform: string; arch: string; osRe
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
   pluginBrowser:(request:import('./extensions').PluginBrowserRequest)=>Promise<void>;
+  resourcePids():Promise<{applicationPids:Record<string,number[]>}>;
   extensions<T=ExtensionSnapshot>(request:ExtensionRequest):Promise<T>;
   installExtension(development?:boolean):Promise<ExtensionSnapshot|null>;
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;

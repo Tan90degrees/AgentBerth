@@ -374,6 +374,7 @@ function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (![window, sshWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问本地接口');
 }
 ipcMain.handle('berth:pluginBrowser',async(event,raw:unknown)=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口支持原生 Web 视图');return pluginBrowser?.request(pluginBrowserRequestSchema.parse(raw));});
+ipcMain.handle('berth:resourcePids',event=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口可读取工作台进程');return {applicationPids:{'deepseek-harness':pluginBrowser?.processIds()??[]}};});
 ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();return connection!.rpc('extensions',{request});});
 ipcMain.handle('berth:installExtension',async(event,development:unknown=false)=>{
   trusted(event);if(typeof development!=='boolean')throw new Error('无效插件安装方式');
@@ -405,7 +406,7 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
     // Ignore already queued work from the previous viewport during a handoff.
     if (!target || event.sender !== target.webContents) return null;
   }
-  if(method==='resources')return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128)});
+  if(method==='resources'){const resourceParams=request.data.params as {applicationPids:Record<string,number[]>};return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128),applicationPids:resourceParams.applicationPids});}
   if(method==='remoteTransferCancel')return connection!.rpc(method,{...request.data.params,owner:'user'});
   return connection!.rpc(method, request.data.params);
 });

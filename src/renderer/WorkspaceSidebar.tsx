@@ -6,7 +6,7 @@ import { agentNames, statusNames } from './labels';
 import { OutputBadge } from './useTerminalActivity';
 import { ResourceBadge } from './Resources';
 import { matchesQuery } from './QuickSwitcher';
-import { clampSidebarWidth, DEFAULT_SIDEBAR_WIDTH, loadSidebarWidth, saveStored } from './storage';
+import { clampSidebarWidth, DEFAULT_SIDEBAR_WIDTH, loadSidebarWidth, readStored, saveStored } from './storage';
 
 const active = (session: Session) => ['running', 'stopping'].includes(session.latestRun?.status ?? '');
 export function matchesSession(session: Session, project: Project, query: string, filter: string, names = agentNames): boolean {
@@ -16,11 +16,13 @@ export function matchesSession(session: Session, project: Project, query: string
 
 // Preview width in CSS once per frame. The React tree and terminal are kept
 // intact while dragging; persist only when the drag ends.
-export function ResizableSidebar({ children, collapsed = false }: { children: ReactNode; collapsed?: boolean }) {
-  const [width, setWidth] = useState(() => clampSidebarWidth(loadSidebarWidth(), window.innerWidth));
+export function ResizableSidebar({ children, collapsed = false, side = 'left' }: { children: ReactNode; collapsed?: boolean; side?: 'left' | 'right' }) {
+  const storageKey=side==='right'?'berth.rightSidebarWidth':'berth.sidebarWidth';
+  const savedWidth=()=>{const stored=Number(readStored(storageKey));return Number.isFinite(stored)&&stored>0?stored:side==='right'?DEFAULT_SIDEBAR_WIDTH:loadSidebarWidth();};
+  const [width, setWidth] = useState(() => clampSidebarWidth(savedWidth(), window.innerWidth));
   const [viewport, setViewport] = useState(window.innerWidth);
   const host = useRef<HTMLElement>(null);
-  const desired = useRef(loadSidebarWidth());
+  const desired = useRef(savedWidth());
   const drag = useRef<{ id: number; x: number; width: number } | null>(null);
   const preview = useRef(width);
   const frame = useRef(0);
@@ -30,7 +32,7 @@ export function ResizableSidebar({ children, collapsed = false }: { children: Re
     const next = clampSidebarWidth(value, window.innerWidth);
     host.current?.style.setProperty('--sidebar-width', `${next}px`);
     desired.current = next; preview.current = next; setWidth(next);
-    saveStored('berth.sidebarWidth', String(next));
+    saveStored(storageKey, String(next));
   };
   useEffect(() => {
     const resized = () => { setViewport(window.innerWidth); setWidth(clampSidebarWidth(desired.current, window.innerWidth)); };
@@ -48,16 +50,17 @@ export function ResizableSidebar({ children, collapsed = false }: { children: Re
     if (event.pointerId !== drag.current?.id) return;
     drag.current = null; document.body.classList.remove('sidebar-resizing'); commit(preview.current);
   };
-  return <aside ref={host} className={`sidebar${collapsed ? ' sidebar-collapsed' : ''}`} style={{ '--sidebar-width': `${width}px` } as CSSProperties}>
+  return <aside ref={host} className={`sidebar${side==='right'?' sidebar-right':''}${collapsed ? ' sidebar-collapsed' : ''}`} style={{ '--sidebar-width': `${width}px` } as CSSProperties}>
     {children}
-    <div hidden={collapsed} className="sidebar-resizer" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" tabIndex={0}
+    <div hidden={collapsed} className="sidebar-resizer" role="separator" aria-label={side==='right'?'调整右侧栏宽度':'调整侧栏宽度'} aria-orientation="vertical" tabIndex={0}
       aria-valuemin={216} aria-valuemax={clampSidebarWidth(480, viewport)} aria-valuenow={width}
       title="拖动调整宽度，双击恢复默认；方向键微调"
       onDoubleClick={() => commit(DEFAULT_SIDEBAR_WIDTH)}
       onKeyDown={event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
-        commit(event.key === 'Home' ? 216 : event.key === 'End' ? 480 : width + (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 50 : 10));
+        const direction=side==='right'?(event.key==='ArrowLeft'?1:-1):(event.key==='ArrowRight'?1:-1);
+        commit(event.key === 'Home' ? 216 : event.key === 'End' ? 480 : width + direction * (event.shiftKey ? 50 : 10));
       }}
       onPointerDown={event => {
         if (event.button !== 0) return;
@@ -69,7 +72,7 @@ export function ResizableSidebar({ children, collapsed = false }: { children: Re
       onPointerMove={event => {
         const current = drag.current;
         if (!current || current.id !== event.pointerId) return;
-        preview.current = clampSidebarWidth(current.width + event.clientX - current.x, window.innerWidth);
+        preview.current = clampSidebarWidth(current.width + (event.clientX - current.x) * (side==='right'?-1:1), window.innerWidth);
         if (!frame.current) frame.current = requestAnimationFrame(() => { host.current?.style.setProperty('--sidebar-width', `${preview.current}px`); frame.current = 0; });
       }} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish} />
   </aside>;

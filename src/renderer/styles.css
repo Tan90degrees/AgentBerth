@@ -2363,6 +2363,7 @@ textarea:focus-visible {
 }
 .workspace-resources {
   display: flex;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
   min-height: 19px;
@@ -2789,3 +2790,56 @@ textarea:focus-visible {
   .status-summary,.tree-quick,.tree-more,.switch-result,.tabs>button,.sidebar-tabs button,.toast-actions button{transition:none}
   .status-popover:not([hidden]),.toast{animation:none}
 }
+
+/* VS Code-style activity bar: sessions and extension applications stay one click away. */
+.activity-bar{flex:0 0 48px;width:48px;min-width:48px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:9px 0 10px;background:var(--surface-muted);border-right:1px solid var(--border);z-index:2}
+.activity-bar-main,.activity-bar-bottom{display:flex;flex-direction:column;align-items:center;gap:7px;width:100%}
+.activity-bar-main{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.activity-bar-main::-webkit-scrollbar{width:3px}
+.activity-bar-main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.activity-item{position:relative;width:40px;height:40px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:8px;background:transparent;color:var(--text-muted);cursor:pointer;flex-shrink:0}
+.activity-item:hover{background:var(--hover);color:var(--text)}
+.activity-item.selected{background:var(--selected);color:var(--text)}
+.activity-item.selected:before{content:'';position:absolute;left:-4px;top:7px;bottom:7px;width:3px;border-radius:0 2px 2px 0;background:var(--primary,#4b86d8)}
+.activity-item:focus-visible{outline:2px solid var(--focus,#4b86d8);outline-offset:1px}
+.activity-divider{width:24px;height:1px;background:var(--border);margin:2px 0 4px}
+.activity-badge{position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:var(--danger,#b54747);color:white;font-size:10px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums}
+.activity-draft-dot{position:absolute;right:5px;top:5px;width:6px;height:6px;border-radius:50%;background:var(--warning)}
+.activity-appearance{display:flex;justify-content:center;width:100%}
+.activity-appearance .appearance-toggle{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0;color:var(--text-muted)}
+.activity-appearance .appearance-toggle:hover{background:var(--hover);color:var(--text)}
+/* Left sidebar can collapse independently while the activity bar remains visible. */
+.sidebar.sidebar-collapsed:not(.sidebar-right){width:0;min-width:0;padding:0;border:0;overflow:hidden}
+.sidebar.sidebar-collapsed:not(.sidebar-right) .sidebar-resizer{display:none}
+.sidebar-content{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;height:100%;overflow:hidden}
+/* File explorer and Git live in a separate, independently resizable right sidebar. */
+.sidebar.sidebar-right{border-right:0;border-left:1px solid var(--border);padding:10px 8px 12px}
+.sidebar.sidebar-right .sidebar-resizer{left:-4px;right:auto}
+.sidebar.sidebar-right.sidebar-collapsed{width:48px;min-width:48px;padding:10px 6px}
+.right-sidebar-content{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;height:100%;overflow:hidden}
+.right-sidebar-rail{display:flex;flex-direction:column;align-items:center;gap:8px;flex:1;padding-top:4px}
+.right-sidebar-rail .icon-button{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:var(--text-muted)}
+.right-sidebar-rail .icon-button:hover:not(:disabled){background:var(--hover);color:var(--text)}
+.right-sidebar-rail .icon-button:disabled{opacity:.35}
+.right-sidebar-header{display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:38px;padding:0 2px 8px;border-bottom:1px solid var(--border);flex-shrink:0}
+.right-sidebar-tabs{display:flex;align-items:center;gap:4px;min-width:0}
+.right-sidebar-tabs button{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text-muted);font-size:var(--fs-sm)}
+.right-sidebar-tabs button:hover:not(:disabled){background:var(--hover);color:var(--text)}
+.right-sidebar-tabs button[aria-selected=true]{background:var(--selected);border-color:var(--border);color:var(--text)}
+.right-sidebar-tabs button:disabled{opacity:.35}
+.right-sidebar-collapse{width:28px;height:28px;flex-shrink:0;color:var(--text-muted)}
+.right-sidebar-panel{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
+.right-sidebar-panel[hidden]{display:none!important}
+.right-sidebar-panel .file-project-picker{flex-shrink:0;padding:10px 2px 8px}
+.right-sidebar-panel .file-project-picker select{width:100%;min-width:0}
+.right-sidebar-panel .sidebar-files-host{display:flex;flex:1;min-width:0;min-height:0;overflow:hidden}
+.right-sidebar-panel .sidebar-files-host>*{min-width:0;min-height:0;flex:1}
+.sidebar-right .sidebar-resizer:hover,.sidebar-right .sidebar-resizer:focus-visible{background:var(--selected)}
+@media(max-width:900px){
+  .activity-bar{flex-basis:44px;width:44px;min-width:44px}
+  .activity-item{width:36px;height:36px}
+  .sidebar.sidebar-right:not(.sidebar-collapsed){width:min(var(--sidebar-width,260px),34vw)}
+}
+.sidebar-panel{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
+.sidebar-panel[hidden]{display:none!important}
+.sidebar-panel>.sidebar-heading{flex-shrink:0}

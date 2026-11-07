@@ -5,10 +5,18 @@ import {promisify} from 'node:util';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {randomUUID} from 'node:crypto';
+import {requestSchema} from '../src/shared/protocol';
 import {ResourceSampler,ProcessReader,parseProcStat,type ProcessSample} from '../src/daemon/resources';
 
 const row=(pid:number,parent:number,memoryBytes:number,cpuSeconds=1,started=1):ProcessSample=>({pid,parent,memoryBytes,cpuSeconds,started});
 const targets=[{sessionId:'a',projectId:'one',runId:'run-a',pid:10},{sessionId:'b',projectId:'two',runId:'run-b',pid:20}];
+test('resource RPC accepts named application PID roots and rejects the old field name',()=>{
+ const request={id:randomUUID(),method:'resources',params:{applicationPids:{'deepseek-harness':[123,456]}}};
+ const parsed=requestSchema.safeParse(request);assert.equal(parsed.success,true);
+ if(parsed.success&&parsed.data.method==='resources')assert.deepEqual(parsed.data.params,{appPids:[],applicationPids:{'deepseek-harness':[123,456]}});
+ assert.equal(requestSchema.safeParse({...request,params:{applications:{'deepseek-harness':[123]}}}).success,false);
+});
 test('proc stat handles parentheses in names, CPU ticks and resident pages',()=>{
  const fields=Array(22).fill('0');fields[0]='S';fields[1]='7';fields[11]='120';fields[12]='30';fields[19]='250';fields[21]='16';
  assert.deepEqual(parseProcStat('42 (agent ) worker) '+fields.join(' '),100,4096),{pid:42,parent:7,started:2.5,cpuSeconds:1.5,memoryBytes:65536});
@@ -20,6 +28,14 @@ test('session/project/workbench CPU and RSS include descendants, exclude unrelat
  time+=3000;rows=rows.map(r=>({...r,cpuSeconds:r.cpuSeconds+1}));const second=await sampler.sample(targets,[100,101]);
  assert.ok(Math.abs(second.sessions.a.cpuPercent!-25)<0.001);assert.ok(Math.abs(second.projects.two.cpuPercent!-100/6)<0.001);assert.ok(Math.abs(second.workspace.cpuPercent!-200/3)<0.001);
  await sampler.close();
+});
+test('named application roots include DSH server and WebContents renderer trees in workspace metrics',async()=>{
+ const rows=[row(1,0,100),row(10,1,10),row(11,10,20),row(100,0,50),row(101,100,60),row(102,100,70)];
+ const sampler=new ResourceSampler(async()=>rows,()=>1000,4,1);
+ const value=await sampler.sample([], [100], {'deepseek-harness':[10,101]});
+ assert.equal(value.workspace.memoryBytes,310);assert.equal(value.workspace.processCount,6);
+ assert.equal(value.applications?.['deepseek-harness'].memoryBytes,90);assert.equal(value.applications?.['deepseek-harness'].processCount,3);
+ assert.equal(value.desktopIncluded,true);await sampler.close();
 });
 test('shared ancestry is assigned to the nearest session and aggregated once',async()=>{
  const sampler=new ResourceSampler(async()=>[row(1,0,10),row(10,1,20),row(20,10,30),row(21,20,40)],()=>1000,2,1);
