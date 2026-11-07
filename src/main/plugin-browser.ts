@@ -1,6 +1,15 @@
 import {WebContentsView,type BrowserWindow,shell} from 'electron';
 import {localPluginUrl,type ExtensionSnapshot,type PluginBrowserRequest,pluginWebStateSchema} from '../shared/extensions';
 
+// DeepSeek Harness owns its nested scroll regions; the outer document must stay
+// pinned to the WebContentsView viewport to avoid a second, page-level scrollbar.
+const HARNESS_ROOT_SCROLL_CSS = `
+  html, body {
+    overflow: hidden !important;
+    overscroll-behavior: none !important;
+  }
+`;
+
 /** A local application's own browser: no host preload, injection or CSP rewrite. */
 export class PluginBrowser {
   private current:{id:string;viewId:string;generation:number;view:WebContentsView;url:string}|null=null;
@@ -34,6 +43,11 @@ export class PluginBrowser {
       // A plugin web page never receives AgentBerth IPC or broad OS permissions.
       view.webContents.session.setPermissionRequestHandler((contents,permission,callback)=>callback(contents===view.webContents&&permission==='clipboard-sanitized-write'));
       view.webContents.on('will-attach-webview',event=>event.preventDefault());
+      if(request.id==='deepseek-harness'){
+        view.webContents.on('dom-ready',()=>{
+          if(!view.webContents.isDestroyed())void view.webContents.insertCSS(HARNESS_ROOT_SCROLL_CSS).catch(()=>{});
+        });
+      }
       this.window.contentView.addChildView(view);
       this.current={id:request.id,viewId:request.view,generation:request.generation,view,url:url.toString()};
       void view.webContents.loadURL(url.toString()).catch(()=>{/* Chromium displays its normal local connection error. Reload remains available. */});
