@@ -1,0 +1,9 @@
+export interface ActivityOrder {items:string[]}
+const validId=(value:unknown):value is string=>typeof value==='string'&&/^[a-z][a-z0-9.-]{0,99}:[a-z][a-z0-9.-]{0,99}$/.test(value);
+export function loadActivityOrder(storage?:Pick<Storage,'getItem'>):ActivityOrder{
+  try{const raw=storage?storage.getItem('berth.activityOrder'):localStorage.getItem('berth.activityOrder');if(!raw||raw.length>65536)return {items:[]};const value=JSON.parse(raw);if(!Array.isArray(value))return {items:[]};return {items:[...new Set(value.filter(validId))].slice(0,200)};}catch{return {items:[]};}
+}
+export function completeActivityOrder(current:readonly string[],saved:readonly string[]):string[]{const live=new Set(current);return [...current.filter(id=>!saved.includes(id)),...saved.filter(id=>live.has(id))];}
+export function reconcileActivityOrder(previous:ActivityOrder,current:readonly string[]):ActivityOrder{const items=completeActivityOrder(current,previous.items);return items.length===previous.items.length&&items.every((id,i)=>id===previous.items[i])?previous:{items};}
+export function orderActivityItems<T extends {id:string}>(items:readonly T[],saved:readonly string[]):T[]{const order=completeActivityOrder(items.map(item=>item.id),saved),rank=new Map(order.map((id,index)=>[id,index]));return [...items].sort((a,b)=>(rank.get(a.id)??0)-(rank.get(b.id)??0));}
+export function moveActivityItem(current:readonly string[],saved:readonly string[],id:string,targetId:string,edge:'before'|'after'):string[]{const full=completeActivityOrder(current,saved);if(id===targetId||!current.includes(id)||!current.includes(targetId))return full;const next=full.filter(value=>value!==id),target=next.indexOf(targetId);next.splice(target+(edge==='after'?1:0),0,id);return next;}

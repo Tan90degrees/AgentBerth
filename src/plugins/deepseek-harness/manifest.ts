@@ -1,7 +1,7 @@
 import {extensionManifestSchema} from '../../shared/extensions';
 
 export const harnessManifest=extensionManifestSchema.parse({
-  apiVersion:1,id:'deepseek-harness',name:'DeepSeek Harness',version:'1.0.0',entry:'builtin',
+  apiVersion:1,id:'deepseek-harness',name:'DeepSeek Harness',version:'1.0.0',entry:'builtin',icon:'brain',
   description:'嵌入 Harness 原生 Web 工作台，使用本机安装、配置与登录状态。',dependencies:['workspace'],
   config:{
     executable:{type:'string',title:'启动程序',default:'npx'},

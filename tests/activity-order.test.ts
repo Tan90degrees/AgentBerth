@@ -1,0 +1,22 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {completeActivityOrder,loadActivityOrder,moveActivityItem,orderActivityItems,reconcileActivityOrder} from '../src/renderer/activity-order';
+const a='pet:main',b='superagent:tasks',c='deepseek-harness:web';
+const storage=(value:unknown)=>({getItem:()=>JSON.stringify(value)});
+test('activity order tolerates unavailable and malformed storage',()=>{
+ assert.deepEqual(loadActivityOrder({getItem:()=>{throw new Error('Unavailable');}}),{items:[]});
+ for(const value of ['{','[]','null','"invalid"'])assert.deepEqual(loadActivityOrder({getItem:()=>value}),{items:[]});
+ assert.deepEqual(loadActivityOrder(storage([a,a,'invalid',b])),{items:[a,b]});
+});
+test('activity order is stable across plugin snapshot changes',()=>{
+ assert.deepEqual(completeActivityOrder([c,a,b],[b,a]),[c,b,a]);
+ assert.deepEqual(orderActivityItems([{id:a},{id:c},{id:b}],[b,a]).map(x=>x.id),[c,b,a]);
+ const previous={items:[b,a]},next=reconcileActivityOrder(previous,[c,a,b]);assert.deepEqual(next.items,[c,b,a]);
+ assert.equal(reconcileActivityOrder(next,[c,a,b]),next);
+});
+test('drag reorder supports before/after and ignores invalid targets',()=>{
+ assert.deepEqual(moveActivityItem([a,b,c],[a,b,c],c,a,'before'),[c,a,b]);
+ assert.deepEqual(moveActivityItem([a,b,c],[a,b,c],a,c,'after'),[b,c,a]);
+ assert.deepEqual(moveActivityItem([a,c],[a,b,c],c,a,'before'),[c,a,b]);
+ assert.deepEqual(moveActivityItem([a,b,c],[],a,a,'after'),[a,b,c]);
+});
