@@ -21,6 +21,14 @@ test('session/project/workbench CPU and RSS include descendants, exclude unrelat
  assert.ok(Math.abs(second.sessions.a.cpuPercent!-25)<0.001);assert.ok(Math.abs(second.projects.two.cpuPercent!-100/6)<0.001);assert.ok(Math.abs(second.workspace.cpuPercent!-200/3)<0.001);
  await sampler.close();
 });
+test('named application roots include DSH server and WebContents renderer trees in workspace metrics',async()=>{
+ const rows=[row(1,0,100),row(10,1,10),row(11,10,20),row(100,0,50),row(101,100,60),row(102,100,70)];
+ const sampler=new ResourceSampler(async()=>rows,()=>1000,4,1);
+ const value=await sampler.sample([], [100], {deepseekHarness:[10,101]});
+ assert.equal(value.workspace.memoryBytes,240);assert.equal(value.workspace.processCount,5);
+ assert.equal(value.applications?.deepseekHarness.memoryBytes,90);assert.equal(value.applications?.deepseekHarness.processCount,3);
+ assert.equal(value.desktopIncluded,true);await sampler.close();
+});
 test('shared ancestry is assigned to the nearest session and aggregated once',async()=>{
  const sampler=new ResourceSampler(async()=>[row(1,0,10),row(10,1,20),row(20,10,30),row(21,20,40)],()=>1000,2,1);
  const value=await sampler.sample(targets.map(t=>({...t,projectId:'same'})));
