@@ -94,6 +94,7 @@ export class DaemonServer {
   private nativeDiscovery = new NativeDiscovery();
   private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string }>();
   private nativeTimer: NodeJS.Timeout | null = null;
+  private pruneTimer: NodeJS.Timeout | null = null;
   private nativeScanning: Promise<void> | null = null;
   private historyBusy = new Set<string>();
   private historyWrites = new Set<string>();
@@ -141,6 +142,11 @@ export class DaemonServer {
     // No renderer from a previous process can still show an undo toast, so
     // release expired snapshots and the run logs they were protecting.
     try { this.removeLogs(this.store.pruneDeletions()); } catch (error) { this.logError(error); }
+    // Expire undo receipts even when the user leaves the daemon idle.
+    this.pruneTimer = setInterval(() => {
+      try { this.pruneLogs(); } catch (error) { this.logError(error); }
+    }, 60_000);
+    this.pruneTimer.unref();
     this.http.on('upgrade', (request, socket, head) => {
       if (!this.authorized(request)) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
       this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
@@ -942,7 +948,9 @@ export class DaemonServer {
     } catch (error) { this.closing = false;this.changed(); throw error; }
   }
   async close(): Promise<void> {
-    this.closing=true;await this.copies.close();
+    this.closing=true;
+    if(this.pruneTimer)clearInterval(this.pruneTimer);this.pruneTimer=null;
+    await this.copies.close();
     if (this.nativeTimer) clearTimeout(this.nativeTimer);
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
