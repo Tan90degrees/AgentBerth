@@ -17,13 +17,16 @@ function Glyph({name}:{name:ExtensionIcon|'sessions'|'manage'|'settings'|'collap
 }
 type Entry={id:string;pluginId:string;viewId:string;title:string;pluginName:string;icon:ExtensionIcon};
 export const ActivityBar=memo(function ActivityBar({snapshot,activities=[],selected,sessionSelected,sidebarCollapsed,draftDirty,appearance,onSessions,onToggleSidebar,onSelect,onManage,onSettings}:{snapshot?:ExtensionSnapshot;activities?:AgentActivity[];selected:{pluginId:string;viewId:string}|null;sessionSelected:boolean;sidebarCollapsed:boolean;draftDirty:boolean;appearance?:ReactNode;onSessions:()=>void;onToggleSidebar:()=>void;onSelect:(pluginId:string,viewId:string)=>void;onManage:()=>void;onSettings:()=>void}){
+  const known=useMemo(()=>snapshot?.plugins.flatMap(plugin=>plugin.views.filter(view=>view.location!=='settings').map(view=>plugin.manifest.id+':'+view.id))??[],[snapshot]);
   const entries=useMemo<Entry[]>(()=>snapshot?.plugins.filter(plugin=>plugin.status==='active').flatMap(plugin=>plugin.views.filter(view=>view.location!=='settings').map(view=>({id:plugin.manifest.id+':'+view.id,pluginId:plugin.manifest.id,viewId:view.id,title:view.title,pluginName:plugin.manifest.name,icon:plugin.manifest.icon??'puzzle'})))??[],[snapshot]);
   const [order,setOrder]=useState(loadActivityOrder),drag=useRef<string|null>(null);
-  const current=entries.map(entry=>entry.id),ordered=orderActivityItems(entries,order.items);
-  useEffect(()=>setOrder(previous=>reconcileActivityOrder(previous,current)),[snapshot?.revision]);
+  const ordered=orderActivityItems(entries,order.items);
+  // Keep disabled views in the saved order so re-enabling an extension restores
+  // its previous position. Uninstalled views disappear from the snapshot entirely.
+  useEffect(()=>setOrder(previous=>reconcileActivityOrder(previous,known)),[snapshot?.revision]);
   useEffect(()=>{saveStored('berth.activityOrder',JSON.stringify(order.items));},[order]);
   const counts=useMemo(()=>{const result=new Map<string,number>();for(const item of activities)if(item.pluginId&&['waiting','error','unknown'].includes(item.status))result.set(item.pluginId,(result.get(item.pluginId)??0)+1);return result;},[activities]);
-  const move=(id:string,targetId:string,edge:'before'|'after')=>setOrder(previous=>({items:moveActivityItem(current,previous.items,id,targetId,edge)}));
+  const move=(id:string,targetId:string,edge:'before'|'after')=>setOrder(previous=>({items:moveActivityItem(known,previous.items,id,targetId,edge)}));
   const onDrop=(event:DragEvent<HTMLButtonElement>,target:Entry)=>{event.preventDefault();const source=drag.current;drag.current=null;if(!source||source===target.id)return;const box=event.currentTarget.getBoundingClientRect();move(source,target.id,event.clientY<box.top+box.height/2?'before':'after');};
   const onKeyDown=(event:KeyboardEvent<HTMLButtonElement>,entry:Entry)=>{if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();const index=ordered.findIndex(item=>item.id===entry.id),target=ordered[index+(event.key==='ArrowUp'?-1:1)];if(target)move(entry.id,target.id,event.key==='ArrowUp'?'before':'after');};
   return <aside className="activity-bar" aria-label="活动栏">

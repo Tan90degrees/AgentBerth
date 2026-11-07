@@ -13,10 +13,14 @@ test('activity order is stable across plugin snapshot changes',()=>{
  assert.deepEqual(orderActivityItems([{id:a},{id:c},{id:b}],[b,a]).map(x=>x.id),[b,a,c]);
  const previous={items:[b,a]},next=reconcileActivityOrder(previous,[c,a,b]);assert.deepEqual(next.items,[b,a,c]);
  assert.equal(reconcileActivityOrder(next,[c,a,b]),next);
+ // Disabled views remain known to the manifest snapshot and keep their place.
+ const withDisabled=reconcileActivityOrder(next,[b,a,c]);assert.deepEqual(withDisabled.items,[b,a,c]);
+ assert.deepEqual(orderActivityItems([{id:a},{id:c}],[...withDisabled.items]).map(x=>x.id),[a,c]);
 });
 test('drag reorder supports before/after and ignores invalid targets',()=>{
  assert.deepEqual(moveActivityItem([a,b,c],[a,b,c],c,a,'before'),[c,a,b]);
  assert.deepEqual(moveActivityItem([a,b,c],[a,b,c],a,c,'after'),[b,c,a]);
  assert.deepEqual(moveActivityItem([a,c],[a,b,c],c,a,'before'),[c,a]);
  assert.deepEqual(moveActivityItem([a,b,c],[],a,a,'after'),[a,b,c]);
+ assert.deepEqual(moveActivityItem([a,b,c],[b,a,c],c,a,'before'),[b,c,a]);
 });
