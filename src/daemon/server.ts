@@ -47,6 +47,7 @@ import { mount as mountResources } from '../core/resources';
 import { mount as mountAcp } from '../core/acp';
 import { AcpSessions } from './acp';
 import { apply as mountSuperagent, superagentView } from '../superagent';
+import { apply as mountNotesWiki, notesWikiView } from '../wiki';
 import { Context } from 'cordis';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -113,7 +114,7 @@ export class DaemonServer {
     this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
-      builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:undefined,
+      builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:id==='notes-wiki'&&view==='wiki'?notesWikiView:undefined,
       beforeChange:async ids=>{
         const sessions=this.store.state().sessions;
         for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)||this.acp.active(session.id)){
@@ -345,6 +346,7 @@ export class DaemonServer {
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
     if(id==='deepseek-harness'){mountHarness(ctx,_config,pid=>{this.harnessPid=pid;});return;}
     if(id==='superagent'){mountSuperagent(ctx,_config as Record<string,string|number|boolean>);return;}
+    if(id==='notes-wiki'){mountNotesWiki(ctx,_config as Record<string,string|number|boolean>);return;}
     const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
       'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'},plugin:null}},
       'agent.claude':{id:'claude',definition:{name:'Claude Code',command:'claude',integration:'claude',resumeCommand:'claude --resume {sessionId}',skills:{project:'.claude/skills',user:'~/.claude/skills'},plugin:null}},
