@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {completeActivityOrder,loadActivityOrder,moveActivityItem,orderActivityItems,reconcileActivityOrder} from '../src/renderer/activity-order';
 const a='pet:main',b='superagent:tasks',c='deepseek-harness:web';
-const storage=(value:unknown)=>({getItem:()=>JSON.stringify(value)});
+const storage=(value:unknown)=>({getItem:()=>JSON.stringify(value)??null});
 test('activity order tolerates unavailable and malformed storage',()=>{
  assert.deepEqual(loadActivityOrder({getItem:()=>{throw new Error('Unavailable');}}),{items:[]});
  for(const value of ['{','[]','null','"invalid"'])assert.deepEqual(loadActivityOrder({getItem:()=>value}),{items:[]});
