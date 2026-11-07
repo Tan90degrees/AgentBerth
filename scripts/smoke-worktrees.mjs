@@ -7,6 +7,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { cleanupSmoke } from './smoke-cleanup.mjs';
+import {openRightSidebar} from './smoke-navigation.mjs';
 const execute=promisify(execFile);
 const git=async(cwd,...args)=>(await execute('git',['-c','commit.gpgsign=false','-C',cwd,...args],{windowsHide:true})).stdout.trim();
 
@@ -19,7 +20,7 @@ export async function checkWorktrees(page,{folder,root,project,session,run,packa
   await git(publisher,'add','.');await git(publisher,'commit','-m','remote fixture');await git(publisher,'push','-u','origin','feature/remote-worktree');
   const ids=await page.evaluate(()=>window.berth.rpc('state').then(s=>s.sessions.map(s=>s.id)));
   const beforeHead=await git(root,'rev-parse','HEAD');
-  await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'Git',exact:true}).click();
+  await openRightSidebar(page,'Git');
   const manager=page.locator('.worktree-manager');await manager.getByText('主工作区',{exact:true}).waitFor();
   await manager.getByRole('button',{name:'＋ 新建 Worktree',exact:true}).click();
   const create=()=>page.getByRole('dialog',{name:'创建 Worktree',exact:true});

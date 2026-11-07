@@ -1,4 +1,5 @@
 import { cleanupSmoke } from './smoke-cleanup.mjs';
+import {openRightSidebar} from './smoke-navigation.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
@@ -32,7 +33,7 @@ await git('add', '.gitignore', 'README.md', 'src/code.ts'); await git('add', '-f
 await mkdir('test-results', { recursive: true });
 let application, daemonPid, failure;
 const step = message => console.log(`File smoke: ${message}`);
-async function coreSettings(page,category){await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:category,exact:true}).click();}
+async function coreSettings(page,category){await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name:category,exact:true}).click();}
 try {
   step('launch and keep a real terminal running throughout file navigation');
   const args = [...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged ? [] : [path.resolve('.')]), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--user-data-dir=' + path.join(folder, 'profile')];
@@ -94,8 +95,8 @@ try {
   };
   const entry = name => page.getByRole('treeitem', { name, exact: true });
   await page.evaluate(() => { window.originalTerminal = document.querySelector('.terminal-mount .xterm'); });
-  const sideTabs = page.getByRole('tablist', { name: '侧栏视图' }), mainTabs = page.getByRole('tablist', { name: '工作区内容' });
-  await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
+  const mainTabs = page.getByRole('tablist', { name: '工作区内容' });
+  await openRightSidebar(page,'文件');
   await entry('README.md').waitFor();
   step('native Git gray state, tracked exceptions, pagination and ignored-folder expansion');
   assert.match(await entry('trace.log').getAttribute('class'), /ignored/);
@@ -186,7 +187,7 @@ try {
   await fonts.getByLabel('预览字体', { exact: true }).selectOption('custom');
   await fonts.getByLabel('自定义预览字体', { exact: true }).fill('Courier New');
   // File preview settings are core and apply immediately; no plugin dialog is involved.
-  await page.getByRole('tablist', { name: '侧栏视图' }).getByRole('tab', { name: '文件', exact: true }).click();
+  await openRightSidebar(page,'文件');
   for (const [file, language] of [['config.json', 'json'], ['config.yaml', 'yaml'], ['main.scala', 'scala']]) {
     await entry(file).click();
     await page.waitForFunction(language => document.querySelector('.preview-document:not([hidden]) .source-code code.hljs')?.dataset.language === language, language);
@@ -224,7 +225,7 @@ try {
   await scm.getByRole('button', { name: '取消暂存 config.yaml', exact: true }).click();
   await scm.getByText('已暂存 2', { exact: true }).waitFor();
   await scm.getByLabel('Git 提交信息', { exact: true }).fill('Commit preview changes');
-  await page.getByRole('tablist', { name: '侧栏视图' }).getByRole('tab', { name: '文件', exact: true }).click();
+  await openRightSidebar(page,'文件');
   await sideTabs.getByRole('tab', { name: 'Git', exact: true }).click();
   assert.equal(await scm.getByLabel('Git 提交信息', { exact: true }).inputValue(), 'Commit preview changes');
   await scm.getByRole('button', { name: /提交已暂存的更改/ }).click();
