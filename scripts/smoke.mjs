@@ -730,7 +730,7 @@ try {
   const handle = await separator.boundingBox();
   await page.mouse.move(handle.x + handle.width / 2, handle.y + 150);
   await page.mouse.down(); await page.mouse.move(handle.x + 85, handle.y + 150, { steps: 15 }); await page.mouse.up();
-  let sidebarWidth = Math.round(await page.locator('.sidebar').evaluate(element => element.getBoundingClientRect().width));
+  let sidebarWidth = Math.round(await page.locator('.sidebar:not(.sidebar-right)').evaluate(element => element.getBoundingClientRect().width));
   assert.ok(sidebarWidth >= 350 && sidebarWidth <= 380, String(sidebarWidth));
   assert.ok(await page.evaluate(() => window.smokeTerminal === document.querySelector('.xterm')));
   await separator.focus(); await page.keyboard.press('ArrowLeft');
