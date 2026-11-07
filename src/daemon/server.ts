@@ -948,13 +948,12 @@ export class DaemonServer {
     } catch (error) { this.closing = false;this.changed(); throw error; }
   }
   async close(): Promise<void> {
-    this.closing=true;
-    if(this.pruneTimer)clearInterval(this.pruneTimer);this.pruneTimer=null;
-    await this.copies.close();
+    this.closing=true;await this.copies.close();
     if (this.nativeTimer) clearTimeout(this.nativeTimer);
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
+    if(this.pruneTimer)clearInterval(this.pruneTimer);this.pruneTimer=null;
     await this.extensions.close();
     await new Promise<void>(resolve => {
       // Keep the shutdown reply and close frame ordered on the wire. Immediate
