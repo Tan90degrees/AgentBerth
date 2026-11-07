@@ -302,7 +302,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       else if (value === 'g' && event.shiftKey && !event.altKey && current.project && current.features.git) { event.preventDefault(); event.stopPropagation(); setSidebarCollapsed(false);setPage('workspace'); setSidebarView('git'); }
       else if (value === ',' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); setQuickOpen(false); setPage('settings'); setError(''); }
       else if ((value === 'n' || value === 'o') && event.shiftKey && !event.altKey && !current.manageDisabled && !current.quickOpen) { event.preventDefault(); event.stopPropagation(); if (value === 'o') current.newProject(); else if (current.project) current.newSession(); else notify('请先添加一个项目'); }
-      else if (value === 'tab' && !event.altKey && !current.quickOpen && current.page === 'workspace' && !(event.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable="true"]')) { event.preventDefault(); event.stopPropagation(); current.cycleSession(event.shiftKey); }
+      else if (value === 'tab' && !event.altKey && !current.quickOpen && current.page === 'workspace') { event.preventDefault(); event.stopPropagation(); current.cycleSession(event.shiftKey); }
     };
     document.addEventListener('keydown', key, true); return () => document.removeEventListener('keydown', key, true);
   }, []);
