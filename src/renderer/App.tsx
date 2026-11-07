@@ -6,7 +6,7 @@ import { ExtensionsContext } from './ExtensionManager';
 import { ExtensionView } from './ExtensionView';
 import { extensionEnabled } from '../shared/extensions';
 import appIcon from '../../assets/app.png';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { API_VERSION, isCustomAgent, type DeletionUndo, type History, type Method, type Project, type Session, type Settings, type State, type SshWindowState } from '../shared/protocol';
 import { SshDock } from './SshDock';
 import { OutputBadge, useTerminalActivity } from './useTerminalActivity';
@@ -55,8 +55,14 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>readStored('berth.sidebarCollapsed')==='true');
   useEffect(()=>{if(!sshWindow)saveStored('berth.sidebarCollapsed',String(sidebarCollapsed));},[sidebarCollapsed]);
-  const [rightSidebarCollapsed,setRightSidebarCollapsed]=useState(()=>readStored('berth.rightSidebarCollapsed')!=='false');
-  const [rightSidebarView,setRightSidebarView]=useState<'files'|'git'>(()=>readStored('berth.rightSidebarView')==='git'?'git':'files');
+  const [rightSidebarCollapsed,setRightSidebarCollapsed]=useState(()=>{
+    const saved=readStored('berth.rightSidebarCollapsed');if(saved!==null)return saved!=='false';
+    const legacy=readStored('berth.sidebarView');return !(legacy==='files'||legacy==='git'||readStored('berth.filesOpen')==='true');
+  });
+  const [rightSidebarView,setRightSidebarView]=useState<'files'|'git'>(()=>{
+    const saved=readStored('berth.rightSidebarView');if(saved==='git'||saved==='files')return saved;
+    return readStored('berth.sidebarView')==='git'?'git':'files';
+  });
   useEffect(()=>{if(!sshWindow)saveStored('berth.rightSidebarCollapsed',String(rightSidebarCollapsed));},[rightSidebarCollapsed,sshWindow]);
   useEffect(()=>{if(!sshWindow)saveStored('berth.rightSidebarView',rightSidebarView);},[rightSidebarView,sshWindow]);
   const [fileTreeHost, setFileTreeHost] = useState<HTMLDivElement | null>(null);
@@ -67,11 +73,11 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const consumeFileTarget = useCallback((nonce: number) => setFileTarget(current => current?.nonce === nonce ? null : current), []);
   useEffect(() => { setFileTarget(current => current?.projectId === projectId ? current : null); }, [projectId, fileTarget?.projectId]);
   const [gitPreview, setGitPreview] = useState<GitDiffRequest | null>(null);
-  const openPreview = useCallback(() => { setGitPreview(null); setTab('preview'); }, []);
-  const openDiff = useCallback((path: string, staged: boolean, projectPath = false) => { setPage('workspace'); setFilesActivated(true); setTab('preview'); setGitPreview({ projectId, worktreePath: selectedWorktreePath, path, staged, projectPath }); }, [projectId, selectedWorktreePath]);
-  const openGit = (value: Project) => { setRightSidebarView('git');setRightSidebarCollapsed(false);if (value.id !== projectId) setSelectedWorktreePath(null);setProjectId(value.id);setPage('workspace'); };
+  const openPreview = useCallback(() => { setExtensionView(null);setPage('workspace');setGitPreview(null);setTab('preview'); }, []);
+  const openDiff = useCallback((path: string, staged: boolean, projectPath = false) => { setExtensionView(null);setPage('workspace');setFilesActivated(true);setTab('preview');setGitPreview({ projectId, worktreePath: selectedWorktreePath, path, staged, projectPath }); }, [projectId, selectedWorktreePath]);
+  const openGit = (value: Project) => { setExtensionView(null);setRightSidebarView('git');setRightSidebarCollapsed(false);if (value.id !== projectId) setSelectedWorktreePath(null);setProjectId(value.id);setPage('workspace'); };
   useEffect(() => { setGitPreview(null); }, [projectId]);
-  const openPath = useCallback((query: string) => { setRightSidebarView('files');setRightSidebarCollapsed(false);setPage('workspace');setFilesActivated(true);setFileTarget({ projectId, query, nonce: ++fileTargetSequence.current }); }, [projectId]);
+  const openPath = useCallback((query: string) => { setExtensionView(null);setRightSidebarView('files');setRightSidebarCollapsed(false);setPage('workspace');setFilesActivated(true);setFileTarget({ projectId, query, nonce: ++fileTargetSequence.current }); }, [projectId]);
   const [page, setPage] = useState<'workspace' | 'settings' | 'plugins'>('workspace');
   const [pluginTab,setPluginTab] = useState<PluginCenterTab>(()=>readStored('berth.pluginTab')==='agents'?'agents':'installed');
   const [requestedPlugin,setRequestedPlugin]=useState<string|null>(null);
@@ -85,9 +91,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [filter, setFilter] = useState('all');
   const [collapsed, setCollapsed] = useState(loadCollapsedProjects);
   const [searchCollapsed,setSearchCollapsed]=useState<string[]|null>(null);
-  // The project/session tree is small enough to filter synchronously. Keeping
-  // this controlled input immediate avoids stale results during rapid session switching.
-  const deferredSearch = search;
+  const deferredSearch = useDeferredValue(search);
   const treeSearching=!!deferredSearch.trim()||filter!=='all';
   useEffect(()=>setSearchCollapsed(null),[deferredSearch,filter]);
   const [tab, setTab] = useState<'terminal' | 'history' | 'runs' | 'preview'>('terminal');
@@ -441,7 +445,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
 
   return <ExtensionsContext.Provider value={state.extensions}><div className={sshWindow?"ssh-window app":"app"}>
     {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= API_VERSION} />
-    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
+    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} sessionUnread={localUnread} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
     <ResizableSidebar collapsed={sidebarCollapsed} side="left">
       <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
         <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>
@@ -515,7 +519,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
         </div>
         <div id="right-sidebar-panel-git" className="right-sidebar-panel" hidden={rightSidebarView!=='git'}>
           <div className="file-project-picker"><select aria-label="Git 所属项目" value={projectId} onChange={event=>selectProject(event.target.value)}>{workspaceProjects.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-          {features.git&&project&&<WorktreeManager key={project.id+':'+project.path} project={project} enabled={connected&&state.apiVersion>=43} visible={rightSidebarView==='git'&&!rightSidebarCollapsed&&page==='workspace'} selectedPath={selectedWorktreePath} onSelect={setSelectedWorktreePath} onNewSession={path=>newSession(project.id,path)} onNotice={notify} onError={setError}/>}
+          {features.git&&project&&<WorktreeManager key={project.id+':'+project.path} project={project} enabled={connected&&state.apiVersion>=43} visible={rightSidebarView==='git'&&!rightSidebarCollapsed} selectedPath={selectedWorktreePath} onSelect={setSelectedWorktreePath} onNewSession={path=>newSession(project.id,path)} onNotice={notify} onError={setError}/>}
           {features.git&&project&&<GitSidebar key={project.id+':'+project.path+':git'} project={project} enabled={connected&&state.apiVersion>=13} visible={rightSidebarView==='git'&&!rightSidebarCollapsed&&page==='workspace'} supported={state.apiVersion>=18} worktreePath={selectedWorktreePath} onDiff={openDiff} onNotice={notify} onError={setError}/>}
         </div>
       </div>}

@@ -18,7 +18,7 @@ export function matchesSession(session: Session, project: Project, query: string
 // intact while dragging; persist only when the drag ends.
 export function ResizableSidebar({ children, collapsed = false, side = 'left' }: { children: ReactNode; collapsed?: boolean; side?: 'left' | 'right' }) {
   const storageKey=side==='right'?'berth.rightSidebarWidth':'berth.sidebarWidth';
-  const savedWidth=()=>{const stored=Number(readStored(storageKey));return Number.isFinite(stored)&&stored>0?stored:loadSidebarWidth();};
+  const savedWidth=()=>{const stored=Number(readStored(storageKey));return Number.isFinite(stored)&&stored>0?stored:side==='right'?DEFAULT_SIDEBAR_WIDTH:loadSidebarWidth();};
   const [width, setWidth] = useState(() => clampSidebarWidth(savedWidth(), window.innerWidth));
   const [viewport, setViewport] = useState(window.innerWidth);
   const host = useRef<HTMLElement>(null);

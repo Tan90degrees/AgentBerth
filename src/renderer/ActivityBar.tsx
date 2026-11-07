@@ -16,14 +16,14 @@ function Glyph({name}:{name:ExtensionIcon|'sessions'|'manage'|'settings'|'collap
   return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d}/></svg>;
 }
 type Entry={id:string;pluginId:string;viewId:string;title:string;pluginName:string;icon:ExtensionIcon};
-export const ActivityBar=memo(function ActivityBar({snapshot,activities=[],selected,sessionSelected,sidebarCollapsed,draftDirty,appearance,onSessions,onToggleSidebar,onSelect,onManage,onSettings}:{snapshot?:ExtensionSnapshot;activities?:AgentActivity[];selected:{pluginId:string;viewId:string}|null;sessionSelected:boolean;sidebarCollapsed:boolean;draftDirty:boolean;appearance?:ReactNode;onSessions:()=>void;onToggleSidebar:()=>void;onSelect:(pluginId:string,viewId:string)=>void;onManage:()=>void;onSettings:()=>void}){
+export const ActivityBar=memo(function ActivityBar({snapshot,activities=[],selected,sessionSelected,sessionUnread=false,sidebarCollapsed,draftDirty,appearance,onSessions,onToggleSidebar,onSelect,onManage,onSettings}:{snapshot?:ExtensionSnapshot;activities?:AgentActivity[];selected:{pluginId:string;viewId:string}|null;sessionSelected:boolean;sessionUnread?:boolean;sidebarCollapsed:boolean;draftDirty:boolean;appearance?:ReactNode;onSessions:()=>void;onToggleSidebar:()=>void;onSelect:(pluginId:string,viewId:string)=>void;onManage:()=>void;onSettings:()=>void}){
   const known=useMemo(()=>snapshot?.plugins.flatMap(plugin=>plugin.views.filter(view=>view.location!=='settings').map(view=>plugin.manifest.id+':'+view.id))??[],[snapshot]);
   const entries=useMemo<Entry[]>(()=>snapshot?.plugins.filter(plugin=>plugin.status==='active').flatMap(plugin=>plugin.views.filter(view=>view.location!=='settings').map(view=>({id:plugin.manifest.id+':'+view.id,pluginId:plugin.manifest.id,viewId:view.id,title:view.title,pluginName:plugin.manifest.name,icon:plugin.manifest.icon??'puzzle'})))??[],[snapshot]);
   const [order,setOrder]=useState(loadActivityOrder),drag=useRef<string|null>(null);
   const ordered=orderActivityItems(entries,order.items);
   // Keep disabled views in the saved order so re-enabling an extension restores
   // its previous position. Uninstalled views disappear from the snapshot entirely.
-  useEffect(()=>setOrder(previous=>reconcileActivityOrder(previous,known)),[snapshot?.revision]);
+  useEffect(()=>{if(!snapshot)return;setOrder(previous=>reconcileActivityOrder(previous,known));},[snapshot?.revision]);
   useEffect(()=>{saveStored('berth.activityOrder',JSON.stringify(order.items));},[order]);
   const counts=useMemo(()=>{const result=new Map<string,number>();for(const item of activities)if(item.pluginId&&['waiting','error','unknown'].includes(item.status))result.set(item.pluginId,(result.get(item.pluginId)??0)+1);return result;},[activities]);
   const move=(id:string,targetId:string,edge:'before'|'after')=>setOrder(previous=>({items:moveActivityItem(known,previous.items,id,targetId,edge)}));
@@ -31,7 +31,7 @@ export const ActivityBar=memo(function ActivityBar({snapshot,activities=[],selec
   const onKeyDown=(event:KeyboardEvent<HTMLButtonElement>,entry:Entry)=>{if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();const index=ordered.findIndex(item=>item.id===entry.id),target=ordered[index+(event.key==='ArrowUp'?-1:1)];if(target)move(entry.id,target.id,event.key==='ArrowUp'?'before':'after');};
   return <aside className="activity-bar" aria-label="活动栏">
     <nav className="activity-bar-main" aria-label="会话与扩展应用">
-      <button type="button" className={'activity-item'+(sessionSelected?' selected':'')} aria-label="会话" title="会话管理" aria-pressed={sessionSelected} onClick={onSessions}><Glyph name="sessions"/></button>
+      <button type="button" className={'activity-item'+(sessionSelected?' selected':'')} aria-label="会话" title="会话管理" aria-pressed={sessionSelected} onClick={onSessions}><Glyph name="sessions"/>{sessionUnread&&<span className="rail-unread" aria-label="有新输出"/>}</button>
       <div className="activity-divider"/>
       {ordered.map(entry=>{const count=counts.get(entry.pluginId)??0,isSelected=selected?.pluginId===entry.pluginId&&selected.viewId===entry.viewId;return <button type="button" draggable className={'activity-item extension-activity'+(isSelected?' selected':'')} key={entry.id} aria-label={entry.pluginName+' · '+entry.title} aria-current={isSelected?'page':undefined} aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" title={entry.pluginName+' · '+entry.title+'（可拖动排序）'} onClick={()=>onSelect(entry.pluginId,entry.viewId)} onKeyDown={event=>onKeyDown(event,entry)} onDragStart={event=>{drag.current=entry.id;event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',entry.id);}} onDragEnd={()=>{drag.current=null;}} onDragOver={event=>{if(drag.current){event.preventDefault();event.dataTransfer.dropEffect='move';}}} onDrop={event=>onDrop(event,entry)}><Glyph name={entry.icon}/>{count>0&&<span className="activity-badge" aria-label={count+' 项待处理'}>{count>9?'9+':count}</span>}</button>;})}
     </nav>

@@ -11,7 +11,7 @@ export function ResourceMonitor({enabled}:{enabled:boolean}){
   useEffect(()=>{
     let alive=true,pending=false;publish(null);
     if(!enabled)return;
-    const refresh=async()=>{if(!enabled||pending||document.visibilityState!=='visible'||!document.hasFocus())return;pending=true;try{const processInfo=await window.berth.resourcePids();const value=await window.berth.rpc<ResourceSnapshot>('resources',processInfo);if(alive)publish(value);}catch{if(alive)publish({sampledAt:new Date().toISOString(),cpuCount:0,sessions:{},projects:{},workspace:{cpuPercent:null,memoryBytes:null,processCount:0,partial:true},applications:{},desktopIncluded:false,error:'资源信息暂不可用，稍后自动重试'});}finally{pending=false;}};
+    const refresh=async()=>{if(!enabled||pending||document.visibilityState!=='visible')return;pending=true;try{const processInfo=await window.berth.resourcePids();const value=await window.berth.rpc<ResourceSnapshot>('resources',processInfo);if(alive)publish(value);}catch{if(alive)publish({sampledAt:new Date().toISOString(),cpuCount:0,sessions:{},projects:{},workspace:{cpuPercent:null,memoryBytes:null,processCount:0,partial:true},applications:{},desktopIncluded:false,error:'资源信息暂不可用，稍后自动重试'});}finally{pending=false;}};
     void refresh();const timer=setInterval(()=>void refresh(),3000);
     window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
     return()=>{alive=false;clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);publish(null);};

@@ -589,6 +589,7 @@ try {
   assert.equal(await page.getByLabel('Agent 类型', { exact: true }).inputValue(), 'shell');
   await page.getByLabel('会话名称', { exact: true }).fill('切换测试会话');
   await page.getByRole('button', { name: '创建会话', exact: true }).click();
+  await page.getByRole('dialog').waitFor({state:'hidden'});
   await page.getByRole('heading', { name: '切换测试会话', exact: true }).waitFor();
   const copied = (await page.evaluate(() => window.berth.rpc('state'))).sessions.find(item => item.title === '切换测试会话');
   assert.equal(copied.latestRun, null); assert.equal(copied.nativeSessionId, null);
@@ -599,8 +600,10 @@ try {
   await page.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea'));
   await page.keyboard.press('Control+Shift+Tab');
   await page.getByRole('heading', { name: '切换测试会话', exact: true }).waitFor();
-  await page.getByLabel('搜索项目和会话', { exact: true }).fill('驻留');
-  await page.waitForFunction(() => document.querySelectorAll('.session-item').length === 1);
+  const treeSearch=page.getByLabel('搜索项目和会话', { exact: true });
+  await treeSearch.fill('驻留');
+  assert.equal(await treeSearch.inputValue(),'驻留','Tree search input must retain the query after session creation completes');
+  await page.waitForFunction(() => document.querySelector('input[aria-label="搜索项目和会话"]')?.value==='驻留'&&document.querySelectorAll('.session-item').length === 1);
   await page.keyboard.press('Control+Tab');
   await page.getByRole('heading', { name: '后台驻留验证', exact: true }).waitFor();
   await page.keyboard.press('Control+Tab');
