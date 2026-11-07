@@ -2363,6 +2363,7 @@ textarea:focus-visible {
 }
 .workspace-resources {
   display: flex;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
   min-height: 19px;
