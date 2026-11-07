@@ -5,10 +5,18 @@ import {promisify} from 'node:util';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {randomUUID} from 'node:crypto';
+import {requestSchema} from '../src/shared/protocol';
 import {ResourceSampler,ProcessReader,parseProcStat,type ProcessSample} from '../src/daemon/resources';
 
 const row=(pid:number,parent:number,memoryBytes:number,cpuSeconds=1,started=1):ProcessSample=>({pid,parent,memoryBytes,cpuSeconds,started});
 const targets=[{sessionId:'a',projectId:'one',runId:'run-a',pid:10},{sessionId:'b',projectId:'two',runId:'run-b',pid:20}];
+test('resource RPC accepts named application PID roots and rejects the old field name',()=>{
+ const request={id:randomUUID(),method:'resources',params:{applicationPids:{'deepseek-harness':[123,456]}}};
+ const parsed=requestSchema.safeParse(request);assert.equal(parsed.success,true);
+ if(parsed.success&&parsed.data.method==='resources')assert.deepEqual(parsed.data.params,{appPids:[],applicationPids:{'deepseek-harness':[123,456]}});
+ assert.equal(requestSchema.safeParse({...request,params:{applications:{'deepseek-harness':[123]}}}).success,false);
+});
 test('proc stat handles parentheses in names, CPU ticks and resident pages',()=>{
  const fields=Array(22).fill('0');fields[0]='S';fields[1]='7';fields[11]='120';fields[12]='30';fields[19]='250';fields[21]='16';
  assert.deepEqual(parseProcStat('42 (agent ) worker) '+fields.join(' '),100,4096),{pid:42,parent:7,started:2.5,cpuSeconds:1.5,memoryBytes:65536});
