@@ -30,8 +30,8 @@ export function WebExtensionView({plugin,viewId,onError,suspended=false}:{plugin
     };
     const schedule=()=>{if(!frame)frame=requestAnimationFrame(send);};
     const resize=new ResizeObserver(schedule);resize.observe(element);
-    // Modal portals are direct body children; observing the whole subtree caused terminal/UI churn to schedule unnecessary native-view IPC.
-    const mutation=new MutationObserver(schedule);mutation.observe(document.body,{childList:true});
+    // Dialogs, quick switcher and context menus are direct .app children. Observe only that boundary: subtree observation made terminal/UI churn schedule redundant native-view IPC.
+    const mutation=new MutationObserver(schedule);mutation.observe(element.closest('.app')??document.querySelector('.app')??document.body,{childList:true});
     window.addEventListener('resize',schedule);window.addEventListener('scroll',schedule,true);document.addEventListener('visibilitychange',schedule);
     send();return()=>{disposed=true;cancelAnimationFrame(frame);resize.disconnect();mutation.disconnect();window.removeEventListener('resize',schedule);window.removeEventListener('scroll',schedule,true);document.removeEventListener('visibilitychange',schedule);void window.berth.pluginBrowser({...target,action:'hide'}).catch(()=>{});};
   },[target.id,target.view,target.generation,status?.state,status?.url,suspended]);
