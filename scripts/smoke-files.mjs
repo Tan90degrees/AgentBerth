@@ -157,18 +157,18 @@ try {
   await writeFile(path.join(root, 'src', 'code.ts'), code + '// EXTERNAL_CHANGE_READY\n');
   await page.getByRole('button', { name: '刷新文件预览', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.preview-document:not([hidden]) .source-code')?.textContent.includes('EXTERNAL_CHANGE_READY'));
-  const resizer = page.getByRole('separator', { name: '调整侧栏宽度', exact: true });
-  const before = await page.locator('.sidebar').boundingBox(); await resizer.focus(); await page.keyboard.press('ArrowRight');
-  await page.waitForFunction(width => document.querySelector('.sidebar').getBoundingClientRect().width > width, before.width);
-  await page.keyboard.press('ArrowLeft');
+  const resizer = page.getByRole('separator', { name: '调整右侧栏宽度', exact: true });
+  const before = await page.locator('.sidebar.sidebar-right').boundingBox(); await resizer.focus(); await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(width => document.querySelector('.sidebar.sidebar-right').getBoundingClientRect().width > width, before.width);
+  await page.keyboard.press('ArrowRight');
   step('main tabs retain the same terminal DOM and selected file');
   await mainTabs.getByRole('tab', { name: '终端', exact: true }).click();
   assert.equal(await page.evaluate(() => window.originalTerminal === document.querySelector('.terminal-mount .xterm')), true);
-  await sideTabs.getByRole('tab', { name: '会话', exact: true }).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();
   await mainTabs.getByRole('tab', { name: '预览', exact: true }).click();
   await preview.getByLabel('文件源码', { exact: true }).waitFor();
-  assert.equal(await sideTabs.getByRole('tab', { name: '会话', exact: true }).getAttribute('aria-selected'), 'true');
-  await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
+  assert.equal(await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).getAttribute('aria-pressed'),'true');
+  await openRightSidebar(page,'文件');
   assert.equal(await entry('code.ts').getAttribute('aria-selected'), 'true');
   assert.equal(await page.evaluate(() => window.originalTerminal === document.querySelector('.terminal-mount .xterm')), true);
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}files-code-dark.png` });
@@ -201,9 +201,9 @@ try {
   fonts = page.getByRole('region', { name: '文件预览设置', exact: true });
   await fonts.getByRole('button', { name: '恢复默认预览字体', exact: true }).click();
   // Skills are managed directly in core settings, independently of provider plugins.
-  await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
+  await openRightSidebar(page,'文件');
   step('source control sidebar previews separate index/worktree diffs, stages selections, unstages and commits without restarting the terminal');
-  await sideTabs.getByRole('tab', { name: 'Git', exact: true }).click();
+  await openRightSidebar(page,'Git');
   const scm = page.getByRole('region', { name: '源代码管理 文件工作台', exact: true });
   await scm.getByRole('button', { name: '查看未暂存差异 src/code.ts', exact: true }).click();
   const diffPane = page.getByRole('region', { name: 'Git 差异预览', exact: true });
@@ -226,7 +226,7 @@ try {
   await scm.getByText('已暂存 2', { exact: true }).waitFor();
   await scm.getByLabel('Git 提交信息', { exact: true }).fill('Commit preview changes');
   await openRightSidebar(page,'文件');
-  await sideTabs.getByRole('tab', { name: 'Git', exact: true }).click();
+  await openRightSidebar(page,'Git');
   assert.equal(await scm.getByLabel('Git 提交信息', { exact: true }).inputValue(), 'Commit preview changes');
   await scm.getByRole('button', { name: /提交已暂存的更改/ }).click();
   await scm.getByText('已提交暂存的更改', { exact: true }).waitFor();
@@ -237,7 +237,7 @@ try {
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-' : ''}source-control-diff.png` });
   assert.equal((await liveRun()).pid, run.pid);
   await diffPane.getByRole('button', { name: '返回文件预览', exact: true }).click();
-  await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
+  await openRightSidebar(page,'文件');
   step('fuzzy path picker handles multiple matches, folder reveal and line-column navigation');
   await page.getByRole('button', { name: '查找文件或目录…' }).click();
   let picker = page.getByRole('dialog', { name: '定位文件或目录', exact: true });
@@ -303,7 +303,7 @@ try {
   await picker.waitFor({ state: 'hidden' });
   const other = await page.evaluate(root => window.berth.rpc('createProject', { name: '另一个文件项目', path: root }), second);
   // Use the session tree: the old file-project dropdown already cleared navigation.
-  await sideTabs.getByRole('tab', { name: '会话', exact: true }).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();
   await page.locator('.projects .project-item').filter({ hasText: '另一个文件项目' }).click();
   await page.waitForFunction(() => document.querySelector('.workbench-header .project-name')?.textContent === '另一个文件项目');
   await page.locator('.projects .project-item').filter({ hasText: '文件工作台' }).click();
@@ -318,7 +318,7 @@ try {
   assert.equal(await page.getByRole('dialog', { name: '定位文件或目录', exact: true }).count(), 0);
   assert.equal((await liveRun()).id, run.id); assert.equal((await liveRun()).pid, run.pid);
   await page.evaluate(({ id, runId }) => window.berth.rpc('input', { sessionId: id, runId, data: '\x03' }), { id: session.id, runId: run.id });
-  await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
+  await openRightSidebar(page,'文件');
   step('image, empty and binary previews; project changes cannot retain another project file');
   await entry('pixel.png').click(); await page.waitForFunction(() => document.querySelector('.image-preview img')?.naturalWidth === 1);
   await entry('binary.bin').click(); await page.getByText('无法直接预览', { exact: true }).waitFor();
@@ -365,10 +365,10 @@ try {
   await page.getByRole('dialog', { name: '移除 Skill', exact: true }).getByRole('button', { name: '移除 Skill', exact: true }).click();
   await skillRow.waitFor({ state: 'hidden' });
   // Core Skills management is part of Settings, not a plugin configuration dialog.
-  await sideTabs.getByRole('tab', { name: '文件', exact: true }).click();
+  await openRightSidebar(page,'文件');
   const current = await liveRun(); assert.equal(current.id, run.id); assert.equal(current.pid, run.pid); assert.equal(current.status, 'running');
   await mainTabs.getByRole('tab', { name: '终端', exact: true }).click();
-  await sideTabs.getByRole('tab', { name: '会话', exact: true }).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();
   assert.equal(await page.locator('.file-browser').count(), 0); await page.locator('.terminal-mount .xterm').waitFor();
   assert.equal((await liveRun()).pid, run.pid);
   await page.evaluate(id => window.berth.rpc('deleteProject', { projectId: id }), other.id);
