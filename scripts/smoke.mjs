@@ -1430,6 +1430,7 @@ try {
       if (page) {
         console.error(`Window: ${page.url()}`);
         console.error((await page.locator('body').innerText({ timeout: 2000 })).slice(0, 2000));
+        console.error('Workspace search diagnostics:',JSON.stringify(await page.evaluate(()=>({value:document.querySelector('input[aria-label="搜索项目和会话"]')?.value,rows:Array.from(document.querySelectorAll('.session-item')).map(node=>node.textContent?.trim()),projects:Array.from(document.querySelectorAll('.project-item')).map(node=>node.textContent?.trim()),sidebarCollapsed:document.querySelector('.sidebar')?.classList.contains('sidebar-collapsed')}))));
         await page.screenshot({ animations: 'disabled', path: 'test-results/smoke-failure.png', timeout: 5000 });
       }
     } catch {}

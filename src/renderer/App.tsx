@@ -6,7 +6,7 @@ import { ExtensionsContext } from './ExtensionManager';
 import { ExtensionView } from './ExtensionView';
 import { extensionEnabled } from '../shared/extensions';
 import appIcon from '../../assets/app.png';
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_VERSION, isCustomAgent, type DeletionUndo, type History, type Method, type Project, type Session, type Settings, type State, type SshWindowState } from '../shared/protocol';
 import { SshDock } from './SshDock';
 import { OutputBadge, useTerminalActivity } from './useTerminalActivity';
@@ -85,7 +85,9 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [filter, setFilter] = useState('all');
   const [collapsed, setCollapsed] = useState(loadCollapsedProjects);
   const [searchCollapsed,setSearchCollapsed]=useState<string[]|null>(null);
-  const deferredSearch = useDeferredValue(search);
+  // The project/session tree is small enough to filter synchronously. Keeping
+  // this controlled input immediate avoids stale results during rapid session switching.
+  const deferredSearch = search;
   const treeSearching=!!deferredSearch.trim()||filter!=='all';
   useEffect(()=>setSearchCollapsed(null),[deferredSearch,filter]);
   const [tab, setTab] = useState<'terminal' | 'history' | 'runs' | 'preview'>('terminal');

@@ -11,6 +11,8 @@ export async function openExtensionView(page,title){
   if(await iframe.count())await iframe.waitFor({state:'visible'});
 }
 export async function openRightSidebar(page,panel){
+  const sessions=page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true});
+  if(await sessions.getAttribute('aria-pressed')!=='true')await sessions.click();
   const tabs=page.getByRole('tablist',{name:'右侧工具',exact:true});
   if(!await tabs.isVisible().catch(()=>false)){
     await page.getByRole('button',{name:panel==='文件'?'打开文件':'打开 Git',exact:true}).click();
