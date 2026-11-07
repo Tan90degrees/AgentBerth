@@ -1064,21 +1064,21 @@ try {
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
   await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
   await assertTerminalGutter(page);
-  step('delete a finished record from its output view and clear remaining history with confirmation');
+  step('delete a finished record, undo from the toast, then clear remaining history');
   await page.getByRole('button', { name: '删除此记录', exact: true }).click();
-  await page.getByRole('heading', { name: '删除此运行记录？', exact: true }).waitFor();
-  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
-  await page.locator('.output-host .xterm-screen').waitFor();
-  await page.getByRole('button', { name: '删除此记录', exact: true }).click();
-  await page.getByRole('button', { name: '确认删除记录', exact: true }).click();
-  await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await eventually(async () => await page.locator('.run-item').filter({ hasText: original.id.slice(0,8) }).count() === 0, 'Deleted record stayed in the list');
   await assert.rejects(page.evaluate(runId => window.berth.rpc('output', { runId }), original.id), /不存在/);
-  await assert.rejects(stat(path.join(folder, 'data', 'logs', original.id + '.log')), /ENOENT/);
+  // The log stays on disk while the undo receipt is valid.
+  assert.ok((await stat(path.join(folder, 'data', 'logs', original.id + '.log'))).isFile());
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  // A restored run is reopened automatically so the recovered output is visible.
+  await eventually(async () => await page.getByRole('button', { name: '返回列表', exact: true }).count() === 1, 'Undo did not reopen the run output');
+  await assert.ok((await page.evaluate(runId => window.berth.rpc('output', { runId }), original.id)).includes('FLOW_DONE'));
+  await page.getByRole('button', { name: '返回列表', exact: true }).click();
+  await eventually(async () => await page.locator('.run-item').filter({ hasText: original.id.slice(0,8) }).count() === 1, 'Undo did not restore the run record');
   await page.getByRole('button', { name: '清除已结束记录', exact: true }).click();
-  await page.getByRole('button', { name: '确认清除记录', exact: true }).click();
-  await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.getByRole('heading', { name: '尚无运行记录', exact: true }).waitFor();
+  await page.locator('.success-toast').filter({ hasText: '已删除' }).last().getByRole('button', { name: '关闭成功提示', exact: true }).click();
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
@@ -1334,7 +1334,7 @@ try {
     await dock.getByLabel('SSH 终端',{exact:true}).selectOption(remoteSession.id);
     await page.evaluate(async id=>{await window.berth.rpc('stop',{sessionId:id});await window.berth.rpc('deleteSession',{sessionId:id});},secondSsh.id);
     await page.evaluate(()=>{window.localBeforeSshToggle=document.querySelector('.workspace-host .xterm');window.remoteBeforeSshToggle=document.querySelector('.ssh-dock .xterm');});
-    for(let index=0;index<3;index++){await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await page.getByRole('button',{name:'SSH 面板',exact:true}).click();}
+    for(let index=0;index<3;index++){await page.getByRole('button',{name:/^SSH 面板/}).click();await page.getByRole('button',{name:/^SSH 面板/}).click();}
     assert.equal(await page.evaluate(()=>window.localBeforeSshToggle===document.querySelector('.workspace-host .xterm')&&window.remoteBeforeSshToggle===document.querySelector('.ssh-dock .xterm')),true,'Toggling SSH must retain both terminal instances');
     const localBounds=await page.locator('.workspace-host .terminal-mount').boundingBox(),remoteBounds=await dock.locator('.terminal-mount').boundingBox();
     assert.ok(localBounds&&remoteBounds&&localBounds.height>40&&remoteBounds.height>40&&remoteBounds.y>=localBounds.y+localBounds.height,'Both local Agent and remote SSH must be visible, with SSH below');

@@ -10,7 +10,7 @@ const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['
 const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
 const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 51;
+export const API_VERSION = 53;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -163,6 +163,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('createSession'), params: z.object({ projectId: id, requestId:id.optional(), ...sessionConfig }).strict() }),
   z.object({ id, method: z.literal('updateSession'), params: z.object({ sessionId: id, ...sessionConfig }).strict() }),
   z.object({ id, method: z.literal('deleteSession'), params: z.object({ sessionId: id }).strict() }),
+  z.object({ id, method: z.literal('restoreDeleted'), params: z.object({ token: id }).strict() }),
   z.object({ id, method: z.literal('saveSettings'), params: settingsSchema }),
   z.object({ id, method: z.literal('createAgent'), params: agentDefinitionSchema }),
   z.object({ id, method: z.literal('updateAgent'), params: agentDefinitionSchema.extend({ agentId: agentSchema }) }),
@@ -199,6 +200,8 @@ export type Request = z.infer<typeof requestSchema>;
 export type Method = Request['method'];
 export type RunStatus = 'running' | 'stopping' | 'exited' | 'stopped' | 'failed' | 'interrupted';
 export interface Project { remoteWorkspace?: boolean; id: string; name: string; path: string; createdAt: string }
+/** A short-lived receipt returned by a deletion so the UI can offer an exact restore. */
+export interface DeletionUndo { token: string; kind: 'project' | 'session' | 'runs'; label: string; projectId: string; sessionId?: string; runIds?: string[] }
 export interface ProjectFile { name: string; path: string; kind: 'directory' | 'file' | 'other'; ignored: boolean; symlink: boolean; unavailable?: boolean }
 export interface ProjectFilePage { path: string; entries: ProjectFile[]; nextOffset: number | null; total: number; truncated: boolean; gitAvailable: boolean; warning?: string }
 export interface FilePreview { path: string; name: string; size: number; modifiedAt: string; kind: 'text' | 'image' | 'binary'; content: string | null; truncated: boolean; encoding?: string; mime?: string; message?: string }

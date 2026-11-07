@@ -94,6 +94,7 @@ export class DaemonServer {
   private nativeDiscovery = new NativeDiscovery();
   private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string }>();
   private nativeTimer: NodeJS.Timeout | null = null;
+  private pruneTimer: NodeJS.Timeout | null = null;
   private nativeScanning: Promise<void> | null = null;
   private historyBusy = new Set<string>();
   private historyWrites = new Set<string>();
@@ -138,6 +139,14 @@ export class DaemonServer {
     rmSync(path.join(dataDirectory,'command-output'),{recursive:true,force:true});
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
+    // No renderer from a previous process can still show an undo toast, so
+    // release expired snapshots and the run logs they were protecting.
+    try { this.removeLogs(this.store.pruneDeletions()); } catch (error) { this.logError(error); }
+    // Expire undo receipts even when the user leaves the daemon idle.
+    this.pruneTimer = setInterval(() => {
+      try { this.pruneLogs(); } catch (error) { this.logError(error); }
+    }, 60_000);
+    this.pruneTimer.unref();
     this.http.on('upgrade', (request, socket, head) => {
       if (!this.authorized(request)) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
       this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
@@ -901,7 +910,10 @@ export class DaemonServer {
     }
   }
   private pruneLogs(): void {
-    const active = new Set([...this.live.values()].map(item => item.run.id));
+    // Releasing expired undo receipts here too means a daemon that keeps
+    // running for days still frees their snapshots and protected logs.
+    try { this.removeLogs(this.store.pruneDeletions()); } catch (error) { this.logError(error); }
+    const active = new Set([...this.live.values()].map(item => item.run.id).concat(this.store.undoRunIds()));
     const files = readdirSync(this.logs).filter(name => /^[a-f0-9-]+\.log(?:\.[123])?$/.test(name)).map(name => ({ name, ...statSync(path.join(this.logs, name)) })).sort((a, b) => a.mtimeMs - b.mtimeMs);
     let total = files.reduce((sum, file) => sum + file.size, 0);
     for (const file of files) {
@@ -941,6 +953,7 @@ export class DaemonServer {
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
+    if(this.pruneTimer)clearInterval(this.pruneTimer);this.pruneTimer=null;
     await this.extensions.close();
     await new Promise<void>(resolve => {
       // Keep the shutdown reply and close frame ordered on the wire. Immediate

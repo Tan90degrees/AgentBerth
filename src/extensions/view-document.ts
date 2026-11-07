@@ -1,9 +1,9 @@
 // Each sandboxed plugin view has an opaque origin. Its message bridge must
 // handshake with the owning renderer before delivering a command: on Linux /
 // Xvfb the document can finish loading before the React frame is fully mounted.
-export const extensionDocument=(html:string)=>`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'"><style>body{font:14px system-ui;margin:16px;color:var(--text,#ddd);background:var(--surface,#212121)}button,input{font:inherit}</style><script>
+export const extensionDocument=(html:string)=>`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'"><style>body{font:var(--fs-md,14px)/1.6 var(--font-sans,system-ui);margin:16px;color:var(--text,#ddd);background:var(--surface,#212121)}button,input{font:inherit}button{border:1px solid var(--border,#444);border-radius:var(--radius-sm,6px);background:transparent;padding:6px 10px}button:hover{background:var(--hover,#333)}</style><script>
 let requestSequence=0,bridgeReady;
-function applyTheme(theme){if(typeof document==='undefined'||!theme)return;for(const name of ['--text','--surface','--surface-muted','--border','--muted','--focus','--color-scheme','--scrollbar','--hover'])if(typeof theme[name]==='string')document.documentElement.style.setProperty(name,theme[name]);}
+function applyTheme(theme){if(typeof document==='undefined'||!theme||typeof theme!=='object')return;for(const name of Object.keys(theme))if(/^--[a-z0-9-]+$/.test(name)&&typeof theme[name]==='string'&&theme[name].length<256)document.documentElement.style.setProperty(name,theme[name]);}
 addEventListener('message',event=>{if(event.source===parent&&event.data?.kind==='agentberth-plugin-theme')applyTheme(event.data.theme);});
 function waitForBridge(){
   if(bridgeReady)return bridgeReady;

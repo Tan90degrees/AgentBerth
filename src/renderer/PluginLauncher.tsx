@@ -1,9 +1,9 @@
-import {useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {memo,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import type {ExtensionSnapshot} from '../shared/extensions';
 import type {AgentActivity} from '../shared/pet';
 
-export function PluginLauncher({snapshot,activities=[],compact=false,selected,onSelect,onManage}:{snapshot?:ExtensionSnapshot;activities?:AgentActivity[];compact?:boolean;selected?:{pluginId:string;viewId:string}|null;onSelect:(pluginId:string,viewId:string)=>void;onManage:()=>void}){
+export const PluginLauncher=memo(function PluginLauncher({snapshot,activities=[],compact=false,selected,onSelect,onManage}:{snapshot?:ExtensionSnapshot;activities?:AgentActivity[];compact?:boolean;selected?:{pluginId:string;viewId:string}|null;onSelect:(pluginId:string,viewId:string)=>void;onManage:()=>void}){
   const [open,setOpen]=useState(false),[query,setQuery]=useState(''),[position,setPosition]=useState({left:8,top:8});
   const anchor=useRef<HTMLButtonElement>(null),popup=useRef<HTMLElement>(null),search=useRef<HTMLInputElement>(null);
   const entries=useMemo(()=>snapshot?.plugins.filter(p=>p.status==='active').flatMap(plugin=>plugin.views.filter(v=>v.location!=='settings').map(view=>({plugin,view})))??[],[snapshot]);
@@ -34,4 +34,4 @@ export function PluginLauncher({snapshot,activities=[],compact=false,selected,on
       <footer><button type="button" className="text-button" onClick={()=>{close();onManage();}}>管理插件</button></footer>
     </section>,document.body)}
   </>;
-}
+});

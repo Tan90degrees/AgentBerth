@@ -6,7 +6,7 @@ import { resolveTerminal } from '../daemon/paths';
 import { directory } from '../daemon/paths';
 import { sameDirectory } from '../daemon/history';
 import { RunLog } from '../daemon/logs';
-export const methods=["restoreWorkspace", "createProject", "updateProject", "deleteProject", "createSession", "updateSession", "deleteSession", "saveSettings", "renameSession", "archiveSession", "start", "stop", "serviceAction", "attach", "detach", "input", "resize", "runs", "deleteRun", "clearFinishedRuns", "output"] as const;
+export const methods=["restoreWorkspace", "createProject", "updateProject", "deleteProject", "restoreDeleted", "createSession", "updateSession", "deleteSession", "saveSettings", "renameSession", "archiveSession", "start", "stop", "serviceAction", "attach", "detach", "input", "resize", "runs", "deleteRun", "clearFinishedRuns", "output"] as const;
 export function mount(ctx:Context,server:DaemonServer){
  const host=server.workspaceCorePort();
  server.registerCoreRoutes(ctx,methods,async(request:Request,client:Client)=>{switch(request.method){
@@ -34,7 +34,15 @@ export function mount(ctx:Context,server:DaemonServer){
         host.requireProjectAvailable(id);
         if (host.gitBusy.has(id)) throw new Error('Git 操作期间请等待完成后再删除项目');
         for (const sessionId of host.store.projectSessionIds(id)) host.requireIdle(sessionId);
-        host.removeLogs(host.store.deleteProject(id)); host.changed(); return null;
+        // Keep the run logs until the undo window expires; prune older receipts first.
+        host.removeLogs(host.store.pruneDeletions());
+        const { undo } = host.store.deleteProjectWithUndo(id); host.changed(); return undo;
+      }
+      case 'restoreDeleted': {
+        // Expire old receipts first so their logs are released exactly when the
+        // restore window closes, even without another delete or a restart.
+        host.removeLogs(host.store.pruneDeletions());
+        const undo = host.store.restoreDeletion(request.params.token); host.changed(); return undo;
       }
       case 'createSession': {
         host.requireProjectAvailable(request.params.projectId);
@@ -70,7 +78,8 @@ export function mount(ctx:Context,server:DaemonServer){
         host.requireProjectAvailable(projectId);
         if (host.worktreeBusy.has(projectId)) throw new Error('Worktree 删除期间请稍后删除会话');
         host.requireIdle(id);
-        host.removeLogs(host.store.deleteSession(id)); host.changed(); return null;
+        host.removeLogs(host.store.pruneDeletions());
+        const { undo } = host.store.deleteSessionWithUndo(id); host.changed(); return undo;
       }
       case 'saveSettings': {
         await resolveTerminal(request.params.terminal);
@@ -119,12 +128,15 @@ export function mount(ctx:Context,server:DaemonServer){
         const run = host.store.run(request.params.runId);
         host.requireProjectAvailable(host.store.session(run.sessionId).projectId);
         if (host.live.get(run.sessionId)?.run.id === run.id) throw new Error('请先停止终端，再删除运行记录');
-        host.store.deleteRun(run.id); host.removeLogs([run.id]); host.changed(); return null;
+        // Logs stay on disk while the receipt is valid so a restored run can still be read.
+        host.removeLogs(host.store.pruneDeletions());
+        const undo = host.store.deleteRunWithUndo(run.id); host.changed(); return undo;
       }
       case 'clearFinishedRuns': {
         const id = request.params.sessionId;
         host.requireProjectAvailable(host.store.session(id).projectId);
-        host.removeLogs(host.store.clearFinishedRuns(id)); host.changed(); return null;
+        host.removeLogs(host.store.pruneDeletions());
+        const undo = host.store.clearFinishedRunsWithUndo(id); host.changed(); return undo;
       }
       case 'output': {
         const run = host.store.run(request.params.runId), live = host.live.get(run.sessionId);

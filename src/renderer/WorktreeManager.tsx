@@ -6,6 +6,13 @@ import type { GitResult, GitStatus, GitWorktree, Project } from '../shared/proto
 
 type WorktreeRefresh = { projectId: string; status?: GitStatus };
 
+/** Electron wraps IPC failures in a transport prefix that users should never see. */
+const worktreeError = (reason: unknown): string => String(reason)
+  .replace(/^Error:\s*/, '')
+  .replace(/^Error invoking remote method '[^']+':\s*/, '')
+  .replace(/^Error:\s*/, '')
+  .trim();
+
 function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -27,7 +34,7 @@ function useWorktrees(project: Project, enabled: boolean, visible: boolean) {
       }
     } catch (reason) {
       if (alive.current && generation.current === token) {
-        setStatus(null); setError(String(reason).replace(/^Error: /, ''));
+        setStatus(null); setError(worktreeError(reason));
       }
     } finally { if (alive.current && generation.current === token) setLoading(false); }
   }, [project.id, enabled, visible]);
@@ -97,7 +104,7 @@ function WorktreeCreateDialog({ status, worktrees, disabled, error, onFetch, onC
     try {
       const item = await onCreate(branch.trim(), mode !== 'existing', mode === 'remote' ? source!.ref : mode === 'new' ? baseRef || undefined : undefined);
       if (item) onCreated(item);
-    } catch (reason) { setLocalError(String(reason)); }
+    } catch (reason) { setLocalError(worktreeError(reason)); }
     finally { setBusy(false); }
   }
   const suggested = (name: string) => {
@@ -178,7 +185,7 @@ export function WorktreeManager({
       onNotice('已创建 Worktree：' + (item.branch ?? branch));
       return item;
     } catch (reason) {
-      const message = String(reason).replace(/^Error: /, '');
+      const message = worktreeError(reason);
       setActionError(message);
       onError(message);
       return null;
@@ -194,7 +201,7 @@ export function WorktreeManager({
       if (selectedPath === item.workingPath) onSelect(null);
       onNotice('已移除 Worktree：' + (item.branch ?? item.path));
     } catch (reason) {
-      const message = String(reason).replace(/^Error: /, '');
+      const message = worktreeError(reason);
       setActionError(message);
       onError(message);
     }
@@ -254,7 +261,7 @@ export function WorktreePicker({
       onChange(item.main ? null : item.workingPath);
       return item;
     } catch (reason) {
-      const message = String(reason).replace(/^Error: /, '');
+      const message = worktreeError(reason);
       setActionError(message);
       return null;
     }

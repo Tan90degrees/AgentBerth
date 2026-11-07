@@ -2,6 +2,31 @@ import { WebExtensionView } from './WebExtensionView';
 import { useLayoutEffect, useRef } from 'react';
 import type { ExtensionInfo } from '../shared/extensions';
 
+// Mirror every semantic token from tokens.css into the sandboxed plugin view.
+// view-document.ts applies them on :root, so bundled plugin CSS can share the
+// main window's type scale, radii, motion and colors.
+const PLUGIN_THEME_TOKENS = [
+  '--color-scheme', '--font-sans', '--font-mono',
+  '--fs-2xs', '--fs-xs', '--fs-sm', '--fs-md', '--fs-lg', '--fs-xl', '--fs-2xl', '--fs-3xl',
+  '--space-1', '--space-2', '--space-3', '--space-4', '--space-5', '--space-6', '--space-8',
+  '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-pill',
+  '--motion-fast', '--motion-base', '--motion-slow', '--ease-out',
+  '--bg', '--sidebar', '--surface', '--surface-muted', '--panel', '--input', '--hover', '--selected',
+  '--text', '--text-secondary', '--text-muted', '--border', '--primary', '--primary-hover', '--on-primary',
+  '--focus', '--link', '--success', '--success-soft', '--success-border', '--danger', '--danger-soft', '--danger-border',
+  '--warning', '--warning-soft', '--warning-border', '--overlay', '--shadow-color', '--selection', '--scrollbar', '--terminal',
+];
+function pluginTheme(): Record<string, string> {
+  const style = getComputedStyle(document.documentElement);
+  const theme: Record<string, string> = {};
+  for (const name of PLUGIN_THEME_TOKENS) {
+    const value = style.getPropertyValue(name).trim();
+    if (value) theme[name] = value;
+  }
+  theme['--muted'] = theme['--text-muted'] ?? ''; // legacy alias used by the bundled Superagent view
+  return theme;
+}
+
 export function ExtensionView(props:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void;initialTaskId?:string;suspended?:boolean}){
   return props.plugin.manifest.views.find(v=>v.id===props.viewId)?.web?<WebExtensionView {...props}/>:<HtmlExtensionView {...props}/>;
 }
@@ -9,7 +34,7 @@ function HtmlExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:Extensi
   const frame=useRef<HTMLIFrameElement>(null);
   // Attach the message bridge before paint: a fast iframe can otherwise send
   // its first command before the passive effect subscribes to window messages.
-  useLayoutEffect(()=>{let pending=0,alive=true;const theme=()=>{const style=getComputedStyle(document.documentElement);return {...Object.fromEntries(['--text','--surface','--surface-muted','--border','--focus','--color-scheme','--scrollbar','--hover'].map(name=>[name,style.getPropertyValue(name)])),'--muted':style.getPropertyValue('--text-muted')||style.getPropertyValue('--muted')};};const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
+  useLayoutEffect(()=>{let pending=0,alive=true;const theme=pluginTheme;const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
     if(!alive||event.source!==frame.current?.contentWindow)return;
     if(event.data?.kind==='agentberth-plugin-open-settings'){window.dispatchEvent(new CustomEvent('berth:plugin-settings',{detail:{pluginId:plugin.manifest.id,isAgent:plugin.isAgent}}));return;}
     if(event.data?.kind==='agentberth-plugin-ready'){

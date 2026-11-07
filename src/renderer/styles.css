@@ -1,11 +1,3 @@
-:root {
-  font-family: Inter,"Segoe UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
-  color: var(--text);
-  background: var(--surface-muted);
-  font-synthesis: none;
-  font-size: 13px;
-  color-scheme: var(--color-scheme)
-}
 * {
   box-sizing: border-box
 }
@@ -114,7 +106,7 @@ h2 {
 .brand small {
   display: block;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   margin-top: 5px
 }
 .sidebar-heading {
@@ -122,7 +114,7 @@ h2 {
   justify-content: space-between;
   align-items: center;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: 1px;
   text-transform: uppercase;
   padding-left: 9px
@@ -161,12 +153,12 @@ h2 {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-muted)
 }
 .sidebar-bottom .text-button {
   margin-left: auto;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .dot {
   width: 6px;
@@ -188,7 +180,7 @@ h2 {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 4px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   line-height: 1.4;
   font-weight: 500;
   color: var(--text-secondary);
@@ -211,17 +203,17 @@ h2 {
   justify-content: space-between
 }
 .eyebrow {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   letter-spacing: 2px;
   color: var(--text-muted);
   font-weight: 600
 }
 .crumb {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary)
 }
 .topbar-status {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   display: flex;
   align-items: center;
@@ -247,7 +239,7 @@ h2 {
   margin-top: 10px;
   color: var(--text-muted);
   font-family: "Cascadia Code",Consolas,monospace;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
@@ -272,7 +264,7 @@ h2 {
 }
 .primary.compact {
   padding: 7px 11px;
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .subtle {
   background: var(--surface-muted);
@@ -302,7 +294,7 @@ h2 {
 .search {
   margin: 0 13px 13px;
   width: calc(100% - 26px);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 9px 10px;
   background: var(--surface-muted);
   border-color: var(--border)
@@ -339,7 +331,7 @@ h2 {
   background: var(--surface-muted);
   border: 1px solid var(--border);
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   padding: 3px 6px;
   border-radius: 4px;
   white-space: nowrap
@@ -350,7 +342,7 @@ h2 {
   color: var(--success)
 }
 .agent-label {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-muted)
 }
 .session-actions {
@@ -359,7 +351,7 @@ h2 {
   align-items: center
 }
 .session-actions .subtle,.session-actions .danger {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   padding: 7px 10px
 }
 .tabs {
@@ -371,7 +363,7 @@ h2 {
 }
 .tabs>button {
   padding: 11px 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   border-bottom: 2px solid transparent
 }
@@ -381,7 +373,7 @@ h2 {
 }
 .tabs>button.hide-terminal {
   margin-left: auto;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .terminal-panel {
   display: flex;
@@ -403,7 +395,7 @@ h2 {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   padding: 10px 18px;
   border-top: 1px solid var(--border);
@@ -465,7 +457,7 @@ h2 {
   gap: 36px;
   margin-top: 36px;
   color: var(--text-muted);
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .welcome-features>span {
   display: flex;
@@ -488,7 +480,7 @@ h2 {
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   gap: 10px
 }
 .panel-toolbar>div {
@@ -496,7 +488,7 @@ h2 {
   gap: 8px
 }
 .panel-toolbar .subtle {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   padding: 7px 10px
 }
 .history-meta {
@@ -505,12 +497,12 @@ h2 {
   border-bottom: 1px solid var(--border)
 }
 .history-meta code {
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .history-meta small {
   display: block;
   margin-top: 6px;
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -536,7 +528,7 @@ h2 {
   display: flex;
   justify-content: space-between;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   margin-bottom: 13px
 }
 .message.assistant header {
@@ -544,7 +536,7 @@ h2 {
 }
 .message time {
   color: var(--text-muted);
-  font-size: 9px
+  font-size: var(--fs-2xs)
 }
 .message p {
   white-space: pre-wrap;
@@ -554,7 +546,7 @@ h2 {
   color: var(--text-secondary)
 }
 .history-warning {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   margin: 10px 0;
   line-height: 1.8
@@ -574,7 +566,7 @@ h2 {
   border-bottom: 1px solid var(--border);
   gap: 12px;
   color: var(--text-secondary);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .run-item>span:first-child {
   width: 30%;
@@ -590,7 +582,7 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 9px
+  font-size: var(--fs-2xs)
 }
 .output-host {
   min-height: 200px
@@ -640,7 +632,7 @@ h2 {
 }
 .form-hint {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.9;
   margin-top: 18px;
   overflow-wrap: anywhere
@@ -676,7 +668,7 @@ h2 {
   padding: 12px 18px;
   background: var(--danger-soft);
   color: var(--danger);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   border-bottom: 1px solid var(--danger-border)
 }
 .loader {
@@ -764,7 +756,7 @@ textarea:focus-visible {
   flex-shrink: 0
 }
 .project-actions .subtle {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 9px 11px
 }
 .project-header>div:first-child {
@@ -781,7 +773,7 @@ textarea:focus-visible {
 .session-filter {
   margin: 0 13px 13px;
   width: calc(100% - 26px);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 8px 10px;
   background: var(--surface-muted)
 }
@@ -861,7 +853,7 @@ textarea:focus-visible {
 }
 .settings-card footer>span {
   margin-right: auto;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary)
 }
 .settings-card input[type=number] {
@@ -906,7 +898,7 @@ textarea:focus-visible {
   margin: 10px 0 2px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary)
 }
 .quick-link kbd {
@@ -967,13 +959,13 @@ textarea:focus-visible {
   display: block;
   margin-top: 6px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis
 }
 .switch-kind {
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   color: var(--text-secondary);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -983,13 +975,35 @@ textarea:focus-visible {
 .switch-empty {
   padding: 28px;
   color: var(--text-secondary);
-  font-size: 12px;
-  text-align: center
+  font-size: var(--fs-xs);
+  text-align: center;
+  display: grid;
+  gap: 10px;
+  justify-items: center
+}
+.switch-empty p {
+  margin: 0
+}
+.switch-group {
+  padding: 12px 10px 5px;
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: .04em
+}
+.switch-group:not(:first-child) {
+  border-top: 1px solid var(--border);
+  margin-top: 6px
+}
+.switch-match {
+  background: transparent;
+  color: var(--link);
+  font-weight: 600
 }
 .dialog .switch-help {
   justify-content: space-between;
   margin-top: 18px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-secondary)
 }
 .form-error {
@@ -1013,7 +1027,7 @@ textarea:focus-visible {
   margin-top: 14px
 }
 .draft-notice {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--warning);
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
@@ -1053,11 +1067,11 @@ textarea:focus-visible {
   white-space: nowrap
 }
 .path-copy {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   flex-shrink: 0
 }
 .clear-filter {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-secondary);
   justify-content: flex-end;
   padding: 0 15px 10px
@@ -1066,7 +1080,7 @@ textarea:focus-visible {
   padding: 7px 21px;
   color: var(--warning);
   background: var(--warning-soft);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   border-top: 1px solid var(--warning-border)
 }
 .launch-error {
@@ -1081,7 +1095,7 @@ textarea:focus-visible {
 }
 .launch-error p {
   color: var(--danger);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.8;
   margin: 8px 0 13px;
   overflow-wrap: anywhere;
@@ -1094,7 +1108,7 @@ textarea:focus-visible {
   gap: 7px
 }
 .launch-error .subtle {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   padding: 7px 10px
 }
 .history-id {
@@ -1104,7 +1118,7 @@ textarea:focus-visible {
   gap: 12px
 }
 .history-id .text-button {
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .session-actions .subtle {
   white-space: nowrap
@@ -1183,7 +1197,7 @@ textarea:focus-visible {
   padding: 0 8px;
   letter-spacing: 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   margin-bottom: 10px
 }
 .tree-search {
@@ -1259,7 +1273,7 @@ textarea:focus-visible {
   color: var(--text-muted)
 }
 .project-item em {
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   font-style: normal;
   color: var(--text-secondary);
   padding: 2px 4px
@@ -1315,7 +1329,7 @@ textarea:focus-visible {
 }
 .session-agent {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   max-width: 70px;
   overflow: hidden;
@@ -1324,17 +1338,17 @@ textarea:focus-visible {
 }
 .tree-empty {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 10px 8px
 }
 .tree-empty .text-button {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-muted)
 }
 .sidebar .add-project {
   border: 0;
   margin: 8px 4px 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 10px 7px
 }
 .sidebar .settings-link {
@@ -1507,7 +1521,7 @@ textarea:focus-visible {
   display: flex;
   gap: 16px;
   color: var(--text-muted);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .terminal-state-actions {
   display: flex;
@@ -1533,7 +1547,7 @@ textarea:focus-visible {
   flex-shrink: 0;
   flex-wrap: wrap;
   color: var(--text-secondary);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .terminal-tool-status {
   margin-right: auto;
@@ -1556,7 +1570,7 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   color: var(--text-secondary);
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .terminal-search input {
   flex: 1;
@@ -1573,7 +1587,7 @@ textarea:focus-visible {
 }
 .terminal-search [role=status] {
   min-width: 36px;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .terminal-search button:last-child {
   margin-left: auto;
@@ -1598,14 +1612,14 @@ textarea:focus-visible {
   gap: 12px
 }
 .topbar .eyebrow {
-  font-size: 9px
+  font-size: var(--fs-2xs)
 }
 .topbar .crumb {
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .topbar-status {
   gap: 8px;
-  font-size: 9px
+  font-size: var(--fs-2xs)
 }
 
 .project-header {
@@ -1636,17 +1650,17 @@ textarea:focus-visible {
 }
 .project-header .path-button {
   min-width: 0;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .project-header .path-copy {
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   white-space: nowrap
 }
 .project-actions {
   gap: 6px
 }
 .project-actions .subtle,.project-actions .primary {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   padding: 6px 8px;
   white-space: nowrap
 }
@@ -1682,7 +1696,7 @@ textarea:focus-visible {
   gap: 5px
 }
 .session-actions .subtle,.session-actions .danger,.session-actions .primary {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   padding: 5px 7px;
   white-space: nowrap
 }
@@ -1693,7 +1707,7 @@ textarea:focus-visible {
 }
 .tabs>button {
   padding: 7px 0;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .terminal-footer {
   padding-top: 6px;
@@ -1713,7 +1727,7 @@ textarea:focus-visible {
   flex-shrink: 0
 }
 .agent-manager p {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   line-height: 1.8
 }
@@ -1741,14 +1755,14 @@ textarea:focus-visible {
 .agent-definitions code {
   display: block;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   margin: 6px 0
 }
 .agent-definitions small {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-secondary)
 }
 .agent-definitions li>div:last-child {
@@ -1790,7 +1804,7 @@ textarea:focus-visible {
   flex-wrap: wrap
 }
 .agent-manager-buttons button {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 8px 10px
 }
 .agent-definitions li>div:last-child {
@@ -1822,7 +1836,7 @@ textarea:focus-visible {
   display: block;
   overflow-wrap: anywhere;
   margin-top: 10px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-secondary)
 }
 .advanced-options {
@@ -1832,7 +1846,7 @@ textarea:focus-visible {
 }
 .advanced-options>summary {
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   padding: 4px 0
 }
@@ -1843,7 +1857,7 @@ textarea:focus-visible {
   border-radius: 7px;
   padding: 12px;
   color: var(--success);
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .imported-plugin p {
   margin-top: 7px;
@@ -1867,7 +1881,7 @@ textarea:focus-visible {
   }
   .agent-definitions .subtle {
     padding: 7px 8px;
-    font-size: 10px
+    font-size: var(--fs-2xs)
   }
 }
 .tree-context-menu {
@@ -1887,7 +1901,7 @@ textarea:focus-visible {
   width: 100%;
   text-align: left;
   padding: 9px 11px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text);
   border-radius: 5px
 }
@@ -1909,6 +1923,31 @@ textarea:focus-visible {
   height: 1px;
   background: var(--surface-muted);
   margin: 5px 4px
+}
+/* Two always-visible project shortcuts. Muted until the row is active so the
+   tree stays quiet; the overflow menu holds the rest of the actions. */
+.tree-quick {
+  opacity: .62;
+  flex-shrink: 0;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary)
+}
+.project-row:hover .tree-quick,.project-row:focus-within .tree-quick,.tree-quick:focus-visible {
+  opacity: 1
+}
+.tree-quick:hover {
+  background: var(--hover);
+  color: var(--text)
+}
+.tree-quick:disabled {
+  opacity: .2;
+  cursor: not-allowed
 }
 .tree-more {
   opacity: 0;
@@ -1968,7 +2007,7 @@ textarea:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   flex: 1
 }
 .project-header h1 {
@@ -2018,7 +2057,7 @@ textarea:focus-visible {
 .run-row>.subtle {
   flex-shrink: 0;
   padding: 7px 10px;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .native-browser {
   flex-shrink: 0;
@@ -2035,7 +2074,7 @@ textarea:focus-visible {
   flex: 1;
   min-width: 150px;
   padding: 7px 10px;
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .native-sources {
   display: flex;
@@ -2045,7 +2084,7 @@ textarea:focus-visible {
   padding: 7px 9px;
   border-radius: 5px;
   color: var(--text-secondary);
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .native-sources>button.selected {
   background: var(--selected);
@@ -2082,25 +2121,25 @@ textarea:focus-visible {
   white-space: nowrap
 }
 .native-preview strong {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary)
 }
 .native-preview code {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   margin-top: 4px
 }
 .native-item>time {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-muted)
 }
 .native-item>.subtle,.native-browser .subtle {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   padding: 6px 9px
 }
 .native-list-hint {
   padding: 12px 18px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   line-height: 1.8
 }
@@ -2109,7 +2148,7 @@ textarea:focus-visible {
   gap: 8px;
   align-items: center;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   margin-top: 8px
 }
 .native-pagination>span {
@@ -2123,7 +2162,7 @@ textarea:focus-visible {
 .native-pagination select {
   width: auto;
   padding: 5px;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .history-meta {
   flex-shrink: 0
@@ -2144,7 +2183,7 @@ textarea:focus-visible {
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .history-diagnostics>summary {
   padding: 7px 18px;
@@ -2154,7 +2193,7 @@ textarea:focus-visible {
 .history-diagnostics>summary>span {
   margin-left: 10px;
   color: var(--text-muted);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .history-diagnostics-content {
   max-height: min(30vh, 200px);
@@ -2174,7 +2213,7 @@ textarea:focus-visible {
   border: 1px solid var(--border);
   border-radius: 5px;
   color: var(--text-secondary);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .git-branch>span {
   min-width: 0;
@@ -2183,7 +2222,7 @@ textarea:focus-visible {
   white-space: nowrap
 }
 .git-branch>small {
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   white-space: nowrap
 }
 .git-branch>svg {
@@ -2207,7 +2246,7 @@ textarea:focus-visible {
 .git-root {
   display: block;
   margin-top: 12px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   overflow-wrap: anywhere;
   color: var(--text-muted)
 }
@@ -2216,17 +2255,17 @@ textarea:focus-visible {
   flex-wrap: wrap;
   gap: 14px;
   margin: 17px 0 12px;
-  font-size: 11px
+  font-size: var(--fs-xs)
 }
 .git-tracking {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.8;
   overflow-wrap: anywhere
 }
 .git-tracking>small {
   display: block;
   color: var(--text-muted);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .git-actions {
   display: flex;
@@ -2235,7 +2274,7 @@ textarea:focus-visible {
   margin-top: 16px
 }
 .git-actions>.subtle,.git-actions>.primary {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 8px 11px
 }
 .git-switch {
@@ -2259,7 +2298,7 @@ textarea:focus-visible {
   gap: 12px;
   padding: 7px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .git-files>li>span {
   min-width: 42px;
@@ -2278,12 +2317,12 @@ textarea:focus-visible {
   background: var(--surface-muted);
   border: 1px solid var(--border);
   padding: 10px;
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .git-progress,.git-success {
   margin-top: 15px;
   line-height: 1.8;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--success)
 }
 .git-manager .form-hint {
@@ -2301,7 +2340,7 @@ textarea:focus-visible {
   gap: 4px;
   flex-shrink: 0;
   white-space: nowrap;
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   line-height: 16px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
@@ -2319,7 +2358,7 @@ textarea:focus-visible {
   text-align: right
 }
 .resource-full {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   gap: 5px
 }
 .workspace-resources {
@@ -2329,7 +2368,7 @@ textarea:focus-visible {
   min-height: 19px;
   padding: 0 5px 3px;
   color: var(--text-muted);
-  font-size: 10px
+  font-size: var(--fs-2xs)
 }
 .sidebar-bottom {
   padding-top: 8px
@@ -2339,7 +2378,7 @@ textarea:focus-visible {
   margin-right: 3px
 }
 .session-item .resource-usage {
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   gap: 3px
 }
 .session-header>.resource-usage {
@@ -2429,7 +2468,7 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 .extension-list small { display: block; color: var(--text-muted); margin-top: 5px; }
-.extension-status { font-size: 11px; margin-left: 9px; color: var(--text-muted); }
+.extension-status { font-size: var(--fs-xs); margin-left: 9px; color: var(--text-muted); }
 .extension-status.active { color: #63b783; }
 .extension-status.failed { color: var(--danger); }
 .extension-fields {
@@ -2451,7 +2490,7 @@ textarea:focus-visible {
 .extension-config-dialog>form>label>input[type=checkbox] { width:auto; align-self:flex-start; }
 .extension-config-dialog>form>label>input,.extension-config-dialog>form>label>select { margin-top:0; max-width:100%; }
 .source-development-guide { width:100%; height: min(48vh,420px); min-height:160px; margin-top:12px; resize:vertical; font:12px/1.65 var(--font-mono,monospace); }
-.extension-config-dialog small { font-size:11px; color:var(--text-muted); }
+.extension-config-dialog small { font-size: var(--fs-xs); color:var(--text-muted); }
 .extension-config-dialog .extension-dialog-view { display:flex; flex-direction:column; min-height:220px; gap:8px; }
 .extension-config-dialog .extension-dialog-view h3 { font-size:13px; }
 .extension-config-dialog .extension-view { min-height:240px; }
@@ -2468,13 +2507,13 @@ textarea:focus-visible {
 .plugin-center-summary{display:flex;align-items:center;gap:22px;padding:13px 18px;border:1px solid var(--border);border-radius:10px;background:var(--surface-muted);}
 .plugin-center-summary span{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:55px;}
 .plugin-center-summary strong{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;}
-.plugin-center-summary small{font-size:11px;color:var(--text-muted);}
+.plugin-center-summary small{font-size: var(--fs-xs);color:var(--text-muted);}
 .plugin-center-tabs{display:flex;gap:6px;padding:5px;border:1px solid var(--border);background:var(--surface-muted);border-radius:10px;flex-shrink:0;}
 .plugin-center-tabs button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:11px 15px;border:1px solid transparent;border-radius:7px;text-align:left;color:var(--text-muted);}
 .plugin-center-tabs button:hover:not(.selected){background:var(--hover);}
 .plugin-center-tabs button.selected{background:var(--surface);border-color:var(--border);box-shadow:0 1px 4px #00000014;color:var(--text);}
 .plugin-center-tabs strong{font-size:13px;font-weight:600;}
-.plugin-center-tabs small{font-size:11px;line-height:1.45;color:var(--text-muted);}
+.plugin-center-tabs small{font-size: var(--fs-xs);line-height:1.45;color:var(--text-muted);}
 .plugin-center-content{overflow-y:auto;flex:1;min-height:0;padding:4px 3px 22px;}
 .plugin-center-content .extension-manager{display:flex;flex-direction:column;gap:14px;}
 .plugin-center-content .extension-manager>header{gap:12px;}
@@ -2551,12 +2590,12 @@ textarea:focus-visible {
 .worktree-path {
   width: 100%;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   overflow-wrap: anywhere;
 }
-.worktree-select small:last-child { color: var(--text-muted); font-size: 10px; }
+.worktree-select small:last-child { color: var(--text-muted); font-size: var(--fs-2xs); }
 .worktree-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.worktree-actions button { padding: 4px 6px; font-size: 10px; }
+.worktree-actions button { padding: 4px 6px; font-size: var(--fs-2xs); }
 .worktree-add { align-self: flex-start; }
 .worktree-create-form, .worktree-picker {
   display: flex;
@@ -2576,7 +2615,7 @@ textarea:focus-visible {
   gap: 5px;
   min-width: 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .worktree-create-form input, .worktree-create-form select, .worktree-picker select {
   width: 100%;
@@ -2600,16 +2639,16 @@ textarea:focus-visible {
 .acp-message.user {background:var(--surface-muted);padding:12px 16px;border-radius:16px;margin-left:36px}.acp-message.error {border-left:3px solid var(--danger);padding-left:12px}
 .acp-message p {white-space:pre-wrap;margin:8px 0}.acp-message pre,.acp-tool pre {overflow:auto;max-width:100%;padding:12px;background:var(--surface-muted);border:1px solid var(--border);border-radius:8px;font:12px/1.55 var(--font-mono,monospace)}
 .acp-stream {white-space:pre-wrap}.acp-thought,.acp-tool {margin:10px 0;color:var(--text-muted);font-size:12px}.acp-thought pre {white-space:pre-wrap;font:inherit}.acp-tool summary,.acp-thought summary {cursor:pointer}.acp-tool small {float:right}
-.acp-notice {color:var(--text-muted);font-size:11px;text-align:center;margin:12px 0}.acp-welcome {text-align:center;padding:60px 16px;color:var(--text-muted)}.acp-welcome h2 {color:var(--text)}
+.acp-notice {color:var(--text-muted);font-size: var(--fs-xs);text-align:center;margin:12px 0}.acp-welcome {text-align:center;padding:60px 16px;color:var(--text-muted)}.acp-welcome h2 {color:var(--text)}
 .acp-conversation>.form-error {margin:6px 16px;max-height:90px;overflow:auto;flex-shrink:0}
 .acp-permission {margin:8px 16px;padding:12px 16px;border:1px solid var(--focus);border-radius:12px;flex-shrink:0}.acp-permission>div {display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-.acp-composer {margin:10px max(16px,calc((100% - 820px)/2));padding:12px;border:1px solid var(--border);border-radius:16px;background:var(--surface-muted);flex-shrink:0}.acp-composer textarea {display:block;width:100%;resize:vertical;min-height:64px;max-height:220px;background:transparent;border:none;color:var(--text);font:inherit;outline:none}.acp-composer footer {display:flex;justify-content:space-between;align-items:center;margin-top:8px}.acp-composer small {color:var(--text-muted);font-size:11px}
+.acp-composer {margin:10px max(16px,calc((100% - 820px)/2));padding:12px;border:1px solid var(--border);border-radius:16px;background:var(--surface-muted);flex-shrink:0}.acp-composer textarea {display:block;width:100%;resize:vertical;min-height:64px;max-height:220px;background:transparent;border:none;color:var(--text);font:inherit;outline:none}.acp-composer footer {display:flex;justify-content:space-between;align-items:center;margin-top:8px}.acp-composer small {color:var(--text-muted);font-size: var(--fs-xs)}
 
-.extension-task-document{display:flex;flex:1;min-height:0}.extension-owned-conversation{display:flex;flex-direction:column;flex:1;min-height:0}.extension-owned-conversation>header{display:flex;gap:12px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border)}.extension-owned-conversation>header strong{font-size:12px;font-weight:500}.extension-owned-conversation>header button{font-size:11px}.extension-owned-conversation>.acp-conversation{flex:1;min-height:0}
+.extension-task-document{display:flex;flex:1;min-height:0}.extension-owned-conversation{display:flex;flex-direction:column;flex:1;min-height:0}.extension-owned-conversation>header{display:flex;gap:12px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border)}.extension-owned-conversation>header strong{font-size:12px;font-weight:500}.extension-owned-conversation>header button{font-size: var(--fs-xs)}.extension-owned-conversation>.acp-conversation{flex:1;min-height:0}
 
-.extension-nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 5px;margin-left:auto;border-radius:10px;background:var(--selected);color:var(--focus);font-size:10px;font-weight:600}
+.extension-nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 5px;margin-left:auto;border-radius:10px;background:var(--selected);color:var(--focus);font-size: var(--fs-2xs);font-weight:600}
 
-.history-load-status{text-align:center;color:var(--text-muted);font-size:11px;padding:10px 0;min-height:34px;flex-shrink:0;}
+.history-load-status{text-align:center;color:var(--text-muted);font-size: var(--fs-xs);padding:10px 0;min-height:34px;flex-shrink:0;}
 .history-workspace-panel{display:flex;flex:1;min-width:0;min-height:0;}
 .runs-load-error{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 16px;padding:10px 12px;}
 .runs-load-error span{overflow-wrap:anywhere;}
@@ -2647,10 +2686,10 @@ textarea:focus-visible {
 .workbench-identity h1{font-weight:600;max-width:240px;flex:0 1 auto}
 .workbench-identity h2{font-weight:500;flex:0 1 auto;max-width:360px;color:var(--text-secondary)}
 .workbench-separator{color:var(--text-muted);flex-shrink:0}
-.workbench-identity .badge{flex-shrink:0;font-size:10px;padding:2px 6px}
-.workbench-header .topbar-status{font-size:11px;gap:8px;white-space:nowrap;flex-shrink:0}
+.workbench-identity .badge{flex-shrink:0;font-size: var(--fs-2xs);padding:2px 6px}
+.workbench-header .topbar-status{font-size: var(--fs-xs);gap:8px;white-space:nowrap;flex-shrink:0}
 .workbench-header .topbar-status>.icon-button{width:28px;height:28px;display:grid;place-items:center}
-.workbench-header .resource-usage{font-size:10px}
+.workbench-header .resource-usage{font-size: var(--fs-2xs)}
 .tree-actions{display:flex;align-items:center;gap:2px;margin-left:auto}
 .tree-actions .icon-button{width:26px;height:26px;display:grid;place-items:center;padding:4px}
 .sidebar-heading{gap:4px}
@@ -2666,7 +2705,7 @@ textarea:focus-visible {
 .plugin-launcher-entry:hover,.plugin-launcher-entry[aria-current=page]{background:var(--hover)}
 .plugin-launcher-entry>span:first-child{flex:1;min-width:0;overflow:hidden}
 .plugin-launcher-entry strong{display:block;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.plugin-launcher-entry small{display:block;font-size:10px;color:var(--text-muted);margin-top:3px}
+.plugin-launcher-entry small{display:block;font-size: var(--fs-2xs);color:var(--text-muted);margin-top:3px}
 .plugin-launcher-list>p{padding:18px 10px;color:var(--text-muted);font-size:12px}
 .plugin-launcher-popup>footer{display:flex;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border);flex-shrink:0}
 .sidebar-rail .plugin-launcher-button{margin:0}
@@ -2681,16 +2720,16 @@ textarea:focus-visible {
 .project-row[data-drop-edge]::after,.session-row[data-drop-edge]::after{content:'';position:absolute;left:2px;right:2px;height:2px;background:var(--focus);border-radius:2px;pointer-events:none;z-index:2}
 [data-drop-edge=before]::after{top:0}[data-drop-edge=after]::after{bottom:0}
 .extension-active .workbench-header{height:34px;min-height:34px}
-.extension-active .workbench-header .ssh-toggle{height:26px;min-height:26px;padding:3px 8px;font-size:11px;line-height:18px}
+.extension-active .workbench-header .ssh-toggle{height:26px;min-height:26px;padding:3px 8px;font-size: var(--fs-xs);line-height:18px}
 .extension-active .extension-page{padding:0}
 .plugin-web-toolbar{padding:4px 10px;gap:6px;min-height:34px}
 .plugin-web-actions{margin-left:0;gap:4px}
-.plugin-web-toolbar button{height:26px;min-height:26px;padding:3px 8px;font-size:11px;line-height:18px}
+.plugin-web-toolbar button{height:26px;min-height:26px;padding:3px 8px;font-size: var(--fs-xs);line-height:18px}
 
 .welcome-steps{display:flex;flex-wrap:wrap;justify-content:center;gap:14px;margin:30px 0 0;padding:0;list-style:none;max-width:660px}
 .welcome-steps li{flex:1;min-width:160px;display:flex;flex-direction:column;gap:6px;text-align:left;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
 .welcome-steps strong{font-size:12px;font-weight:600;color:var(--text)}
-.welcome-steps span{font-size:11px;line-height:1.7;color:var(--text-muted)}
+.welcome-steps span{font-size: var(--fs-xs);line-height:1.7;color:var(--text-muted)}
 .welcome-shortcuts-link{margin-top:16px;font-size:12px;gap:8px}
 .welcome-shortcuts-link:hover:not(:disabled){text-decoration:underline}
 .dialog:has(.shortcut-groups){width:660px}
@@ -2700,12 +2739,12 @@ textarea:focus-visible {
 .shortcut-row{display:flex;align-items:center;justify-content:space-between;gap:14px;font-size:12px;color:var(--text-secondary)}
 .shortcut-row dd{margin:0;display:flex;gap:4px;flex-shrink:0}
 .sidebar-empty{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
-.sidebar-empty .subtle{padding:5px 12px;font-size:11px;border:1px solid var(--border)}
+.sidebar-empty .subtle{padding:5px 12px;font-size: var(--fs-xs);border:1px solid var(--border)}
 .toast{animation:toast-in .18s ease-out}
 .toast-stack{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);z-index:5;display:flex;flex-direction:column;align-items:center;gap:10px;width:max-content;max-width:70vw}
 .toast-stack .toast{position:static;transform:none;max-width:100%}
 .toast-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.toast .toast-copy{font-size:11px;line-height:1.5;padding:3px 10px;border:1px solid currentColor;border-radius:6px}
+.toast .toast-copy{font-size: var(--fs-xs);line-height:1.5;padding:3px 10px;border:1px solid currentColor;border-radius:6px}
 @keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:640px){.welcome-steps{flex-direction:column;align-items:stretch}.shortcut-groups{grid-template-columns:1fr}}
 
@@ -2713,3 +2752,40 @@ textarea:focus-visible {
 .acp-load-error span{min-width:0;overflow-wrap:anywhere;color:var(--danger)}
 .acp-load-error button{flex-shrink:0}
 @media(prefers-reduced-motion:reduce){.toast{animation:none}}
+
+.topbar{position:relative}
+.main{position:relative}
+.status-summary{display:inline-flex;align-items:center;gap:7px;padding:5px 9px;border:1px solid var(--border);border-radius:var(--radius-pill);color:var(--text-secondary);background:var(--surface);font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
+.status-summary:hover,.status-summary.selected{background:var(--selected);color:var(--text)}
+.status-summary svg{opacity:.7}
+.status-summary .status-label{color:var(--text-muted)}
+.status-popover{position:absolute;top:58px;right:31px;z-index:8;min-width:240px;padding:14px 16px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--panel);box-shadow:0 8px 30px var(--shadow-color);display:flex;flex-direction:column;gap:10px}
+.status-popover[hidden]{display:none}
+.status-detail{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:var(--fs-xs);color:var(--text-muted)}
+.status-detail strong{color:var(--text);font-weight:500;font-variant-numeric:tabular-nums}
+.action-progress{position:absolute;top:0;left:0;right:0;height:2px;overflow:hidden;z-index:9}
+.action-progress::after{content:'';position:absolute;width:35%;height:100%;background:var(--focus);animation:berth-progress 1.1s var(--ease-out) infinite}
+@keyframes berth-progress{from{transform:translateX(-100%)}to{transform:translateX(390%)}}
+.toast-stack{right:24px;bottom:24px;left:auto;transform:none;align-items:flex-end}
+.session-empty{gap:12px}
+.session-empty .empty-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.session-empty .welcome-steps{margin-top:12px}
+.session-empty .welcome-steps li{min-width:150px}
+@media(prefers-reduced-motion:reduce){.action-progress::after{animation:none;width:100%;opacity:.5}}
+
+/* P1 micro-interactions: one motion scale, always reduced-motion aware. */
+.status-summary,.tree-quick,.tree-more,.switch-result,.tabs>button,.sidebar-tabs button,.toast-actions button{
+  transition:background-color var(--motion-fast) var(--ease-out),color var(--motion-fast) var(--ease-out),border-color var(--motion-fast) var(--ease-out),opacity var(--motion-fast) var(--ease-out)
+}
+.status-popover:not([hidden]){
+  animation:berth-popover-in var(--motion-fast) var(--ease-out)
+}
+@keyframes berth-popover-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.toast{
+  animation:toast-in var(--motion-base) var(--ease-out)
+}
+/* Sidebar geometry changes once: width animation would repeatedly resize PTYs. */
+@media(prefers-reduced-motion:reduce){
+  .status-summary,.tree-quick,.tree-more,.switch-result,.tabs>button,.sidebar-tabs button,.toast-actions button{transition:none}
+  .status-popover:not([hidden]),.toast{animation:none}
+}
