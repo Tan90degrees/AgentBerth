@@ -5,13 +5,32 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
+import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition, AgentDefinitionConfig, DeletionUndo, History, Project, Run, Session, Settings, State, TerminalConfig, HistoryQuery, NativeHistoryPage } from '../shared/protocol';
 import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 import { restartPlanSchema, type RestartEntry } from './recovery';
 import type {ManagedSessions,SessionOwner} from '../shared/protocol';
 import type { AcpEvent } from '../shared/acp';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
+
+// Deletions keep an exact, short-lived snapshot instead of a "recreate from
+// the form" approximation: ids, native-session links and run records survive
+// an undo. Order matters when restoring because several tables have foreign
+// keys into projects/sessions.
+const UNDO_TABLES = ['projects', 'sessions', 'runs', 'session_owners', 'native_histories', 'remote_actions', 'remote_requests', 'acp_sessions', 'acp_events', 'acp_turns'] as const;
+type UndoTable = typeof UNDO_TABLES[number];
+type Row = Record<string, unknown>;
+interface DeletionPayload { tables: Partial<Record<UndoTable, Row[]>>; runIds: string[] }
+type DeletionKind = 'project' | 'session' | 'runs';
+interface DeletionRow { token: string; kind: DeletionKind; label: string; projectId: string; sessionId: string | null; deletedAt: string; payload: string }
+const UNDO_TTL_MS = 30 * 60 * 1000;
+const UNDO_LIMIT = 10;
+const parsePayload = (value: unknown): DeletionPayload => {
+  try {
+    const parsed = JSON.parse(String(value)) as DeletionPayload;
+    return { tables: parsed?.tables ?? {}, runIds: Array.isArray(parsed?.runIds) ? parsed.runIds.filter(id => typeof id === 'string') : [] };
+  } catch { return { tables: {}, runIds: [] }; }
+};
 
 export class Store {
   private db: DatabaseSync;
@@ -23,8 +42,9 @@ export class Store {
     this.db=new DatabaseSync(database);
     // Schema 6 is the first Cordis-only data format. Schema 7 adds a nullable
     // session worktree path. Schema 8 adds opt-in, read-only service sessions.
+    // Schema 9 adds the short-lived deletion snapshots used by undo.
     const schemaVersion=Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
-    if(existing&&![6,7,8].includes(schemaVersion)){
+    if(existing&&![6,7,8,9].includes(schemaVersion)){
       this.db.close();
       throw new Error('检测到旧版 AgentBerth 数据。新架构不支持原地升级，请退出应用并清除旧数据目录后重新启动。');
     }
@@ -72,7 +92,11 @@ export class Store {
     this.db.exec('CREATE TABLE IF NOT EXISTS ssh_connections (id TEXT PRIMARY KEY, value TEXT NOT NULL, fingerprint TEXT)');
     this.db.exec(`CREATE TABLE IF NOT EXISTS session_owners(sessionId TEXT PRIMARY KEY,projectId TEXT NOT NULL,pluginId TEXT NOT NULL,taskId TEXT NOT NULL,kind TEXT NOT NULL);CREATE TRIGGER IF NOT EXISTS remove_session_owner AFTER DELETE ON sessions BEGIN DELETE FROM session_owners WHERE sessionId=old.id;END;`);
     if(existing&&schemaVersion<8)this.db.exec('ALTER TABLE sessions ADD COLUMN service INTEGER NOT NULL DEFAULT 0');
-    this.db.exec('PRAGMA user_version = 8');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS deletions (
+      token TEXT PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL,
+      projectId TEXT NOT NULL, sessionId TEXT, deletedAt TEXT NOT NULL, payload TEXT NOT NULL
+    );`);
+    this.db.exec('PRAGMA user_version = 9');
     this.db.exec(`CREATE TABLE IF NOT EXISTS acp_sessions(sessionId TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS acp_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS acp_events_session ON acp_events(sessionId,sequence);
@@ -156,16 +180,28 @@ export class Store {
     return this.db.prepare('SELECT id FROM sessions WHERE projectId = ?').all(id).map(row => String(row.id));
   }
 
-  deleteProject(id: string): string[] {
+  private deleteProjectRows(id: string): string[] {
     this.project(id);
     const runIds = this.db.prepare('SELECT runs.id FROM runs JOIN sessions ON sessions.id = runs.sessionId WHERE sessions.projectId = ?').all(id).map(row => String(row.id));
-    this.transaction(() => {
-      this.db.prepare('DELETE FROM runs WHERE sessionId IN (SELECT id FROM sessions WHERE projectId = ?)').run(id);
-      this.db.prepare('DELETE FROM sessions WHERE projectId = ?').run(id);
-      this.db.prepare('DELETE FROM session_owners WHERE projectId=?').run(id);
-      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
-    });
+    this.db.prepare('DELETE FROM runs WHERE sessionId IN (SELECT id FROM sessions WHERE projectId = ?)').run(id);
+    this.db.prepare('DELETE FROM sessions WHERE projectId = ?').run(id);
+    this.db.prepare('DELETE FROM session_owners WHERE projectId=?').run(id);
+    this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     return runIds;
+  }
+
+  deleteProject(id: string): string[] {
+    return this.transaction(() => this.deleteProjectRows(id));
+  }
+
+  /** Delete a project while keeping an exact snapshot for the UI undo action. */
+  deleteProjectWithUndo(id: string): { runIds: string[]; undo: DeletionUndo } {
+    const project = this.project(id);
+    return this.transaction(() => {
+      const payload = this.captureDeletion('project', id);
+      const runIds = this.deleteProjectRows(id);
+      return { runIds, undo: this.recordDeletion('project', project.name, id, null, payload) };
+    });
   }
 
   session(id: string): Session {
@@ -222,14 +258,115 @@ export class Store {
     return runIds;
   }
 
-  deleteSession(id: string): string[] {
+  private deleteSessionRows(id: string): string[] {
     this.session(id);
     const runIds = this.db.prepare('SELECT id FROM runs WHERE sessionId = ?').all(id).map(row => String(row.id));
-    this.transaction(() => {
-      this.db.prepare('DELETE FROM runs WHERE sessionId = ?').run(id);
-      this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
-    });
+    this.db.prepare('DELETE FROM runs WHERE sessionId = ?').run(id);
+    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
     return runIds;
+  }
+
+  deleteSession(id: string): string[] {
+    return this.transaction(() => this.deleteSessionRows(id));
+  }
+
+  /** Delete a session while keeping an exact snapshot for the UI undo action. */
+  deleteSessionWithUndo(id: string): { runIds: string[]; undo: DeletionUndo } {
+    const session = this.session(id);
+    return this.transaction(() => {
+      const payload = this.captureDeletion('session', id);
+      const runIds = this.deleteSessionRows(id);
+      return { runIds, undo: this.recordDeletion('session', session.title, session.projectId, id, payload) };
+    });
+  }
+
+  private rows(sql: string, ...params: (string | number | null)[]): Row[] {
+    return this.db.prepare(sql).all(...params) as unknown as Row[];
+  }
+
+  private captureDeletion(kind: 'project' | 'session', id: string): DeletionPayload {
+    const project = kind === 'project';
+    const bySession = project ? 'IN (SELECT id FROM sessions WHERE projectId = ?)' : '= ?';
+    const tables: Partial<Record<UndoTable, Row[]>> = {
+      sessions: this.rows(project ? 'SELECT * FROM sessions WHERE projectId = ?' : 'SELECT * FROM sessions WHERE id = ?', id),
+      runs: this.rows(project ? 'SELECT rowid, * FROM runs WHERE sessionId IN (SELECT id FROM sessions WHERE projectId = ?)' : 'SELECT rowid, * FROM runs WHERE sessionId = ?', id),
+      session_owners: this.rows(project ? 'SELECT * FROM session_owners WHERE projectId = ?' : 'SELECT * FROM session_owners WHERE sessionId = ?', id),
+    };
+    if (project) {
+      tables.projects = this.rows('SELECT * FROM projects WHERE id = ?', id);
+      tables.native_histories = this.rows('SELECT * FROM native_histories WHERE projectId = ?', id);
+    }
+    for (const table of ['remote_actions', 'remote_requests', 'acp_sessions', 'acp_events', 'acp_turns'] as UndoTable[])
+      tables[table] = this.rows(`SELECT * FROM ${table} WHERE sessionId ${bySession}`, id);
+    const runIds = (tables.runs ?? []).map(row => String(row.id));
+    return { tables, runIds };
+  }
+
+  private recordDeletion(kind: DeletionKind, label: string, projectId: string, sessionId: string | null, payload: DeletionPayload): DeletionUndo {
+    const token = randomUUID();
+    this.db.prepare('INSERT INTO deletions (token, kind, label, projectId, sessionId, deletedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(token, kind, label.slice(0, 100), projectId, sessionId, new Date().toISOString(), JSON.stringify(payload));
+    return { token, kind, label, projectId, ...(sessionId ? { sessionId } : {}) };
+  }
+
+  /** Restore the exact rows captured by a deletion, or explain why it cannot be restored. */
+  restoreDeletion(token: string): DeletionUndo {
+    return this.transaction(() => {
+      const row = this.rows('SELECT * FROM deletions WHERE token = ?', token)[0] as unknown as DeletionRow | undefined;
+      if (!row) throw new Error('撤销记录已过期或已使用');
+      // A long-running daemon may not have pruned yet, but the receipt is no
+      // longer valid: its log files are already outside the protection window.
+      const deletedAt = Date.parse(row.deletedAt);
+      if (!Number.isFinite(deletedAt) || deletedAt < Date.now() - UNDO_TTL_MS) throw new Error('撤销时间已过，无法恢复');
+      const payload = parsePayload(row.payload);
+      const project = payload.tables.projects?.[0], session = payload.tables.sessions?.[0];
+      if (row.kind === 'project') {
+        if (!project) throw new Error('撤销记录已损坏，无法恢复');
+        if (this.rows('SELECT id FROM projects WHERE id = ? OR pathKey = ?', String(project.id), String(project.pathKey)).length)
+          throw new Error('同名项目目录已重新添加，无法撤销');
+      } else if (row.kind === 'session') {
+        if (!session) throw new Error('撤销记录已损坏，无法恢复');
+        if (this.rows('SELECT id FROM sessions WHERE id = ?', String(session.id)).length) throw new Error('此会话已重新创建，无法撤销');
+        if (!this.rows('SELECT id FROM projects WHERE id = ?', String(session.projectId)).length) throw new Error('所属项目已被删除，无法单独恢复此会话');
+      } else {
+        const runRows = payload.tables.runs ?? [];
+        if (!runRows.length) throw new Error('撤销记录已损坏，无法恢复');
+        for (const run of runRows) {
+          if (this.rows('SELECT id FROM runs WHERE id = ?', String(run.id)).length) throw new Error('此运行记录已重新创建，无法撤销');
+          if (!this.rows('SELECT id FROM sessions WHERE id = ?', String(run.sessionId)).length) throw new Error('所属会话已被删除，无法单独恢复运行记录');
+        }
+      }
+      for (const table of UNDO_TABLES) this.insertRows(table, payload.tables[table] ?? []);
+      this.db.prepare('DELETE FROM deletions WHERE token = ?').run(token);
+      const result: DeletionUndo = { token, kind: row.kind, label: row.label, projectId: row.projectId, ...(row.sessionId ? { sessionId: row.sessionId } : {}) };
+      if (row.kind === 'runs') result.runIds = payload.runIds;
+      return result;
+    });
+  }
+
+  private insertRows(table: UndoTable, rows: Row[]): void {
+    if (!rows.length) return;
+    const columns = Object.keys(rows[0]);
+    const statement = this.db.prepare(`INSERT INTO ${table} (${columns.map(column => `"${column}"`).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`);
+    for (const row of rows) statement.run(...columns.map(column => row[column] as string | number | null));
+  }
+
+  /** Drop stale snapshots and return the log run ids that are now safe to remove. */
+  pruneDeletions(now = Date.now()): string[] {
+    const rows = this.rows('SELECT token, deletedAt, payload FROM deletions ORDER BY rowid DESC');
+    const stale = rows.filter((row, index) => index >= UNDO_LIMIT || Date.parse(String(row.deletedAt)) < now - UNDO_TTL_MS);
+    if (!stale.length) return [];
+    this.transaction(() => { for (const row of stale) this.db.prepare('DELETE FROM deletions WHERE token = ?').run(String(row.token)); });
+    const protectedIds = new Set(this.undoRunIds());
+    return [...new Set(stale.flatMap(row => parsePayload(row.payload).runIds))].filter(id => !protectedIds.has(id));
+  }
+
+  /** Log files of a recently deleted run must survive until its undo expires. */
+  undoRunIds(): string[] {
+    const now = Date.now();
+    return [...new Set(this.rows('SELECT deletedAt, payload FROM deletions')
+      .filter(row => Date.parse(String(row.deletedAt)) >= now - UNDO_TTL_MS)
+      .flatMap(row => parsePayload(row.payload).runIds))];
   }
 
   saveRemoteAction(action: Omit<RemoteAction, 'sequence'>): RemoteAction {
@@ -325,7 +462,15 @@ export class Store {
     const id = randomUUID();
     const now = new Date().toISOString();
     if (!preserveRequests) this.db.prepare('DELETE FROM remote_requests WHERE sessionId=?').run(sessionId);
-    this.db.prepare("INSERT INTO runs (id, sessionId, status, startedAt, command, cols, rows, shell) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)").run(id, sessionId, now, command, cols, rows, shell);
+    // Undo must restore the original ordering used by latestRun. SQLite would
+    // otherwise reuse deleted rowids, including when the runs table is empty.
+    this.db.prepare(`INSERT INTO runs (rowid, id, sessionId, status, startedAt, command, cols, rows, shell)
+      SELECT COALESCE(MAX(position), 0) + 1, ?, ?, 'running', ?, ?, ?, ?, ? FROM (
+        SELECT MAX(rowid) AS position FROM runs
+        UNION ALL
+        SELECT CAST(json_extract(entry.value, '$.rowid') AS INTEGER) AS position
+        FROM deletions, json_each(deletions.payload, '$.tables.runs') AS entry
+      )`).run(id, sessionId, now, command, cols, rows, shell);
     this.db.prepare('UPDATE runs SET recordOutput = ? WHERE id = ?').run(this.session(sessionId).agent === 'shell' ? 1 : 0, id);
     this.db.prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(now, sessionId);
     return this.run(id);
@@ -347,6 +492,28 @@ export class Store {
     const ids = this.db.prepare("SELECT id FROM runs WHERE sessionId = ? AND status NOT IN ('running', 'stopping')").all(sessionId).map(row => String(row.id));
     this.db.prepare("DELETE FROM runs WHERE sessionId = ? AND status NOT IN ('running', 'stopping')").run(sessionId);
     return ids;
+  }
+
+  /** Delete finished runs but keep their exact rows and logs until the undo receipt expires. */
+  private deleteRunsWithUndo(rows: Row[], sessionId: string, label: string): DeletionUndo | null {
+    if (!rows.length) return null;
+    const { projectId } = this.session(sessionId);
+    return this.transaction(() => {
+      const ids = rows.map(row => String(row.id));
+      const statement = this.db.prepare('DELETE FROM runs WHERE id = ?');
+      for (const id of ids) statement.run(id);
+      const undo = this.recordDeletion('runs', label, projectId, sessionId, { tables: { runs: rows }, runIds: ids });
+      return { ...undo, runIds: ids };
+    });
+  }
+  deleteRunWithUndo(id: string): DeletionUndo | null {
+    const run = this.run(id);
+    if (['running', 'stopping'].includes(run.status)) throw new Error('请先停止终端，再删除运行记录');
+    return this.deleteRunsWithUndo(this.rows('SELECT rowid, * FROM runs WHERE id = ?', id), run.sessionId, `运行 ${id.slice(0, 8)}`);
+  }
+  clearFinishedRunsWithUndo(sessionId: string): DeletionUndo | null {
+    const rows = this.rows("SELECT rowid, * FROM runs WHERE sessionId = ? AND status NOT IN ('running', 'stopping')", sessionId);
+    return this.deleteRunsWithUndo(rows, sessionId, `${rows.length} 条运行记录`);
   }
   setPid(id: string, pid: number): void { this.db.prepare('UPDATE runs SET pid = ? WHERE id = ?').run(pid, id); }
   stopping(id: string): void { this.db.prepare("UPDATE runs SET status = 'stopping' WHERE id = ?").run(id); }

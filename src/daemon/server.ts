@@ -138,6 +138,9 @@ export class DaemonServer {
     rmSync(path.join(dataDirectory,'command-output'),{recursive:true,force:true});
     this.logs = path.join(dataDirectory, 'logs');
     mkdirSync(this.logs, { recursive: true, mode: 0o700 });
+    // No renderer from a previous process can still show an undo toast, so
+    // release expired snapshots and the run logs they were protecting.
+    try { this.removeLogs(this.store.pruneDeletions()); } catch (error) { this.logError(error); }
     this.http.on('upgrade', (request, socket, head) => {
       if (!this.authorized(request)) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
       this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
@@ -901,7 +904,10 @@ export class DaemonServer {
     }
   }
   private pruneLogs(): void {
-    const active = new Set([...this.live.values()].map(item => item.run.id));
+    // Releasing expired undo receipts here too means a daemon that keeps
+    // running for days still frees their snapshots and protected logs.
+    try { this.removeLogs(this.store.pruneDeletions()); } catch (error) { this.logError(error); }
+    const active = new Set([...this.live.values()].map(item => item.run.id).concat(this.store.undoRunIds()));
     const files = readdirSync(this.logs).filter(name => /^[a-f0-9-]+\.log(?:\.[123])?$/.test(name)).map(name => ({ name, ...statSync(path.join(this.logs, name)) })).sort((a, b) => a.mtimeMs - b.mtimeMs);
     let total = files.reduce((sum, file) => sum + file.size, 0);
     for (const file of files) {

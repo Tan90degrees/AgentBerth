@@ -8,7 +8,7 @@ import path from 'node:path';
 import { Store } from '../src/daemon/store';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
-import { DEFAULT_SETTINGS, type Attachment, type Project, type Run, type Session, type Settings, type State } from '../src/shared/protocol';
+import { DEFAULT_SETTINGS, type Attachment, type DeletionUndo, type Project, type Run, type Session, type Settings, type State } from '../src/shared/protocol';
 import { shell, resolveTerminal } from '../src/daemon/paths';
 import { matchesProject } from '../src/daemon/history';
 
@@ -125,8 +125,13 @@ test('management protects running and starting PTYs, applies shell defaults only
   assert.equal(second.shell, (await resolveTerminal({ profile: 'custom', executable: selected.file, args: selected.args })).file);
   await connection.rpc('stop', { sessionId: session.id });
   await eventually(async () => (await connection.rpc<State>('state')).sessions[0].latestRun?.status === 'stopped');
+  const undo = await connection.rpc<DeletionUndo>('deleteSession', { sessionId: session.id });
+  // Run logs are kept until the undo receipt expires, so an exact restore can
+  // still read the output. They are purged later by the daemon, never by a delete.
+  assert.equal(existsSync(logFile), true); assert.ok(existsSync(projectFile));
+  await connection.rpc('restoreDeleted', { token: undo.token });
+  assert.match(await connection.rpc<string>('output', { runId: run.id }), /LOG_DELETE_CHECK/);
   await connection.rpc('deleteSession', { sessionId: session.id });
-  assert.equal(existsSync(logFile), false); assert.ok(existsSync(projectFile));
   await connection.rpc('deleteProject', { projectId: project.id });
   assert.equal((await connection.rpc<State>('state')).projects.length, 0); assert.ok(existsSync(projectFile));
   await assert.rejects(connection.rpc('saveSettings', { ...DEFAULT_SETTINGS, terminal: { profile: 'custom', executable: path.join(folder, 'missing-shell'), args: [] } }), /找不到终端/);

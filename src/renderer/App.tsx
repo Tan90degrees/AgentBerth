@@ -1,53 +1,49 @@
-import { SuccessToast } from './SuccessToast';
+import { SuccessToast, type ToastAction } from './SuccessToast';
+import { dismissNotice, pushNotice, type Notice } from './notice-queue';
+import { WorkspaceSkeleton } from './WorkspaceSkeleton';
 import {reconcileSidebarOrder,loadSidebarOrder,orderSidebarItems,completeSidebarOrder,moveSidebarItem,type SidebarMove} from './sidebar-order';
 import { PluginLauncher } from './PluginLauncher';
 import { ExtensionsContext } from './ExtensionManager';
 import { ExtensionView } from './ExtensionView';
 import { extensionEnabled } from '../shared/extensions';
 import appIcon from '../../assets/app.png';
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { API_VERSION, DEFAULT_SETTINGS, isCustomAgent, type Agent, type AgentDefinition, type History, type Method, type Project, type Run, type Session, type Settings, type State, type TerminalConfig, type SshWindowState } from '../shared/protocol';
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { API_VERSION, isCustomAgent, type DeletionUndo, type History, type Method, type Project, type Session, type Settings, type State, type SshWindowState } from '../shared/protocol';
 import { SshDock } from './SshDock';
 import { OutputBadge, useTerminalActivity } from './useTerminalActivity';
-import { RemoteFields } from './RemoteTerminal';
-import type { RemoteConfig } from '../shared/protocol';
 import { TerminalView } from './TerminalView';
 import { AcpConversation } from './AcpConversation';
 import { AppearanceToggle } from './AppearanceControls';
 import { ResourceBadge, ResourceMonitor } from './Resources';
 import { GitBranch, GitSidebar } from './GitManager';
-import { WorktreeManager, WorktreePicker } from './WorktreeManager';
+import { WorktreeManager } from './WorktreeManager';
 import type { GitDiffRequest } from '../shared/protocol';
-import { HistoryPanel } from './HistoryPanel';
-import { RunHistory } from './RunHistory';
+import { SessionInsights } from './SessionInsights';
 import { ServiceTerminal } from './ServiceTerminal';
 import { TerminalState } from './TerminalState';
-import { TerminalFields } from './TerminalFields';
 import { SettingsPage } from './SettingsPage';
 import { PluginCenter, type PluginCenterTab } from './PluginCenter';
 import { agentLabels, nextSessionTitle, statusNames, terminalNames } from './labels';
 import { ContextMenu, type TreeMenuTarget, type MenuItem } from './ContextMenu';
-import { Dialog } from './Dialog';
+import { ModalLayer } from './ModalLayer';
+import type { Modal, ModalInitial, ModalRequest, ModalTarget, ProjectFormValues, SessionFormValues } from './modal-form';
 import { QuickSwitcher, type SwitchTarget } from './QuickSwitcher';
 import { ShortcutsDialog } from './ShortcutsDialog';
 import { loadCollapsedProjects, loadSelections, loadSettingsDraft, readStored, saveStored, type SettingsDraft } from './storage';
 import { handleTabKeyDown } from './tab-navigation';
+import { getWorkspaceState, publishWorkspaceState, useStableCallback, useWorkspaceState } from './workspace-state';
 
 import { matchesSession, ProjectTree, ResizableSidebar } from './WorkspaceSidebar';
 
 const active = (session: Session) => ['running', 'stopping'].includes(session.latestRun?.status ?? '');
 const FileBrowser = lazy(() => import('./FileBrowser'));
 const GitDiffPreview = lazy(() => import('./GitDiffPreview'));
-const date = (value: string) => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-type Modal = 'project' | 'editProject' | 'deleteProject' | 'session' | 'editSession' | 'sshSession' | 'editSshSession' | 'deleteSession' | 'stop' | 'link' | 'restart' | 'renameSession' | 'renameProject' | null;
-const normalize = (value: State): State => ({ ...value, agents: value.agents ?? [], apiVersion: value.apiVersion ?? 1, maxSshTerminals: value.maxSshTerminals ?? DEFAULT_SETTINGS.maxSshTerminals, settings: { ...structuredClone(DEFAULT_SETTINGS), ...value.settings }, sessions: value.sessions.map(session => ({ ...session, terminal: session.terminal ?? null })) });
-
 function Icon({ kind }: { kind: 'folder' | 'terminal' | 'plus' | 'arrow' | 'history' | 'settings' | 'git' | 'plugins' }) {
   const paths = { plugins: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z', git: 'M6 8v8m0-4c9 0 12-2 12-5M6 4a2 2 0 1 0 0 .1M6 18a2 2 0 1 0 0 .1M18 3a2 2 0 1 0 0 .1', folder: 'M3 7V5h6l2 2h10v12H3V7Z', terminal: 'm5 7 4 4-4 4m7 0h6', plus: 'M12 5v14M5 12h14', arrow: 'M5 12h14m-5-5 5 5-5 5', history: 'M3 11a9 9 0 1 1 2 7M3 4v7h7m2-4v6l4 2', settings: 'M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-6 0v6' };
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[kind]} /></svg>;
 }
 export function App({sshWindow=false}: {sshWindow?: boolean}) {
-  const [state, setState] = useState<State>({ projects: [], sessions: [], maxActiveTerminals: DEFAULT_SETTINGS.maxActiveTerminals, maxSshTerminals: DEFAULT_SETTINGS.maxSshTerminals, platform: '', settings: structuredClone(DEFAULT_SETTINGS), apiVersion: API_VERSION });
+  const state = useWorkspaceState(value => value);
   const features={workspace:true,agents:true,ssh:true,pet:extensionEnabled(state.extensions,'pet'),files:true,git:true,resources:true,appearance:true};
   const [extensionView,setExtensionView]=useState<{pluginId:string;viewId:string;taskId?:string;sessionId?:string}|null>(null);
   const selectedExtension=state.extensions?.plugins.find(p=>p.manifest.id===extensionView?.pluginId&&p.status==='active');
@@ -73,7 +69,6 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const openGit = (value: Project) => { setSidebarCollapsed(false); if (value.id !== projectId) setSelectedWorktreePath(null); setProjectId(value.id); setSidebarView('git'); setPage('workspace'); };
   useEffect(() => { setGitPreview(null); }, [projectId]);
   const openPath = useCallback((query: string) => { setSidebarCollapsed(false);setPage('workspace'); setSidebarView('files'); setFilesActivated(true); setFileTarget({ projectId, query, nonce: ++fileTargetSequence.current }); }, [projectId]);
-  const currentSessionId = useRef(sessionId); currentSessionId.current = sessionId;
   const [page, setPage] = useState<'workspace' | 'settings' | 'plugins'>('workspace');
   const [pluginTab,setPluginTab] = useState<PluginCenterTab>(()=>readStored('berth.pluginTab')==='agents'?'agents':'installed');
   const [requestedPlugin,setRequestedPlugin]=useState<string|null>(null);
@@ -92,13 +87,21 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   useEffect(()=>setSearchCollapsed(null),[deferredSearch,filter]);
   const [tab, setTab] = useState<'terminal' | 'history' | 'runs' | 'preview'>('terminal');
   const [terminalVisible, setTerminalVisible] = useState(true);
-  const [modal, setModal] = useState<Modal>(null);
-  const [modalTarget, setModalTarget] = useState<{ projectId: string; sessionId?: string } | null>(null);
+  const [modalRequest, setModalRequest] = useState<ModalRequest | null>(null);
+  const modal = modalRequest?.kind ?? null;
+  const modalTarget = modalRequest?.target ?? null;
+  const modalToken = useRef(0);
   const [treeMenu, setTreeMenu] = useState<TreeMenuTarget | null>(null);
   const closeTreeMenu = useCallback(() => setTreeMenu(null), []);
   const [busy, setBusy] = useState(false);
+  const [pendingActions, setPendingActions] = useState<Record<string, boolean>>({});
+  const [statusOpen, setStatusOpen] = useState(false);
   const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
+  // Actionable notices (undo / retry) keep their own slot so a later plain
+  // success message cannot swallow the user's only chance to reverse a delete.
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const notify = useCallback((text: string, action?: ToastAction) => setNotices(list => pushNotice(list, text, action)), []);
+  const closeNotice = useCallback((id: number) => setNotices(list => dismissNotice(list, id)), []);
   const [dismissedRecovery, setDismissedRecovery] = useState('');
   const [quickOpen, setQuickOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -106,23 +109,13 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [settingsDraft, setSettingsDraft] = useState<SettingsDraft | null>(loadSettingsDraft);
   const remembered = useRef(loadSelections());
   const opener = useRef<HTMLElement | null>(null);
-  const initialForm = useRef('');
-  const [folder, setFolder] = useState('');
-  const [name, setName] = useState('');
-  const [title, setTitle] = useState('');
-  const [agent, setAgent] = useState<Agent>('codex');
-  const [command, setCommand] = useState('');
-  const [service,setService]=useState(false);
-  const [terminal, setTerminal] = useState<TerminalConfig | null>(null);
-  const [remote, setRemote] = useState<RemoteConfig | null>(null);
-  const [worktreePath, setWorktreePath] = useState<string | null>(null);
   const [sshOpen,setSshOpen]=useState(()=>sshWindow||readStored('berth.sshOpen')==='true');
   const [sshSessionId,setSshSessionId]=useState(()=>readStored('berth.sshSession')??'');
   const [sshWindowState,setSshWindowState]=useState<SshWindowState>({detached:sshWindow,sessionId:''});
   const [sshWindowReady,setSshWindowReady]=useState(false);
   const changeSshWindow=(action:'open'|'dock'|'select',id=sshSessionId)=>window.berth.sshWindow(action,id);
   const selectSsh=(id:string)=>{setSshSessionId(id);if(sshWindow)void changeSshWindow('select',id).catch(reason=>setError(String(reason)));};
-  const openSavedSsh=async(alias:string)=>{const result=await window.berth.openSshConnection(alias);selectSsh(result.sessionId);setSshOpen(true);setPage('workspace');setMessage('SSH 终端已打开');return result;};
+  const openSavedSsh=async(alias:string)=>{const result=await window.berth.openSshConnection(alias);selectSsh(result.sessionId);setSshOpen(true);setPage('workspace');notify('SSH 终端已打开');return result;};
   const startSsh=(id:string)=>window.berth.rpc('start',{sessionId:id,resume:false,cols:100,rows:30});
   useEffect(()=>{
     let alive=true,changed=false;
@@ -144,17 +137,10 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     if(added.length&&followNew&&(!sshWindowState.detached||sshWindow)){selectSsh(added[0].id);setSshOpen(true);}
     else if(sshSessionId&&!remote.some(session=>session.id===sshSessionId))selectSsh(running[0]?.id??remote[0]?.id??'');
   },[state.sessions,loading,sshSessionId,sshWindowState.detached,sshWindowReady]);
-  const [nativeId, setNativeId] = useState('');
-  const [startNow, setStartNow] = useState(true);
-  const [history, setHistory] = useState<History | null>(null);
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [runsLoading, setRunsLoading] = useState(false);
-  const [runsError, setRunsError] = useState('');
-  const runsSession = useRef('');
-  const [runsRevision, setRunsRevision] = useState(0);
-  const [runOutput, setRunOutput] = useState<string | null>(null);
-  const [runOutputError, setRunOutputError] = useState('');
   const [viewingRun, setViewingRun] = useState<{ sessionId: string; runId: string } | null>(null);
+  const selectedSessionRef = useRef(sessionId); selectedSessionRef.current = sessionId;
+  // Bumped when a dialog links a native session or an undo restores run rows.
+  const [insightsRevision, setInsightsRevision] = useState(0);
   const outputRunId = viewingRun?.sessionId === sessionId ? viewingRun.runId : null;
   const agentNames = useMemo(() => agentLabels(state.agents), [state.agents]);
   const project = workspaceProjects.find(item => item.id === projectId);
@@ -182,19 +168,17 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const running = useMemo(() => state.sessions.filter(active).length, [state.sessions]);
   const sshRunning = useMemo(() => state.sessions.filter(item => !!item.remote && active(item)).length, [state.sessions]);
   const windowsPty = useMemo(() => state.windowsPty, [state.windowsPty?.backend, state.windowsPty?.buildNumber]);
-  const manageDisabled = busy || !connected || !features.workspace;
+  const manageDisabled = !connected || !features.workspace;
   const draftDirty = !!settingsDraft && JSON.stringify(settingsDraft.value) !== JSON.stringify(state.settings);
   const draftConflict = draftDirty && JSON.stringify(settingsDraft?.base) !== JSON.stringify(state.settings);
-  const formValue = modal === 'project' || modal === 'editProject' ? JSON.stringify({ name, folder }) : ['session','editSession','sshSession','editSshSession'].includes(modal ?? '') ? JSON.stringify({ title, agent, command, terminal, startNow, remote, worktreePath, service }) : modal === 'link' ? JSON.stringify(nativeId) : modal === 'renameSession' ? JSON.stringify(title) : modal === 'renameProject' ? JSON.stringify(name) : '';
-  const dirtyForm = !!formValue && formValue !== initialForm.current;
 
   useEffect(() => {
     if (!window.berth) { setLoading(false); setError('请通过 AgentBerth 桌面应用打开工作台'); return; }
     const off = window.berth.onEvent(event => {
-      if (event.event === 'state') { setState(normalize(event.data)); setHasLoadedState(true); setLoading(false); }
+      if (event.event === 'state') { publishWorkspaceState(event.data); setHasLoadedState(true); setLoading(false); }
       if (event.event === 'connection') { setConnected(event.data.connected); if (event.data.connected) { setConnectionEpoch(n => n + 1); setError(''); } if (event.data.error) setError(event.data.error); }
     });
-    void window.berth.rpc<State>('state').then(value => { setState(normalize(value)); setConnected(true); setHasLoadedState(true); setLoading(false); setError(''); }).catch(reason => { setError(String(reason)); setLoading(false); });
+    void window.berth.rpc<State>('state').then(value => { publishWorkspaceState(value); setConnected(true); setHasLoadedState(true); setLoading(false); setError(''); }).catch(reason => { setError(String(reason)); setLoading(false); });
     return off;
   }, []);
   useEffect(() => { if (!loading && !workspaceProjects.some(item => item.id === projectId)) setProjectId(workspaceProjects[0]?.id ?? ''); }, [workspaceProjects, projectId, loading]);
@@ -212,55 +196,37 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   }, [workspaceProjects, state.sessions, projectId, sessionId, loading]);
   useEffect(() => { if(sshWindow)return;saveStored('berth.sidebarView', sidebarView); saveStored('berth.filesOpen', null); if (sidebarView === 'files') setFilesActivated(true); }, [sidebarView]);
   useEffect(() => { if(sshWindow)return;saveStored('berth.project', projectId); }, [projectId]);
-  useEffect(() => { if(sshWindow)return;saveStored('berth.session', sessionId); setTerminalVisible(true); setRunOutput(null); }, [sessionId]);
+  useEffect(() => { if(sshWindow)return;saveStored('berth.session', sessionId); setTerminalVisible(true); }, [sessionId]);
 
   useEffect(() => { if (!sshWindow&&!loading) saveStored('berth.settingsDraft', draftDirty ? JSON.stringify(settingsDraft) : null); }, [settingsDraft, state.settings, loading]);
   useEffect(() => { if (!loading && settingsDraft && !draftDirty) setSettingsDraft(null); }, [settingsDraft, draftDirty, loading]);
-  useEffect(() => {
-    if (sshWindow || !session || !connected) { setRunsLoading(false); setRunsError(!connected && session ? '后台连接已断开，请重新连接后重试。' : ''); return; }
-    let canceled = false;
-    const sessionChanged = runsSession.current !== sessionId;
-    runsSession.current = sessionId;
-    setHistory(null); setRunsError(''); setRunOutputError(''); setRunOutput(null);
-    if (sessionChanged) setRuns([]);
-    if (tab === 'history') void window.berth.rpc<History>('history', { sessionId }).then(value => { if (!canceled) setHistory(value); }).catch(reason => { if (!canceled) setError(String(reason)); });
-    if (tab === 'runs') {
-      setRunsLoading(true);
-      void window.berth.rpc<Run[]>('runs', { sessionId }).then(async value => {
-        if (canceled) return;
-        setRuns(value);
-        if (outputRunId) {
-          if (!value.some(run => run.id === outputRunId)) { setRunOutputError('运行记录已不存在'); return; }
-          try {
-            const text = await window.berth.rpc<string>('output', { runId: outputRunId });
-            if (!canceled) setRunOutput(text);
-          } catch (reason) { if (!canceled) setRunOutputError(String(reason)); }
-        }
-      }).catch(reason => { if (!canceled) setRunsError(String(reason)); }).finally(() => { if (!canceled) setRunsLoading(false); });
-    } else setRunsLoading(false);
-    return () => { canceled = true; };
-  }, [sessionId, tab, connected, session?.agent, session?.transcriptPath, session?.nativeSessionId, session?.latestRun?.status, session?.latestRun?.id, project?.path, outputRunId, runsRevision]);
-
-  async function perform<T>(method: Method, params: Record<string, unknown>): Promise<T | undefined> {
-    setBusy(true); setError(''); setMessage('');
+  async function perform<T>(method: Method, params: Record<string, unknown>, scope?: string): Promise<T | undefined> {
+    if (scope) setPendingActions(previous => ({ ...previous, [scope]: true })); else setBusy(true);
+    // Notices manage their own lifetime now: an undo receipt must survive a
+    // subsequent unrelated RPC, and plain messages replace each other.
+    setError('');
     try { return await window.berth.rpc<T>(method, params); }
     catch (reason) { setError(String(reason)); return undefined; }
-    finally { setBusy(false); }
+    finally {
+      if (scope) setPendingActions(previous => { const next = { ...previous }; delete next[scope]; return next; });
+      else setBusy(false);
+    }
   }
   const reorderSidebar=useCallback((move:SidebarMove)=>{
-    const current=move.kind==='project'?state.projects.filter(project=>!project.remoteWorkspace).map(project=>project.id):state.sessions.filter(session=>!session.remote&&!session.owner&&session.projectId===move.projectId).map(session=>session.id);
+    const snapshot=getWorkspaceState();
+    const current=move.kind==='project'?snapshot.projects.filter(project=>!project.remoteWorkspace).map(project=>project.id):snapshot.sessions.filter(session=>!session.remote&&!session.owner&&session.projectId===move.projectId).map(session=>session.id);
     if(!current.includes(move.id)||!current.includes(move.targetId))return;
     setSidebarOrder(previous=>{
       const saved=move.kind==='project'?previous.projects:previous.sessions[move.projectId!]??[],full=completeSidebarOrder(current,saved),next=moveSidebarItem(current,saved,move.id,move.targetId,move.edge);
       if(next.every((id,index)=>id===full[index]))return previous;
       return move.kind==='project'?{...previous,projects:next}:{...previous,sessions:{...previous.sessions,[move.projectId!]:next}};
     });
-  },[state.projects,state.sessions]);
+  },[]);
   useEffect(()=>{if(!sshWindow&&!loading)setSidebarOrder(previous=>reconcileSidebarOrder(previous,state.projects.filter(project=>!project.remoteWorkspace).map(project=>project.id),state.sessions.filter(session=>!session.remote&&!session.owner)));},[state.projects,state.sessions,loading,sshWindow]);
   useEffect(()=>{if(!sshWindow&&!loading)saveStored('berth.sidebarOrder',JSON.stringify(sidebarOrder));},[sidebarOrder,loading,sshWindow]);
   const expandProject = useCallback((id: string) => {setCollapsed(previous => previous.includes(id) ? previous.filter(item => item !== id) : previous);setSearchCollapsed(previous=>previous?.filter(item=>item!==id)??null);}, []);
   const selectProject = useCallback((id: string) => { setExtensionView(null); setProjectId(id); setSelectedWorktreePath(null); setSearch(''); setFilter('all'); setPage('workspace'); setError(''); expandProject(id); }, [expandProject]);
-  const selectSession = useCallback((projectId: string, sessionId: string, withinFeature=false) => { const target=state.sessions.find(item=>item.id===sessionId);if(target?.owner){setPage('workspace');setExtensionView(previous=>withinFeature&&previous?.pluginId===target.owner!.pluginId?{...previous,sessionId:target.id}:{pluginId:target.owner!.pluginId,viewId:'tasks',taskId:target.owner!.taskId,sessionId:target.id});return;}setExtensionView(null); setSelectedWorktreePath(target?.worktreePath ?? null); if(target?.remote){selectSsh(sessionId);setSshOpen(true);setPage('workspace');return;} setProjectId(projectId); setSessionId(sessionId); setPage('workspace'); setTab('terminal'); setError(''); expandProject(projectId); }, [expandProject,state.sessions]);
+  const selectSession = useCallback((projectId: string, sessionId: string, withinFeature=false) => { const target=getWorkspaceState().sessions.find(item=>item.id===sessionId);if(target?.owner){setPage('workspace');setExtensionView(previous=>withinFeature&&previous?.pluginId===target.owner!.pluginId?{...previous,sessionId:target.id}:{pluginId:target.owner!.pluginId,viewId:'tasks',taskId:target.owner!.taskId,sessionId:target.id});return;}setExtensionView(null); setSelectedWorktreePath(target?.worktreePath ?? null); if(target?.remote){selectSsh(sessionId);setSshOpen(true);setPage('workspace');return;} setProjectId(projectId); setSessionId(sessionId); setPage('workspace'); setTab('terminal'); setError(''); expandProject(projectId); }, [expandProject]);
   useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{pluginId:string;isAgent:boolean}>).detail;if(!detail?.pluginId)return;setPluginTab(detail.isAgent?'agents':'installed');setRequestedPlugin(detail.pluginId);setPage('plugins');setError('');};window.addEventListener('berth:plugin-settings',open);return()=>window.removeEventListener('berth:plugin-settings',open);},[]);
   useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<{sessionId:string;pluginId?:string}>).detail?.sessionId,target=state.sessions.find(session=>session.id===id);if(target)selectSession(target.projectId,target.id,(event as CustomEvent).detail.pluginId===target.owner?.pluginId);else setError('会话尚未创建或已删除');};window.addEventListener('berth:open-session',open);return()=>window.removeEventListener('berth:open-session',open);},[selectSession,state.sessions]);
   useEffect(() => {
@@ -277,19 +243,32 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   }, [sshWindow]);
   const toggleProject = useCallback((id: string) => setCollapsed(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]), []);
   useEffect(() => { if (!sshWindow&&!loading) saveStored('berth.collapsedProjects', JSON.stringify(collapsed.filter(id => workspaceProjects.some(project => project.id === id)))); }, [collapsed, workspaceProjects, loading]);
-  function openModal(value: Modal, target: { projectId: string; sessionId?: string } | null = null) { setModalTarget(target); if (!quickOpen) opener.current = document.activeElement as HTMLElement | null; setError(''); setModal(value); }
+  useEffect(() => {
+    if (!statusOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement).closest?.('.status-summary, .status-popover')) setStatusOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [statusOpen]);
+  function openModal(kind: Modal, target: ModalTarget = null, initial: ModalInitial = {}) {
+    if (!quickOpen) opener.current = document.activeElement as HTMLElement | null;
+    setError('');
+    setModalRequest({ kind, target, initial, token: ++modalToken.current });
+  }
   function clearFilter() { setSearch(''); setFilter('all'); }
-  function newProject() { setFolder(''); setName(''); initialForm.current = JSON.stringify({ name: '', folder: '' }); openModal('project'); }
-  function editProject(value = project) { if (!value) return; setFolder(value.path); setName(value.name); initialForm.current = JSON.stringify({ name: value.name, folder: value.path }); openModal('editProject', { projectId: value.id }); }
-  function sessionForm(value: { title: string; agent: Agent; command: string; terminal: TerminalConfig | null; startNow: boolean; remote?: RemoteConfig | null; worktreePath?: string | null; service?:boolean }, editing = false, target: { projectId: string; sessionId?: string } | null = null) {
-    setService(!!value.service); setTitle(value.title); setAgent(value.agent); setCommand(value.command); setTerminal(value.terminal); setStartNow(value.startNow); setRemote(value.remote ?? null); setWorktreePath(value.worktreePath ?? null);
-    initialForm.current = JSON.stringify({ title: value.title, agent: value.agent, command: value.command, terminal: value.terminal, startNow: value.startNow, remote: value.remote ?? null, worktreePath: value.worktreePath ?? null, service:!!value.service }); openModal(value.remote ? editing ? 'editSshSession' : 'sshSession' : editing ? 'editSession' : 'session', target);
+  function newProject() { openModal('project', null, { project: { name: '', folder: '' } }); }
+  function editProject(value = project) { if (!value) return; openModal('editProject', { projectId: value.id }, { project: { name: value.name, folder: value.path } }); }
+  function openProjectFolder(value: Project) { void window.berth.openProject(value.path).catch(reason => setError(String(reason))); }
+  function sessionForm(value: Partial<SessionFormValues> & Pick<SessionFormValues, 'title' | 'agent' | 'command' | 'terminal' | 'startNow'>, editing = false, target: ModalTarget = null) {
+    const form: SessionFormValues = { ...value, remote: value.remote ?? null, worktreePath: value.worktreePath ?? null, service: !!value.service };
+    openModal(form.remote ? editing ? 'editSshSession' : 'sshSession' : editing ? 'editSession' : 'session', target, { session: form });
   }
   function newSession(id = projectId, selectedPath: string | null = id === projectId ? selectedWorktreePath : null) { const selected=state.settings.defaultAgent;const fallback=selected==='custom'||['codex','claude','opencode'].includes(selected)&&!extensionEnabled(state.extensions,'agent.'+selected)||selected.startsWith('agent:')&&!state.agents?.some(item=>item.id===selected&&(item.acp||item.sourceId?.startsWith('ext.')));sessionForm({ title: '', agent: fallback?'shell':selected, command: state.settings.defaultAgent === 'custom' ? state.settings.defaultCommand : state.agents?.find(item => item.id === state.settings.defaultAgent)?.command ?? '', terminal: null, startNow: true, worktreePath: selectedPath }, false, { projectId: id }); }
   function newSshSession() { sessionForm({title:'', agent:'shell', command:'', terminal:null, startNow:true, remote:{host:'',directory:''}}); }
   function editSession(value = session) { if (value) sessionForm({ title: value.title, agent: value.agent, command: value.command, terminal: value.terminal, startNow: false, remote: value.remote ?? null, worktreePath: value.worktreePath ?? null, service:value.service }, true, { projectId: value.projectId, sessionId: value.id }); }
   function copySession(value = session) { if (value) sessionForm({ title: value.title.slice(0, 90) + ' · 副本', agent: value.agent, command: value.command, terminal: value.terminal, startNow: false, remote: value.remote ?? null, worktreePath: value.worktreePath ?? null, service:value.service }, false, { projectId: value.projectId }); }
-  function openLink() { const value = session?.nativeSessionId ?? ''; setNativeId(value); initialForm.current = JSON.stringify(value); openModal('link'); }
+  function openLink() { openModal('link', null, { value: session?.nativeSessionId ?? '' }); }
   function openQuick() { opener.current = document.activeElement as HTMLElement | null; setQuickOpen(true); }
   function openShortcuts() { if (!quickOpen) opener.current = document.activeElement as HTMLElement | null; setQuickOpen(false); setShortcutsOpen(true); }
   function chooseTarget(target: SwitchTarget) {
@@ -297,11 +276,11 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     if (target.kind === 'action') { if (target.action === 'settings') { setPage('settings'); setError(''); } else if (target.action === 'project') newProject(); else if (target.action === 'shortcuts') openShortcuts(); else newSession(); return; }
     if(target.sessionId)selectSession(target.projectId!,target.sessionId);else selectProject(target.projectId!);setTab('terminal');
   }
-  async function copyText(text: string, label: string) { try { await window.berth.copyText(text); setMessage(label + '已复制'); } catch (reason) { setError(String(reason)); } }
+  async function copyText(text: string, label: string) { try { await window.berth.copyText(text); notify(label + '已复制'); } catch (reason) { setError(String(reason)); } }
   function cycleSession(previous: boolean) {
     if (!project) return;
     const visible = projectSessions.filter(item => matchesSession(item, project, deferredSearch, filter, agentNames));
-    if (!visible.length) { setMessage('当前筛选下没有可切换的会话'); return; }
+    if (!visible.length) { notify('当前筛选下没有可切换的会话'); return; }
     const index = visible.findIndex(item => item.id === sessionId);
     const next = visible[index < 0 ? previous ? visible.length - 1 : 0 : (index + (previous ? -1 : 1) + visible.length) % visible.length];
     if (next.id !== sessionId) (document.activeElement as HTMLElement | null)?.blur();
@@ -322,53 +301,51 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       else if (value === 'e' && event.shiftKey && !event.altKey && current.project && current.features.files) { event.preventDefault(); event.stopPropagation(); setSidebarCollapsed(false);setPage('workspace'); setSidebarView(value => value === 'files' ? 'sessions' : 'files'); }
       else if (value === 'g' && event.shiftKey && !event.altKey && current.project && current.features.git) { event.preventDefault(); event.stopPropagation(); setSidebarCollapsed(false);setPage('workspace'); setSidebarView('git'); }
       else if (value === ',' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); setQuickOpen(false); setPage('settings'); setError(''); }
-      else if ((value === 'n' || value === 'o') && event.shiftKey && !event.altKey && !current.manageDisabled && !current.quickOpen) { event.preventDefault(); event.stopPropagation(); if (value === 'o') current.newProject(); else if (current.project) current.newSession(); else setMessage('请先添加一个项目'); }
-      else if (value === 'tab' && !event.altKey && !current.quickOpen && current.page === 'workspace') { event.preventDefault(); event.stopPropagation(); current.cycleSession(event.shiftKey); }
+      else if ((value === 'n' || value === 'o') && event.shiftKey && !event.altKey && !current.manageDisabled && !current.quickOpen) { event.preventDefault(); event.stopPropagation(); if (value === 'o') current.newProject(); else if (current.project) current.newSession(); else notify('请先添加一个项目'); }
+      else if (value === 'tab' && !event.altKey && !current.quickOpen && current.page === 'workspace' && !(event.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable="true"]')) { event.preventDefault(); event.stopPropagation(); current.cycleSession(event.shiftKey); }
     };
     document.addEventListener('keydown', key, true); return () => document.removeEventListener('keydown', key, true);
   }, []);
-  async function selectFolder() {
-    try { const value = await window.berth.chooseDirectory(); if (value) { setFolder(value); if (!name) setName(value.split(/[\\/]/).filter(Boolean).at(-1) ?? '项目'); } }
-    catch (reason) { setError(String(reason)); }
+  async function submitProject(values: ProjectFormValues) {
+    const result = await perform<Project>(modal === 'editProject' ? 'updateProject' : 'createProject', { ...(modal === 'editProject' ? { projectId: actionProject!.id } : {}), name: values.name.trim() || values.folder.split(/[\\/]/).filter(Boolean).at(-1) || '项目', path: values.folder });
+    if (result) { if (modal === 'project') selectProject(result.id); setModalRequest(null); }
   }
-  async function submitProject(event: FormEvent) {
-    event.preventDefault(); const result = await perform<Project>(modal === 'editProject' ? 'updateProject' : 'createProject', { ...(modal === 'editProject' ? { projectId: actionProject!.id } : {}), name: name.trim() || folder.split(/[\\/]/).filter(Boolean).at(-1) || '项目', path: folder });
-    if (result) { if (modal === 'project') selectProject(result.id); setModal(null); }
-  }
-  async function submitSession(event: FormEvent) {
-    event.preventDefault(); const editing = modal === 'editSession' || modal === 'editSshSession';
+  async function submitSession(values: SessionFormValues) {
+    const { title, agent, command, terminal, remote, worktreePath, service, startNow } = values;
+    const editing = modal === 'editSession' || modal === 'editSshSession';
     const sessionTitle = title.trim() || nextSessionTitle(remote ? 'SSH' : agentNames[agent], (remote ? state.sessions.filter(item=>item.remote) : actionProjectSessions).map(item=>item.title));
     const result = await perform<Session>(editing ? 'updateSession' : remote ? 'createRemoteSession' : 'createSession', remote && !editing
       ? {title:sessionTitle, remote}
       : { ...(editing ? {sessionId:actionSession!.id} : {projectId:actionProject!.id}), title:sessionTitle, agent:remote?'shell':agent, ...(state.apiVersion>=51?{service:!remote&&agent==='shell'&&service}:{}), command:remote?'':isCustomAgent(agent)||agent==='shell'&&service?command:'', terminal:remote?null:terminal, remote, worktreePath:remote?null:worktreePath });
-    if (result) { if (!editing) { if(result.remote){selectSsh(result.id);setSshOpen(true);}else selectSession(result.projectId, result.id); setSearch(''); setFilter('all'); } setModal(null); if (!editing && startNow) await perform('start', { sessionId: result.id, resume: false, cols: 100, rows: 30 }); }
+    if (result) { if (!editing) { if(result.remote){selectSsh(result.id);setSshOpen(true);}else selectSession(result.projectId, result.id); setSearch(''); setFilter('all'); } setModalRequest(null); if (!editing && startNow) await perform('start', { sessionId: result.id, resume: false, cols: 100, rows: 30 }); }
   }
-  async function importHistory() {
-    try { const target = sessionId; const file = await window.berth.chooseTranscript(); if (!file) return; const result = await perform<History>('importHistory', { sessionId: target, path: file }); if (result && currentSessionId.current === target) { setHistory(result); setTab('history'); } }
-    catch (reason) { setError(String(reason)); }
+  async function submitRename(kind: 'renameSession' | 'renameProject', value: string) {
+    const result = kind === 'renameSession'
+      ? await perform('renameSession', { sessionId: actionSession!.id, title: value })
+      : await perform('updateProject', { projectId: actionProject!.id, name: value, path: actionProject!.path });
+    if (result !== undefined) setModalRequest(null);
   }
-  async function refreshHistory() {
-    const target = sessionId;
-    const result = await perform<History>('refreshHistory', { sessionId: target });
-    if (result && currentSessionId.current === target) setHistory(result);
+  async function submitLink(value: string) {
+    const result = await perform<History>('linkNativeSession', { sessionId, nativeSessionId: value });
+    if (result !== undefined) { setModalRequest(null); setInsightsRevision(revision => revision + 1); }
   }
   async function restartBackend() {
-    setBusy(true); setError(''); setMessage('');
-    try { await window.berth.restartBackend(); setModal(null); }
+    setBusy(true); setError('');
+    try { await window.berth.restartBackend(); setModalRequest(null); }
     catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
   }
   const menuItems: MenuItem[] = [];
   const menuProject = treeMenu?.kind === 'project' ? state.projects.find(item => item.id === treeMenu.id) : undefined;
   const menuSession = treeMenu?.kind === 'session' ? state.sessions.find(item => item.id === treeMenu.id) : undefined;
-  const menuModal = (kind: Modal, target: { projectId: string; sessionId?: string }) => { openModal(kind, target); opener.current = treeMenu!.opener; };
+  const menuModal = (kind: Modal, target: ModalTarget, initial: ModalInitial = {}) => { openModal(kind, target, initial); opener.current = treeMenu!.opener; };
   if (menuProject) {
     const value = menuProject, target = { projectId: value.id }, hasRunning = state.sessions.some(item => item.projectId === value.id && active(item));
     menuItems.push(
       { label: '新建会话', disabled: manageDisabled, action: () => { newSession(value.id); opener.current = treeMenu!.opener; } },
-      { label: '重命名项目', disabled: manageDisabled, action: () => { setName(value.name); initialForm.current = JSON.stringify(value.name); menuModal('renameProject', target); } },
+      { label: '重命名项目', disabled: manageDisabled, action: () => menuModal('renameProject', target, { value: value.name }) },
       { label: '编辑项目', disabled: manageDisabled, action: () => { editProject(value); opener.current = treeMenu!.opener; } },
-      { label: '在文件管理器中打开', separator: true, action: () => void window.berth.openProject(value.path).catch(reason => setError(String(reason))) },
+      { label: '在文件管理器中打开', separator: true, action: () => openProjectFolder(value) },
       { label: 'Git 管理', disabled: !connected || state.apiVersion < 12, action: () => { openGit(value); } },
       { label: '复制项目路径', action: () => void copyText(value.path, '项目路径') },
       { label: '删除项目', separator: true, danger: true, disabled: manageDisabled || hasRunning, hint: hasRunning ? '请先停止本项目全部终端' : undefined, action: () => menuModal('deleteProject', target) },
@@ -380,18 +357,83 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     const resumable = ['codex', 'claude', 'opencode'].includes(value.agent) || !!definition?.resumeCommand || !!definition?.plugin?.resume;
     menuItems.push(
       { label: value.remote ? '新建 SSH 会话' : '新建会话', disabled: manageDisabled || (!!value.remote && state.apiVersion<24), action: () => { if(value.remote)newSshSession();else newSession(value.projectId); opener.current = treeMenu!.opener; } },
-      { label: '重命名会话', disabled: manageDisabled, action: () => { setTitle(value.title); initialForm.current = JSON.stringify(value.title); menuModal('renameSession', target); } },
+      { label: '重命名会话', disabled: manageDisabled, action: () => menuModal('renameSession', target, { value: value.title }) },
       { label: '编辑会话', disabled: manageDisabled, action: () => { editSession(value); opener.current = treeMenu!.opener; } },
       { label: '复制会话', disabled: manageDisabled || (!!value.remote && state.apiVersion<24), action: () => { copySession(value); opener.current = treeMenu!.opener; } },
       ...(value.service&&active(value)?[{label:'重启服务',disabled:manageDisabled||value.latestRun?.status==='stopping',action:()=>void perform('serviceAction',{sessionId:value.id,action:'restart',cols:100,rows:30})}]:[]),
       active(value) ? { label: value.service?'停止服务':definition?.acp?'断开 Agent':'停止终端', separator: true, disabled: manageDisabled || value.latestRun?.status === 'stopping', action: () => menuModal('stop', target) }
-        : { label: value.service?'启动服务':definition?.acp?'连接 Agent':'启动终端', separator: true, disabled: manageDisabled, action: () => { selectSession(value.projectId, value.id); void perform('start', { sessionId: value.id, resume: false, cols: 100, rows: 30 }); } },
+        : { label: value.service?'启动服务':definition?.acp?'连接 Agent':'启动终端', separator: true, disabled: manageDisabled, action: () => { selectSession(value.projectId, value.id); void perform('start', { sessionId: value.id, resume: false, cols: 100, rows: 30 }, 'start:' + value.id); } },
       ...(resumable && value.nativeSessionId && !active(value) ? [{ label: '恢复原生会话', disabled: manageDisabled, action: () => { selectSession(value.projectId, value.id); void perform('start', { sessionId: value.id, resume: true, cols: 100, rows: 30 }); } }] : []),
       { label: '删除会话', separator: true, danger: true, disabled: manageDisabled || active(value), hint: active(value) ? '请先停止此终端' : undefined, action: () => menuModal('deleteSession', target) },
     );
   }
-  const closeModal = () => { setModal(null); setError(''); };
-  const cancelButton = <button type="button" data-dismiss="dialog" className="subtle" disabled={busy} onClick={closeModal}>取消</button>;
+  const closeModal = () => { setModalRequest(null); setError(''); };
+  // The daemon may broadcast the restored rows before the RPC reply arrives,
+  // or just after it. Read the module store (not the last render) and try on
+  // both paths, so the selection effect never races an outdated snapshot.
+  const pendingRestore = useRef<{ projectId: string; sessionId?: string } | null>(null);
+  const applyRestore = useStableCallback((target: { projectId: string; sessionId?: string }) => {
+    if (loading || sshWindow) return;
+    const current = getWorkspaceState();
+    if (target.sessionId) {
+      if (!current.sessions.some(item => item.id === target.sessionId)) return;
+      pendingRestore.current = null;
+      selectSession(target.projectId, target.sessionId);
+    } else {
+      if (!current.projects.some(item => item.id === target.projectId)) return;
+      pendingRestore.current = null;
+      selectProject(target.projectId);
+    }
+  });
+  useEffect(() => {
+    const target = pendingRestore.current;
+    if (target) applyRestore(target);
+  }, [state.sessions, state.projects, applyRestore]);
+
+  const deletedRunViews = useRef<Record<string, string>>({});
+  function handleDeleted(undo: DeletionUndo | null, label: string, previousRunId?: string | null) {
+    if (!undo) { notify(`已删除「${label}」`); return; }
+    if (previousRunId && undo.kind === 'runs' && undo.runIds?.includes(previousRunId)) deletedRunViews.current[undo.token] = previousRunId;
+    notify(`已删除「${label}」`, { label: '撤销', onAction: () => void undoDelete(undo) });
+  }
+  async function undoDelete(undo: DeletionUndo) {
+    setBusy(true);
+    try {
+      const result = await window.berth.rpc<DeletionUndo>('restoreDeleted', { token: undo.token });
+      notify(`已恢复「${result.label}」`);
+      if (result.kind === 'runs') {
+        setInsightsRevision(value => value + 1);
+        // Reopen the exact output that was open before the delete. A batch
+        // clear from the list stays on the list, and undo never hijacks the
+        // user's current tab. Only discard the entry after a successful restore.
+        const previous = deletedRunViews.current[undo.token];
+        if (previous && result.runIds?.includes(previous) && result.sessionId && selectedSessionRef.current === result.sessionId)
+          setViewingRun({ sessionId: result.sessionId, runId: previous });
+        delete deletedRunViews.current[undo.token];
+      } else {
+        const target = { projectId: result.projectId, sessionId: result.sessionId };
+        pendingRestore.current = target;
+        applyRestore(target);
+      }
+    } catch (reason) {
+      const detail = String(reason).replace(/^Error:\s*/, '').replace(/^Error invoking remote method '[^']+':\s*/, '').replace(/^Error:\s*/, '').trim();
+      // Keep a retry affordance: a stale receipt should not strand the user.
+      notify(`未能恢复「${undo.label}」：${detail}`, { label: '重试', onAction: () => void undoDelete(undo) });
+    } finally { setBusy(false); }
+  }
+  // Local UI state (search, toasts) changes on every keystroke.
+  // These bridges keep the callbacks referentially stable so memoized subtrees
+  // only rerender when their own inputs change; the ref always points at the
+  // latest handlers, so behavior is unchanged.
+  const stableNewSession = useStableCallback(newSession);
+  const stableOpenFolder = useStableCallback(openProjectFolder);
+  const stableClearFilter = useStableCallback(clearFilter);
+  const stableToggle = useStableCallback((id: string) => {
+    if (treeSearching) setSearchCollapsed(previous => (previous ?? []).includes(id) ? (previous ?? []).filter(value => value !== id) : [...(previous ?? []), id]);
+    else toggleProject(id);
+  });
+  const stableSelectView = useStableCallback((pluginId: string, viewId: string) => { setExtensionView({ pluginId, viewId }); setPage('workspace'); });
+  const stableOpenPlugins = useStableCallback(() => openPlugins());
 
   return <ExtensionsContext.Provider value={state.extensions}><div className={sshWindow?"ssh-window app":"app"}>
     {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= 14} />
@@ -403,7 +445,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
           <button type="button" className="icon-button" aria-label="文件" title="文件 · Ctrl+Shift+E" disabled={!features.files||!project||state.apiVersion<16} aria-pressed={page==='workspace'&&sidebarView==='files'} onClick={()=>{setSidebarView('files');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="folder" /></button>
           <button type="button" className="icon-button" aria-label="Git" title="Git · Ctrl+Shift+G" disabled={!features.git||!project} aria-pressed={page==='workspace'&&sidebarView==='git'} onClick={()=>{setSidebarView('git');setPage('workspace');setSidebarCollapsed(false);}}><Icon kind="git" /></button>
         </nav>
-        <div className="sidebar-rail-bottom">{sidebarCollapsed&&<PluginLauncher compact snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} onSelect={(pluginId,viewId)=>{setExtensionView({pluginId,viewId});setPage('workspace');}} onManage={()=>openPlugins()}/>}<button type="button" className="icon-button" aria-label="插件" title="插件中心" aria-pressed={page==='plugins'} onClick={()=>openPlugins()}><Icon kind="plugins" /></button><button type="button" className="icon-button" aria-label="设置" title="设置 · Ctrl+," aria-pressed={page==='settings'} onClick={()=>{setPage('settings');setError('');}}><Icon kind="settings" /></button>{features.appearance&&<AppearanceToggle />}</div>
+        <div className="sidebar-rail-bottom">{sidebarCollapsed&&<PluginLauncher compact snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} onSelect={stableSelectView} onManage={stableOpenPlugins}/>}<button type="button" className="icon-button" aria-label="插件" title="插件中心" aria-pressed={page==='plugins'} onClick={()=>openPlugins()}><Icon kind="plugins" /></button><button type="button" className="icon-button" aria-label="设置" title="设置 · Ctrl+," aria-pressed={page==='settings'} onClick={()=>{setPage('settings');setError('');}}><Icon kind="settings" /></button>{features.appearance&&<AppearanceToggle />}</div>
       </div>
       <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
       <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>
@@ -416,7 +458,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       <div id="sidebar-panel-sessions" className="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-sessions" hidden={sidebarView !== 'sessions'}>
       <div className="sidebar-heading"><span>项目与会话</span><div className="tree-actions"><button type="button" className="icon-button" aria-label="全部展开" title="全部展开" disabled={!workspaceProjects.length} onClick={()=>{setCollapsed([]);setSearchCollapsed([]);}}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><path d="m4 3 4 3 4-3M4 9l4 3 4-3"/></svg></button><button type="button" className="icon-button" aria-label="全部折叠" title="全部折叠" disabled={!workspaceProjects.length} onClick={()=>{const ids=workspaceProjects.map(project=>project.id);setCollapsed(ids);setSearchCollapsed(ids);}}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><path d="m4 6 4-3 4 3M4 12l4-3 4 3"/></svg></button><button className="icon-button" aria-label="添加项目" onClick={newProject} disabled={manageDisabled}><Icon kind="plus" /></button></div></div>
       {workspaceProjects.length > 0 && <div className="tree-search"><input className="search" placeholder="搜索项目、会话或目录…" value={search} onChange={event => setSearch(event.target.value)} aria-label="搜索项目和会话" /><select className="session-filter" aria-label="筛选会话" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部会话</option><option value="active">运行中</option><option value="inactive">未运行</option>{Object.entries(agentNames).filter(([value])=>value==='shell'||value!=='custom'&&features.agents&&(!['codex','claude','opencode'].includes(value)||extensionEnabled(state.extensions,'agent.'+value))).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{(search || filter !== 'all') && <button className="clear-filter" onClick={clearFilter}>清除筛选</button>}</div>}
-      <ProjectTree unread={unread} projects={workspaceProjects} sessions={sidebarSessions} projectId={page === 'workspace' ? projectId : ''} sessionId={page === 'workspace' ? sessionId : ''} collapsed={treeSearching?(searchCollapsed??[]):collapsed} query={deferredSearch} filter={filter} names={agentNames} disabled={manageDisabled} onToggle={id=>{if(treeSearching)setSearchCollapsed(previous=>(previous??[]).includes(id)?(previous??[]).filter(value=>value!==id):[...(previous??[]),id]);else toggleProject(id);}} onProject={selectProject} onSession={selectSession} onNewSession={newSession} onMenu={setTreeMenu} onMove={reorderSidebar} onClearFilter={clearFilter} />
+      <ProjectTree unread={unread} projects={workspaceProjects} sessions={sidebarSessions} projectId={page === 'workspace' ? projectId : ''} sessionId={page === 'workspace' ? sessionId : ''} collapsed={treeSearching?(searchCollapsed??[]):collapsed} query={deferredSearch} filter={filter} names={agentNames} disabled={manageDisabled} onToggle={stableToggle} onProject={selectProject} onSession={selectSession} onNewSession={stableNewSession} onOpenFolder={stableOpenFolder} onMenu={setTreeMenu} onMove={reorderSidebar} onClearFilter={stableClearFilter} />
       </div>
       <div id="sidebar-panel-files" className="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-files" hidden={sidebarView !== 'files'}>
         <div className="file-project-picker"><select aria-label="文件所属项目" value={projectId} onChange={event => { selectProject(event.target.value); setFileTarget(null); }}>{workspaceProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
@@ -424,18 +466,19 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
       </div>
       <div id="sidebar-panel-git" className="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-git" hidden={sidebarView !== 'git'}>
         <div className="file-project-picker"><select aria-label="Git 所属项目" value={projectId} onChange={event => selectProject(event.target.value)}>{workspaceProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-        {features.git && project && <WorktreeManager key={`${project.id}:${project.path}`} project={project} enabled={connected && state.apiVersion >= 43} visible={sidebarView === 'git' && page === 'workspace'} selectedPath={selectedWorktreePath} onSelect={setSelectedWorktreePath} onNewSession={path => newSession(project.id, path)} onNotice={setMessage} onError={setError} />}
-        {features.git && project && <GitSidebar key={`${project.id}:${project.path}:git`} project={project} enabled={connected && state.apiVersion >= 13} visible={sidebarView === 'git' && page === 'workspace'} supported={state.apiVersion >= 18} worktreePath={selectedWorktreePath} onDiff={openDiff} onNotice={setMessage} onError={setError} />}
+        {features.git && project && <WorktreeManager key={`${project.id}:${project.path}`} project={project} enabled={connected && state.apiVersion >= 43} visible={sidebarView === 'git' && page === 'workspace'} selectedPath={selectedWorktreePath} onSelect={setSelectedWorktreePath} onNewSession={path => newSession(project.id, path)} onNotice={notify} onError={setError} />}
+        {features.git && project && <GitSidebar key={`${project.id}:${project.path}:git`} project={project} enabled={connected && state.apiVersion >= 13} visible={sidebarView === 'git' && page === 'workspace'} supported={state.apiVersion >= 18} worktreePath={selectedWorktreePath} onDiff={openDiff} onNotice={notify} onError={setError} />}
       </div>
-      {!sidebarCollapsed&&<PluginLauncher snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} onSelect={(pluginId,viewId)=>{setExtensionView({pluginId,viewId});setPage('workspace');}} onManage={()=>openPlugins()}/>}<div className="sidebar-settings"><button className={`settings-link ${page === 'plugins' ? 'selected' : ''}`} onClick={()=>openPlugins()} title="管理插件与 Agent 接入" aria-label="插件"><Icon kind="plugins" />插件</button><button className={`settings-link ${page === 'settings' ? 'selected' : ''}`} onClick={() => { setPage('settings'); setError(''); }} title="Ctrl+," aria-label="设置"><Icon kind="settings" />设置{draftDirty && <span className="draft-dot" title="有未保存的设置草稿" />}</button>{features.appearance&&<AppearanceToggle />}</div>
+      {!sidebarCollapsed&&<PluginLauncher snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} onSelect={stableSelectView} onManage={stableOpenPlugins}/>}<div className="sidebar-settings"><button className={`settings-link ${page === 'plugins' ? 'selected' : ''}`} onClick={()=>openPlugins()} title="管理插件与 Agent 接入" aria-label="插件"><Icon kind="plugins" />插件</button><button className={`settings-link ${page === 'settings' ? 'selected' : ''}`} onClick={() => { setPage('settings'); setError(''); }} title="Ctrl+," aria-label="设置"><Icon kind="settings" />设置{draftDirty && <span className="draft-dot" title="有未保存的设置草稿" />}</button>{features.appearance&&<AppearanceToggle />}</div>
       <div className="workspace-resources"><span>工作台</span><ResourceBadge scope="workspace" full /></div>
       <div className="sidebar-bottom"><span className={`dot ${connected ? 'live' : ''}`} /><span role="status">{connected ? '后台已连接' : '后台未连接'}</span><button className="text-button" disabled={busy} onClick={() => void window.berth?.reconnect().catch(reason => setError(String(reason)))}>重连</button></div>
       </div>
     </ResizableSidebar>
     <main className={extensionView&&page==='workspace'?'main extension-active':'main'}>
+      {(busy || Object.keys(pendingActions).length > 0) && <div className="action-progress" role="progressbar" aria-label="正在处理" />}
       <header className="topbar workbench-header" data-session-id={page==='workspace'&&!extensionView?session?.id:undefined} aria-label="工作区信息">
         <div className="workbench-identity">{page==='workspace'&&extensionView&&selectedExtension?<h1>{selectedExtension.manifest.views.find(v=>v.id===extensionView.viewId)?.title}</h1>:page==='workspace'&&project?<><h1 className="project-name" title={project.name+'\n'+(selectedWorktreePath??project.path)}>{project.name}</h1><span className="workbench-separator" aria-hidden="true">/</span><h2 className="workbench-session-title" title={session?session.title+' · '+(session.service?'服务终端':agentNames[session.agent]):undefined}>{tab==='preview'?'文件预览':session?.title??'项目工作区'}</h2>{session&&tab!=='preview'&&<span className={`badge ${active(session)?'live-badge':''}`}>{statusNames[session.latestRun?.status??'']??'待启动'}</span>}</>:<span className="workbench-page-title">AgentBerth</span>}</div>
-        <div className="topbar-status">{page==='workspace'&&!extensionView&&session&&active(session)&&<ResourceBadge scope="session" id={session.id} runId={session.latestRun?.id} full/>}{features.ssh&&state.apiVersion>=21&&<button type="button" className={`subtle ssh-toggle${!sshWindowState.detached&&sshOpen&&page==='workspace'?' selected':''}`} aria-label="SSH 面板" aria-expanded={!sshWindowState.detached&&sshOpen&&page==='workspace'} aria-controls="ssh-workspace-dock" onClick={()=>{if(sshWindowState.detached){void changeSshWindow('open').catch(reason=>setError(String(reason)));return;}setSshOpen(previous=>page!=='workspace'||!previous);setPage('workspace');}} title={sshWindowState.detached?'SSH 已在独立窗口中，点击前往':undefined}>SSH{sshUnread&&<OutputBadge />}{(state.apiVersion>=27||sshRunning>0)&&<span className="ssh-count">{sshRunning}{state.apiVersion>=27?`/${state.maxSshTerminals}`:''}</span>}</button>}{features.git && page === 'workspace' && !extensionView && project && <GitBranch key={`${project.id}:${project.path}:${selectedWorktreePath ?? 'main'}`} project={project} enabled={connected && state.apiVersion >= 13} worktreePath={selectedWorktreePath} onOpen={() => openGit(project)} />}<span className={`dot ${connected ? 'live' : ''}`} />{state.apiVersion>=27?`本机 ${running-sshRunning}`:`${running} 个终端后台运行`} <span className="quiet">/ {state.maxActiveTerminals}</span>{page==='workspace'&&extensionView&&<button type="button" className="icon-button" aria-label="关闭插件视图" title="关闭插件视图" onClick={()=>setExtensionView(null)}>×</button>}</div>
+        <div className="topbar-status">{features.ssh&&state.apiVersion>=21&&<button type="button" className={`subtle ssh-toggle${!sshWindowState.detached&&sshOpen&&page==='workspace'?' selected':''}`} aria-label={sshRunning>0?`SSH 面板，${sshRunning} 个连接`:'SSH 面板'} aria-expanded={!sshWindowState.detached&&sshOpen&&page==='workspace'} aria-controls="ssh-workspace-dock" onClick={()=>{if(sshWindowState.detached){void changeSshWindow('open').catch(reason=>setError(String(reason)));return;}setSshOpen(previous=>page!=='workspace'||!previous);setPage('workspace');}} title={sshWindowState.detached?'SSH 已在独立窗口中，点击前往':sshRunning>0?`${sshRunning} 个 SSH 连接正在运行`:undefined}>SSH{sshUnread&&<OutputBadge />}{sshRunning>0&&<span className="ssh-count" aria-hidden="true">{sshRunning}</span>}</button>}{features.git && page === 'workspace' && !extensionView && project && <GitBranch key={`${project.id}:${project.path}:${selectedWorktreePath ?? 'main'}`} project={project} enabled={connected && state.apiVersion >= 13} worktreePath={selectedWorktreePath} onOpen={() => openGit(project)} />}<button type="button" className={`status-summary${statusOpen ? ' selected' : ''}`} aria-label={`运行状态详情 · 本机终端 ${running-sshRunning} / ${state.maxActiveTerminals}`} aria-expanded={statusOpen} onClick={() => setStatusOpen(value => !value)}><span className={`dot ${connected ? 'live' : ''}`} /><span className="status-label">本机</span><span>{state.apiVersion>=27?`${running-sshRunning} / ${state.maxActiveTerminals}`:`${running} 个终端`}</span><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="m3 5 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg></button><div className="status-popover" hidden={!statusOpen} role="group" aria-label="运行状态详情"><div className="status-detail"><span>SSH 连接</span><strong>{sshRunning} / {state.maxSshTerminals}</strong></div><div className="status-detail"><span>后台服务</span><strong>{connected ? '已连接' : '未连接'}</strong></div>{page==='workspace'&&!extensionView&&session&&active(session)&&<div className="status-detail"><span>当前会话</span><ResourceBadge scope="session" id={session.id} runId={session.latestRun?.id} full/></div>}<div className="status-detail"><span>偏好与更多</span><button type="button" className="text-button" onClick={() => { setStatusOpen(false); setPage('settings'); }}>打开设置</button></div></div>{page==='workspace'&&extensionView&&<button type="button" className="icon-button" aria-label="关闭插件视图" title="关闭插件视图" onClick={()=>setExtensionView(null)}>×</button>}</div>
       </header>
       {extensionView&&selectedExtension&&page==='workspace'&&<section className="extension-page"><div className="extension-task-document" hidden={!!extensionView.sessionId}><ExtensionView key={selectedExtension.manifest.id+':'+selectedExtension.generation} plugin={selectedExtension} viewId={extensionView.viewId} initialTaskId={extensionView.taskId} suspended={!!modal||quickOpen||!!treeMenu||!!extensionView.sessionId} onError={setError}/></div>{extensionView.sessionId&&(()=>{const internal=state.sessions.find(value=>value.id===extensionView.sessionId&&value.owner?.pluginId===selectedExtension.manifest.id);return internal?<section className="extension-owned-conversation" aria-label="Superagent 内部会话"><header><button className="subtle" onClick={()=>setExtensionView(previous=>previous?{...previous,sessionId:undefined}:null)}>← 返回任务</button><strong>{internal.title}</strong></header><AcpConversation key={internal.id} session={internal} connected={connected} task={{title:internal.title,label:state.agentActivities?.find(activity=>activity.taskId===internal.owner?.taskId&&activity.pluginId===internal.owner?.pluginId)?.label??'任务内部会话',onOpen:()=>setExtensionView(previous=>previous?{...previous,sessionId:undefined}:null)}} onOpenFile={(path,line)=>{setExtensionView(null);setProjectId(internal.projectId);setSelectedWorktreePath(internal.worktreePath??null);setSidebarCollapsed(false);setPage('workspace');setSidebarView('files');setFilesActivated(true);setFileTarget({projectId:internal.projectId,query:path+(line?':'+line:''),nonce:++fileTargetSequence.current});setTab('preview');}}/></section>:<div className="empty-page">内部会话已删除<button onClick={()=>setExtensionView(previous=>previous?{...previous,sessionId:undefined}:null)}>返回任务</button></div>;})()}</section>}
       {connected&&state.apiVersion<API_VERSION&&<div className="workspace-recovery" role="status" aria-label="后台需要更新"><div><strong>后台需要更新</strong><small>当前运行的后台尚不支持新增能力。先停止正在运行的会话，再更新后台；当前架构的数据会保留。</small></div><button className="subtle" disabled={running>0||busy} onClick={()=>openModal('restart')}>更新空闲后台</button></div>}
@@ -455,7 +498,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
           <button type="button" className="subtle" onClick={() => void window.berth.quitDesktop()}>仅退出界面</button>
         </div>
         <small>仅退出界面不会强制停止仍在运行的后台任务。若要清除旧数据，务必先完整备份。</small>
-      </div> : loading ? <div className="empty-page" role="status"><div className="loader" /><h2>正在连接你的工作空间</h2></div> : <><div className="plugins-host" hidden={page !== 'plugins'}>{page === 'plugins' && <PluginCenter tab={pluginTab} onTabChange={setPluginTab} projects={workspaceProjects} currentProjectId={projectId} apiVersion={state.apiVersion} openPluginId={requestedPlugin} onOpenHandled={()=>setRequestedPlugin(null)} onError={setError}/>}</div><div className="settings-host" hidden={page !== 'settings'}>{page === 'settings' && <SettingsPage projects={workspaceProjects} currentProjectId={projectId} connected={connected} apiVersion={state.apiVersion} agents={state.agents ?? []} settings={state.settings} draft={draftDirty ? settingsDraft!.value : state.settings} onChange={value => setSettingsDraft(JSON.stringify(value) === JSON.stringify(state.settings) ? null : { base: state.settings, value })} onDiscard={() => { setSettingsDraft(null); setError(''); }} conflict={draftConflict} onError={setError} error={error} platform={state.platform} busy={busy} disabled={manageDisabled} restartDisabled={busy || !connected} running={running} onSave={async (value: Settings) => { const result = await perform<Settings>('saveSettings', { ...value }); if (result !== undefined) { setSettingsDraft(null); return true; } return false; }} onRestart={() => openModal('restart')} />}</div><div className="workbench-split" hidden={page !== 'workspace'||!!extensionView||!features.workspace}><div className="workspace-host" hidden={!project&&sshOpen}>{!project ? <div className="empty-page welcome"><div className="welcome-symbol"><Icon kind="terminal" /></div><span className="eyebrow">YOUR PROJECTS, IN ONE PLACE</span><h1>项目工作台</h1><p>集中管理项目、终端与 Agent 会话。</p><div className="welcome-actions"><button className="primary" onClick={newProject} disabled={manageDisabled}><Icon kind="plus" />添加第一个项目</button><button className="subtle" onClick={() => void window.berth.openExternal('https://github.com/Tan90degrees/AgentBerth/blob/main/README.md').catch(reason => setError(String(reason)))}>查看使用说明</button></div><ol className="welcome-steps"><li><strong>1 · 添加项目目录</strong><span>按项目组织会话、文件与 Git。</span></li><li><strong>2 · 新建并启动会话</strong><span>选择 Agent 或普通终端，可同时运行多个。</span></li><li><strong>3 · 随时切换或离开</strong><span>终端在后台继续运行，重新打开即可接回。</span></li></ol><button type="button" className="text-button welcome-shortcuts-link" onClick={openShortcuts}>查看键盘快捷键<kbd>Ctrl+/</kbd></button></div> : <>
+      </div> : loading ? <WorkspaceSkeleton /> : <><div className="plugins-host" hidden={page !== 'plugins'}>{page === 'plugins' && <PluginCenter tab={pluginTab} onTabChange={setPluginTab} projects={workspaceProjects} currentProjectId={projectId} apiVersion={state.apiVersion} openPluginId={requestedPlugin} onOpenHandled={()=>setRequestedPlugin(null)} onError={setError}/>}</div><div className="settings-host" hidden={page !== 'settings'}>{page === 'settings' && <SettingsPage projects={workspaceProjects} currentProjectId={projectId} connected={connected} apiVersion={state.apiVersion} agents={state.agents ?? []} settings={state.settings} draft={draftDirty ? settingsDraft!.value : state.settings} onChange={value => setSettingsDraft(JSON.stringify(value) === JSON.stringify(state.settings) ? null : { base: state.settings, value })} onDiscard={() => { setSettingsDraft(null); setError(''); }} conflict={draftConflict} onError={setError} error={error} platform={state.platform} busy={busy} disabled={manageDisabled} restartDisabled={busy || !connected} running={running} onSave={async (value: Settings) => { const result = await perform<Settings>('saveSettings', { ...value }); if (result !== undefined) { setSettingsDraft(null); return true; } return false; }} onRestart={() => openModal('restart')} />}</div><div className="workbench-split" hidden={page !== 'workspace'||!!extensionView||!features.workspace}><div className="workspace-host" hidden={!project&&sshOpen}>{!project ? <div className="empty-page welcome"><div className="welcome-symbol"><Icon kind="terminal" /></div><span className="eyebrow">YOUR PROJECTS, IN ONE PLACE</span><h1>项目工作台</h1><p>集中管理项目、终端与 Agent 会话。</p><div className="welcome-actions"><button className="primary" onClick={newProject} disabled={manageDisabled}><Icon kind="plus" />添加第一个项目</button><button className="subtle" onClick={() => void window.berth.openExternal('https://github.com/Tan90degrees/AgentBerth/blob/main/README.md').catch(reason => setError(String(reason)))}>查看使用说明</button></div><ol className="welcome-steps"><li><strong>1 · 添加项目目录</strong><span>按项目组织会话、文件与 Git。</span></li><li><strong>2 · 新建并启动会话</strong><span>选择 Agent 或普通终端，可同时运行多个。</span></li><li><strong>3 · 随时切换或离开</strong><span>终端在后台继续运行，重新打开即可接回。</span></li></ol><button type="button" className="text-button welcome-shortcuts-link" onClick={openShortcuts}>查看键盘快捷键<kbd>Ctrl+/</kbd></button></div> : <>
 
         <section className="workspace">
           <div className="session-content">
@@ -467,26 +510,9 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
               <button id="workspace-tab-preview" role="tab" aria-controls="workspace-panel-preview" aria-selected={tab === 'preview'} tabIndex={tab === 'preview' ? 0 : -1} className={tab === 'preview' ? 'selected' : ''} disabled={!features.files || state.apiVersion < 16} onClick={() => { setFilesActivated(true); setTab('preview'); }}>预览</button>
               {tab === 'terminal' && !acpSession && session?.latestRun?.status === 'running' && <button className="hide-terminal" onClick={() => setTerminalVisible(value => !value)}>{terminalVisible ? '收起终端' : '接回终端'}</button>}
             </div>
-            {!session && tab === 'terminal' && <div className="empty-page"><Icon kind="terminal" /><h2>选择或创建一个会话</h2><button className="subtle" onClick={() => newSession()} disabled={manageDisabled}>新建会话</button><p>也可以从左侧“文件”浏览项目，无需启动终端。</p></div>}
+            {!session && tab === 'terminal' && <div className="empty-page session-empty"><div className="welcome-symbol"><Icon kind="terminal" /></div><h2>选择或创建一个会话</h2><p>会话从项目目录启动，关闭窗口后仍由后台继续运行。</p><div className="empty-actions"><button className="primary" onClick={() => newSession()} disabled={manageDisabled}><Icon kind="plus" />新建会话</button><button className="subtle" onClick={openQuick}>快速切换 <kbd>Ctrl+Shift+P</kbd></button></div><ul className="welcome-steps"><li><strong>1 · 添加项目</strong><span>登记本机目录，工作台不会改动你的项目文件。</span></li><li><strong>2 · 创建会话</strong><span>选择 Agent 或普通终端，可先创建、稍后启动。</span></li><li><strong>3 · 随时接回</strong><span>切换项目或重开窗口，终端画面与进程都会接回。</span></li></ul></div>}
             {session && <div id="workspace-panel-terminal" className="terminal-panel workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-terminal" hidden={tab !== 'terminal'}>{session.service?<ServiceTerminal key={session.id+':'+connectionEpoch} session={session} connected={connected} fontSize={state.settings.fontSize} windowsPty={windowsPty} onError={setError}/>:acpSession?<AcpConversation key={session.id} session={session} connected={connected} task={(()=>{const activity=state.agentActivities?.find(item=>item.kind==='superagent'&&item.managedSessionIds.includes(session.id)&&item.pluginId&&item.taskId);return activity?{title:activity.title,label:activity.label,onOpen:()=>{setPage('workspace');setExtensionView({pluginId:activity.pluginId!,viewId:'tasks',taskId:activity.taskId});}}:undefined;})()} onOpenFile={(path,line)=>openPath(path+(line?':'+line:''))}/>:<>{session.latestRun?.error && <div className="launch-error" role="alert"><strong>{session.latestRun?.status === 'interrupted' ? '上次运行已中断' : '启动未完成'}</strong><p>{session.latestRun.error}</p><p>可在下方重试启动，或编辑会话后重试。</p></div>}{connected && session.latestRun?.status !== 'running' ? <TerminalState historyAvailable={canHistory || canResume} recordOutput={recordOutput} run={session.latestRun} disabled={manageDisabled} busy={busy} onStart={() => { void perform('start', { sessionId: session.id, resume: false, cols: 100, rows: 30 }); }} onEdit={() => editSession(session)} onResume={canResume && session.nativeSessionId ? () => { void perform('start', { sessionId: session.id, resume: true, cols: 100, rows: 30 }); } : undefined} onOutput={() => { if (session.latestRun) { setViewingRun({ sessionId, runId: session.latestRun.id }); setTab('runs'); } }} /> : connected && terminalVisible ? <TerminalView key={`${session.id}:${session.latestRun?.id}:${connectionEpoch}`} sessionId={sessionId} remoteSession={!!session.remote} inputEnabled windowsPty={windowsPty} orderedResize={state.apiVersion >= 9} binaryMouse={state.apiVersion >= 16} fontSize={state.settings.fontSize} autoFocus={page === 'workspace' && !modal && !quickOpen && !shortcutsOpen && !treeMenu && sidebarView !== 'git' && tab === 'terminal'} onError={setError} onOpenPath={features.files && !session.remote && state.apiVersion >= 17 ? openPath : undefined} /> : <div className="empty-page"><Icon kind="terminal" /><h2>{connected ? '终端已收起' : '后台连接已断开'}</h2><p>{connected ? '运行中的任务仍在后台继续。' : '重新连接后接回终端。'}</p><button className="subtle" onClick={() => connected ? setTerminalVisible(true) : void window.berth.reconnect().catch(reason => setError(String(reason)))}>{connected ? '接回终端' : '重新连接'}</button></div>}<footer className="terminal-footer"><span>{session.latestRun ? `${active(session) ? '运行' : '上次运行'} ${session.latestRun.id.slice(0, 8)}${active(session) && !session.remote ? ` · PID ${session.latestRun.pid ?? '—'}` : ''}` : '尚未启动'} · {session.latestRun ? session.latestRun.shell?.split(/[\\/]/).at(-1) || '历史终端' : terminalNames[(session.terminal ?? state.settings.terminal).profile]}</span><span>{session.remote ? '本机后台维持 SSH · 链路断开不保证恢复原进程' : '关窗口继续运行 · 托盘退出停止全部终端'}</span></footer></>}</div>}
-            {session && tab === 'history' && <div id="workspace-panel-history" className="workspace-panel history-workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-history"><HistoryPanel key={`${session.id}:${project.path}:${JSON.stringify(sessionDefinition?.plugin)}`} session={session} history={history} label={agentNames[session.agent]} canHistory={canHistory} canAssociate={canHistory || canResume || !!sessionDefinition?.plugin?.list} canDiscover={!!sessionDefinition?.plugin?.list || state.apiVersion >= 35 && ['codex', 'claude'].includes(session.agent) || state.apiVersion >= 38 && (session.agent === 'opencode' || !!sessionDefinition?.integration)} autoRead={!!sessionDefinition?.plugin?.history || !!session.nativeSessionId && (['claude', 'opencode'].includes(session.agent) || !!sessionDefinition?.integration)} supported={state.apiVersion >= 11} disabled={manageDisabled} onImport={importHistory} onRefresh={refreshHistory} onManual={openLink} onCopy={id => void copyText(id, '原生会话 ID')} onLink={async nativeSessionId => {
-              const target = sessionId;
-              const result = await perform<History>('linkNativeSession', { sessionId: target, nativeSessionId });
-              if (result && currentSessionId.current === target) { setHistory(result); setMessage('原生会话已关联'); }
-              return result;
-            }} onUnlink={async () => {
-              const target = sessionId;
-              const result = await perform<History>('unlinkNativeSession', { sessionId: target });
-              if (result && currentSessionId.current === target) { setHistory(result); setMessage('已解除关联，历史记录保留'); }
-              return result;
-            }} /></div>}
-            {session && tab === 'runs' && recordOutput && <div id="workspace-panel-runs" className="workspace-panel history-workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-runs"><RunHistory key={sessionId} runs={runs} loading={runsLoading} error={runsError} outputError={runOutputError} onRetry={() => setRunsRevision(value => value + 1)} outputRunId={outputRunId} output={runOutput} windowsPty={windowsPty} fontSize={state.settings.fontSize} disabled={manageDisabled || state.apiVersion < 10} onError={setError} onView={runId => { setRunOutput(null); setViewingRun(runId ? { sessionId, runId } : null); }} onDelete={async runId => {
-              const selected = sessionId;
-              const result = await perform(runId ? 'deleteRun' : 'clearFinishedRuns', runId ? { runId } : { sessionId: selected });
-              if (result === undefined) return false;
-              if (currentSessionId.current === selected) { setViewingRun(null); setRunOutput(null); setRunsRevision(value => value + 1); }
-              setMessage('运行记录已删除'); return true;
-            }} /></div>}
+            {session && (tab === 'history' || tab === 'runs' && recordOutput) && <SessionInsights key={session.id} session={session} projectPath={project?.path ?? ''} definition={sessionDefinition} label={agentNames[session.agent]} tab={tab === 'history' ? 'history' : 'runs'} apiVersion={state.apiVersion} connected={connected} canHistory={canHistory} canResume={canResume} disabled={manageDisabled} windowsPty={windowsPty} fontSize={state.settings.fontSize} viewingRunId={outputRunId} insightsRevision={insightsRevision} onViewingRun={(runId, targetSessionId) => setViewingRun(runId ? { sessionId: targetSessionId, runId } : null)} onTabChange={setTab} onManualLink={openLink} onCopyText={copyText} onNotice={notify} onDeleted={handleDeleted} onError={setError} />}
             <div id="workspace-panel-preview" className="workspace-panel preview-panel" role="tabpanel" aria-labelledby="workspace-tab-preview" hidden={tab !== 'preview'} ref={setFilePreviewHost}>{gitPreview?.projectId === projectId && <Suspense fallback={<p>正在准备差异预览…</p>}><GitDiffPreview request={gitPreview} connected={connected} onChange={staged => setGitPreview(value => value ? { ...value, staged } : null)} onBack={() => setGitPreview(null)} /></Suspense>}</div>
           </div>
         </section>
@@ -495,31 +521,12 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     {features.ssh&&sshWindow&&sshWindowReady&&<SshDock unread={unread} state={state} visible connected={connected} sessionId={sshSessionId} onSelect={selectSsh} onClose={()=>void changeSshWindow('dock').catch(reason=>setError(String(reason)))} onMenu={setTreeMenu} onError={setError} connectionEpoch={connectionEpoch} onOpenConnection={openSavedSsh} onStart={startSsh} hasLocal={false} detached onWindow={()=>changeSshWindow('dock')} />}
     {features.files && !sshWindow && project && state.apiVersion >= 16 && filesActivated && <Suspense fallback={null}><FileBrowser key={`${project.id}:${project.path}:${selectedWorktreePath ?? 'main'}`} project={project} worktreePath={selectedWorktreePath} connected={connected} treeHost={fileTreeHost} previewHost={filePreviewHost} previewHidden={gitPreview?.projectId === projectId} onDiff={features.git && state.apiVersion >= 18 ? openDiff : undefined} onPreview={openPreview} navigationSupported={state.apiVersion >= 17} onTargetConsumed={consumeFileTarget} target={fileTarget?.projectId === projectId ? fileTarget : null} /></Suspense>}
     {treeMenu && menuItems.length > 0 && <ContextMenu target={treeMenu} items={menuItems} onClose={closeTreeMenu} />}
-    {(modal === 'renameSession' || modal === 'renameProject') && <Dialog title={modal === 'renameSession' ? '重命名会话' : '重命名项目'} dirty={dirtyForm} busy={busy} error={error} returnFocus={opener.current} onClose={closeModal}><form onSubmit={async event => {
-      event.preventDefault(); const result = modal === 'renameSession' ? await perform('renameSession', { sessionId: actionSession!.id, title }) : await perform('updateProject', { projectId: actionProject!.id, name, path: actionProject!.path });
-      if (result !== undefined) setModal(null);
-    }}><label>{modal === 'renameSession' ? '会话名称' : '项目名称'}<input aria-label={modal === 'renameSession' ? '会话名称' : '项目名称'} autoFocus required maxLength={100} value={modal === 'renameSession' ? title : name} onChange={event => modal === 'renameSession' ? setTitle(event.target.value) : setName(event.target.value)} /></label><footer>{cancelButton}<button className="primary" disabled={busy}>保存名称</button></footer></form></Dialog>}
     {quickOpen && <QuickSwitcher state={{...state,projects:workspaceProjects,sessions:state.sessions.filter(session=>!session.owner)}} canCreate={!manageDisabled} hasProject={!!project} onSelect={chooseTarget} onClose={() => setQuickOpen(false)} returnFocus={opener.current} />}
     {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} returnFocus={opener.current} />}
-    {(message || (error && !modal && hasLoadedState && page !== 'settings')) && <div className="toast-stack">
-      {message && <SuccessToast message={message} onDismiss={() => setMessage('')} />}
-      {error && !modal && hasLoadedState && page !== 'settings' && <div className="toast" role="alert"><span>{error.replace(/^Error: /, '')}</span><div className="toast-actions"><button type="button" className="toast-copy" onClick={() => void copyText(error, '错误信息')}>复制</button><button onClick={() => setError('')} aria-label="关闭提示">×</button></div></div>}
+    {(notices.length > 0 || (error && !modal && hasLoadedState && page !== 'settings')) && <div className="toast-stack">
+      {notices.map(item => <SuccessToast key={item.id} message={item.text} action={item.action} onDismiss={() => closeNotice(item.id)} />)}
+      {error && !modal && hasLoadedState && page !== 'settings' && <div className="toast" role="alert"><span>{error.replace(/^Error: /, '')}</span><div className="toast-actions">{!connected && <button type="button" className="toast-copy" onClick={() => { setError(''); void window.berth.reconnect().catch(reason => setError(String(reason))); }}>重新连接</button>}<button type="button" className="toast-copy" onClick={() => void copyText(error, '错误信息')}>复制</button><button onClick={() => setError('')} aria-label="关闭提示">×</button></div></div>}
     </div>}
-    {(modal === 'project' || modal === 'editProject') && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title={modal === 'project' ? '添加项目目录' : '编辑项目'} onClose={closeModal}><form onSubmit={submitProject}><label>项目名称（可选）<input aria-label="项目名称" autoFocus maxLength={100} value={name} onChange={event => setName(event.target.value)} placeholder="留空按目录自动命名" /></label><label>项目目录<div className="input-with-button"><input aria-label="项目目录" required disabled={modal === 'editProject' && actionProjectSessions.some(active)} value={folder} onChange={event => setFolder(event.target.value)} placeholder={state.platform === 'win32' ? 'D:\\Projects\\my-project' : '/home/user/projects/my-project'} /><button type="button" className="subtle" disabled={modal === 'editProject' && actionProjectSessions.some(active)} onClick={() => void selectFolder()}>选择目录</button></div></label><p className="form-hint">{modal === 'editProject' ? '运行中的项目可以修改名称。修改目录前请停止全部终端；修改后会清除原生对话关联，避免从错误目录恢复。' : '会话从这个目录启动，同一路径自动去重。'}</p><footer>{cancelButton}<button className="primary" disabled={busy}>{busy ? '正在提交…' : modal === 'project' ? '添加项目' : '保存项目'}</button></footer></form></Dialog>}
-    {(modal === 'session' || modal === 'editSession') && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title={modal === 'session' ? '新建项目会话' : '编辑会话'} onClose={closeModal}><form onSubmit={submitSession}><label>会话名称（可选）<input aria-label="会话名称" autoFocus maxLength={100} value={title} onChange={event => setTitle(event.target.value)} placeholder={`${agentNames[agent]} 会话（留空自动命名）`} /></label><label>Agent 类型<select aria-label="Agent 类型" disabled={modal === 'editSession' && !!actionSession && active(actionSession)} value={agent} onChange={event => { const value = event.target.value; setAgent(value); if(value!=='shell')setService(false); setCommand(value === 'custom' ? state.settings.defaultCommand : state.agents?.find(item => item.id === value)?.command ?? ''); }}>{Object.entries(agentNames).filter(([value])=>value==='shell'||value!=='custom'&&features.agents&&(!['codex','claude','opencode'].includes(value)||extensionEnabled(state.extensions,'agent.'+value))).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>{agent !== 'shell' && <p className="form-hint">请确认本机已安装并配置 {agentNames[agent]}，且可从所选终端调用。首次使用可查看「设置 → 关于与支持 → 使用说明」。</p>}{actionProject && <WorktreePicker project={actionProject} enabled={connected && state.apiVersion >= 43} value={worktreePath} onChange={setWorktreePath} disabled={modal === 'editSession' && !!actionSession && active(actionSession)} />}{agent==='shell'&&state.apiVersion>=51&&<label>终端模式<select aria-label="终端模式" value={service?'service':'interactive'} disabled={modal==='editSession'&&!!actionSession&&active(actionSession)} onChange={event=>setService(event.target.value==='service')}><option value="interactive">交互终端</option><option value="service">服务 · 只读输出</option></select></label>}{(isCustomAgent(agent)||agent==='shell'&&service) && !state.agents?.find(item=>item.id===agent)?.acp && <label>启动命令<input aria-label="启动命令" required maxLength={4096} disabled={modal === 'editSession' && !!actionSession && active(actionSession)} value={command} onChange={event => setCommand(event.target.value)} placeholder={service?"例如 npm run dev":"你的 Agent TUI 启动命令"} /></label>}{!state.agents?.find(item=>item.id===agent)?.acp&&<details className="advanced-options" open={modal === 'editSession'}><summary>会话终端（默认跟随设置）</summary><TerminalFields value={terminal} onError={setError} platform={state.platform} inherit disabled={modal === 'editSession' && !!actionSession && active(actionSession)} onChange={setTerminal} /></details>}<p className="form-hint">工作目录：{worktreePath ?? actionProject?.path}<br />{modal === 'editSession' ? '启动配置需在停止终端后修改；更换 Agent 会清除原生对话关联。' : 'Agent 使用本机已有安装和登录状态。'}{agent === 'opencode' && <><br />启动 opencode；关联会话后使用 opencode --session ID 恢复。</>}</p>{modal === 'session' && <label className="checkbox-label"><input type="checkbox" checked={startNow} onChange={event => setStartNow(event.target.checked)} />创建后立即启动</label>}<footer>{cancelButton}<button className="primary" disabled={busy}>{busy ? '正在提交…' : modal === 'editSession' ? '保存会话' : startNow ? '创建并启动' : '创建会话'}</button></footer></form></Dialog>}
-    {(modal === 'sshSession' || modal === 'editSshSession') && remote && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title={modal === 'sshSession' ? '新建 SSH 会话' : '编辑 SSH 会话'} onClose={closeModal}>
-      <form onSubmit={submitSession}>
-        <label>会话名称（可选）<input aria-label="会话名称" autoFocus maxLength={100} value={title} onChange={event=>setTitle(event.target.value)} placeholder="SSH 会话（留空自动命名）" /></label>
-        <RemoteFields value={remote} disabled={modal === 'editSshSession' && !!actionSession && active(actionSession)} onError={setError} onChange={setRemote} />
-        {modal === 'editSshSession' && <p className="form-hint">停止此 SSH 终端后可修改连接与远端目录；本机 Agent 会话不受影响。</p>}
-        {modal === 'sshSession' && <label className="checkbox-label"><input type="checkbox" checked={startNow} onChange={event=>setStartNow(event.target.checked)} />创建后立即启动</label>}
-        <footer>{cancelButton}<button className="primary" disabled={busy}>{busy ? '正在提交…' : modal === 'editSshSession' ? '保存会话' : startNow ? '创建并启动' : '创建会话'}</button></footer>
-      </form>
-    </Dialog>}
-    {modal === 'deleteSession' && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title="删除此会话？" onClose={closeModal}><p className="stop-description">删除「{actionSession?.title}」及其运行记录、工作台日志和导入的对话副本。此操作无法撤销。<br />项目文件和 Agent 原生记录会保留。</p><footer>{cancelButton}<button className="danger" disabled={busy} onClick={async () => { if (await perform('deleteSession', { sessionId: actionSession!.id }) !== undefined) setModal(null); }}>确认删除会话</button></footer></Dialog>}
-    {modal === 'deleteProject' && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title="删除此项目？" onClose={closeModal}><p className="stop-description">删除「{actionProject?.name}」的项目登记及全部 {actionProjectSessions.length} 个会话、运行记录和工作台日志。此操作无法撤销。<br />磁盘上的项目目录和 Agent 原生记录会保留。</p><footer>{cancelButton}<button className="danger" disabled={busy} onClick={async () => { if (await perform('deleteProject', { projectId: actionProject!.id }) !== undefined) setModal(null); }}>确认删除项目</button></footer></Dialog>}
-    {modal === 'stop' && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title="停止此终端？" onClose={closeModal}><p className="stop-description">「{actionSession?.title}」{actionSession?.remote ? '将关闭 SSH 连接；远端任务可能继续运行，需在远端确认停止。' : '正在执行的任务会中断。'}<br />如需保留后台任务，可以收起终端或关闭窗口。</p><footer><button className="subtle" disabled={busy} onClick={closeModal}>继续运行</button><button className="danger" disabled={busy} onClick={async () => { if (await perform('stop', { sessionId: actionSession!.id }) !== undefined) setModal(null); }}>停止终端</button></footer></Dialog>}
-    {modal === 'link' && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title="关联原生会话 ID" onClose={closeModal}><form onSubmit={async event => { event.preventDefault(); const result = await perform<History>('linkNativeSession', { sessionId, nativeSessionId: nativeId.trim() }); if (result) { setHistory(result); setModal(null); } }}><label>原生会话 ID<input aria-label="原生会话 ID" autoFocus required maxLength={128} pattern="[a-zA-Z0-9_-]+" value={nativeId} onChange={event => setNativeId(event.target.value)} /></label><p className="form-hint">请填写本机 {session ? agentNames[session.agent] : 'Agent'} 在此项目中已有的会话 ID。可在终端运行时关联，用于历史查看与下次恢复；不会切换当前 CLI。原有历史仍保留在列表中。</p><footer>{cancelButton}<button className="primary" disabled={busy}>保存关联</button></footer></form></Dialog>}
-    {modal === 'restart' && <Dialog key={modal} dirty={dirtyForm} error={error} returnFocus={opener.current} busy={busy} title="重启后台服务？" onClose={closeModal}><p className="stop-description">仅重启当前版本后台服务，不执行旧版本数据迁移。<br />所有终端都需要先停止。</p><footer>{cancelButton}<button className="primary" disabled={busy || running > 0 || !connected} onClick={() => void restartBackend()}>确认重启后台</button></footer></Dialog>}
+    {modalRequest && <ModalLayer key={modalRequest.token} request={modalRequest} state={state} agentNames={agentNames} features={features} actionProject={actionProject} actionSession={actionSession} actionProjectSessions={actionProjectSessions} session={session} busy={busy} error={error} connected={connected} running={running} returnFocus={opener.current} perform={perform} onError={setError} onClose={closeModal} onSubmitProject={values => void submitProject(values)} onSubmitSession={values => void submitSession(values)} onSubmitRename={(kind, value) => void submitRename(kind, value)} onSubmitLink={value => void submitLink(value)} onDeleted={handleDeleted} onRestart={() => void restartBackend()} />}
   </div></ExtensionsContext.Provider>;
 }

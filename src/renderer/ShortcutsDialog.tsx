@@ -28,12 +28,17 @@ const groups: { title: string; items: [string, string][] }[] = [
   {
     title: '列表与对话框', items: [
       ['移动选择', '↑ / ↓'],
+      ['移动到结果首尾（快速切换）', 'Home / End'],
       ['确认或打开', 'Enter'],
       ['关闭当前面板', 'Esc'],
     ],
   },
   {
     title: '终端与对话', items: [
+      ['复制终端选中文字', 'Ctrl+Shift+C'],
+      ['显式粘贴到运行中的终端', 'Ctrl+Shift+V'],
+      ['查找当前终端或只读输出', 'Ctrl+Shift+F'],
+      ['下一个 / 上一个匹配（查找框内）', 'Enter / Shift+Enter'],
       ['预览文件、定位目录或打开链接', 'Ctrl+点击'],
       ['发送消息 / 换行（Agent 对话）', 'Enter / Shift+Enter'],
     ],

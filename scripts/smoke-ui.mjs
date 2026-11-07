@@ -45,6 +45,19 @@ try{
   await page.getByRole('button',{name:'关闭终端查找',exact:true}).click();await app.evaluate(({BrowserWindow},bounds)=>BrowserWindow.getAllWindows()[0].setBounds(bounds),bounds);
   await page.getByRole('button',{name:'返回列表',exact:true}).click();await connection(false);await row.locator('.run-item').click();await page.getByRole('heading',{name:'无法读取本次输出',exact:true}).waitFor();await connection(true);
   await tabs.getByRole('tab',{name:'终端',exact:true}).click();
+  // A delayed deletion in another session must not close the current output.
+  const other=await rpc('createSession',{projectId:project.id,title:'Other terminal',agent:'shell'});
+  const oldRun=await rpc('start',{sessionId:other.id,cols:90,rows:24});await rpc('stop',{sessionId:other.id});
+  await until(()=>rpc('runs',{sessionId:other.id}).then(runs=>runs.every(run=>!['running','stopping'].includes(run.status))));
+  await select(other.id);await tabs.getByRole('tab',{name:'运行记录',exact:true}).click();
+  await faults({hold:'deleteRun'});await page.locator('.run-row').filter({hasText:oldRun.id.slice(0,8)}).getByRole('button',{name:'删除运行记录 '+oldRun.id.slice(0,8),exact:true}).click();
+  await until(()=>app.evaluate(()=>!!globalThis.uiFaults.release));await select(shell.id);
+  await tabs.getByRole('tab',{name:'运行记录',exact:true}).click();await row.locator('.run-item').click();
+  await page.getByRole('button',{name:'返回列表',exact:true}).waitFor();await app.evaluate(()=>globalThis.uiFaults.release());
+  const deletionToast=page.locator('.success-toast').filter({hasText:'已删除'});await deletionToast.waitFor();
+  assert.equal(await page.getByRole('button',{name:'返回列表',exact:true}).isVisible(),true,'Late deletion closed another session output');
+  await deletionToast.getByRole('button',{name:'关闭成功提示',exact:true}).click();
+  await tabs.getByRole('tab',{name:'终端',exact:true}).click();
   // Success toasts stay available to keyboard users, then expire after focus leaves.
   await page.locator(`.project-branch[data-project-id="${project.id}"]>.project-row`).click({button:'right'});await page.getByRole('menuitem',{name:'复制项目路径',exact:true}).click();
   const toast=page.locator('.success-toast');await toast.waitFor();await toast.getByRole('button',{name:'关闭成功提示',exact:true}).focus();await page.mouse.move(600,600);await page.waitForTimeout(4200);assert.equal(await toast.isVisible(),true);await page.locator('.quick-link').focus();await toast.waitFor({state:'hidden',timeout:6000});

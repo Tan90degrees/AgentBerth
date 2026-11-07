@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { initializeAppearance } from './appearance';
 import { App } from './App';
 import { DesktopPet } from './DesktopPet';
+import './tokens.css';
 import './styles.css';
 import '@xterm/xterm/css/xterm.css';
 import './appearance.css';

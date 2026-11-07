@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Store } from '../src/daemon/store';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
-import type { Attachment, Project, Run, Session, State } from '../src/shared/protocol';
+import type { Attachment, DeletionUndo, Project, Run, Session, State } from '../src/shared/protocol';
 
 async function until(check: () => Promise<boolean>) {
   const deadline = Date.now() + 6000;
@@ -29,7 +29,7 @@ test('deleting finished records removes saved screens and recalculates latest st
   assert.equal(store.session(s.id).latestRun, null); assert.equal(store.state().sessions[0].latestRun, null);
 });
 
-test('run deletion RPC removes all log rotations and preserves current terminals and other sessions', { timeout: 20000 }, async t => {
+test('run deletion RPC keeps logs during the undo window and preserves current terminals and other sessions', { timeout: 20000 }, async t => {
   const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-run-rpc-')); const data = path.join(folder, 'data');
   const server = new DaemonServer(data); const c = await DaemonConnection.open(await server.listen(), () => {});
   t.after(async () => { c.close(); await server.close(); await rm(folder, { recursive: true, force: true, maxRetries: 5 }); });
@@ -44,8 +44,10 @@ test('run deletion RPC removes all log rotations and preserves current terminals
   for (const suffix of ['', '.1', '.2', '.3']) await writeFile(path.join(data, 'logs', old.id + '.log' + suffix), 'delete me');
   const live = await c.rpc<Run>('start', { sessionId: s.id, cols: 80, rows: 24 });
   await assert.rejects(c.rpc('deleteRun', { runId: live.id }), /先停止/);
-  await c.rpc('deleteRun', { runId: old.id });
-  for (const suffix of ['', '.1', '.2', '.3']) await assert.rejects(readFile(path.join(data, 'logs', old.id + '.log' + suffix)), /ENOENT/);
+  const undo = await c.rpc<DeletionUndo>('deleteRun', { runId: old.id });
+  assert.equal(undo?.kind, 'runs');
+  // Logs survive while the undo receipt is valid; the row itself is gone.
+  for (const suffix of ['', '.1', '.2', '.3']) assert.equal(await readFile(path.join(data, 'logs', old.id + '.log' + suffix), 'utf8'), 'delete me');
   await assert.rejects(c.rpc('output', { runId: old.id }), /不存在/);
   const other = await c.rpc<Session>('createSession', { projectId: p.id, title: 'Other', agent: 'shell', command: 'echo OTHER_READY' });
   const otherRun = await c.rpc<Run>('start', { sessionId: other.id, cols: 80, rows: 24 });
