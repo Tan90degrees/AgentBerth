@@ -262,7 +262,7 @@ export interface AppInfo { version: string; platform: string; arch: string; osRe
 export interface SshWindowState { detached: boolean; sessionId: string }
 export interface DesktopApi {
   pluginBrowser:(request:import('./extensions').PluginBrowserRequest)=>Promise<void>;
-  resourcePids():Promise<{appPids:number[];applications:Record<string,number[]>}>;
+  resourcePids():Promise<{applicationPids:Record<string,number[]>}>;
   extensions<T=ExtensionSnapshot>(request:ExtensionRequest):Promise<T>;
   installExtension(development?:boolean):Promise<ExtensionSnapshot|null>;
   pet<T = import('./pet').PetSnapshot>(request: import('./pet').PetRequest): Promise<T>;
