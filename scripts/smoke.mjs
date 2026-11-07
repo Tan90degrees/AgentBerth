@@ -9,6 +9,7 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import {openRightSidebar} from './smoke-navigation.mjs';
 
 const { Terminal: HeadlessTerminal } = headless;
 const { Unicode11Addon } = unicode11;
@@ -24,7 +25,7 @@ async function openSettings(page) {
 async function pluginSettings(page,id){
   const category=({appearance:'外观',agents:'Agent 与 Skills',ssh:'SSH 与 MCP'})[id];
   if(!category)throw new Error('Unknown core settings category: '+id);
-  await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();
   await settingsCategory(page,category);
   return null;
 }
@@ -227,7 +228,7 @@ try {
   await gitDialog.getByLabel('切换 Git 分支',{exact:true}).selectOption('main');await gitDialog.getByRole('button',{name:'切换分支',exact:true}).click();
   await eventually(async()=>await gitDialog.locator('.git-heading>strong').innerText()==='main','Git branch switch back failed');
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-manager':'git-manager'}.png`});
-  await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'会话',exact:true}).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();
   step('save shell and default Agent settings');
   await openSettings(page);
   step('categorized settings search, empty results, cross-category drafts and hidden-field validation');
@@ -314,7 +315,7 @@ try {
   assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isEnabled(), false);
   assert.equal(await page.locator('[data-setting-id="plugins"]').count(),0,'Core settings must not manage plugins');
   assert.equal(await page.locator('[data-setting-id="default-agent"]').count(),1,'Default Agent selection belongs to core settings');
-  await page.locator('.sidebar-settings').getByRole('button',{name:'插件',exact:true}).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'扩展管理',exact:true}).click();
   await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).click();
   await page.getByRole('heading',{name:'插件中心'}).waitFor();
   await page.getByRole('navigation',{name:'插件分类'}).getByRole('button',{name:/Agent 接入/}).getAttribute('aria-current').then(value=>assert.equal(value,'page'));
@@ -328,7 +329,7 @@ try {
   await developerSettings.getByRole('button',{name:'关闭对话框',exact:true}).click();
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('berth:event', { event: 'connection', data: { connected: true } }));
   await page.locator('.sidebar-bottom').getByText('后台已连接', { exact: true }).waitFor();
-  await page.locator('.sidebar-settings').getByRole('button',{name:'设置',exact:true}).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();
   await settingsCategory(page, '常用设置');
   if (process.platform === 'win32') {
     step('auto-detect PowerShell 7 and launch its real executable');
@@ -436,7 +437,7 @@ try {
   await eventually(async()=>await gitDialog.getByRole('button',{name:'刷新状态',exact:true}).isEnabled(),'Git operation did not complete');
   await gitDialog.evaluate(element=>{element.scrollTop=0;});
   await page.screenshot({ animations: 'disabled',path:`test-results/${packaged?'packaged-git-live-terminal':'git-live-terminal'}.png`});
-  await page.getByRole('tablist',{name:'侧栏视图'}).getByRole('tab',{name:'会话',exact:true}).click();
+  await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();
   await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('echo LIVE_GIT_IO_READY');await page.keyboard.press('Enter');
   await eventually(async()=>(await page.evaluate(id=>window.berth.rpc('attach',{sessionId:id}),before.sessions[0].id)).snapshot.split('LIVE_GIT_IO_READY').length>=3,'Terminal I/O stopped after Git changes');
 
@@ -740,22 +741,22 @@ try {
   sidebarWidth = 290;
   assert.equal(await page.evaluate(() => localStorage.getItem('berth.sidebarWidth')), String(sidebarWidth));
   step('collapse the sidebar to a rail without replacing the terminal, then restore its saved width');
-  await page.getByRole('button',{name:'收起侧栏',exact:true}).click();
-  assert.equal(await page.getByRole('button',{name:'展开侧栏',exact:true}).getAttribute('aria-expanded'),'false');
-  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),48);
+  await page.getByRole('button',{name:'折叠会话侧栏',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'展开会话侧栏',exact:true}).getAttribute('aria-pressed'),'false');
+  assert.equal(Math.round((await page.locator('.sidebar:not(.sidebar-right)').boundingBox()).width),0);
   assert.equal(await separator.isVisible(),false);
   assert.equal(await page.locator('#sidebar-content').isVisible(),false);
   assert.equal(await page.evaluate(()=>window.smokeTerminal===document.querySelector('.xterm')),true);
   assert.equal(await page.evaluate(()=>localStorage.getItem('berth.sidebarWidth')),String(sidebarWidth));
   await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}sidebar-collapsed.png`});
-  await page.getByRole('navigation',{name:'侧栏快捷切换',exact:true}).getByRole('button',{name:'文件',exact:true}).click();
-  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),sidebarWidth);
+  await openRightSidebar(page,'文件');
+  assert.equal(Math.round((await page.locator('.sidebar:not(.sidebar-right)').boundingBox()).width),0,'Opening files must not expand the session sidebar');
   assert.equal(await page.getByRole('tab',{name:'文件',exact:true}).getAttribute('aria-selected'),'true');
-  await page.getByRole('tab',{name:'会话',exact:true}).click();
-  await page.getByRole('button',{name:'收起侧栏',exact:true}).focus();await page.keyboard.press('ControlOrMeta+b');
-  await page.getByRole('button',{name:'展开侧栏',exact:true}).waitFor();
+  await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();
+  await page.getByRole('button',{name:'折叠会话侧栏',exact:true}).focus();await page.keyboard.press('ControlOrMeta+b');
+  await page.getByRole('button',{name:'展开会话侧栏',exact:true}).waitFor();
   await page.keyboard.press('ControlOrMeta+b');await separator.waitFor();
-  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),sidebarWidth);
+  assert.equal(Math.round((await page.locator('.sidebar:not(.sidebar-right)').boundingBox()).width),sidebarWidth);
   assert.equal(await page.evaluate(()=>window.smokeTerminal===document.querySelector('.xterm')),true);
 
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('驻留');
@@ -968,7 +969,7 @@ try {
   await page.getByRole('button', { name: '切换为深色模式', exact: true }).click();
   step('tray quit path stops all terminals and the detached daemon');
   await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
-  await page.getByRole('button',{name:'收起侧栏',exact:true}).click();
+  await page.getByRole('button',{name:'折叠会话侧栏',exact:true}).click();
   const quittingDaemon = daemonPid;
   await closeApplication(application); application = null;
   assert.throws(() => process.kill(quittingDaemon, 0), /ESRCH/);
@@ -991,9 +992,9 @@ try {
   assert.ok(after.recovery.restored >= 1);
   daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   assert.notEqual(daemonPid, quittingDaemon);
-  await page.getByRole('button',{name:'展开侧栏',exact:true}).waitFor();
-  assert.equal(Math.round((await page.locator('.sidebar').boundingBox()).width),48,'Collapsed state must survive restart');
-  await page.getByRole('button',{name:'展开侧栏',exact:true}).click();
+  await page.getByRole('button',{name:'展开会话侧栏',exact:true}).waitFor();
+  assert.equal(Math.round((await page.locator('.sidebar:not(.sidebar-right)').boundingBox()).width),0,'Collapsed state must survive restart');
+  await page.getByRole('button',{name:'展开会话侧栏',exact:true}).click();
   assert.equal(Number(await page.getByRole('separator',{name:'调整侧栏宽度',exact:true}).getAttribute('aria-valuenow')), sidebarWidth);
   assert.equal(await page.getByRole('button',{name:'SSH 面板',exact:true}).getAttribute('aria-expanded'),'false','Plugin teardown on tray exit must not reopen the SSH dock on next launch');
   assert.equal(await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).getAttribute('aria-expanded'), 'false');

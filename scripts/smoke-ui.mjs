@@ -31,7 +31,7 @@ try{
   await terminal.focus();await page.keyboard.press('ArrowRight');await tabs.getByRole('tab',{name:'运行记录',exact:true}).and(page.locator('[aria-selected="true"]')).waitFor();
   await page.keyboard.press('Home');await until(()=>terminal.evaluate(node=>node===document.activeElement));assert.equal(await terminal.getAttribute('aria-selected'),'true');
   await page.keyboard.press('ArrowUp');assert.equal(await terminal.evaluate(node=>node===document.activeElement),true,'Horizontal tabs must preserve vertical navigation');
-  const sidebar=page.getByRole('tablist',{name:'侧栏视图',exact:true});await sidebar.getByRole('tab',{name:'会话',exact:true}).focus();await page.keyboard.press('End');assert.equal(await sidebar.getByRole('tab',{name:'Git',exact:true}).getAttribute('aria-selected'),'true');await page.keyboard.press('Home');
+  const activity=page.locator('.activity-bar');const sessionButton=activity.getByRole('button',{name:'会话',exact:true});await sessionButton.focus();await page.keyboard.press('Enter');assert.equal(await sessionButton.getAttribute('aria-pressed'),'true');
   await rpc('input',{sessionId:shell.id,runId:run.id,data:'echo '+ 'Z'.repeat(300)+'UI_COPY_READY\r'});await until(()=>rpc('attach',{sessionId:shell.id}).then(value=>value.snapshot.includes('UI_COPY_READY')));
   const unchanged=(await rpc('state')).sessions.find(value=>value.id===shell.id).latestRun;assert.equal(unchanged.id,run.id);assert.equal(unchanged.pid,run.pid);
   // Recover read-only run/output failures without restarting the command.
