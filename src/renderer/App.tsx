@@ -440,7 +440,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const stableOpenPlugins = useStableCallback(() => openPlugins());
 
   return <ExtensionsContext.Provider value={state.extensions}><div className={sshWindow?"ssh-window app":"app"}>
-    {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= 14} />
+    {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= API_VERSION} />
     <ActivityBar snapshot={state.extensions} activities={state.agentActivities} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
     <ResizableSidebar collapsed={sidebarCollapsed} side="left">
       <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
