@@ -2810,7 +2810,7 @@ textarea:focus-visible {
 /* Left sidebar can collapse independently while the activity bar remains visible. */
 .sidebar.sidebar-collapsed:not(.sidebar-right){width:0;min-width:0;padding:0;border:0;overflow:hidden}
 .sidebar.sidebar-collapsed:not(.sidebar-right) .sidebar-resizer{display:none}
-.sidebar-content{height:100%}
+.sidebar-content{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;height:100%;overflow:hidden}
 /* File explorer and Git live in a separate, independently resizable right sidebar. */
 .sidebar.sidebar-right{border-right:0;border-left:1px solid var(--border);padding:10px 8px 12px}
 .sidebar.sidebar-right .sidebar-resizer{left:-4px;right:auto}
