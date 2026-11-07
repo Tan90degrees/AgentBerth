@@ -374,6 +374,7 @@ function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (![window, sshWindow].some(target => target && !target.isDestroyed() && event.sender === target.webContents && event.senderFrame === target.webContents.mainFrame)) throw new Error('无权访问本地接口');
 }
 ipcMain.handle('berth:pluginBrowser',async(event,raw:unknown)=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口支持原生 Web 视图');return pluginBrowser?.request(pluginBrowserRequestSchema.parse(raw));});
+ipcMain.handle('berth:resourcePids',event=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口可读取工作台进程');return {appPids:[process.pid],applications:{'deepseek-harness':pluginBrowser?.processIds()??[]}};});
 ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();return connection!.rpc('extensions',{request});});
 ipcMain.handle('berth:installExtension',async(event,development:unknown=false)=>{
   trusted(event);if(typeof development!=='boolean')throw new Error('无效插件安装方式');

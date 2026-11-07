@@ -1,9 +1,11 @@
 import { z } from 'zod';
 
 export const extensionId = z.string().regex(/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/).max(100);
+export const extensionIconSchema=z.enum(['puzzle','terminal','brain','paw','workflow','code','chart','database','globe','sparkles','message','book','image','search','plug']);
+export type ExtensionIcon=z.infer<typeof extensionIconSchema>;
 export const configField = z.object({type:z.enum(['string','number','boolean']),title:z.string().min(1).max(100),description:z.string().max(500).optional(),default:z.union([z.string(),z.number(),z.boolean()]).optional(),minimum:z.number().optional(),maximum:z.number().optional(),enum:z.array(z.string()).max(100).optional()}).strict();
 export const extensionManifestSchema=z.object({
-  apiVersion:z.literal(1),id:extensionId,name:z.string().min(1).max(100),version:z.string().regex(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/),description:z.string().max(1000).default(''),kind:z.enum(['feature','agent']).default('feature'),
+  apiVersion:z.literal(1),id:extensionId,name:z.string().min(1).max(100),version:z.string().regex(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/),description:z.string().max(1000).default(''),kind:z.enum(['feature','agent']).default('feature'),icon:extensionIconSchema.optional(),
   entry:z.string().min(1).max(500).default('index.cjs'),desktopEntry:z.string().min(1).max(500).optional(),dependencies:z.array(extensionId).max(32).default([]),
   config:z.record(z.string().regex(/^[a-zA-Z][\w]*$/),configField).default({}),
   views:z.array(z.object({id:extensionId,title:z.string().min(1).max(100),location:z.enum(['sidebar','panel','settings']),entry:z.string().max(500).default(''),web:z.object({command:z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),project:z.boolean().optional()}).strict().optional()}).strict().refine(v=>!!v.entry!==!!v.web,'视图须指定 HTML entry 或原生 Web 命令')).max(20).default([]),

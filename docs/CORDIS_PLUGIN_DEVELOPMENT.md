@@ -25,6 +25,7 @@
 | `apiVersion` | 固定为 1 |
 | `id` | 稳定的小写字母、数字、点或连字符；不能覆盖内置 ID |
 | `name` / `version` | 显示名称与 SemVer 版本 |
+| `icon` | 可选的 Activity Bar 图标 ID：`puzzle`、`terminal`、`brain`、`paw`、`workflow`、`code`、`chart`、`database`、`globe`、`sparkles`、`message`、`book`、`image`、`search` 或 `plug`；不支持远程图标 URL、任意 HTML/SVG 或脚本 |
 | `entry` | 后台 `.cjs` 入口，默认 `index.cjs` |
 | `desktopEntry` | 可选，Electron 主进程 `.cjs` 入口，适合自定义桌宠或独立窗口 |
 | `dependencies` | 仅声明其他可选扩展插件 ID。工作台核心服务（Agent 注册、项目、文件、Git、SSH/MCP、资源、Skills、Worktree 等）始终可用，不需要写入依赖。旧清单中的 `agents`、`workspace`、`ssh`、`files`、`git`、`resources` 等核心 ID 会按宿主能力兼容处理；未知第三方插件不会被自动下载；拒绝依赖循环。 |
