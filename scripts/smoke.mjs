@@ -1334,7 +1334,7 @@ try {
     await dock.getByLabel('SSH 终端',{exact:true}).selectOption(remoteSession.id);
     await page.evaluate(async id=>{await window.berth.rpc('stop',{sessionId:id});await window.berth.rpc('deleteSession',{sessionId:id});},secondSsh.id);
     await page.evaluate(()=>{window.localBeforeSshToggle=document.querySelector('.workspace-host .xterm');window.remoteBeforeSshToggle=document.querySelector('.ssh-dock .xterm');});
-    for(let index=0;index<3;index++){await page.getByRole('button',{name:'SSH 面板',exact:true}).click();await page.getByRole('button',{name:'SSH 面板',exact:true}).click();}
+    for(let index=0;index<3;index++){await page.getByRole('button',{name:/^SSH 面板/}).click();await page.getByRole('button',{name:/^SSH 面板/}).click();}
     assert.equal(await page.evaluate(()=>window.localBeforeSshToggle===document.querySelector('.workspace-host .xterm')&&window.remoteBeforeSshToggle===document.querySelector('.ssh-dock .xterm')),true,'Toggling SSH must retain both terminal instances');
     const localBounds=await page.locator('.workspace-host .terminal-mount').boundingBox(),remoteBounds=await dock.locator('.terminal-mount').boundingBox();
     assert.ok(localBounds&&remoteBounds&&localBounds.height>40&&remoteBounds.height>40&&remoteBounds.y>=localBounds.y+localBounds.height,'Both local Agent and remote SSH must be visible, with SSH below');
