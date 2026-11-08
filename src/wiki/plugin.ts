@@ -1,5 +1,7 @@
 import type { Context } from 'cordis';
+import path from 'node:path';
 import { byteTruncate, extractLinks, lineDiff, truncate } from './core';
+import { startInbox, type InboxHandle } from './inbox';
 import type { ServiceOptions } from './service';
 import { WikiService } from './service';
 import { WikiStore } from './store';
@@ -15,6 +17,18 @@ const number = (params: Params, key: string, fallback = 0): number => typeof par
 const strings = (params: Params, key: string): string[] => Array.isArray(params[key]) ? (params[key] as unknown[]).filter((value): value is string => typeof value === 'string') : [];
 const field = (type: string, extra: Record<string, unknown> = {}): Properties[string] => ({ type, ...extra });
 const schema = (properties: Properties, required: string[] = []): Record<string, unknown> => ({ type: 'object', properties, additionalProperties: false, required });
+
+// The MCP bridge injects an optional `agentId` into every exposed tool's
+// arguments, and the workbench forbids declaring that key ourselves. MCP-only
+// commands therefore tolerate unknown keys; the handlers read named fields
+// only. All human-facing and write commands keep strict schemas.
+const mcpSchema = (properties: Properties, required: string[] = []): Record<string, unknown> => ({ type: 'object', properties, additionalProperties: true, required });
+
+/** Read-only tools exposed to workbench Agents over MCP. Writes stay behind
+ * human review: a model can query the wiki but cannot publish to it. */
+export const MCP_READ_ONLY_COMMANDS = [
+  'wiki_index', 'wiki_search', 'wiki_read', 'wiki_sources', 'wiki_source', 'wiki_status', 'wiki_ask', 'wiki_task',
+] as const;
 
 // The extension bridge rejects results above 128 KiB. Keep every command well
 // below that, with a clear error instead of an opaque timeout when it is not
@@ -55,10 +69,15 @@ function readConfig(config: Record<string, string | number | boolean>): WikiConf
 export function apply(ctx: Context, config: Record<string, string | number | boolean>): void {
   const api = ctx.berth;
   const store = new WikiStore(api.dataDirectory);
-  const options: ServiceOptions = { store, config: readConfig(config), signal: api.signal };
+  const options: ServiceOptions = {
+    store, config: readConfig(config), signal: api.signal,
+    call: (method, params) => api.call(method, params),
+  };
   const service = new WikiService(options);
-  const commands: { name: string; description: string; input: Record<string, unknown>; handler: Handler }[] = [];
-  const add = (name: string, description: string, input: Record<string, unknown>, handler: Handler) => commands.push({ name, description, input, handler });
+  const commands: { name: string; description: string; input: Record<string, unknown>; handler: Handler; mcp: boolean }[] = [];
+  const add = (name: string, description: string, input: Record<string, unknown>, handler: Handler, mcp = false) =>
+    commands.push({ name, description, input, handler, mcp });
+  let inbox: InboxHandle | null = null;
 
   // Navigation & status
   // status is polled every 2 seconds: never ship the (potentially large)
@@ -82,13 +101,17 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     for (const page of pages) for (const target of extractLinks(page.body)) inbound.set(target, (inbound.get(target) ?? 0) + 1);
     return pages.slice(0, 500).map(page => ({ slug: page.slug, title: byteTruncate(page.title, 300), summary: byteTruncate(page.summary, 600), kind: page.kind, humanEdited: page.humanEdited, updatedAt: page.updatedAt, links: extractLinks(page.body).length, backlinks: inbound.get(page.slug) ?? 0 }));
   });
-  add('get_page', '读取单页全文与反向链接', schema({ slug: field('string') }, ['slug']), params => {
+  add('get_page', '读取单页全文、反向链接与原始出处', schema({ slug: field('string') }, ['slug']), params => {
     const page = service.getPage(text(params, 'slug'));
     if (!page) return null;
     const inbound = service.listPages().filter(other => extractLinks(other.body).includes(page.slug)).map(other => other.slug);
     // The view renders page.body; shipping the raw document as `text` too would
     // double the payload and can push a long Chinese page past the bridge cap.
-    return { page: { ...page, body: byteTruncate(page.body, 60 * 1024) }, backlinks: inbound.slice(0, 200), history: service.history(page.slug) };
+    return {
+      page: { ...page, body: byteTruncate(page.body, 60 * 1024) },
+      backlinks: inbound.slice(0, 200), history: service.history(page.slug),
+      excerpts: service.excerpts(page.slug),
+    };
   });
   add('save_page', '人工编辑页面（自动编译将跳过）', schema({
     slug: field('string'), title: field('string'), summary: field('string'), body: field('string'),
@@ -123,6 +146,16 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('add_source', '新增原始素材（不可变）', schema({ title: field('string'), text: field('string') }, ['text']), params => service.addSource({ title: text(params, 'title'), text: text(params, 'text') }));
   add('add_image', '为素材追加一张压缩后的图片', schema({ sourceId: field('string'), mime: field('string'), base64: field('string') }, ['sourceId', 'mime', 'base64']), params => service.addImage(text(params, 'sourceId'), text(params, 'mime'), text(params, 'base64')));
   add('delete_source', '删除原始素材', schema({ id: field('string') }, ['id']), params => service.deleteSource(text(params, 'id')).then(() => true));
+
+  // Automatic capture: watch raw/inbox and import finished workbench sessions.
+  add('inbox_status', '查看自动采集目录与待处理文件', schema({}), () => ({
+    dir: inbox?.dir ?? path.join(api.dataDirectory, 'raw', 'inbox'),
+    importedDir: inbox?.importedDir ?? path.join(api.dataDirectory, 'raw', 'inbox', 'imported'),
+    failedDir: inbox?.failedDir ?? path.join(api.dataDirectory, 'raw', 'inbox', 'failed'),
+    pending: inbox?.pending ?? [], archived: inbox?.archived ?? 0, watching: !!inbox,
+  }));
+  add('list_capture_sessions', '列出可沉淀为素材的工作台会话', schema({}), () => service.listCaptureSessions());
+  add('capture_session', '把一次 Agent 会话沉淀成不可变素材', schema({ sessionId: field('string') }, ['sessionId']), params => service.captureSession(text(params, 'sessionId')));
 
   // Skills (CRUD over Markdown workflow templates)
   add('list_skills', '列出全部 Skill', schema({}), () => service.allSkills().slice(0, 200).map(skill => ({
@@ -164,9 +197,19 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   }, ['id', 'action']), params => service.reviewDraft(text(params, 'id'), params.action === 'reject' ? 'reject' : 'approve', text(params, 'feedback')));
 
   // Query / lint / synthesis
-  add('ask', '基于 wiki 提问（引用页面）', schema({ question: field('string') }, ['question']), params => service.ask(text(params, 'question')));
+  add('ask', '基于 wiki 提问（引用页面并回溯原文）', schema({ question: field('string') }, ['question']), params => service.ask(text(params, 'question')));
   add('answers', '最近的问答记录', schema({}), () => service.answers().slice(0, 5).map(answer => ({ ...answer, answer: truncate(answer.answer, 4000) })));
-  add('save_answer', '把回答归档成新页面', schema({ question: field('string'), answer: field('string'), citations: field('array', { items: { type: 'string' } }) }, ['question', 'answer']), params => service.saveAnswer(text(params, 'question'), text(params, 'answer'), strings(params, 'citations')));
+  add('save_answer', '把回答归档成新页面', schema({
+    question: field('string'), answer: field('string'),
+    citations: field('array', { items: { type: 'string' } }),
+    evidence: field('array', { items: { type: 'object', properties: { sourceId: field('string'), quote: field('string') } } }),
+  }, ['question', 'answer']), params => service.saveAnswer(
+    text(params, 'question'), text(params, 'answer'), strings(params, 'citations'),
+    (Array.isArray(params.evidence) ? params.evidence : [])
+      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      .filter(item => typeof item.sourceId === 'string' && typeof item.quote === 'string')
+      .map(item => ({ sourceId: item.sourceId as string, quote: (item.quote as string).slice(0, 300) })),
+  ));
   add('lint', '运行知识库体检', schema({}), () => service.lint());
   add('lint_result', '读取最近一次体检结果', schema({}), () => service.lintResult());
 
@@ -175,8 +218,41 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('clear_api_key', '清除模型 API Key', schema({}), () => service.clearApiKey().then(() => true));
   add('test_connection', '测试模型连通性', schema({}), () => service.testConnection());
 
+  // ---- MCP tools: read-only surface for workbench Agents -----------------
+  add('wiki_index', 'MCP：读取 index.md 导航索引与页面总数，查询知识库时先用它定位页面',
+    mcpSchema({}), () => ({ index: byteTruncate(service.indexText(), 32 * 1024), pages: service.listPages().length }), true);
+  add('wiki_search', 'MCP：按关键词检索 wiki 页面，返回摘要与命中片段；再用 wiki_read 读取全文',
+    mcpSchema({ query: field('string', { maxLength: 500 }), limit: field('integer', { minimum: 1, maximum: 20 }) }, ['query']),
+    params => service.searchSnippets(text(params, 'query'), Math.max(1, Math.min(20, number(params, 'limit', 8) || 8))), true);
+  add('wiki_read', 'MCP：读取单页全文、反向链接与可验证的原始素材出处',
+    mcpSchema({ slug: field('string') }, ['slug']), params => service.readForAgent(text(params, 'slug')), true);
+  add('wiki_sources', 'MCP：列出不可变的原始素材清单',
+    mcpSchema({}), () => service.listSources().slice(0, 100).map(source => ({
+      id: source.id, title: source.title, createdAt: source.createdAt, compiled: source.compiled, characters: source.text.length,
+    })), true);
+  add('wiki_source', 'MCP：读取一份原始素材全文（可用 quote 定位证据片段）',
+    mcpSchema({ id: field('string') }, ['id']), params => {
+      const source = service.getSource(text(params, 'id'));
+      return source ? { id: source.id, title: source.title, createdAt: source.createdAt, text: byteTruncate(source.text, 60 * 1024) } : null;
+    }, true);
+  add('wiki_status', 'MCP：读取知识库规模与模型配置状态',
+    mcpSchema({}), () => {
+      const { tasks, ...rest } = service.status();
+      return { ...rest, activeTasks: tasks.filter(task => ['queued', 'running'].includes(task.status)).length };
+    }, true);
+  add('wiki_ask', 'MCP：基于已发布页面提问；返回任务 ID，再用 wiki_task 轮询取带引用的答案',
+    mcpSchema({ question: field('string', { maxLength: 2000 }) }, ['question']),
+    params => ({ taskId: service.ask(text(params, 'question')), pollWith: 'wiki_task' }), true);
+  add('wiki_task', 'MCP：查询 wiki_ask 等后台任务的状态与结果',
+    mcpSchema({ id: field('string') }, ['id']), params => {
+      const task = service.taskStatus(text(params, 'id'));
+      if (!task) return null;
+      const { result, ...rest } = task;
+      return { ...rest, result: result === undefined ? null : trimDeep(result, 32 * 1024) };
+    }, true);
+
   for (const command of commands) {
-    api.command({ name: command.name, description: command.description, mcp: false, inputSchema: command.input },
+    api.command({ name: command.name, description: command.description, mcp: command.mcp, inputSchema: command.input },
       async params => fit(await command.handler(params)));
   }
 
@@ -186,5 +262,17 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   ctx.effect(() => {
     const timer = setTimeout(() => service.tick(), 3_000);
     return () => clearTimeout(timer);
+  });
+  // Watching the inbox is a Cordis effect: the watcher dies when the plugin is
+  // disabled or reloaded, so no stray handles survive a config change.
+  ctx.effect(() => {
+    inbox = startInbox({
+      root: api.dataDirectory,
+      onFile: async (name, value) => { await service.ingestInboxFile(name, value); },
+      onError: (name, error) => store.appendLog('ingest', '自动采集失败', [
+        `文件：${path.basename(name)}`, String(error instanceof Error ? error.message : error).slice(0, 200),
+      ]),
+    });
+    return () => { inbox?.stop(); inbox = null; };
   });
 }

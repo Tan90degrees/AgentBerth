@@ -1,22 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  buildIndex, byteTruncate, draftPages, extractLinks, lineDiff, lintWiki, pageFromDocument, pageHash,
-  pageToDocument, parseDocument, parseJsonResponse, searchPages, skillFromDocument,
-  skillToDocument, slugify, stringifyDocument, validateSkillName,
+  bestExcerpt, buildIndex, byteTruncate, draftPages, evidenceList, extractLinks, lineDiff, lintWiki,
+  pageFromDocument, pageHash, pageToDocument, parseDocument, parseJsonResponse, resolveExcerpts,
+  searchPages, skillFromDocument, skillToDocument, slugify, snippet, sourceExcerpt,
+  stringifyDocument, validateSkillName,
 } from '../src/wiki/core';
+import { startInbox } from '../src/wiki/inbox';
 import { completionUrl, maskedKey, userMessage, chat } from '../src/wiki/llm';
 import { BUILTIN_SKILLS, DEFAULT_SCHEMA, resolveSkill } from '../src/wiki/prompts';
+import { apply, MCP_READ_ONLY_COMMANDS } from '../src/wiki/plugin';
 import { WikiStore } from '../src/wiki/store';
 import { WikiService } from '../src/wiki/service';
 import { notesWikiManifest } from '../src/wiki/manifest';
 import { notesWikiView } from '../src/wiki/view';
 import { notesWikiMarkup } from '../src/wiki/view-markup';
-import type { WikiConfig, WikiDraft, WikiPage } from '../src/wiki/types';
+import type { SourceExcerpt, WikiConfig, WikiDraft, WikiPage, WikiSource } from '../src/wiki/types';
 
 function temp(t: { after: (fn: () => void) => void }): string {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
@@ -28,7 +31,7 @@ const config = (overrides: Partial<WikiConfig> = {}): WikiConfig => ({
   autoCompile: false, autoApprove: false, lintMinutes: 0, maxContextPages: 8, ...overrides,
 });
 const page = (slug: string, body: string, extra: Partial<WikiPage> = {}): WikiPage => ({
-  slug, title: slug, summary: '摘要 ' + slug, kind: 'concept', sources: [], tags: [],
+  slug, title: slug, summary: '摘要 ' + slug, kind: 'concept', sources: [], evidence: [], tags: [],
   body, humanEdited: false, hash: '', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...extra,
 });
 
@@ -187,8 +190,8 @@ function modelFetch(state: MockState): typeof fetch {
     else if (joined.includes('编译（Compile）')) content = JSON.stringify({
       summary: '新增向量检索页面', log: '编译完成', contradictions: [],
       pages: [
-        { slug: '向量检索', title: '向量检索', kind: 'concept', summary: '用嵌入召回候选', tags: ['检索'], body: '# 向量检索\n\n用嵌入召回候选，见 [[重排序]]。', sources: ['src'] },
-        { slug: '重排序', title: '重排序', kind: 'concept', summary: '提升精度', tags: [], body: '# 重排序\n\n提升精度，见 [[向量检索]]。', sources: ['src'] },
+        { slug: '向量检索', title: '向量检索', kind: 'concept', summary: '用嵌入召回候选', tags: ['检索'], body: '# 向量检索\n\n用嵌入召回候选，见 [[重排序]]。', sources: ['src'], evidence: [{ quote: '向量检索与重排序的关系' }] },
+        { slug: '重排序', title: '重排序', kind: 'concept', summary: '提升精度', tags: [], body: '# 重排序\n\n提升精度，见 [[向量检索]]。', sources: ['src'], evidence: [{ quote: '向量检索与重排序的关系' }] },
       ],
     });
     else if (joined.includes('查询（Query）')) content = '要点：召回后需重排序 [[向量检索]]。依据见 [[重排序]]。';
@@ -231,13 +234,20 @@ test('end-to-end: compile produces a draft, approval publishes pages, ask cites 
   const pages = service.listPages();
   assert.equal(pages.length, 2);
   assert.ok(store.index().includes('[[向量检索|向量检索]]'));
+  assert.ok(pages.find(item => item.slug === '向量检索')!.evidence.length > 0, 'model quotes survive publishing');
+  const excerpts = service.excerpts('向量检索');
+  assert.ok(excerpts.length > 0 && excerpts[0].verified, 'a published quote resolves back to the raw source');
+  assert.ok(excerpts[0].context.includes('向量检索'));
+  assert.ok(service.searchSnippets('向量检索')[0].snippet.includes('向量'));
+  assert.ok(service.readForAgent('向量检索')!.excerpts.length > 0, 'MCP reads see the same provenance');
   assert.equal(pages.every(item => !item.humanEdited), true);
   assert.ok(store.log().includes('publish'));
   const answerTask = await waitFor(service, service.ask('召回和精度怎么处理？'));
   assert.equal(answerTask.status, 'done', answerTask.error);
-  const answer = answerTask.result as { answer: string; citations: string[] };
+  const answer = answerTask.result as { answer: string; citations: string[]; evidence: SourceExcerpt[] };
   assert.ok(answer.answer.includes('[[向量检索]]'));
   assert.deepEqual(answer.citations.sort(), ['向量检索', '重排序'].sort());
+  assert.ok(answer.evidence.length > 0, 'answers carry resolvable provenance');
   const lintTask = await waitFor(service, service.lint());
   assert.equal(lintTask.status, 'done', lintTask.error);
   assert.ok((lintTask.result as { suggestions: string[] }).suggestions.length > 0);
@@ -351,7 +361,7 @@ test('publishing is safe when two proposals create the same page', async t => {
   const draft = (id: string, body: string): WikiDraft => ({
     id, sourceId: null, sourceTitle: '手工提案', createdAt: '2026-01-01T00:00:00.000Z',
     model: 'manual', summary: '', contradictions: [], feedback: [], status: 'pending',
-    pages: [{ slug: '同名页', title: '同名页', summary: '', kind: 'concept', body, sources: [], tags: [], previous: null, action: 'create' }],
+    pages: [{ slug: '同名页', title: '同名页', summary: '', kind: 'concept', body, sources: [], evidence: [], tags: [], previous: null, action: 'create' }],
   });
   store.saveDraft(draft('d1', '# 第一份'));
   store.saveDraft(draft('d2', '# 第二份'));
@@ -377,4 +387,174 @@ test('a failed auto-compile backs off instead of retrying every tick', async t =
   service.tick();
   assert.equal(service.status().tasks.filter(task => task.kind === 'compile' && ['queued', 'running'].includes(task.status)).length, 0,
     'a failed source waits for the retry window');
+});
+
+async function pollUntil(check: () => boolean, label: string, timeout = 6000): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('timeout: ' + label);
+}
+
+test('evidence only stores verbatim quotes and resolves to readable raw context', () => {
+  const source: WikiSource = {
+    id: 'src-evidence', title: '检索笔记',
+    text: '第一段讲别的。\n向量检索与重排序的关系：先召回，再精排。\n结尾。',
+    images: [], vision: '', compiled: false, hash: '', createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  const kept = evidenceList([
+    { quote: '向量检索与重排序的关系' },
+    { quote: '模型编造的一句话' },
+    { quote: '向量检索 与 重排序 的 关系' },
+  ], source.text);
+  assert.equal(kept.length, 2, 'fabricated quotes are dropped, whitespace-wrapped ones survive');
+  assert.equal(evidenceList([{ quote: '的' }, { quote: '向量' }], source.text).length, 0,
+    'a one/two-character quote matches anything and proves nothing');
+  const excerpt = sourceExcerpt(source, kept[0].quote);
+  assert.equal(excerpt.verified, true);
+  assert.ok(excerpt.context.includes('先召回，再精排'), 'the surrounding source text is shown');
+  assert.equal(sourceExcerpt(source, '不存在的引文').verified, false);
+  const original = page('向量检索', '向量检索用于召回', {
+    sources: ['src-evidence'],
+    evidence: kept.map(item => ({ sourceId: 'src-evidence', quote: item.quote })),
+  });
+  const parsed = pageFromDocument('向量检索', pageToDocument(original), '2026-01-01T00:00:00.000Z');
+  assert.deepEqual(parsed.evidence, original.evidence, 'evidence round-trips through frontmatter');
+  assert.equal(pageHash(parsed), pageHash(original));
+  assert.ok(resolveExcerpts(parsed, [source])[0].context.includes('先召回'));
+  assert.equal(resolveExcerpts(page('无来源', '正文'), [source]).length, 0, 'no sources means no invented provenance');
+  assert.equal(bestExcerpt(source, '重排序 精度').verified, true, 'local fallback still quotes real text');
+  assert.ok(snippet('开头一堆文字，然后向量检索出现在后面，还有更多内容', '向量检索').includes('向量检索'));
+});
+
+test('MCP exposes only read-only wiki commands and tolerates the injected agentId', async t => {
+  const cleanups: (() => void)[] = [];
+  // Register the cleanup hook BEFORE temp() registers the directory removal:
+  // on Windows a live fs.watch handle keeps the directory locked (EPERM).
+  t.after(() => { while (cleanups.length) cleanups.pop()!(); });
+  const root = temp(t);
+  const registered: { description: Record<string, unknown>; handler: (params: Record<string, unknown>) => unknown | Promise<unknown> }[] = [];
+  const effect = (setup: () => unknown): void => {
+    const dispose = setup();
+    if (typeof dispose === 'function') cleanups.push(dispose as () => void);
+  };
+  const ctx = {
+    berth: {
+      id: 'notes-wiki', dataDirectory: root, signal: new AbortController().signal,
+      command: (description: Record<string, unknown>, handler: (params: Record<string, unknown>) => unknown) => registered.push({ description, handler }),
+      interval: () => {}, effect, call: async () => ({ sessions: [] }),
+    },
+    effect,
+  };
+  apply(ctx as never, {});
+  const byName = new Map(registered.map(item => [String(item.description.name), item]));
+  for (const name of MCP_READ_ONLY_COMMANDS) {
+    const entry = byName.get(name)!;
+    assert.equal(entry.description.mcp, true, name + ' is discoverable by Agents');
+    assert.notEqual((entry.description.inputSchema as Record<string, unknown>).additionalProperties, false,
+      name + ' accepts the MCP-injected agentId');
+  }
+  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key', 'delete_page'])
+    assert.equal(byName.get(name)!.description.mcp, false, name + ' stays behind human review');
+  const search = byName.get('wiki_search')!;
+  assert.ok(Array.isArray(await search.handler({ query: '向量', agentId: 'agent-1' })));
+  assert.ok(((await byName.get('wiki_index')!.handler({ agentId: 'agent-1' })) as { index: string }).index.includes('Wiki 索引'));
+  assert.equal(await byName.get('wiki_read')!.handler({ slug: '不存在', agentId: 'agent-1' }), null);
+  assert.equal(byName.get('inbox_status')!.description.mcp, false);
+  // Regression: the view ships full excerpts (title/context/verified); the
+  // command must accept them and keep only the two fields it persists. Short
+  // quotes and unknown source ids are rejected at the service boundary.
+  const evidenceStore = new WikiStore(root);
+  const quote = '逐字引文来自原始素材，用于验证归档路径的出处校验。';
+  evidenceStore.saveSource({
+    id: 'src-evidence', title: '素材', text: quote, images: [], vision: '',
+    compiled: false, hash: '', createdAt: '2026-01-01T00:00:00.000Z',
+  });
+  const archived = await byName.get('save_answer')!.handler({
+    question: '证据会保留吗？', answer: '会 [[向量检索]]', citations: ['向量检索'],
+    evidence: [
+      { sourceId: 'src-evidence', quote, title: '额外字段', verified: true },
+      { sourceId: 'unknown-source', quote: '另一个无效的引文片段' },
+      { sourceId: 'src-evidence', quote: '的' },
+    ],
+  }) as WikiPage;
+  assert.deepEqual(archived.evidence, [{ sourceId: 'src-evidence', quote }]);
+});
+
+test('inbox watcher imports dropped files once and archives them', async t => {
+  // Own the temp directory here so the watcher-stop hook runs before removal.
+  const root = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
+  const store = new WikiStore(root);
+  const service = new WikiService({ store, config: config({ autoCompile: false }), signal: new AbortController().signal });
+  const inbox = startInbox({ root, onFile: async (name, value) => { await service.ingestInboxFile(name, value); } });
+  t.after(() => inbox.stop());
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+  const content = '# 采集笔记\n\n向量检索先召回再重排序。';
+  writeFileSync(path.join(inbox.dir, 'note.md'), content);
+  await pollUntil(() => service.listSources().length === 1, 'inbox import');
+  const source = service.listSources()[0];
+  assert.equal(source.title, 'note');
+  assert.ok(source.text.includes('先召回再重排序'));
+  assert.equal(readdirSync(inbox.dir).filter(name => name.endsWith('.md')).length, 0, 'file moved out of the inbox');
+  assert.ok(readdirSync(inbox.importedDir).some(name => name.endsWith('note.md')));
+  writeFileSync(path.join(inbox.dir, 'note.md'), content);
+  await pollUntil(() => readdirSync(inbox.importedDir).length >= 2, 'duplicate archived');
+  assert.equal(service.listSources().length, 1, 'identical content is never imported twice');
+  assert.ok(store.log().includes('自动采集'));
+});
+
+test('workbench sessions can be captured as immutable sources, exactly once', async t => {
+  const root = temp(t);
+  const store = new WikiStore(root);
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const call = async (method: string) => {
+    if (method === 'state') return { sessions: [{ id: sessionId, title: '检索方案讨论', latestRun: { status: 'completed' } }] };
+    if (method === 'acpSnapshot') return { events: [
+      { sequence: 1, kind: 'user', text: '讨论向量检索' },
+      { sequence: 2, kind: 'assistant', text: '建议先召回再重排序' },
+    ] };
+    return {};
+  };
+  const service = new WikiService({ store, config: config(), signal: new AbortController().signal, call });
+  assert.deepEqual(await service.listCaptureSessions(), [{ id: sessionId, title: '检索方案讨论', status: 'completed' }]);
+  const first = await service.captureSession(sessionId);
+  assert.equal(first.events, 2);
+  assert.equal(first.skipped, false);
+  const source = store.getSource(first.id)!;
+  assert.ok(source.text.includes('建议先召回再重排序'));
+  assert.ok(source.text.includes('采集自工作台会话'));
+  assert.ok(store.log().includes('工作台会话'));
+  const second = await service.captureSession(sessionId);
+  assert.equal(second.skipped, true);
+  assert.equal(service.listSources().length, 1, 'an unchanged session snapshot is not duplicated');
+  await assert.rejects(service.captureSession('unknown'), /会话不存在/);
+  const offline = new WikiService({ store: new WikiStore(temp(t)), config: config(), signal: new AbortController().signal });
+  assert.deepEqual(await offline.listCaptureSessions(), []);
+  await assert.rejects(offline.captureSession(sessionId), /不可用/);
+});
+
+test('inbox quarantines oversized files and never imports a half-written file', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
+  const store = new WikiStore(root);
+  const service = new WikiService({ store, config: config({ autoCompile: false }), signal: new AbortController().signal });
+  const inbox = startInbox({
+    root, onFile: async (name, value) => { await service.ingestInboxFile(name, value); }, onError: () => {},
+  });
+  t.after(() => inbox.stop());
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+
+  writeFileSync(path.join(inbox.dir, 'big.md'), 'x'.repeat(1024 * 1024 + 1));
+  await pollUntil(() => readdirSync(inbox.failedDir).length > 0, 'oversized file quarantined', 12000);
+  assert.equal(service.listSources().length, 0, 'a deterministic failure never becomes a source');
+
+  const slow = path.join(inbox.dir, 'slow.md');
+  writeFileSync(slow, '# 慢速写入\n\n前半段');
+  setTimeout(() => writeFileSync(slow, '# 慢速写入\n\n前半段 + 完整结尾。'), 250);
+  await pollUntil(() => service.listSources().some(item => item.title === 'slow'), 'settled import', 12000);
+  const imported = service.listSources().filter(item => item.title === 'slow');
+  assert.equal(imported.length, 1);
+  assert.ok(imported[0].text.includes('完整结尾'), 'only complete text becomes an immutable source');
+  assert.ok(inbox.archived >= 1);
 });

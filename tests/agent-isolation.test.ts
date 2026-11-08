@@ -90,7 +90,12 @@ test('one bundled MCP process isolates concurrent named subagents and disposes o
  t.after(()=>{for(const p of pending.values())clearTimeout(p.timer);child.kill();});
  const request=(method:string,params:unknown)=>new Promise<any>((resolve,reject)=>{const id=++sequence,timer=setTimeout(()=>reject(new Error('MCP timeout: '+stderr)),10000);pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});
  const invoke=async(agentId:string|undefined,name:string,args:Record<string,unknown>={})=>decode(await request('tools/call',{name,arguments:{...args,agentId}}));
- const discovery=await request('tools/list',{});assert.equal(discovery.tools.length,4);assert.ok(discovery.tools.every((tool:any)=>tool.inputSchema.properties.agentId));
+ const discovery=await request('tools/list',{});
+ // Enabled Cordis plugins contribute their own MCP tools; count is not fixed.
+ // What must hold is that the core terminal tools remain and every tool still
+ // declares the injected agentId used for subagent isolation.
+ assert.ok(discovery.tools.length>=4,'core terminal tools stay available alongside enabled plugin tools');
+ assert.ok(discovery.tools.every((tool:any)=>tool.inputSchema.properties.agentId));
  const [a,b]=await Promise.all([invoke(undefined,'terminal_session',{action:'create',alias:'fixture',title:'same-name'}),invoke(undefined,'terminal_session',{action:'create',alias:'fixture',title:'same-name'})]);
  assert.notEqual(a.agentId,b.agentId);assert.match(a.agentId,/^[a-f0-9-]{36}$/);assert.notEqual(a.sessionId,b.sessionId);assert.equal(f.shells(),2);
  assert.equal(a.harness.lifecycle.onTaskComplete.arguments.agentId,a.agentId);assert.equal(b.harness.lifecycle.onTaskComplete.arguments.agentId,b.agentId);

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { dump, load, JSON_SCHEMA } from 'js-yaml';
-import type { PageKind, WikiDraft, WikiLint, WikiPage, WikiSkill } from './types';
+import type { PageKind, SourceEvidence, SourceExcerpt, WikiDraft, WikiLint, WikiPage, WikiSkill, WikiSource } from './types';
 
 export const PAGE_KINDS: PageKind[] = ['concept', 'entity', 'source', 'comparison', 'overview', 'note'];
 export const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -40,13 +40,104 @@ const stringList = (value: unknown): string[] => Array.isArray(value)
   ? value.filter((item): item is string => typeof item === 'string').slice(0, 100)
   : typeof value === 'string' && value.trim() ? [value] : [];
 
+/** A compiled claim is only as trustworthy as the raw text behind it. Quotes
+ * are checked against the immutable source before they are ever stored. */
+const compact = (value: string): string => String(value ?? '').replace(/\s+/g, '');
+/** A one-character "quote" matches almost any source and proves nothing. */
+const MIN_QUOTE_CHARS = 8;
+
+export function evidenceList(value: unknown, sourceText?: string, allowed?: Set<string>): SourceEvidence[] {
+  if (!Array.isArray(value)) return [];
+  const haystack = sourceText ? compact(sourceText) : '';
+  const out: SourceEvidence[] = [];
+  for (const item of value.slice(0, 20)) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const quote = typeof row.quote === 'string' ? row.quote.trim().slice(0, 300) : '';
+    const sourceId = typeof row.sourceId === 'string' ? row.sourceId.slice(0, 100) : '';
+    if (compact(quote).length < MIN_QUOTE_CHARS) continue;
+    if (allowed && sourceId && !allowed.has(sourceId)) continue;
+    if (sourceText && !haystack.includes(compact(quote))) continue;
+    out.push({ sourceId, quote });
+  }
+  return out.slice(0, 8);
+}
+
+function findSpan(text: string, quote: string): { start: number; end: number } {
+  const direct = text.indexOf(quote);
+  if (direct >= 0) return { start: direct, end: direct + quote.length };
+  const needle = compact(quote);
+  if (!needle) return { start: -1, end: -1 };
+  const positions: number[] = [];
+  for (let i = 0; i < text.length; i++) if (!/\s/.test(text[i])) positions.push(i);
+  const at = compact(text).indexOf(needle);
+  if (at < 0 || positions[at] === undefined) return { start: -1, end: -1 };
+  return { start: positions[at], end: (positions[at + needle.length - 1] ?? positions[at]) + 1 };
+}
+
+export function sourceExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text'>, quote: string): SourceExcerpt {
+  const text = String(source.text ?? '');
+  const { start, end } = findSpan(text, quote);
+  const base: SourceExcerpt = { sourceId: source.id, title: source.title, quote, context: '', verified: start >= 0 };
+  if (start < 0) return base;
+  const from = Math.max(0, start - 180), to = Math.min(text.length, end + 180);
+  return { ...base, context: (from > 0 ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '') };
+}
+
+/** Local fallback when a page has no model-supplied quotes: pick the source
+ * passage sharing the most tokens with the page body. It never invents text. */
+export function bestExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text'>, pageBody: string): SourceExcerpt {
+  const text = String(source.text ?? '');
+  const words = tokens(pageBody);
+  const chunks = text.split(/\n\s*\n|\n/).map(value => value.trim()).filter(value => value.length > 20).slice(0, 200);
+  let best = '', score = 0;
+  for (const chunk of chunks) {
+    const lower = chunk.toLowerCase();
+    const hits = words.reduce((total, word) => total + (lower.includes(word) ? 1 : 0), 0);
+    if (hits > score) { score = hits; best = chunk; }
+  }
+  return sourceExcerpt(source, best ? best.slice(0, 300) : text.slice(0, 300));
+}
+
+export function resolveExcerpts(page: WikiPage, sources: WikiSource[], limit = 6): SourceExcerpt[] {
+  const byId = new Map(sources.map(source => [source.id, source]));
+  const out: SourceExcerpt[] = [];
+  for (const item of page.evidence) {
+    if (out.length >= limit) break;
+    const source = byId.get(item.sourceId) ?? (page.sources.length === 1 ? byId.get(page.sources[0]) : undefined);
+    if (!source) continue;
+    const excerpt = sourceExcerpt(source, item.quote);
+    if (excerpt.verified && !out.some(value => value.sourceId === excerpt.sourceId && value.quote === excerpt.quote)) out.push(excerpt);
+  }
+  for (const id of page.sources) {
+    if (out.length >= limit) break;
+    if (out.some(value => value.sourceId === id)) continue;
+    const source = byId.get(id);
+    if (source) out.push(bestExcerpt(source, page.body));
+  }
+  return out.map(item => ({ ...item, quote: truncate(item.quote, 400), context: truncate(item.context, 1200) }));
+}
+
+/** Short context window around the first query hit, used by MCP search results. */
+export function snippet(text: string, query: string, max = 360): string {
+  const value = String(text ?? '').replace(/\s+/g, ' ').trim();
+  const lower = value.toLowerCase();
+  let at = -1;
+  for (const word of tokens(query)) {
+    const found = lower.indexOf(word);
+    if (found >= 0 && (at < 0 || found < at)) at = found;
+  }
+  const from = Math.max(0, at - 80);
+  return (from > 0 ? '…' : '') + value.slice(from, Math.min(value.length, from + max)) + (from + max < value.length ? '…' : '');
+}
+
 export function pageFromDocument(slug: string, text: string, fallbackTime: string): WikiPage {
   const { data, body } = parseDocument(text);
   const title = typeof data.title === 'string' && data.title.trim() ? data.title : slug;
   const kind = PAGE_KINDS.includes(data.kind as PageKind) ? data.kind as PageKind : 'note';
   const page: WikiPage = {
     slug, title, summary: typeof data.summary === 'string' ? data.summary : '',
-    kind, sources: stringList(data.sources), tags: stringList(data.tags), body,
+    kind, sources: stringList(data.sources), evidence: evidenceList(data.evidence), tags: stringList(data.tags), body,
     humanEdited: data.humanEdited === true,
     hash: typeof data.hash === 'string' ? data.hash : '',
     createdAt: typeof data.createdAt === 'string' ? data.createdAt : fallbackTime,
@@ -58,13 +149,13 @@ export function pageFromDocument(slug: string, text: string, fallbackTime: strin
 export function pageToDocument(page: WikiPage): string {
   return stringifyDocument({
     title: page.title, summary: page.summary, kind: page.kind,
-    sources: page.sources, tags: page.tags, humanEdited: page.humanEdited,
+    sources: page.sources, evidence: page.evidence, tags: page.tags, humanEdited: page.humanEdited,
     hash: page.hash, createdAt: page.createdAt, updatedAt: page.updatedAt,
   }, page.body);
 }
 
-export function pageHash(page: Pick<WikiPage, 'title' | 'summary' | 'body' | 'sources'>): string {
-  return createHash('sha256').update(JSON.stringify([page.title, page.summary, page.body, page.sources])).digest('hex').slice(0, 32);
+export function pageHash(page: Pick<WikiPage, 'title' | 'summary' | 'body' | 'sources' | 'evidence'>): string {
+  return createHash('sha256').update(JSON.stringify([page.title, page.summary, page.body, page.sources, page.evidence])).digest('hex').slice(0, 32);
 }
 
 export function extractLinks(body: string): string[] {
@@ -241,7 +332,7 @@ export function validateSkillName(name: string): void {
   if (!SKILL_NAME.test(name) || name.length > 64) throw new Error('Skill 名称须为小写字母、数字和横线，最多 64 字符');
 }
 
-export function draftPages(value: unknown, pages: WikiPage[], sourceId: string | null): WikiDraft['pages'] {
+export function draftPages(value: unknown, pages: WikiPage[], sourceId: string | null, sourceText?: string): WikiDraft['pages'] {
   const list = Array.isArray(value) ? value.slice(0, 15) : [];
   const bySlug = new Map(pages.map(page => [page.slug, page]));
   const result: WikiDraft['pages'] = [];
@@ -254,10 +345,13 @@ export function draftPages(value: unknown, pages: WikiPage[], sourceId: string |
     const existing = bySlug.get(slug);
     const body = typeof row.body === 'string' ? byteTruncate(row.body, 48 * 1024) : '';
     const sources = [...new Set([...(Array.isArray(row.sources) ? row.sources.filter((value): value is string => typeof value === 'string') : []), ...(sourceId ? [sourceId] : [])])].slice(0, 50);
+    const quoted = evidenceList(row.evidence, sourceText, new Set(sources))
+      .map(item => ({ sourceId: item.sourceId || sources[0] || sourceId || '', quote: item.quote }))
+      .filter(item => item.sourceId);
     const next: WikiDraft['pages'][number] = {
       slug, title, summary: typeof row.summary === 'string' ? row.summary.trim().slice(0, 400) : '',
       kind: PAGE_KINDS.includes(row.kind as PageKind) ? row.kind as PageKind : 'concept',
-      body, sources, tags: Array.isArray(row.tags) ? row.tags.filter((value): value is string => typeof value === 'string').slice(0, 20) : [],
+      body, sources, evidence: quoted.length ? quoted : (existing?.evidence ?? []), tags: Array.isArray(row.tags) ? row.tags.filter((value): value is string => typeof value === 'string').slice(0, 20) : [],
       previous: existing ? pageToDocument(existing) : null,
       action: existing ? (existing.humanEdited ? 'skip' : 'update') : 'create',
     };

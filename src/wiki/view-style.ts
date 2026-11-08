@@ -68,6 +68,12 @@ article{overflow:auto;padding:18px 22px;min-width:0}
 .answer{white-space:normal;border:1px solid var(--border,#e5e5e5);border-radius:var(--radius-md,10px);padding:14px;background:var(--surface-muted,#f9f9f9)}
 .citations{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .citations button{font-size:var(--fs-xs,12px);padding:3px 8px}
+.evidence{margin-top:12px;border:1px solid var(--border,#e5e5e5);border-radius:var(--radius-md,10px);padding:10px 12px;background:var(--surface-muted,#f9f9f9)}
+.evidence-item{padding:8px 0;border-top:1px solid var(--border,#e5e5e5);font-size:var(--fs-xs,12px)}
+.evidence-item:first-of-type{border-top:0}
+.evidence-item blockquote{margin:6px 0;padding:6px 10px;border-left:3px solid var(--primary,#212121);background:var(--surface,#fff);white-space:pre-wrap;line-height:1.6;color:var(--text-secondary,#4d4d4d)}
+.evidence-item small{color:var(--text-muted,#6b6b6b);word-break:break-all}
+.evidence code{font-size:var(--fs-xs,12px)}
 .progress{display:flex;align-items:center;gap:8px;font-size:var(--fs-xs,12px);color:var(--text-secondary,#4d4d4d);margin:8px 0}
 .spinner{width:10px;height:10px;border:2px solid var(--border,#e5e5e5);border-top-color:var(--primary,#212121);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}

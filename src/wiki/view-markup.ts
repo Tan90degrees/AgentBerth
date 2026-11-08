@@ -23,6 +23,7 @@ export const notesWikiMarkup = String.raw`
       <section data-for="sources" hidden>
         <div class="list-head"><strong>原始素材</strong><button id="newSource" data-action="newSource" class="ghost" aria-label="新建素材">＋</button></div>
         <p class="muted">素材只读，模型据此编译页面。</p>
+        <button data-action="showCapture" class="ghost" style="width:100%;margin-bottom:8px">自动采集 / 会话沉淀</button>
         <div id="sourceList"></div>
       </section>
       <section data-for="review" hidden>

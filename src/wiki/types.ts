@@ -3,12 +3,29 @@
 export type PageKind = 'concept' | 'entity' | 'source' | 'comparison' | 'overview' | 'note';
 export type SkillKind = 'ingest' | 'compile' | 'query' | 'lint' | 'synthesize' | 'custom';
 
+/** A verbatim quote from an immutable raw source, stored on a wiki page so a
+ * reader (or an Agent) can jump from a compiled claim back to its evidence. */
+export interface SourceEvidence {
+  sourceId: string;
+  quote: string;
+}
+
+/** Evidence resolved against the actual source text, ready to render. */
+export interface SourceExcerpt {
+  sourceId: string;
+  title: string;
+  quote: string;
+  context: string;
+  verified: boolean;
+}
+
 export interface WikiPage {
   slug: string;
   title: string;
   summary: string;
   kind: PageKind;
   sources: string[];
+  evidence: SourceEvidence[];
   tags: string[];
   body: string;
   humanEdited: boolean;
@@ -45,6 +62,7 @@ export interface DraftPage {
   kind: PageKind;
   body: string;
   sources: string[];
+  evidence: SourceEvidence[];
   tags: string[];
   previous: string | null;
   action: 'create' | 'update' | 'skip';
@@ -91,6 +109,7 @@ export interface WikiAnswer {
   answer: string;
   citations: string[];
   pages: string[];
+  evidence: SourceExcerpt[];
   model: string;
   at: string;
 }

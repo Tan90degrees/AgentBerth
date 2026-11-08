@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
@@ -17,8 +17,8 @@ const model = createServer(async (request, response) => {
   let content;
   if (joined.includes('素材摄入')) content = JSON.stringify({ summary: '关于向量检索的素材', concepts: [{ title: '向量检索', kind: 'concept', summary: '用嵌入召回', relevance: 0.9 }], claims: ['召回与精度需要平衡'], contradictions: [] });
   else if (joined.includes('编译（Compile）')) content = JSON.stringify({ summary: '编译出两页', log: '窗口验证编译', contradictions: [], pages: [
-    { slug: '向量检索', title: '向量检索', kind: 'concept', summary: '用嵌入召回候选', tags: ['检索'], body: '# 向量检索\n\n用嵌入召回候选，见 [[重排序]]。', sources: [] },
-    { slug: '重排序', title: '重排序', kind: 'concept', summary: '提升精度', tags: [], body: '# 重排序\n\n提升精度，见 [[向量检索]]。', sources: [] },
+    { slug: '向量检索', title: '向量检索', kind: 'concept', summary: '用嵌入召回候选', tags: ['检索'], body: '# 向量检索\n\n用嵌入召回候选，见 [[重排序]]。', sources: [], evidence: [{ quote: '向量检索与重排序的关系' }] },
+    { slug: '重排序', title: '重排序', kind: 'concept', summary: '提升精度', tags: [], body: '# 重排序\n\n提升精度，见 [[向量检索]]。', sources: [], evidence: [{ quote: '向量检索与重排序的关系' }] },
   ] });
   else if (joined.includes('查询（Query）')) content = '要点：召回后需要重排序 [[向量检索]]，依据见 [[重排序]]。';
   else if (joined.includes('体检（Lint）')) content = JSON.stringify({ contradictions: [], orphans: [], missing: [], stale: [], suggestions: ['补充混合检索页面'] });
@@ -103,9 +103,43 @@ try {
   assert.ok((await call('index')).includes('[[向量检索|向量检索]]'));
   step('approval published pages and rebuilt index.md');
 
+  const detail = await call('get_page', { slug: '向量检索' });
+  assert.ok(detail.excerpts.length > 0 && detail.excerpts[0].verified, 'published quotes resolve back to raw text');
+  assert.ok(detail.excerpts[0].context.includes('向量检索'));
+  step('page citations trace back to the immutable source');
+
+  const catalog = await ext({ action: 'list' });
+  const plugin = catalog.plugins.find(item => item.manifest.id === 'notes-wiki');
+  const tools = new Map(plugin.commands.map(command => [command.name, command]));
+  for (const name of ['wiki_index', 'wiki_search', 'wiki_read', 'wiki_sources', 'wiki_source', 'wiki_status', 'wiki_ask', 'wiki_task'])
+    assert.equal(tools.get(name)?.mcp, true, name + ' is exposed as an MCP tool');
+  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key'])
+    assert.equal(tools.get(name)?.mcp, false, name + ' stays behind human review');
+  const hits = await call('wiki_search', { query: '向量检索', agentId: 'smoke-agent' });
+  assert.ok(hits.some(item => item.slug === '向量检索'), 'MCP search tolerates the injected agentId');
+  const agentRead = await call('wiki_read', { slug: '向量检索', agentId: 'smoke-agent' });
+  assert.ok(agentRead.excerpts.length > 0, 'Agents see the same provenance as the UI');
+  const asked = await call('wiki_ask', { question: '怎么提升精度？' });
+  await until(async () => {
+    const task = await call('wiki_task', { id: asked.taskId });
+    return task && ['done', 'failed'].includes(task.status);
+  }, 'wiki_ask task');
+  const askedTask = await call('wiki_task', { id: asked.taskId });
+  assert.equal(askedTask.status, 'done', askedTask.error);
+  assert.ok(askedTask.result.evidence.length > 0, 'MCP answers carry raw sources');
+  step('MCP read-only tools, agentId tolerance and task polling work');
+
+  const inbox = await call('inbox_status');
+  assert.equal(inbox.watching, true);
+  await writeFile(path.join(inbox.dir, 'window-note.md'), '# 窗口自动采集\n\n这是一份从文件落盘自动进入的素材。');
+  await until(async () => (await call('list_sources')).some(item => item.title === 'window-note'), 'inbox auto import');
+  assert.ok(Array.isArray(await call('list_capture_sessions')));
+  step('raw/inbox watcher imports dropped files inside the real daemon');
+
   const answer = await waitTask(await call('ask', { question: '召回和精度怎么处理？' }));
   assert.ok(answer.answer.includes('[[向量检索]]'));
   assert.deepEqual(answer.citations.sort(), ['向量检索', '重排序'].sort());
+  assert.ok(answer.evidence.length > 0, 'answers carry raw source excerpts');
   const archived = await call('save_answer', { question: '召回和精度怎么处理？', answer: answer.answer, citations: answer.citations });
   assert.equal(archived.humanEdited, true);
   const lint = await waitTask(await call('lint'));
@@ -129,6 +163,7 @@ try {
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-window-settings.png' });
   await frame.locator('[data-tab="wiki"]').click();
   await until(async () => (await frame.locator('#pageView').innerText()).includes('向量检索'), 'page detail');
+  await until(async () => (await frame.locator('#pageView').innerText()).includes('原始出处'), 'page provenance rendered');
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-window-pages.png' });
   step('view tabs render live daemon data');
 
@@ -138,6 +173,8 @@ try {
   await frame.locator('#newSource').click();
   await until(async () => (await frame.locator('#sourceView [data-field="text"]').count()) > 0, 'new source form');
   await frame.locator('#sourceView [data-action="cancelSource"]').click();
+  await frame.locator('[data-action="showCapture"]').click();
+  await until(async () => (await frame.locator('#sourceView').innerText()).includes('raw/inbox'), 'capture panel');
   await frame.locator('[data-tab="wiki"]').click();
   await frame.locator('#newPage').click();
   await until(async () => (await frame.locator('#pageView [data-field="slug"]').count()) > 0, 'new page form');
@@ -150,6 +187,10 @@ try {
   await frame.locator('#question').fill('窗口里直接提问可以吗？');
   await frame.locator('#ask').click();
   await until(async () => (await frame.locator('#answerView').innerText()).includes('向量检索'), 'ask button produced an answer');
+  await until(async () => (await frame.locator('#answerView').innerText()).includes('原始出处'), 'answer provenance rendered');
+  const archivedBefore = (await call('list_pages')).length;
+  await frame.locator('#answerView [data-action="saveAnswer"]').click();
+  await until(async () => (await call('list_pages')).length > archivedBefore, 'iframe archives an answer with evidence');
   await frame.locator('[data-tab="review"]').click();
   const lintBefore = (await call('status')).tasks.filter(task => task.kind === 'lint').length;
   await frame.locator('#runLint').click();
