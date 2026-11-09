@@ -61,7 +61,7 @@ export function evidenceList(value: unknown, sourceText?: string, allowed?: Set<
     if (sourceText !== undefined && !haystack.includes(compact(quote))) continue;
     out.push({ sourceId, quote });
   }
-  return out.slice(0, 8);
+  return out.slice(0, 20);
 }
 
 function findSpan(text: string, quote: string): { start: number; end: number } {

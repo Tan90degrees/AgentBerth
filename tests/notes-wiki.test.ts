@@ -45,6 +45,10 @@ test('documents round-trip through YAML frontmatter and keep Markdown bodies', (
   assert.equal(parsed.kind, 'concept');
   assert.deepEqual(extractLinks(original.body), ['混合检索', '重排序']);
   assert.equal(pageHash(parsed), pageHash(original));
+  const manyQuotes = page('many-quotes', '正文', { evidence: Array.from({ length: 16 }, (_, i) => ({ sourceId: 'source-' + i, quote: '多次编译合并后仍须保留的有效逐字引文' + i })) });
+  const reparsed = pageFromDocument('many-quotes', pageToDocument(manyQuotes), '2026-01-01T00:00:00.000Z');
+  assert.deepEqual(reparsed.evidence, manyQuotes.evidence, 'merged evidence survives the next read and write');
+  assert.equal(pageHash(reparsed), pageHash(manyQuotes));
   const { data, body } = parseDocument(stringifyDocument({ name: 'abc', triggers: ['一', '二'] }, '# 指令'));
   assert.equal(data.name, 'abc');
   assert.deepEqual(data.triggers, ['一', '二']);
