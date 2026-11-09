@@ -244,7 +244,11 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const selectSession = useCallback((projectId: string, sessionId: string, withinFeature=false) => { const target=getWorkspaceState().sessions.find(item=>item.id===sessionId);if(target?.owner){setPage('workspace');setExtensionView(previous=>withinFeature&&previous?.pluginId===target.owner!.pluginId?{...previous,sessionId:target.id}:{pluginId:target.owner!.pluginId,viewId:'tasks',taskId:target.owner!.taskId,sessionId:target.id});return;}setExtensionView(null); setSelectedWorktreePath(target?.worktreePath ?? null); if(target?.remote){selectSsh(sessionId);setSshOpen(true);setPage('workspace');return;} setProjectId(projectId); setSessionId(sessionId); setPage('workspace'); setTab('terminal'); setError(''); expandProject(projectId); }, [expandProject]);
   useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{pluginId:string;isAgent:boolean}>).detail;if(!detail?.pluginId)return;
     const plugin=state.extensions?.plugins.find(item=>item.manifest.id===detail.pluginId);
-    const popover=plugin&&plugin.installed&&!plugin.manifest.views.some(view=>view.location==='settings')&&(Object.keys(plugin.manifest.config).length>0||plugin.manifest.id==='pet');
+    // Agent-facing plugins (Superagent and its custom variants) carry source
+    // development tools and embedded settings views that only the full dialog
+    // can host. Keep that flow; plain config-only plugins use the light popover.
+    const fullDialog=detail.isAgent||!!plugin?.manifest.dependencies.includes('agents')||!!plugin?.manifest.views.some(view=>view.location==='settings');
+    const popover=plugin&&plugin.installed&&!fullDialog&&(Object.keys(plugin.manifest.config).length>0||plugin.manifest.id==='pet');
     if(popover){setPluginSettingsRequest(detail);return;}
     setPluginTab(detail.isAgent?'agents':'installed');setRequestedPlugin(detail.pluginId);setPage('plugins');setError('');};
     window.addEventListener('berth:plugin-settings',open);return()=>window.removeEventListener('berth:plugin-settings',open);},[state.extensions]);
@@ -455,8 +459,10 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     if (treeSearching) setSearchCollapsed(previous => (previous ?? []).includes(id) ? (previous ?? []).filter(value => value !== id) : [...(previous ?? []), id]);
     else toggleProject(id);
   });
-  // Clicking the already-selected view toggles the sidebar, like the collapse
-  // button; clicking anything else selects it and makes sure the bar is open.
+  // Clicking an already-selected extension icon toggles the sidebar, like the
+  // collapse button. The Sessions icon carries aria-pressed (it selects a
+  // view), so clicking it repeatedly must always return to the session list
+  // with the sidebar open rather than collapsing it.
   const stableSelectView = useStableCallback((pluginId: string, viewId: string) => {
     if (page === 'workspace' && extensionView?.pluginId === pluginId && extensionView.viewId === viewId) { setSidebarCollapsed(value => !value); return; }
     setExtensionView({ pluginId, viewId }); setPage('workspace'); setSidebarCollapsed(false);
@@ -465,7 +471,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
 
   return <ExtensionsContext.Provider value={state.extensions}><div className={sshWindow?"ssh-window app":"app"}>
     {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= API_VERSION} />
-    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} sessionUnread={localUnread} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{if(page==='workspace'&&!extensionView){setSidebarCollapsed(value=>!value);return;}setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
+    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} sessionUnread={localUnread} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
     <ResizableSidebar collapsed={sidebarCollapsed} side="left">
       <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
         <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>

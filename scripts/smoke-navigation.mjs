@@ -6,6 +6,10 @@ export async function openExtensionView(page,title){
   }
   if(target<0)throw new Error('Activity Bar extension icon not found: '+title);
   await buttons.nth(target).click();
+  // Re-clicking the active icon intentionally collapses the sidebar. Smoke
+  // flows re-open a view to assert on the session tree, so expand it again.
+  const expand=page.locator('.activity-bar button[aria-label="展开会话侧栏"]');
+  if(await expand.count())await expand.click();
   await page.locator('.extension-page').waitFor({state:'visible'});
   const iframe=page.locator('.extension-page iframe[title="'+title+'"]');
   if(await iframe.count())await iframe.waitFor({state:'visible'});
