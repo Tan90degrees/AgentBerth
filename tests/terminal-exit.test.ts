@@ -14,12 +14,13 @@ test('terminal completion stores unknown native exit codes as NULL and preserves
   t.after(() => { store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
   const project = store.createProject('Exit codes', root);
   const session = store.createSession(project.id, 'Shell', 'shell', '');
-  for (const code of [undefined, NaN, Infinity, -Infinity, 0.5, '0', {}, null, 0, 1, -1, 0xC000013A]) {
+  const cases = [[undefined, null], [NaN, null], [Infinity, null], [-Infinity, null], [0.5, null], ['0', null], [{}, null], [null, null], [0, 0], [1, 1], [-1, -1], [0xC000013A, 0xC000013A]] as const;
+  for (const [code, expected] of cases) {
     const run = store.createRun(session.id, '', 80, 24);
     store.finish(run.id, 'exited', code as never, null, '', 0, 80, 24);
     const saved = store.run(run.id);
     assert.equal(saved.status, 'exited');
-    assert.equal(saved.exitCode, typeof code === 'number' && Number.isSafeInteger(code) ? code : null);
+    assert.equal(saved.exitCode, expected);
     assert.ok(saved.endedAt);
   }
 });
