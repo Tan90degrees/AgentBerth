@@ -123,7 +123,7 @@ export const notesWikiScript = String.raw`
       if(!result||state.source!==result.id||state.tab!=='sources')return;
       var images=result.images.length?'<p class="muted">附件：'+result.images.length+' 张图片'+(result.vision?'（已生成图片理解）':'')+'</p>':'';
       var vision=result.vision?'<h3>图片理解</h3><div class="markdown">'+markdown(result.vision)+'</div>':'';
-      host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(result.title)+'</h2><p class="muted">'+esc(date(result.createdAt))+' · 素材 ID '+esc(result.id.slice(0,8))+'</p></div><div class="row">'+button('compileSource','重新编译','primary',' data-id="'+esc(result.id)+'"')+button('deleteSource','删除','danger',' data-id="'+esc(result.id)+'"')+'</div></div>'+images+vision+'<hr><div class="markdown">'+markdown(result.text.slice(0,8000))+'</div></div>';
+      host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(result.title)+'</h2><p class="muted">'+esc(date(result.createdAt))+' · 素材 ID '+esc(result.id.slice(0,8))+'</p></div><div class="row">'+button('compileSource',result.staging?'完成保存并编译':'重新编译','primary',' data-id="'+esc(result.id)+'"')+button('deleteSource','删除','danger',' data-id="'+esc(result.id)+'"')+'</div></div>'+images+vision+'<hr><div class="markdown">'+markdown(result.text.slice(0,8000))+'</div></div>';
     }).catch(err);
   }
   function compressImage(file,done){
@@ -180,13 +180,13 @@ export const notesWikiScript = String.raw`
   }
   // ---- Ask
   function renderAnswerList(){
-    $('answerList').innerHTML=state.answers.length?state.answers.map(function(a,i){return '<button class="item'+(state.answer===i?' selected':'')+'" data-action="openAnswer" data-index="'+i+'"><strong>'+esc(a.question)+'</strong><span>'+esc(date(a.at))+' · '+a.citations.length+' 引用</span></button>'}).join(''):empty('还没有提问记录。');
+    $('answerList').innerHTML=state.answers.length?state.answers.map(function(a,i){return '<button class="item'+(state.answer===a.at?' selected':'')+'" data-action="openAnswer" data-at="'+esc(a.at)+'"><strong>'+esc(a.question)+'</strong><span>'+esc(date(a.at))+' · '+a.citations.length+' 引用</span></button>'}).join(''):empty('还没有提问记录。');
   }
   function renderAsk(){
     renderAnswerList();var host=$('answerView');
-    var a=state.answer===null?null:state.answers[state.answer];
+    var a=state.answerDetail&&state.answerDetail.at===state.answer?state.answerDetail:state.answers.find(function(item){return item.at===state.answer});
     if(!a)return;
-    if(!a.full){call('get_answer',{at:a.at}).then(function(full){if(!full)return;full.full=true;var index=state.answers.findIndex(function(item){return item.at===full.at});if(index<0)return;state.answers[index]=full;if(state.answer===index)renderAsk()}).catch(err);return}
+    if(!a.full){call('get_answer',{at:a.at}).then(function(full){if(!full)return;full.full=true;var index=state.answers.findIndex(function(item){return item.at===full.at});if(index>=0)state.answers[index]=full;if(state.answer===full.at){state.answerDetail=full;renderAsk()}}).catch(err);return}
     host.innerHTML='<div class="card"><h2>'+esc(a.question)+'</h2><div class="answer markdown">'+markdown(a.answer)+'</div><div class="citations">'+a.citations.map(function(slug){return button('openPage',slug,'',' data-slug="'+esc(slug)+'"')}).join('')+'</div>'+evidenceBlock(a.evidence)+'<div class="row" style="margin-top:10px">'+button('saveAnswer','归档为新页面','primary')+button('openPluginSettings','模型：'+esc(a.model),'ghost')+'</div></div>';
   }
   // ---- Skills
@@ -205,9 +205,9 @@ export const notesWikiScript = String.raw`
         '<label>触发词（逗号分隔）<input data-field="triggers" value="'+esc(triggers)+'"></label>'+
         '<label>指令正文（Markdown，将作为模型 system prompt）<textarea data-field="body" rows="16" maxlength="30000"></textarea></label>'+
         '<p class="muted">同类型的自定义 Skill 会优先于内置版本；用同名保存可覆盖内置指令。</p>'+
-        '<div class="row">'+button('saveSkill','保存','primary')+(state.newSkill?'':button('deleteSkill','删除','danger')+button('exportSkill','导出 SKILL.md'))+button('cancelSkill','取消')+'</div><p id="skillStatus" class="muted"></p>');
+        '<div class="row">'+button('saveSkill','保存','primary')+(state.newSkill?'':button('deleteSkill','删除','danger')+button('exportSkill','导出 SKILL.md'))+button('cancelSkill','取消')+'</div><p id="skillStatus" class="muted"></p><div id="skillExport"></div>');
       var body=document.querySelector('[data-field="body"]');
-      if(body)call('get_skill',{name:state.newSkill?'':state.skill}).then(function(value){if(value&&body.isConnected&&!body.value.trim())body.value=value.body}).catch(err);
+      if(body&&!state.newSkill)call('get_skill',{name:state.skill}).then(function(value){if(value&&body.isConnected&&!body.value.trim())body.value=value.body}).catch(err);
       return;
     }
     host.innerHTML=card('工作流 Skill','<p>每个 Skill 是一个可编辑的 Markdown 指令模板，对应 LLM Wiki 的 Schema 层：摄入、编译、查询、体检、归档。</p><p class="muted">内置 Skill 可编辑覆盖但不能删除；自定义 Skill 可自由增删改查，导出的 SKILL.md 与工作台 Agent 的技能格式兼容。</p><div class="row">'+button('newSkill','新建 Skill','primary')+'</div><details><summary>导入 SKILL.md</summary><label>粘贴内容<textarea data-field="import" rows="8" maxlength="30000" placeholder="粘贴 SKILL.md 全文（含 --- 头部）"></textarea></label>'+button('importSkill','导入','primary')+'</details><div id="skillExport"></div>');
@@ -275,7 +275,7 @@ export const notesWikiScript = String.raw`
       var origin=state.taskOrigin;state.task=null;
       if(task.status==='failed'){err(task.error);$('askProgress').textContent='';return}
       if(origin==='ask'){
-        if(task.result){state.answers=[task.result].concat(state.answers).slice(0,5);state.answer=0;$('question').value='';renderAsk()}
+        if(task.result){state.answers=[task.result].concat(state.answers).slice(0,5);state.answer=task.result.at;state.answerDetail=null;$('question').value='';renderAsk()}
         $('askProgress').textContent='';
       }else if(origin==='compile'||origin==='review'){
         state.tab='review';setTab('review');return refreshLists().then(refreshStatus);
@@ -349,7 +349,7 @@ export const notesWikiScript = String.raw`
       }).finally(function(){if(node.isConnected)node.disabled=false});
       return;
     }
-    if(action==='compileSource'){go(call('compile',{sourceId:id}),function(taskId){startTask(taskId,'compile')});return}
+    if(action==='compileSource'){go(call('finalize_source',{id:id}).then(function(){return call('compile',{sourceId:id})}),function(taskId){startTask(taskId,'compile')});return}
     if(action==='deleteSource'){go(call('delete_source',{id:id}),function(){state.source=null;return refreshLists().then(function(){if(state.tab==='sources')renderSource()})});return}
     if(action==='openDraft'){state.draft=id;state.draftSlug='';renderReview();return}
     if(action==='draftPage'){state.draftSlug=slug;loadDraftPage(state.draft,slug);document.querySelectorAll('[data-action="draftPage"]').forEach(function(b){b.classList.toggle('active',b.dataset.slug===slug)});return}
@@ -360,10 +360,10 @@ export const notesWikiScript = String.raw`
       var question=$('question').value.trim();if(!question){err('请输入问题');return}
       go(call('ask',{question:question}),function(taskId){$('askProgress').textContent='已提交…';startTask(taskId,'ask')});return;
     }
-    if(action==='openAnswer'){state.answer=Number(node.dataset.index);renderAsk();return}
+    if(action==='openAnswer'){state.answer=node.dataset.at;renderAsk();return}
     if(action==='saveAnswer'){
-      var a=state.answers[state.answer];if(!a)return;
-      go(call('get_answer',{at:a.at}).then(function(full){if(!full)throw new Error('问答记录已过期，请重新提问');return call('save_answer',{question:full.question,answer:full.answer,citations:full.citations,evidence:(full.evidence||[]).map(function(e){return {sourceId:e.sourceId,quote:e.quote}})})}),function(taskId){startTask(taskId,'archive')});return;
+      if(!state.answer)return;
+      go(call('archive_answer',{at:state.answer}),function(taskId){startTask(taskId,'archive')});return;
     }
     if(action==='newSkill'){state.newSkill=true;state.skill=null;renderSkill();return}
     if(action==='cancelSkill'){state.newSkill=false;renderSkill();return}

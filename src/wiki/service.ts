@@ -448,7 +448,7 @@ export class WikiService {
       return;
     }
     const images = source.images.map(name => this.store.imageData(name)).filter((value): value is { mime: string; base64: string } => !!value);
-    if (!images.length) return;
+    if (images.length !== source.images.length) throw new Error('素材图片附件缺失，请检查原始文件后重试');
     if (task) task.progress = '理解图片';
     const description = await this.complete([
       { role: 'system', content: '你是图片理解助手。提取图片中的文字、图表结构、关键数据与结论，输出简洁中文 Markdown。不要臆测图中不存在的信息。' },

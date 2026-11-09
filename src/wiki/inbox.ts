@@ -107,6 +107,7 @@ export function startInbox(options: InboxOptions): InboxHandle {
         failedAt.delete(name); attempts.delete(name);
         prune();
       } catch (error) {
+        if (stopped) return;
         settling.delete(name);
         const count = (attempts.get(name) ?? 0) + 1;
         attempts.set(name, count);

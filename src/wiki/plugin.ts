@@ -210,7 +210,12 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
 
   // Query / lint / synthesis
   add('ask', '基于 wiki 提问（引用页面并回溯原文）', schema({ question: field('string') }, ['question']), params => service.ask(text(params, 'question')));
-  add('answers', '最近的问答记录', schema({}), () => service.answers().slice(0, 5).map(answer => ({ ...answer, answer: truncate(answer.answer, 4000) })));
+  add('answers', '最近的问答记录', schema({}), () => service.answers().slice(0, 5).map(answer => ({ ...answer, evidence: [], answer: truncate(answer.answer, 4000) })));
+  add('archive_answer', '将完整问答记录归档为新页面', schema({ at: field('string') }, ['at']), params => {
+    const answer = service.answers().find(item => item.at === text(params, 'at'));
+    if (!answer) throw new Error('问答记录已过期，请重新提问');
+    return service.archiveAnswer(answer.question, answer.answer, answer.citations, answer.evidence);
+  });
   add('get_answer', '读取完整问答记录', schema({ at: field('string') }, ['at']), params => service.answers().find(answer => answer.at === text(params, 'at')) ?? null);
   add('save_answer', '把回答归档成新页面', schema({
     question: field('string'), answer: field('string'),

@@ -483,6 +483,37 @@ test('MCP exposes only read-only wiki commands and tolerates the injected agentI
   let archived: WikiPage | undefined;
   await pollUntil(async () => { const task = await byName.get('task')!.handler({ id: archiveTask }) as WikiTask; archived = task.result as WikiPage; return task.status === 'done'; }, 'archive answer');
   assert.deepEqual(archived!.evidence, [{ sourceId: 'src-evidence', quote }]);
+  // The sidebar may shorten an answer; archiving by record identity keeps the
+  // full stored answer instead of sending that preview back through the bridge.
+  const answer = '完整回答正文'.repeat(1000) + '最终结论不可丢失';
+  const meta = evidenceStore.meta();
+  meta.answers = [{ question: '长回答', answer, citations: [], pages: [], evidence: [], model: 'test', at: '2026-01-01T00:00:00.000Z' }];
+  evidenceStore.saveMeta(meta);
+  const preview = await byName.get('answers')!.handler({}) as { answer: string }[];
+  assert.ok(preview[0].answer.length < answer.length);
+  const fullTask = await byName.get('archive_answer')!.handler({ at: meta.answers[0].at }) as string;
+  await pollUntil(async () => {
+    const task = await byName.get('task')!.handler({ id: fullTask }) as WikiTask;
+    if (task.status !== 'done') return false;
+    assert.ok((task.result as WikiPage).body.includes('最终结论不可丢失'));
+    return true;
+  }, 'archive uses complete stored answer');
+  const oldBody = Array.from({ length: 600 }, (_, index) => '旧内容 ' + index).join('\n');
+  const newBody = Array.from({ length: 600 }, (_, index) => '新内容 ' + index).join('\n');
+  evidenceStore.saveDraft({ id: 'large-diff', sourceId: null, sourceTitle: '长提案', createdAt: '', model: 'test', summary: '', contradictions: [], feedback: [], status: 'pending',
+    pages: [{ slug: 'long', title: 'long', summary: '', kind: 'note', body: newBody, sources: [], evidence: [], tags: [], previous: pageToDocument(page('long', oldBody)), action: 'update' }],
+  });
+  let offset = 0, seen = 0;
+  while (true) {
+    const diff = await byName.get('draft_page')!.handler({ id: 'large-diff', slug: 'long', offset }) as { diff: { text: string }[]; nextOffset: number; hasMore: boolean; totalLines: number };
+    seen += diff.diff.length;
+    assert.equal(diff.totalLines, 1200);
+    if (!diff.hasMore) { assert.equal(diff.diff.at(-1)!.text, '新内容 599'); break; }
+    assert.ok(diff.nextOffset > offset);
+    offset = diff.nextOffset;
+  }
+  assert.equal(seen, 1200);
+
 });
 
 test('inbox watcher imports dropped files once and archives them', async t => {
@@ -686,11 +717,11 @@ test('retrieval never adds unrelated pages solely because they have backlinks', 
 
 test('MCP wiki disclosure and paid model access require separate explicit opt-ins', async t => {
   for (const settings of [{ allowAgentAccess: false, allowAgentQueries: false }, { allowAgentAccess: true, allowAgentQueries: false }, { allowAgentAccess: true, allowAgentQueries: true }]) {
+    const effects: (() => void)[] = [];
+    t.after(() => effects.forEach(dispose => dispose()));
     const root = temp(t);
     const commands = new Map<string, { mcp?: boolean; handler: (params: Record<string, unknown>) => Promise<unknown> }>();
-    const effects: (() => void)[] = [];
     const effect = (setup: () => unknown) => { const dispose = setup(); if (typeof dispose === 'function') effects.push(dispose as () => void); };
-    t.after(() => effects.forEach(dispose => dispose()));
     apply({ berth: { dataDirectory: root, signal: new AbortController().signal,
       command: (description: { name: string; mcp?: boolean }, handler: (params: Record<string, unknown>) => Promise<unknown>) => commands.set(description.name, { ...description, handler }),
       call: async () => ({}), interval: () => {}, effect,
@@ -705,10 +736,9 @@ test('MCP wiki disclosure and paid model access require separate explicit opt-in
 
 test('inbox quarantines blank and oversized character content without silent truncation', async t => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
   const calls: string[] = [];
   const inbox = startInbox({ root, onFile: async name => { calls.push(name); } });
-  t.after(() => inbox.stop());
+  t.after(() => { inbox.stop(); rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
   writeFileSync(path.join(inbox.dir, 'empty.md'), '   \n');
   writeFileSync(path.join(inbox.dir, 'long.txt'), 'x'.repeat(200_001));
   await pollUntil(() => readdirSync(inbox.failedDir).length === 2, 'invalid inbox files quarantined');
