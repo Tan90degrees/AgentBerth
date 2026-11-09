@@ -112,24 +112,26 @@ test('RPC pull, sync, branch switch, staging, diff and commit preserve a running
 
 test('a Git RPC exceeding 15 seconds leaves session creation, terminal start, history links and I/O available', {timeout:45000},async t=>{
   const{dir,a}=await fixture(t),server=new DaemonServer(path.join(dir,'data')),c=await DaemonConnection.open(await server.listen(),()=>{});
+  const concurrentRpc = <T = unknown>(method: import('../src/shared/protocol').Method, params: Record<string, unknown> = {}): Promise<T> =>
+    c.rpc<T>(method, params).catch(error => { throw new Error(method + ': ' + (error instanceof Error ? error.message : String(error)), { cause: error }); });
   let pending:Promise<GitResult>|undefined;
   try{
     const helper=path.join(dir,'delayed-upload.cjs'),marker=path.join(dir,'started');
     const node=(await execute('node',['-p','process.execPath'],{encoding:'utf8',windowsHide:true})).stdout.trim();
     await writeFile(helper,`require('node:fs').writeFileSync(${JSON.stringify(marker)},'ready');setTimeout(()=>{const c=require('node:child_process').spawn('git',['upload-pack',...process.argv.slice(2)],{stdio:'inherit',windowsHide:true});c.on('error',()=>process.exit(1));c.on('exit',code=>process.exit(code??1));},16000);`);
     const quote=(value:string)=>'"'+value.replaceAll('\\','/')+'"';await git(a,'config','remote.origin.uploadpack',quote(node)+' '+quote(helper));
-    const p=await c.rpc<Project>('createProject',{name:'Live Git',path:a}),status=await c.rpc<GitStatus>('gitStatus',{projectId:p.id});
-    pending=c.rpc<GitResult>('gitOperation',{projectId:p.id,action:'fetch',remote:'origin',expected:{root:status.root,head:status.head,branch:status.branch}});
+    const p=await concurrentRpc<Project>('createProject',{name:'Live Git',path:a}),status=await concurrentRpc<GitStatus>('gitStatus',{projectId:p.id});
+    pending=concurrentRpc<GitResult>('gitOperation',{projectId:p.id,action:'fetch',remote:'origin',expected:{root:status.root,head:status.head,branch:status.branch}});
     // Attach rejection handling immediately while performing concurrent requests.
     void pending.catch(()=>{});
     const deadline=Date.now()+8000;while(true){try{await readFile(marker);break;}catch{assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,40));}}
-    const s=await c.rpc<Session>('createSession',{projectId:p.id,title:'During fetch',agent:'shell',command:''});
-    const run=await c.rpc<Run>('start',{sessionId:s.id,cols:80,rows:24});await c.rpc('attach',{sessionId:s.id});await c.rpc('input',{sessionId:s.id,runId:run.id,data:'echo CONCURRENT_GIT_IO_OK\r'});
-    const native=await c.rpc<Session>('createSession',{projectId:p.id,title:'History',agent:'codex',command:''});await c.rpc('linkNativeSession',{sessionId:native.id,nativeSessionId:'live-fetch-history'});await c.rpc('unlinkNativeSession',{sessionId:native.id});
-    await assert.rejects(c.rpc('updateProject',{projectId:p.id,name:'Changed',path:a}),/Git/);
+    const s=await concurrentRpc<Session>('createSession',{projectId:p.id,title:'During fetch',agent:'shell',command:''});
+    const run=await concurrentRpc<Run>('start',{sessionId:s.id,cols:80,rows:24});await concurrentRpc('attach',{sessionId:s.id});await concurrentRpc('input',{sessionId:s.id,runId:run.id,data:'echo CONCURRENT_GIT_IO_OK\r'});
+    const native=await concurrentRpc<Session>('createSession',{projectId:p.id,title:'History',agent:'codex',command:''});await concurrentRpc('linkNativeSession',{sessionId:native.id,nativeSessionId:'live-fetch-history'});await concurrentRpc('unlinkNativeSession',{sessionId:native.id});
+    await assert.rejects(concurrentRpc('updateProject',{projectId:p.id,name:'Changed',path:a}),/Git/);
     const result=await pending;assert.equal(result.status.kind,'repository');
-    assert.ok((await c.rpc<{snapshot:string}>('attach',{sessionId:s.id})).snapshot.includes('CONCURRENT_GIT_IO_OK'));
-    assert.equal((await c.rpc<State>('state')).sessions.find(value=>value.id===s.id)!.latestRun!.pid,run.pid);
+    assert.ok((await concurrentRpc<{snapshot:string}>('attach',{sessionId:s.id})).snapshot.includes('CONCURRENT_GIT_IO_OK'));
+    assert.equal((await concurrentRpc<State>('state')).sessions.find(value=>value.id===s.id)!.latestRun!.pid,run.pid);
   }finally{c.close();await server.close();if(pending)await Promise.allSettled([pending]);}
 });
 
