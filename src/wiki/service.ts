@@ -11,6 +11,7 @@ import {
   queryMessages, resolveSkill, synthesizeMessages,
 } from './prompts';
 import { withWriteLock, type WikiStore } from './store';
+import { extractPdfText, type PdfTextExtractor } from './pdf';
 import type {
   SourceEvidence, SourceExcerpt, WikiAnswer, WikiConfig, WikiDraft, WikiLint, WikiPage, WikiSkill, WikiSource, WikiStatus, WikiTask,
 } from './types';
@@ -23,6 +24,8 @@ export interface ServiceOptions {
   publish?: () => void;
   /** Host RPC, used to read workbench sessions when capturing them as sources. */
   call?: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+  /** Overridable PDF text extraction, so tests never need the real pdf.js. */
+  pdfExtract?: PdfTextExtractor;
 }
 
 const now = () => new Date().toISOString();
@@ -39,6 +42,7 @@ export class WikiService {
   private readonly fetchImpl?: typeof fetch;
   private readonly publish?: () => void;
   private readonly call?: ServiceOptions['call'];
+  private readonly pdfExtract: PdfTextExtractor;
   private readonly tasks = new Map<string, WikiTask>();
   private readonly queue: { id: string; run: (task: WikiTask) => Promise<unknown>; onError?: () => void }[] = [];
   private draining = false;
@@ -54,7 +58,14 @@ export class WikiService {
     this.fetchImpl = options.fetchImpl;
     this.publish = options.publish;
     this.call = options.call;
+    this.pdfExtract = options.pdfExtract ?? extractPdfText;
     this.lastTickLint = Date.parse(this.store.meta().lastLint ?? '') || 0;
+    // Abandoned uploads otherwise pin up to 20 MiB of buffers each. Sweep on a
+    // timer as well as on every new upload, and release everything on shutdown.
+    const sweep = setInterval(() => this.prunePdfUploads(), 60_000);
+    sweep.unref?.();
+    this.signal.addEventListener('abort', () => { clearInterval(sweep); this.pdfUploads.clear(); }, { once: true });
+    if (this.signal.aborted) { clearInterval(sweep); this.pdfUploads.clear(); }
     if (!this.store.schema().trim()) this.store.saveSchema(DEFAULT_SCHEMA);
     if (!this.store.index().trim()) this.store.saveIndex(buildIndex([]));
   }
@@ -185,51 +196,167 @@ export class WikiService {
   /** Files dropped into raw/inbox become immutable sources. A content hash
    * keeps a re-scan (or a duplicated fs.watch event) from importing twice. */
   async ingestInboxFile(name: string, text: string): Promise<{ id: string; skipped: boolean }> {
-    const title = truncate(path.basename(name).replace(/\.(md|markdown|txt|json)$/i, ''), 160) || '导入素材';
+    const title = truncate(path.basename(name).replace(/\.(md|markdown|txt|json|pdf)$/i, ''), 160) || '导入素材';
     const body = String(text ?? '');
     if (body.length > 200_000) throw new Error('素材超过 200000 字符上限，请拆分后导入');
-    const hash = this.store.sourceHash({ title, text: body, images: [], vision: '' });
+    return this.importText(title, body, `自动采集 ${path.basename(name)}`);
+  }
+
+  /** Shared dedupe-and-save for every ingest path (inbox file, PDF, session). */
+  private async importText(title: string, body: string, origin: string): Promise<{ id: string; skipped: boolean }> {
+    const cleanTitle = truncate(title.trim() || '未命名素材', 160);
+    const text = String(body ?? '');
+    if (!text.trim()) throw new Error('素材内容不能为空');
+    const hash = this.store.sourceHash({ title: cleanTitle, text, images: [], vision: '' });
     const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
     if (existing) return { id: existing.id, skipped: true };
-    const source = await this.addSource({ title, text: body, origin: `自动采集 ${path.basename(name)}` });
+    const source = await this.addSource({ title: cleanTitle, text, origin });
     return { id: source.id, skipped: false };
   }
 
-  async listCaptureSessions(): Promise<{ id: string; title: string; status: string }[]> {
+  // ---- PDF import -------------------------------------------------------
+  /** The inbox watcher parses PDFs with this; the chunked upload path shares it. */
+  async extractPdfText(name: string, bytes: Uint8Array): Promise<string> {
+    const { text } = await this.pdfExtract(bytes);
+    if (!text.trim()) throw new Error(`PDF「${path.basename(name)}」没有可提取的文本（可能是扫描件或纯图片 PDF）`);
+    return text;
+  }
+  async ingestPdfFile(name: string, bytes: Uint8Array): Promise<{ id: string; skipped: boolean }> {
+    const title = truncate(path.basename(name).replace(/\.pdf$/i, ''), 160) || '导入素材';
+    const text = await this.extractPdfText(name, bytes);
+    return this.importText(title, text, `自动采集 PDF ${path.basename(name)}`);
+  }
+
+  // The iframe bridge caps one command's params at 64 KiB, so a PDF travels as
+  // base64 chunks. Uploads live in memory only and expire after 10 minutes.
+  private static readonly PDF_UPLOAD_TTL_MS = 10 * 60_000;
+  private static readonly PDF_MAX_BYTES = 20 * 1024 * 1024;
+  private readonly pdfUploads = new Map<string, { title: string; chunks: Buffer[]; bytes: number; at: number }>();
+
+  private prunePdfUploads(): void {
+    const cutoff = Date.now() - WikiService.PDF_UPLOAD_TTL_MS;
+    for (const [id, entry] of this.pdfUploads) if (entry.at < cutoff) this.pdfUploads.delete(id);
+  }
+
+  beginPdfUpload(title: string): { uploadId: string } {
+    this.prunePdfUploads();
+    if (this.pdfUploads.size >= 8) {
+      const oldest = this.pdfUploads.keys().next().value;
+      if (oldest) this.pdfUploads.delete(oldest);
+    }
+    const uploadId = randomUUID();
+    this.pdfUploads.set(uploadId, { title: truncate(String(title ?? '').trim(), 160), chunks: [], bytes: 0, at: Date.now() });
+    return { uploadId };
+  }
+  async appendPdfChunk(uploadId: string, base64: string, done: boolean): Promise<{ id: string; skipped: boolean; pages: number } | null> {
+    if (!/^[a-f0-9-]{36}$/.test(uploadId)) throw new Error('无效的上传标识');
+    const entry = this.pdfUploads.get(uploadId);
+    if (!entry) throw new Error('上传已过期，请重新导入 PDF');
+    const chunk = Buffer.from(String(base64 ?? ''), 'base64');
+    if (chunk.length > 64 * 1024) throw new Error('PDF 分片过大');
+    entry.bytes += chunk.length;
+    entry.at = Date.now();
+    if (entry.bytes > WikiService.PDF_MAX_BYTES) { this.pdfUploads.delete(uploadId); throw new Error('PDF 超过 20 MiB 上限，请拆分后导入'); }
+    entry.chunks.push(chunk);
+    if (!done) return null;
+    this.pdfUploads.delete(uploadId);
+    const bytes = Buffer.concat(entry.chunks);
+    const { text, pages } = await this.pdfExtract(new Uint8Array(bytes));
+    if (!text.trim()) throw new Error('PDF 没有可提取的文本（可能是扫描件或纯图片 PDF）');
+    const title = entry.title || '导入素材';
+    const hash = this.store.sourceHash({ title, text, images: [], vision: '' });
+    const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
+    if (existing) return { id: existing.id, skipped: true, pages };
+    const source = await this.addSource({ title, text, origin: 'PDF 导入' });
+    return { id: source.id, skipped: false, pages };
+  }
+  cancelPdfUpload(uploadId: string): boolean { return this.pdfUploads.delete(uploadId); }
+
+  /** Sessions that can be turned into an immutable source. ACP agents expose a
+   * live conversation; custom agents (CLI / plugin based) expose an imported
+   * transcript history. Both are selectable in the view. */
+  async listCaptureSessions(): Promise<{ id: string; title: string; status: string; agent: string; agentName: string; kind: 'acp' | 'history' }[]> {
     if (!this.call) return [];
     try {
-      const state = await this.call('state', {}) as { sessions?: { id: string; title?: string; agent?: string; latestRun?: { status?: string } }[]; agents?: { id: string; acp?: unknown }[] } | null;
-      return (state?.sessions ?? []).filter(session => !!session.id && state?.agents?.some(agent => agent.id === session.agent && !!agent.acp)).slice(0, 50).map(session => ({
-        id: session.id, title: truncate(String(session.title ?? session.id), 120),
-        status: String(session.latestRun?.status ?? 'idle'),
-      }));
+      const state = await this.call('state', {}) as {
+        sessions?: { id: string; title?: string; agent?: string; service?: boolean; owner?: unknown; remote?: unknown; nativeSessionId?: string | null; transcriptPath?: string | null; updatedAt?: string; latestRun?: { status?: string } }[];
+        agents?: { id: string; name?: string; acp?: unknown; plugin?: { history?: boolean } | null }[];
+      } | null;
+      const names = new Map((state?.agents ?? []).map(agent => [agent.id, agent.name ?? agent.id]));
+      const builtin: Record<string, string> = { codex: 'Codex', claude: 'Claude', opencode: 'OpenCode', shell: '终端', custom: '自定义' };
+      const label = (id: string) => names.get(id) ?? builtin[id] ?? id;
+      return (state?.sessions ?? [])
+        .filter(session => !!session.id && !session.service && !session.owner && !session.remote && session.agent !== 'shell')
+        .map(session => {
+          const definition = state?.agents?.find(agent => agent.id === session.agent);
+          const acp = !!definition?.acp;
+          const history = !!session.transcriptPath || !!session.nativeSessionId || !!definition?.plugin?.history;
+          if (!acp && !history) return null;
+          return {
+            id: session.id, title: truncate(String(session.title ?? session.id), 120),
+            status: String(session.latestRun?.status ?? 'idle'),
+            agent: String(session.agent ?? ''), agentName: label(String(session.agent ?? '')),
+            kind: acp ? 'acp' as const : 'history' as const,
+          };
+        })
+        .filter((value): value is NonNullable<typeof value> => value !== null)
+        .sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : 0))
+        .slice(0, 50);
     } catch (error) {
       throw new Error('读取工作台会话失败：' + String(error instanceof Error ? error.message : error).slice(0, 160));
     }
   }
 
-  /** Turn an ACP conversation into an immutable source. This is the workbench's
+  /** Turn a conversation into an immutable source. This is the workbench's
    * highest-value ingest path: agent runs already produce the raw material. */
   async captureSession(sessionId: string): Promise<{ id: string; skipped: boolean; events: number }> {
     if (!this.call) throw new Error('会话捕获在当前环境不可用');
     let sessionTitle = sessionId.slice(0, 8);
     let events: { sequence?: number; kind?: string; text: string }[] = [];
     try {
-      const state = await this.call('state', {}) as { sessions?: { id: string; title?: string; agent?: string }[]; agents?: { id: string; acp?: unknown }[] } | null;
+      const state = await this.call('state', {}) as {
+        sessions?: { id: string; title?: string; agent?: string; nativeSessionId?: string | null }[];
+        agents?: { id: string; acp?: unknown }[];
+      } | null;
       const session = state?.sessions?.find(item => item.id === sessionId);
       if (!session) throw new Error('会话不存在');
-      if (!state?.agents?.some(agent => agent.id === session.agent && !!agent.acp)) throw new Error('仅支持捕获 ACP 对话会话');
+      if (session.agent === 'shell') throw new Error('普通终端会话没有可沉淀的对话记录');
+      const definition = state?.agents?.find(agent => agent.id === session.agent);
       sessionTitle = session.title || sessionTitle;
-      const snapshot = await this.call('acpSnapshot', { sessionId, limit: 200 }) as {
-        events?: { sequence?: number; kind?: string; text?: string }[]; hasMore?: boolean;
-      } | null;
-      events = (snapshot?.events ?? [])
-        .filter(event => event && typeof event.text === 'string' && event.text.trim())
-        .map(event => ({ sequence: event.sequence, kind: event.kind, text: String(event.text) }));
+      if (definition?.acp) {
+        const snapshot = await this.call('acpSnapshot', { sessionId, limit: 200 }) as {
+          events?: { sequence?: number; kind?: string; text?: string }[];
+        } | null;
+        events = (snapshot?.events ?? [])
+          .filter(event => event && typeof event.text === 'string' && event.text.trim())
+          .map(event => ({ sequence: event.sequence, kind: event.kind, text: String(event.text) }));
+      } else {
+        // `history` only holds imported transcripts. A session that is merely
+        // linked to a native (Claude / OpenCode / plugin) record keeps its text
+        // in nativeHistory, so try that before declaring the session empty.
+        type Msg = { role?: string; text?: string; timestamp?: string | null };
+        let messages: Msg[] = [];
+        const history = await this.call('history', { sessionId }) as { messages?: Msg[] } | null;
+        messages = history?.messages ?? [];
+        if (!messages.length && session.nativeSessionId) {
+          const native = await this.call('nativeHistory', {
+            sessionId, nativeSessionId: session.nativeSessionId, refresh: false,
+          }) as { messages?: Msg[] } | null;
+          messages = native?.messages ?? [];
+        }
+        events = messages
+          .filter(message => message && typeof message.text === 'string' && message.text.trim())
+          .slice(-200)
+          .map((message, index) => ({
+            sequence: index + 1,
+            kind: message.role === 'assistant' ? 'assistant' : 'user',
+            text: (message.timestamp ? `（${message.timestamp}）\n\n` : '') + String(message.text),
+          }));
+      }
     } catch (error) {
       throw new Error('读取工作台会话失败：' + String(error instanceof Error ? error.message : error).slice(0, 160));
     }
-    if (!events.length) throw new Error('该会话暂无可沉淀的对话记录');
+    if (!events.length) throw new Error('该会话暂无可沉淀的对话记录；可先在会话的「对话历史」中导入或关联原生记录');
     const labels: Record<string, string> = { user: '用户', assistant: '助手', thought: '思考', tool: '工具', plan: '计划', notice: '提示', error: '错误', permission: '授权', turn: '轮次', terminal: '终端' };
     const lines = events.map(event => `### ${event.sequence ?? '-'} · ${labels[event.kind ?? ''] ?? event.kind ?? '记录'}\n\n${truncate(event.text, 4000)}`);
     const title = truncate(`会话记录：${sessionTitle}`, 160);

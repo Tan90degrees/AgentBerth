@@ -153,6 +153,12 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('finalize_source', '完成素材图片上传', schema({ id: field('string') }, ['id']), params => service.finalizeSource(text(params, 'id')));
   add('delete_source', '删除原始素材', schema({ id: field('string') }, ['id']), params => service.deleteSource(text(params, 'id')).then(() => true));
 
+  // PDF import: the bridge caps a command's params at 64 KiB, so the file is
+  // uploaded as base64 chunks and parsed (text extraction) on the last one.
+  add('pdf_upload_start', '开始一次 PDF 分片上传', schema({ title: field('string') }), params => service.beginPdfUpload(text(params, 'title')));
+  add('pdf_upload_chunk', '追加 PDF 分片（base64 ≤ 48 KiB），done=true 时完成解析导入', schema({ uploadId: field('string'), base64: field('string'), done: field('boolean') }, ['uploadId', 'base64']), params => service.appendPdfChunk(text(params, 'uploadId'), text(params, 'base64'), bool(params, 'done')));
+  add('pdf_upload_cancel', '取消 PDF 上传', schema({ uploadId: field('string') }, ['uploadId']), params => ({ cancelled: service.cancelPdfUpload(text(params, 'uploadId')) }));
+
   // Automatic capture: watch raw/inbox and import finished workbench sessions.
   add('inbox_status', '查看自动采集目录与待处理文件', schema({}), () => ({
     dir: inbox?.dir ?? path.join(api.dataDirectory, 'raw', 'inbox'),
@@ -160,7 +166,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     failedDir: inbox?.failedDir ?? path.join(api.dataDirectory, 'raw', 'inbox', 'failed'),
     pending: inbox?.pending ?? [], archived: inbox?.archived ?? 0, watching: !!inbox,
   }));
-  add('list_capture_sessions', '列出可沉淀为素材的工作台会话', schema({}), () => service.listCaptureSessions());
+  add('list_capture_sessions', '列出可沉淀为素材的工作台会话（ACP 对话与已导入历史的自定义 Agent 会话）', schema({}), () => service.listCaptureSessions());
   add('capture_session', '把一次 Agent 会话沉淀成不可变素材', schema({ sessionId: field('string') }, ['sessionId']), params => service.captureSession(text(params, 'sessionId')));
 
   // Skills (CRUD over Markdown workflow templates)
@@ -291,6 +297,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   ctx.effect(() => {
     inbox = startInbox({
       root: api.dataDirectory,
+      parse: (name, bytes) => service.extractPdfText(name, new Uint8Array(bytes)),
       onFile: async (name, value) => { await service.ingestInboxFile(name, value); },
       onError: (name, error) => store.appendLog('ingest', '自动采集失败', [
         `文件：${path.basename(name)}`, String(error instanceof Error ? error.message : error).slice(0, 200),

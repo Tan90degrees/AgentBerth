@@ -7,6 +7,9 @@ import type { ExtensionInfo } from '../shared/extensions';
 // main window's type scale, radii, motion and colors.
 const PLUGIN_THEME_TOKENS = [
   '--color-scheme', '--font-sans', '--font-mono',
+  // --fs-* are calc() expressions that reference --ui-font-scale, so the scale
+  // itself must travel into the iframe or every one of them becomes invalid.
+  '--ui-font-scale',
   '--fs-2xs', '--fs-xs', '--fs-sm', '--fs-md', '--fs-lg', '--fs-xl', '--fs-2xl', '--fs-3xl',
   '--space-1', '--space-2', '--space-3', '--space-4', '--space-5', '--space-6', '--space-8',
   '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-pill',

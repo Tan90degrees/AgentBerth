@@ -1,6 +1,6 @@
-import { HarnessSettings } from '../plugins/deepseek-harness/Settings';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { extensionEnabled, resolveExtensionConfig, type ExtensionInfo, type ExtensionSnapshot, type ExtensionConfig } from '../shared/extensions';
+import { ExtensionConfigFields } from './ExtensionConfigFields';
 import { ExtensionView } from './ExtensionView';
 import { PluginSettingsPanel } from './PluginSettingsPanel';
 import { Dialog } from './Dialog';
@@ -58,10 +58,7 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
           {message&&<p role="status">{message}</p>}
         </details>}
         <form onSubmit={event=>{event.preventDefault();void saveConfig();}}>
-          {configured.manifest.id==='deepseek-harness'?<HarnessSettings value={draft} onChange={setDraft} disabled={!!busy}/>:Object.entries(configured.manifest.config).map(([key,field])=><label key={key}>{field.title}
-            {field.type==='boolean'?<input aria-label={configured.manifest.name+' '+field.title} type="checkbox" checked={!!draft[key]} onChange={event=>setDraft({...draft,[key]:event.target.checked})}/>:field.enum?<select aria-label={configured.manifest.name+' '+field.title} value={String(draft[key]??'')} onChange={event=>setDraft({...draft,[key]:event.target.value})}>{field.enum.map(value=><option key={value} value={value}>{value}</option>)}</select>:<input aria-label={configured.manifest.name+' '+field.title} type={field.type==='number'?'number':'text'} min={field.minimum} max={field.maximum} value={draft[key] as string|number??''} onChange={event=>setDraft({...draft,[key]:field.type==='number'?Number(event.target.value):event.target.value})}/>}
-            {field.description&&<small>{field.description}</small>}
-          </label>)}
+          <ExtensionConfigFields plugin={configured} draft={draft} setDraft={setDraft} busy={!!busy}/>
           {configured.manifest.id!=='deepseek-harness'&&configured.status==='active'&&configured.manifest.views.filter(view=>view.location==='settings').map(view=><section className="extension-dialog-view" key={view.id}><h3>{view.title}</h3><ExtensionView key={configured.generation+view.id} plugin={configured} viewId={view.id} onError={setConfigError}/></section>)}
           <footer><button className="extension-button subtle" type="button" onClick={()=>setEditing(null)} disabled={!!busy}>关闭</button>{dirty&&<button className="extension-button primary" type="submit" disabled={!!busy}>保存配置</button>}</footer>
         </form>

@@ -27,6 +27,7 @@ import { ContextMenu, type TreeMenuTarget, type MenuItem } from './ContextMenu';
 import { ModalLayer } from './ModalLayer';
 import type { Modal, ModalInitial, ModalRequest, ModalTarget, ProjectFormValues, SessionFormValues } from './modal-form';
 import { QuickSwitcher, type SwitchTarget } from './QuickSwitcher';
+import { PluginSettingsPopover } from './PluginSettingsPopover';
 import { ShortcutsDialog } from './ShortcutsDialog';
 import { loadCollapsedProjects, loadSelections, loadSettingsDraft, readStored, saveStored, type SettingsDraft } from './storage';
 import { getWorkspaceState, publishWorkspaceState, useStableCallback, useWorkspaceState } from './workspace-state';
@@ -81,6 +82,11 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [page, setPage] = useState<'workspace' | 'settings' | 'plugins'>('workspace');
   const [pluginTab,setPluginTab] = useState<PluginCenterTab>(()=>readStored('berth.pluginTab')==='agents'?'agents':'installed');
   const [requestedPlugin,setRequestedPlugin]=useState<string|null>(null);
+  // In-page plugin config: opened from an extension view's 设置 button. Plugins
+  // with embedded settings views (or no config fields) keep the plugin center flow.
+  const [pluginSettingsRequest,setPluginSettingsRequest]=useState<{pluginId:string;isAgent:boolean}|null>(null);
+  // Global type scale: uiFontScale multiplies every --fs-* token in tokens.css.
+  useEffect(()=>{const scale=state.settings.uiFontScale;document.documentElement.style.setProperty('--ui-font-scale',String(typeof scale==='number'&&scale>=0.85&&scale<=1.3?scale:1));},[state.settings.uiFontScale]);
   useEffect(()=>{if(!sshWindow)saveStored('berth.pluginTab',pluginTab);},[pluginTab,sshWindow]);
   const openPlugins = (tab?:PluginCenterTab)=>{if(tab)setPluginTab(tab);setPage('plugins');setError('');};
   const [connected, setConnected] = useState(false);
@@ -236,7 +242,12 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const expandProject = useCallback((id: string) => {setCollapsed(previous => previous.includes(id) ? previous.filter(item => item !== id) : previous);setSearchCollapsed(previous=>previous?.filter(item=>item!==id)??null);}, []);
   const selectProject = useCallback((id: string) => { setExtensionView(null); setProjectId(id); setSelectedWorktreePath(null); setSearch(''); setFilter('all'); setPage('workspace'); setError(''); expandProject(id); }, [expandProject]);
   const selectSession = useCallback((projectId: string, sessionId: string, withinFeature=false) => { const target=getWorkspaceState().sessions.find(item=>item.id===sessionId);if(target?.owner){setPage('workspace');setExtensionView(previous=>withinFeature&&previous?.pluginId===target.owner!.pluginId?{...previous,sessionId:target.id}:{pluginId:target.owner!.pluginId,viewId:'tasks',taskId:target.owner!.taskId,sessionId:target.id});return;}setExtensionView(null); setSelectedWorktreePath(target?.worktreePath ?? null); if(target?.remote){selectSsh(sessionId);setSshOpen(true);setPage('workspace');return;} setProjectId(projectId); setSessionId(sessionId); setPage('workspace'); setTab('terminal'); setError(''); expandProject(projectId); }, [expandProject]);
-  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{pluginId:string;isAgent:boolean}>).detail;if(!detail?.pluginId)return;setPluginTab(detail.isAgent?'agents':'installed');setRequestedPlugin(detail.pluginId);setPage('plugins');setError('');};window.addEventListener('berth:plugin-settings',open);return()=>window.removeEventListener('berth:plugin-settings',open);},[]);
+  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{pluginId:string;isAgent:boolean}>).detail;if(!detail?.pluginId)return;
+    const plugin=state.extensions?.plugins.find(item=>item.manifest.id===detail.pluginId);
+    const popover=plugin&&plugin.installed&&!plugin.manifest.views.some(view=>view.location==='settings')&&(Object.keys(plugin.manifest.config).length>0||plugin.manifest.id==='pet');
+    if(popover){setPluginSettingsRequest(detail);return;}
+    setPluginTab(detail.isAgent?'agents':'installed');setRequestedPlugin(detail.pluginId);setPage('plugins');setError('');};
+    window.addEventListener('berth:plugin-settings',open);return()=>window.removeEventListener('berth:plugin-settings',open);},[state.extensions]);
   useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<{sessionId:string;pluginId?:string}>).detail?.sessionId,target=state.sessions.find(session=>session.id===id);if(target)selectSession(target.projectId,target.id,(event as CustomEvent).detail.pluginId===target.owner?.pluginId);else setError('会话尚未创建或已删除');};window.addEventListener('berth:open-session',open);return()=>window.removeEventListener('berth:open-session',open);},[selectSession,state.sessions]);
   useEffect(() => {
     if (sshWindow) return;
@@ -444,12 +455,17 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     if (treeSearching) setSearchCollapsed(previous => (previous ?? []).includes(id) ? (previous ?? []).filter(value => value !== id) : [...(previous ?? []), id]);
     else toggleProject(id);
   });
-  const stableSelectView = useStableCallback((pluginId: string, viewId: string) => { setExtensionView({ pluginId, viewId }); setPage('workspace'); });
+  // Clicking the already-selected view toggles the sidebar, like the collapse
+  // button; clicking anything else selects it and makes sure the bar is open.
+  const stableSelectView = useStableCallback((pluginId: string, viewId: string) => {
+    if (page === 'workspace' && extensionView?.pluginId === pluginId && extensionView.viewId === viewId) { setSidebarCollapsed(value => !value); return; }
+    setExtensionView({ pluginId, viewId }); setPage('workspace'); setSidebarCollapsed(false);
+  });
   const stableOpenPlugins = useStableCallback(() => openPlugins());
 
   return <ExtensionsContext.Provider value={state.extensions}><div className={sshWindow?"ssh-window app":"app"}>
     {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= API_VERSION} />
-    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} sessionUnread={localUnread} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
+    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} sessionUnread={localUnread} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{if(page==='workspace'&&!extensionView){setSidebarCollapsed(value=>!value);return;}setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
     <ResizableSidebar collapsed={sidebarCollapsed} side="left">
       <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
         <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>
@@ -533,6 +549,7 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     {features.files && !sshWindow && project && state.apiVersion >= 16 && filesActivated && <Suspense fallback={null}><FileBrowser key={`${project.id}:${project.path}:${selectedWorktreePath ?? 'main'}`} project={project} worktreePath={selectedWorktreePath} connected={connected} treeHost={fileTreeHost} previewHost={filePreviewHost} previewHidden={gitPreview?.projectId === projectId} onDiff={features.git && state.apiVersion >= 18 ? openDiff : undefined} onPreview={openPreview} navigationSupported={state.apiVersion >= 17} onTargetConsumed={consumeFileTarget} target={fileTarget?.projectId === projectId ? fileTarget : null} /></Suspense>}
     {treeMenu && menuItems.length > 0 && <ContextMenu target={treeMenu} items={menuItems} onClose={closeTreeMenu} />}
     {quickOpen && <QuickSwitcher state={{...state,projects:workspaceProjects,sessions:state.sessions.filter(session=>!session.owner)}} canCreate={!manageDisabled} hasProject={!!project} onSelect={chooseTarget} onClose={() => setQuickOpen(false)} returnFocus={opener.current} />}
+    {pluginSettingsRequest && <PluginSettingsPopover request={pluginSettingsRequest} snapshot={state.extensions} projects={workspaceProjects} currentProjectId={projectId} apiVersion={state.apiVersion} onError={setError} onClose={() => setPluginSettingsRequest(null)} />}
     {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} returnFocus={opener.current} />}
     {(notices.length > 0 || (error && !modal && hasLoadedState && page !== 'settings')) && <div className="toast-stack">
       {notices.map(item => <SuccessToast key={item.id} message={item.text} action={item.action} onDismiss={() => closeNotice(item.id)} />)}

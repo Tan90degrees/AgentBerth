@@ -2,8 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 
-const IMPORTABLE = /\.(md|markdown|txt|json)$/i;
+const IMPORTABLE = /\.(md|markdown|txt|json|pdf)$/i;
+const isPdf = (name: string) => /\.pdf$/i.test(name);
+/** Text files stay small; PDFs are allowed more room because text extraction
+ * shrinks them by an order of magnitude. */
 const MAX_BYTES = 1024 * 1024;
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const DEBOUNCE_MS = 400;
 /** A file must stop changing for this long before it is considered complete. */
 const SETTLE_MS = 700;
@@ -19,6 +23,8 @@ export interface InboxOptions {
   /** Plugin data directory; the watched folder is <root>/raw/inbox. */
   root: string;
   onFile: (name: string, text: string) => Promise<void>;
+  /** Binary → text conversion (used for PDF). Defaults to UTF-8 for text types. */
+  parse?: (name: string, bytes: Buffer) => Promise<string>;
   onError?: (name: string, error: unknown) => void;
 }
 export interface InboxHandle {
@@ -93,9 +99,17 @@ export function startInbox(options: InboxOptions): InboxHandle {
           if (checks <= MAX_SETTLE_CHECKS) { rescan = true; continue; }
           throw new PermanentInboxError('文件长时间未写完');
         }
-        if (info.size > MAX_BYTES) throw new PermanentInboxError('文件超过 1 MiB 上限');
+        if (info.size > (isPdf(name) ? MAX_PDF_BYTES : MAX_BYTES)) throw new PermanentInboxError(isPdf(name) ? '文件超过 20 MiB 上限' : '文件超过 1 MiB 上限');
         settling.delete(name);
-        const text = readFileSync(file, 'utf8');
+        const buffer = readFileSync(file);
+        let text: string;
+        try {
+          // A binary parse failure is deterministic: the bytes will not change,
+          // so unlike a transient FS error it must not be retried forever.
+          text = isPdf(name) && options.parse ? await options.parse(name, buffer) : buffer.toString('utf8');
+        } catch (error) {
+          throw new PermanentInboxError(String(error instanceof Error ? error.message : error).slice(0, 200));
+        }
         if (!text.trim()) throw new PermanentInboxError('文件内容为空');
         if (text.length > 200_000) throw new PermanentInboxError('素材超过 200000 字符上限，请拆分后导入');
         await options.onFile(name, text);

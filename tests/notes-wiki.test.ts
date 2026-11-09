@@ -555,7 +555,7 @@ test('workbench sessions can be captured as immutable sources, exactly once', as
     return {};
   };
   const service = new WikiService({ store, config: config(), signal: new AbortController().signal, call });
-  assert.deepEqual(await service.listCaptureSessions(), [{ id: sessionId, title: '检索方案讨论', status: 'completed' }]);
+  assert.deepEqual(await service.listCaptureSessions(), [{ id: sessionId, title: '检索方案讨论', status: 'completed', agent: 'agent:test', agentName: 'agent:test', kind: 'acp' }]);
   const first = await service.captureSession(sessionId);
   assert.equal(first.events, 2);
   assert.equal(first.skipped, false);
@@ -837,4 +837,120 @@ test('external Markdown edits are protected even when frontmatter flags are unch
   await waitFor(service, service.reviewDraft(draft.id, 'approve'));
   assert.equal(store.getPage(original.slug)!.body, '用户在外部编辑器写入的正文');
   assert.equal(pageFromDocument('plain', '# 手工放入的 Markdown', '').humanEdited, true);
+});
+
+test('ACP, imported history and native records are all capturable, and the picker shows who and what', async t => {
+  const store = new WikiStore(temp(t));
+  const acpSession = '22222222-2222-4222-8222-222222222222';
+  const cliSession = '33333333-3333-4333-8333-333333333333';
+  const nativeSession = '55555555-5555-4555-8555-555555555555';
+  const plainSession = '44444444-4444-4444-8444-444444444444';
+  const call = async (method: string, params?: Record<string, unknown>) => {
+    if (method === 'state') return {
+      // Builtin integrations have no `acp`; custom ACP agents declare it.
+      agents: [{ id: 'agent:acp-bot', name: 'ACP 机器人', acp: {} }, { id: 'agent:cli', name: '自定义 CLI' }, { id: 'codex', name: 'Codex' }],
+      sessions: [
+        { id: acpSession, agent: 'agent:acp-bot', title: 'ACP 会话', latestRun: { status: 'completed' } },
+        { id: cliSession, agent: 'agent:cli', title: '自定义 Agent 会话', transcriptPath: 'C:/transcripts/x.jsonl', latestRun: { status: 'idle' } },
+        { id: nativeSession, agent: 'codex', title: '原生记录会话', nativeSessionId: 'native-123' },
+        { id: plainSession, agent: 'shell', title: '普通终端' },
+      ],
+    };
+    if (method === 'acpSnapshot') return { events: [{ sequence: 1, kind: 'user', text: 'ACP 问题' }] };
+    if (method === 'history') return params?.sessionId === cliSession
+      ? { messages: [{ role: 'user', text: '历史里的提问', timestamp: null }, { role: 'assistant', text: '历史里的回答' }] }
+      : { messages: [] };
+    if (method === 'nativeHistory') return { messages: [{ role: 'user', text: '原生记录里的提问', timestamp: null }] };
+    return {};
+  };
+  const service = new WikiService({ store, config: config(), signal: new AbortController().signal, call });
+  const sessions = await service.listCaptureSessions();
+  assert.equal(sessions.length, 3, 'plain terminal sessions are not offered');
+  const cli = sessions.find(item => item.id === cliSession)!;
+  assert.equal(cli.kind, 'history');
+  assert.equal(cli.agentName, '自定义 CLI', 'custom agents get a readable name');
+  assert.equal(sessions.find(item => item.id === acpSession)!.kind, 'acp');
+  assert.equal(sessions.find(item => item.id === acpSession)!.agentName, 'ACP 机器人');
+  const captured = await service.captureSession(cliSession);
+  assert.equal(captured.skipped, false);
+  const source = store.getSource(captured.id)!;
+  assert.ok(source.text.includes('历史里的提问'));
+  assert.ok(source.text.includes('助手'));
+  assert.equal(captured.events, 2);
+  const acp = await service.captureSession(acpSession);
+  assert.ok(store.getSource(acp.id)!.text.includes('ACP 问题'), 'ACP snapshot becomes a source');
+  // `history` is empty here; the native-linked session must fall back to
+  // nativeHistory instead of reporting "no transcript".
+  const nativeSource = await service.captureSession(nativeSession);
+  assert.ok(store.getSource(nativeSource.id)!.text.includes('原生记录里的提问'));
+  await assert.rejects(service.captureSession(plainSession), /普通终端会话没有可沉淀的对话记录/);
+});
+
+test('PDF imports travel in chunks, dedupe by content and refuse scans without text', async t => {
+  const store = new WikiStore(temp(t));
+  const pdfExtract = async (bytes: Uint8Array) => ({ text: 'PDF 正文 · 第 ' + bytes.length + ' 页', pages: 1 });
+  const service = new WikiService({ store, config: config({ autoCompile: false }), signal: new AbortController().signal, pdfExtract });
+  const start = service.beginPdfUpload('检索综述');
+  const first = await service.appendPdfChunk(start.uploadId, Buffer.from('part1').toString('base64'), false);
+  assert.equal(first, null, 'chunks do nothing until the last one');
+  const done = await service.appendPdfChunk(start.uploadId, Buffer.from('part2').toString('base64'), true);
+  assert.equal(done!.skipped, false);
+  assert.equal(done!.pages, 1);
+  const source = store.getSource(done!.id)!;
+  assert.equal(source.title, '检索综述');
+  assert.ok(source.text.includes('PDF 正文'));
+  const repeat = await service.appendPdfChunk(service.beginPdfUpload('换个名字').uploadId, Buffer.from('part1part2').toString('base64'), true);
+  assert.equal(repeat!.skipped, true, 'identical content is never imported twice');
+  await assert.rejects(service.appendPdfChunk('not-a-uuid', '', true), /无效的上传标识/);
+  const stale = service.beginPdfUpload('过期');
+  service.cancelPdfUpload(stale.uploadId);
+  await assert.rejects(service.appendPdfChunk(stale.uploadId, '', true), /上传已过期/);
+  const textless = new WikiService({ store: new WikiStore(temp(t)), config: config({ autoCompile: false }), signal: new AbortController().signal,
+    pdfExtract: async () => ({ text: '   ', pages: 1 }) });
+  const scan = textless.beginPdfUpload('扫描件');
+  await assert.rejects(textless.appendPdfChunk(scan.uploadId, Buffer.from('pdf').toString('base64'), true), /没有可提取的文本/);
+});
+
+test('the inbox watcher parses dropped PDFs into text sources and quarantines broken ones', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
+  const store = new WikiStore(root);
+  const service = new WikiService({ store, config: config({ autoCompile: false }), signal: new AbortController().signal,
+    pdfExtract: async () => ({ text: '从 PDF 提取的正文', pages: 3 }) });
+  const inbox = startInbox({
+    root,
+    parse: (name, bytes) => service.extractPdfText(name, new Uint8Array(bytes)),
+    onFile: async (name, value) => { await service.ingestInboxFile(name, value); },
+    onError: () => {},
+  });
+  t.after(() => inbox.stop());
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+  writeFileSync(path.join(inbox.dir, '论文.pdf'), Buffer.from('%PDF-1.4 fake'));
+  await pollUntil(() => service.listSources().length === 1, 'pdf import');
+  const source = service.listSources()[0];
+  assert.equal(source.title, '论文', 'the .pdf suffix is stripped from the title');
+  assert.ok(source.text.includes('从 PDF 提取的正文'));
+  assert.ok(store.log().includes('自动采集 论文.pdf'));
+});
+
+test('the inbox watcher quarantines PDFs that fail text extraction', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
+  const broken = new WikiService({ store: new WikiStore(root), config: config({ autoCompile: false }), signal: new AbortController().signal,
+    pdfExtract: async () => { throw new Error('解析失败'); } });
+  const failedInbox = startInbox({
+    root, parse: (name, bytes) => broken.extractPdfText(name, new Uint8Array(bytes)),
+    onFile: async (name, value) => { await broken.ingestInboxFile(name, value); }, onError: () => {},
+  });
+  t.after(() => failedInbox.stop());
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+  writeFileSync(path.join(failedInbox.dir, 'broken.pdf'), Buffer.from('%PDF-1.4 fake'));
+  await pollUntil(() => readdirSync(failedInbox.failedDir).length > 0, 'broken pdf quarantined', 40000);
+  assert.equal(broken.listSources().length, 0);
+});
+
+test('the pdf.js legacy build extracts text from a real minimal PDF', async () => {
+  const pdf = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 68>>stream\nBT /F1 24 Tf 20 100 Td (Hello AgentBerth PDF) Tj ET\nendstream\nendobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n', 'latin1');
+  const { extractPdfText } = await import('../src/wiki/pdf');
+  const result = await extractPdfText(new Uint8Array(pdf));
+  assert.equal(result.pages, 1);
+  assert.ok(result.text.includes('Hello AgentBerth PDF'));
 });

@@ -140,6 +140,28 @@ try {
   assert.ok(Array.isArray(await call('list_capture_sessions')));
   step('raw/inbox watcher imports dropped files inside the real daemon');
 
+  // PDF import goes through the chunked bridge commands and the real pdf.js.
+  const samplePdf = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 68>>stream\nBT /F1 24 Tf 20 100 Td (Hello AgentBerth PDF) Tj ET\nendstream\nendobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n', 'latin1');
+  const upload = await call('pdf_upload_start', { title: '窗口 PDF 导入' });
+  for (let offset = 0; ; offset += 12000) {
+    const piece = samplePdf.subarray(offset, offset + 12000);
+    const done = offset + 12000 >= samplePdf.length;
+    await call('pdf_upload_chunk', { uploadId: upload.uploadId, base64: piece.toString('base64'), done });
+    if (done) break;
+  }
+  const uploaded = (await call('list_sources')).find(item => item.title === '窗口 PDF 导入');
+  assert.ok(uploaded, 'chunked PDF upload created a source');
+  assert.ok((await call('get_source', { id: uploaded.id })).text.includes('Hello AgentBerth PDF'), 'pdf.js extracted the real text');
+  // sourceHash is content-only, so a byte-identical inbox drop would be deduped.
+  // Use equal-length variants to prove each ingest path really parses PDFs.
+  const inboxPdf = Buffer.from(samplePdf.toString('latin1').replace('Hello AgentBerth PDF', 'Hello AgentBerth INB'), 'latin1');
+  const iframePdf = Buffer.from(samplePdf.toString('latin1').replace('Hello AgentBerth PDF', 'Hello AgentBerth IFR'), 'latin1');
+  await writeFile(path.join(inbox.dir, 'window-paper.pdf'), inboxPdf);
+  await until(async () => (await call('list_sources')).some(item => item.title === 'window-paper'), 'inbox pdf import');
+  const inboxSource = (await call('list_sources')).find(item => item.title === 'window-paper');
+  assert.ok((await call('get_source', { id: inboxSource.id })).text.includes('Hello AgentBerth INB'), 'inbox parsed its PDF through pdf.js');
+  step('PDF import works through both the bridge and the inbox watcher');
+
   const answer = await waitTask(await call('ask', { question: '召回和精度怎么处理？' }));
   assert.ok(answer.answer.includes('[[向量检索]]'));
   assert.deepEqual(answer.citations.sort(), ['向量检索', '重排序'].sort());
@@ -167,12 +189,73 @@ try {
   await until(async () => (await frame.locator('#draftList').innerText()).includes('已发布'), 'draft list');
   await frame.locator('[data-tab="settings"]').click();
   await until(async () => (await frame.locator('#settingsView').innerText()).includes('mock-text'), 'settings view');
+  // The in-page plugin settings popover replaces the jump to the plugin center.
+  await frame.locator('#openPluginSettings').click();
+  await until(async () => (await page.locator('.plugin-settings-popover').count()) > 0, 'plugin settings popover opens in place');
+  assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes('笔记 Wiki'), 'popover shows the plugin identity');
+  assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes('模型服务地址'), 'popover renders real config fields');
+  await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-plugin-popover.png' });
+  await page.locator('.plugin-settings-popover [aria-label="关闭配置面板"]').click();
+  await until(async () => (await page.locator('.plugin-settings-popover').count()) === 0, 'popover closed');
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-window-settings.png' });
   await frame.locator('[data-tab="wiki"]').click();
   await until(async () => (await frame.locator('#pageView').innerText()).includes('向量检索'), 'page detail');
   await until(async () => (await frame.locator('#pageView').innerText()).includes('原始出处'), 'page provenance rendered');
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-window-pages.png' });
   step('view tabs render live daemon data');
+
+  // Activity bar: icons carry text labels, and re-clicking the selected icon
+  // toggles the sidebar (the second click collapses, the third restores).
+  const knowledge = page.getByRole('button', { name: '笔记 Wiki · 知识库' });
+  assert.equal(await knowledge.locator('.activity-label').innerText(), '知识库', 'extension icons carry a text label');
+  assert.ok((await page.locator('.activity-label').allInnerTexts()).includes('会话'), 'the sessions icon is labelled');
+  await knowledge.click();
+  await until(async () => page.locator('#sidebar-content').isHidden(), 're-click collapses the sidebar');
+  await knowledge.click();
+  await until(async () => page.locator('#sidebar-content').isVisible(), 'another click restores the sidebar');
+  step('labelled activity icons toggle the sidebar on re-click');
+
+  // Markdown editor: preview renders in place and never loses the draft.
+  await frame.locator('#pageView [data-action="editPage"]').click();
+  await until(async () => (await frame.locator('#pageView [data-field="body"]').count()) > 0, 'edit form opens');
+  const fence = '```';
+  const md = [
+    '# 编辑预览标题', '',
+    '正文段落 **加粗**、`行内代码` 与 [[重排序]] 及 [[A&B]]', '',
+    '- 第一项', '- 第二项', '',
+    '1. 有序一', '2. 有序二', '',
+    fence, '第一行代码', '第二行代码', fence, '',
+    '| 列 A | 列 B |', '| --- | --- |', '| 1 | 2 |',
+  ].join('\n');
+  await frame.locator('#pageView [data-field="body"]').fill(md);
+  await frame.locator('#pageView [data-action="mdPreview"]').click();
+  const preview = frame.locator('#pageView .md-preview');
+  await until(async () => (await preview.locator('h1').count()) > 0, 'markdown preview rendered');
+  assert.equal(await preview.locator('ul li').count(), 2, 'unordered list renders');
+  assert.equal(await preview.locator('ol li').count(), 2, 'ordered list renders');
+  assert.equal(await preview.locator('table td').count(), 2, 'table renders');
+  assert.ok((await preview.locator('pre').textContent()).includes('第一行代码\n第二行代码'), 'fenced code keeps its line breaks');
+  assert.ok((await preview.locator('code').first().innerText()).includes('行内代码'), 'inline code renders');
+  assert.ok((await preview.locator('.wikilink').allInnerTexts()).includes('A&B'), 'wikilink labels are not double-escaped');
+  await frame.locator('#pageView [data-action="mdPreview"]').click();
+  assert.equal(await frame.locator('#pageView [data-field="body"]').inputValue(), md, 'preview round-trip keeps the draft');
+  step('markdown editor renders lists, tables, code and links without losing the draft');
+
+  // Keep the page editor mounted while another tab opens: field lookups must
+  // resolve in the active panel, never in a stale background form.
+  await frame.locator('[data-tab="skills"]').click();
+  await frame.locator('#newSkill').click();
+  await until(async () => (await frame.locator('#skillView [data-field="body"]').count()) > 0, 'skill editor');
+  const scoped = await frame.locator('#skillView [data-field="body"]').evaluate(node => ({
+    same: document.querySelector('.panel.active [data-field="body"]') === node,
+    total: document.querySelectorAll('[data-field="body"]').length,
+  }));
+  assert.equal(scoped.total, 2, 'both panels keep their own editor mounted');
+  assert.ok(scoped.same, 'field lookup resolves inside the active panel');
+  await frame.locator('#skillView [data-action="cancelSkill"]').click();
+  await frame.locator('[data-tab="wiki"]').click();
+  await frame.locator('#pageView [data-action="cancelEdit"]').click();
+  step('form fields are scoped to the visible panel');
 
   // The static buttons are delegated through [data-action]; exercise them for
   // real so a missing attribute can never ship as a dead primary action again.
@@ -198,6 +281,13 @@ try {
   await until(async () => (await call('list_sources')).some(source => source.title === '纯图片窗口素材' && source.images === 1 && source.compiled), 'image-only source saved and compiled');
   await until(async () => await frame.locator('[data-tab="review"]').evaluate(node => node.classList.contains('active')), 'image compile task completed in the view');
   step('image-only source uploads before compilation');
+  await frame.locator('[data-tab="sources"]').click();
+  await frame.locator('#newSource').click();
+  await frame.locator('#sourceView [data-field="pdf"]').setInputFiles({ name: 'window-upload.pdf', mimeType: 'application/pdf', buffer: iframePdf });
+  await until(async () => (await call('list_sources')).some(item => item.title === 'window-upload' && item.compiled), 'iframe PDF upload imported and compiled');
+  await until(async () => await frame.locator('[data-tab="review"]').evaluate(node => node.classList.contains('active')), 'iframe PDF compile task completed in the view');
+  assert.ok((await call('get_source', { id: (await call('list_sources')).find(item => item.title === 'window-upload').id })).text.includes('Hello AgentBerth IFR'), 'iframe upload extracted its own text');
+  step('the iframe PDF input uploads, extracts and compiles');
   await frame.locator('[data-tab="ask"]').click();
   await frame.locator('#question').fill('向量检索：窗口里直接提问可以吗？');
   await frame.locator('#ask').click();

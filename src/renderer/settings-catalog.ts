@@ -12,6 +12,7 @@ export type SettingsEntry = { id: string; category: SettingsCategory; title: str
 export function settingsCatalog(_agents: AgentDefinition[], _apiVersion: number): SettingsEntry[] {
   return [
     { id: 'appearance', category: 'appearance', title: '外观主题', keywords: 'theme appearance dark light system 深色 浅色 跟随系统', common: true },
+    { id: 'ui-font', category: 'appearance', title: '界面字号', keywords: '界面 字号 缩放 ui font scale 大小 显示 布局', common: true, field: 'uiFontScale' },
     { id: 'default-agent', category: 'agent', title: '默认 Agent', keywords: 'agent provider codex claude opencode 默认接入', common: true, field: 'defaultAgent' },
     { id: 'skills', category: 'agent', title: 'Skills 管理', keywords: 'agent skill 技能 导入 管理', common: true },
     { id: 'preview', category: 'files', title: '文件预览', keywords: 'preview font 字体 字号 markdown 语法高亮', common: true },

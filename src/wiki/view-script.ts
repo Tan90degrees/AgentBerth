@@ -6,30 +6,64 @@ export const notesWikiScript = String.raw`
   var esc=function(value){return String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')};
   var err=function(value){$('error').textContent=String(value&&value.message||value||'')};
   var ok=function(value){return function(result){err('');return result};};
-  var val=function(name){var node=document.querySelector('[data-field="'+name+'"]');return node?node.value:''};
+  // All panels stay mounted, so field lookups must be scoped to the visible
+  // one: an unscoped querySelector would read a stale form from another tab.
+  var field=function(name,root){return (root||document.querySelector('.panel.active')||document).querySelector('[data-field="'+name+'"]')};
+  var val=function(name){var node=field(name);return node?node.value:''};
   var date=function(value){try{return new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return String(value||'')}};
   var kindName={concept:'概念',entity:'实体',source:'来源',comparison:'对比',overview:'总览',note:'笔记'};
 
+  // Render Markdown without a library: the whole document is escaped first, so
+  // every replacement below only ever inserts already-escaped text or markup
+  // we generate ourselves (and link protocols are allow-listed).
   function markdown(text){
     var tick=String.fromCharCode(96),fence=tick+tick+tick;
-    var lines=esc(text||'').split(/\r?\n/),out=[],inList=false,inCode=false;
+    var lines=esc(text||'').split(/\r?\n/),out=[],list=null,inCode=false,para=[];
+    var codeRe=new RegExp(tick+'([^'+tick+']+)'+tick,'g');
+    var inline=function(value){
+      var codes=[];
+      value=value.replace(codeRe,function(_,code){codes.push('<code>'+code+'</code>');return '@@CODE'+(codes.length-1)+'@@'});
+      value=value.replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g,function(_,target,label){
+        var slug=target.trim().toLowerCase().replace(/[^0-9a-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af._-]+/g,'-').replace(/[-_]{2,}/g,'-').replace(/\.{2,}/g,'.').replace(/^[-_.]+|[-_.]+$/g,'').slice(0,80);
+        return '<button class="wikilink" data-action="openPage" data-slug="'+esc(slug)+'">'+(label||target)+'</button>';
+      });
+      value=value.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+      value=value.replace(/(^|[^*])\*([^*]+)\*/g,'$1<em>$2</em>');
+      value=value.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,function(_,label,url){
+        if(!/^(https?:\/\/|mailto:|\/|#|\.\/|\.\.\/)/i.test(url))return label;
+        return '<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+label+'</a>';
+      });
+      value=value.replace(/@@CODE(\d+)@@/g,function(_,i){return codes[Number(i)]||''});
+      return value;
+    };
+    var flushPara=function(){if(para.length){out.push('<p>'+para.map(inline).join('<br>')+'</p>');para=[]}};
+    var closeList=function(){if(list){out.push('</'+list+'>');list=null}};
+    var cells=function(row){return row.trim().replace(/^\||\|$/g,'').split('|').map(function(c){return inline(c.trim())})};
     for(var i=0;i<lines.length;i++){
       var line=lines[i];
-      if(line.indexOf(fence)===0){if(inList){out.push('</ul>');inList=false}inCode=!inCode;out.push(inCode?'<pre>':'</pre>');continue}
-      if(inCode){out.push(line);continue}
-      var link=function(_,target,label){var slug=target.trim().toLowerCase().replace(/[^0-9a-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af._-]+/g,'-').replace(/[-_]{2,}/g,'-').replace(/\.{2,}/g,'.').replace(/^[-_.]+|[-_.]+$/g,'').slice(0,80);return '<button class="wikilink" data-action="openPage" data-slug="'+esc(slug)+'">'+esc(label||target)+'</button>'};
-      line=line.replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g,link);
-      line=line.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
-      if(/^### /.test(line)){if(inList){out.push('</ul>');inList=false}out.push('<h3>'+line.slice(4)+'</h3>');continue}
-      if(/^## /.test(line)){if(inList){out.push('</ul>');inList=false}out.push('<h2>'+line.slice(3)+'</h2>');continue}
-      if(/^# /.test(line)){if(inList){out.push('</ul>');inList=false}out.push('<h1>'+line.slice(2)+'</h1>');continue}
-      if(/^&gt; ?/.test(line)){if(inList){out.push('</ul>');inList=false}out.push('<blockquote>'+line.replace(/^&gt; ?/,'')+'</blockquote>');continue}
-      if(/^[-*] /.test(line)){if(!inList){out.push('<ul>');inList=true}out.push('<li>'+line.slice(2)+'</li>');continue}
-      if(inList){out.push('</ul>');inList=false}
-      if(line.trim())out.push('<p>'+line+'</p>');
+      if(line.indexOf(fence)===0){flushPara();closeList();out.push(inCode?'</code></pre>':'<pre><code>');inCode=!inCode;continue}
+      if(inCode){out.push(line+'\n');continue}
+      if(/^\s*\|.*\|\s*$/.test(line)){
+        flushPara();closeList();
+        var head=cells(line),sep=lines[i+1];
+        if(sep&&/^\s*\|[\s:|-]+\|\s*$/.test(sep)){
+          i++;var table='<table><thead><tr>'+head.map(function(c){return '<th>'+c+'</th>'}).join('')+'</tr></thead><tbody>';
+          while(i+1<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i+1])){i++;table+='<tr>'+cells(lines[i]).map(function(c){return '<td>'+c+'</td>'}).join('')+'</tr>'}
+          out.push(table+'</tbody></table>');continue;
+        }
+        out.push('<p>'+head.join(' | ')+'</p>');continue;
+      }
+      if(/^\s*([-*_] *){3,}$/.test(line)){flushPara();closeList();out.push('<hr>');continue}
+      var heading=/^(#{1,6})\s+(.*)$/.exec(line);
+      if(heading){flushPara();closeList();out.push('<h'+heading[1].length+'>'+inline(heading[2])+'</h'+heading[1].length+'>');continue}
+      if(/^&gt;\s?/.test(line)){flushPara();closeList();out.push('<blockquote>'+inline(line.replace(/^&gt;\s?/,''))+'</blockquote>');continue}
+      var bullet=/^\s*[-*]\s+(.*)$/.exec(line),ordered=/^\s*\d+\.\s+(.*)$/.exec(line);
+      if(bullet||ordered){flushPara();var want=ordered?'ol':'ul';if(list!==want){closeList();out.push('<'+want+'>');list=want}out.push('<li>'+inline((bullet||ordered)[1])+'</li>');continue}
+      closeList();
+      if(line.trim())para.push(line);else flushPara();
     }
-    if(inList)out.push('</ul>');
-    if(inCode)out.push('</pre>');
+    flushPara();closeList();
+    if(inCode)out.push('</code></pre>');
     return out.join('');
   }
   function empty(text){return '<div class="empty">'+esc(text)+'</div>'}
@@ -43,11 +77,43 @@ export const notesWikiScript = String.raw`
   }
   function captureCard(){
     var sessions=state.sessions||[];
-    var options=sessions.length?sessions.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.title)+' · '+esc(s.status)+'</option>'}).join(''):'<option value="">（暂无会话，或工作台状态暂不可用）</option>';
+    var options=sessions.length?sessions.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.agentName||'会话')+' · '+esc(s.title)+' · '+(s.kind==='acp'?'ACP 对话':'导入历史')+'</option>'}).join(''):'<option value="">（暂无会话，或工作台状态暂不可用）</option>';
     return card('自动采集',
-      '<p class="muted">把 <code>.md / .txt</code> 文件放进插件目录的 <code>raw/inbox/</code>，会自动成为不可变素材；相同内容只导入一次，处理后归档到 <code>imported/</code>。</p>'+
-      '<label>从工作台会话沉淀<select data-field="session">'+options+'</select></label>'+
+      '<p class="muted">把 <code>.md / .txt / .pdf</code> 文件放进插件目录的 <code>raw/inbox/</code>，会自动成为不可变素材；相同内容只导入一次，处理后归档到 <code>imported/</code>。ACP 对话与已导入历史的自定义 Agent 会话都可沉淀。</p>'+
+      '<label>选择要沉淀的 Agent 会话<select data-field="session">'+options+'</select></label>'+
       '<div class="row" style="margin-top:8px">'+button('captureSession','存入素材','primary')+button('refreshSessions','刷新会话')+'</div><p id="captureStatus" class="muted"></p>');
+  }
+  // A Markdown field with a live preview toggle. Preview is rendered in place
+  // (no card re-render) so the text being typed is never lost.
+  function mdEditor(labelText,field,rows,value,max){
+    return '<label>'+esc(labelText)+'</label><div class="md-editor"><div class="md-tools">'+button('mdPreview','预览','ghost')+'</div><textarea data-field="'+esc(field)+'" rows="'+rows+'" maxlength="'+max+'">'+esc(value||'')+'</textarea><div class="md-preview markdown" hidden></div></div>';
+  }
+  function uploadPdf(file,progress){
+    var uploadId='';
+    var cancel=function(){if(!uploadId)return;var id=uploadId;uploadId='';call('pdf_upload_cancel',{uploadId:id}).catch(function(){})};
+    var finish=function(result){
+      uploadId='';
+      if(!result||!result.id){progress('');return Promise.resolve()}
+      progress(result.skipped?'内容已存在，跳过导入。':'导入完成（'+result.pages+' 页），正在启动编译…');
+      state.newSource=false;state.source=result.id;state.tab='sources';setTab('sources');
+      return call('compile',{sourceId:result.id}).then(function(taskId){startTask(taskId,'compile')},function(){return refreshLists()});
+    };
+    var chain=function(offset,base64){
+      var done=offset>=file.size;
+      call('pdf_upload_chunk',{uploadId:uploadId,base64:base64,done:done}).then(function(result){
+        if(done)return finish(result);
+        progress('上传中 '+Math.min(99,Math.round(offset*100/Math.max(1,file.size)))+'%');
+        read(offset);
+      }).catch(function(error){cancel();progress('');err(error)});
+    };
+    var read=function(offset){
+      var reader=new FileReader();
+      reader.onerror=function(){cancel();progress('');err(new Error('PDF 读取失败：'+file.name))};
+      reader.onload=function(){chain(offset+36*1024,String(reader.result).split(',')[1]||'')};
+      reader.readAsDataURL(file.slice(offset,offset+36*1024));
+    };
+    progress('准备上传…');
+    call('pdf_upload_start',{title:file.name.replace(/\.pdf$/i,'')}).then(function(start){uploadId=start.uploadId;read(0)}).catch(function(error){progress('');err(error)});
   }
 
   function setTab(name){
@@ -87,7 +153,7 @@ export const notesWikiScript = String.raw`
   function renderPage(){
     renderPageList();var host=$('pageView');
     if(state.newPage){
-      host.innerHTML=card('新建页面','<label>页面名称（slug）<input data-field="slug" placeholder="例如：向量检索"></label><label>标题<input data-field="title"></label><label>一句话摘要<input data-field="summary"></label><label>正文（支持 [[双向链接]]）<textarea data-field="body" rows="14" maxlength="30000"></textarea></label><div class="row" style="margin-top:10px">'+button('savePage','保存页面','primary')+button('cancelPage','取消')+'</div>');return;
+      host.innerHTML=card('新建页面','<label>页面名称（slug）<input data-field="slug" placeholder="例如：向量检索"></label><label>标题<input data-field="title"></label><label>一句话摘要<input data-field="summary"></label>'+mdEditor('正文（支持 [[双向链接]] 与 Markdown）','body',14,'',30000)+'<div class="row" style="margin-top:10px">'+button('savePage','保存页面','primary')+button('cancelPage','取消')+'</div>');return;
     }
     if(!state.page){host.innerHTML=empty('从左侧选择一个页面，或点 ＋ 新建。');return}
     call('get_page',{slug:state.page}).then(function(result){
@@ -95,7 +161,7 @@ export const notesWikiScript = String.raw`
       var p=result.page;state.editToken=result.editToken;
       if(state.editing&&result.truncated){state.editing=false;err('页面过长，请在本地 Markdown 文件中编辑完整内容');}
       if(state.editing){
-        host.innerHTML=card('编辑「'+p.title+'」','<label>标题<input data-field="title" value="'+esc(p.title)+'"></label><label>摘要<input data-field="summary" value="'+esc(p.summary)+'"></label><label>类型<select data-field="kind">'+Object.keys(kindName).map(function(k){return '<option value="'+k+'"'+(k===p.kind?' selected':'')+'>'+kindName[k]+'</option>'}).join('')+'</select></label><label>正文<textarea data-field="body" rows="18" maxlength="30000">'+esc(p.body)+'</textarea></label><p class="muted">人工编辑的页面不会被自动编译覆盖。</p><div class="row">'+button('savePage','保存','primary')+button('cancelEdit','取消')+'</div>');
+        host.innerHTML=card('编辑「'+p.title+'」','<label>标题<input data-field="title" value="'+esc(p.title)+'"></label><label>摘要<input data-field="summary" value="'+esc(p.summary)+'"></label><label>类型<select data-field="kind">'+Object.keys(kindName).map(function(k){return '<option value="'+k+'"'+(k===p.kind?' selected':'')+'>'+kindName[k]+'</option>'}).join('')+'</select></label>'+mdEditor('正文（Markdown，支持 [[双向链接]]）','body',18,p.body,30000)+'<p class="muted">人工编辑的页面不会被自动编译覆盖。</p><div class="row">'+button('savePage','保存','primary')+button('cancelEdit','取消')+'</div>');
         return;
       }
       var meta='<p><span class="badge">'+esc(kindName[p.kind]||p.kind)+'</span>'+(p.humanEdited?'<span class="badge warn">人工编辑</span>':'')+'<span class="badge">'+p.sources.length+' 个来源</span><span class="badge">更新 '+esc(date(p.updatedAt))+'</span></p>';
@@ -113,9 +179,16 @@ export const notesWikiScript = String.raw`
   function renderSource(){
     renderSourceList();var host=$('sourceView');
     if(state.newSource){
-      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文（最多约 3 万字）<textarea data-field="text" rows="14" maxlength="30000" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片（可选，自动压缩后逐张上传）<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><p class="muted">文本与图片进入 raw/ 后不可修改；模型只读取它们。</p><div class="row">'+button('saveSource','保存并编译','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
-      var input=document.querySelector('[data-field="images"]');
+      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文（最多约 3 万字）<textarea data-field="text" rows="14" maxlength="30000" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片（可选，自动压缩后逐张上传）<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>PDF 文档（可选，分片上传后自动提取文本）<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><p class="muted">文本与图片进入 raw/ 后不可修改；模型只读取它们。</p><div class="row">'+button('saveSource','保存并编译','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
+      var input=field('images',host);
       if(input)input.onchange=function(){var files=Array.prototype.slice.call(input.files||[]).slice(0,4),box=$('imagePreview');box.innerHTML='';files.forEach(function(file){compressImage(file,function(image){var img=document.createElement('img');img.src='data:'+image.mime+';base64,'+image.base64;img.className='img-preview';box.appendChild(img)})})};
+      var pdfInput=field('pdf',host);
+      if(pdfInput)pdfInput.onchange=function(){
+        var file=(pdfInput.files||[])[0];if(!file)return;
+        if(file.size>20*1024*1024){err('PDF 超过 20 MiB 上限，请拆分后导入');return}
+        pdfInput.disabled=true;
+        uploadPdf(file,function(value){var box=$('pdfProgress');if(box)box.textContent=value});
+      };
       return;
     }
     if(!state.source){host.innerHTML=captureCard()+empty('从左侧选择素材，或点 ＋ 新增。');return}
@@ -203,10 +276,10 @@ export const notesWikiScript = String.raw`
         '<label>描述<input data-field="description" value="'+esc(description)+'"></label>'+
         '<label>类型<select data-field="kind">'+['ingest','compile','query','lint','synthesize','custom'].map(function(k){return '<option value="'+k+'"'+(k===kind?' selected':'')+'>'+k+'</option>'}).join('')+'</select></label>'+
         '<label>触发词（逗号分隔）<input data-field="triggers" value="'+esc(triggers)+'"></label>'+
-        '<label>指令正文（Markdown，将作为模型 system prompt）<textarea data-field="body" rows="16" maxlength="30000"></textarea></label>'+
+        mdEditor('指令正文（Markdown，将作为模型 system prompt）','body',16,'',30000)+
         '<p class="muted">同类型的自定义 Skill 会优先于内置版本；用同名保存可覆盖内置指令。</p>'+
         '<div class="row">'+button('saveSkill','保存','primary')+(state.newSkill?'':button('deleteSkill','删除','danger')+button('exportSkill','导出 SKILL.md'))+button('cancelSkill','取消')+'</div><p id="skillStatus" class="muted"></p><div id="skillExport"></div>');
-      var body=document.querySelector('[data-field="body"]');
+      var body=field('body',host);
       if(body&&!state.newSkill)call('get_skill',{name:state.skill}).then(function(value){if(value&&body.isConnected&&!body.value.trim())body.value=value.body}).catch(err);
       return;
     }
@@ -220,7 +293,7 @@ export const notesWikiScript = String.raw`
       '<hr><p class="muted">自动编译：'+(s.automation.autoCompile?'开':'关')+' · 发布方式：人工审阅 · 体检间隔：'+(s.automation.lintMinutes||'关闭')+' 分钟 · 上次体检：'+esc(s.lastLint?date(s.lastLint):'尚未运行')+'</p>'+
       '<div class="row">'+button('testConnection','测试连接')+button('openPluginSettings','修改模型配置')+button('runLint','立即体检')+'</div>');
     var key='<div class="card"><h3>API Key（仅存于本机插件私有文件）</h3><label>密钥<input type="password" data-field="apiKey" placeholder="sk-…" autocomplete="off"></label><div class="row" style="margin-top:8px">'+button('setKey','保存密钥','primary')+button('clearKey','清除')+'</div><p class="muted">不会写入插件配置表单，也不会出现在日志里。</p></div>';
-    var schema='<div class="card"><h3>Schema 约定</h3><p class="muted">定义页面规范、链接风格与编译边界，会随每次模型调用一起发送。</p><textarea data-field="schema" rows="12" maxlength="30000"></textarea><div class="row" style="margin-top:8px">'+button('saveSchema','保存 Schema','primary')+'</div></div>';
+    var schema='<div class="card"><h3>Schema 约定</h3><p class="muted">定义页面规范、链接风格与编译边界，会随每次模型调用一起发送。</p>'+mdEditor('Schema（Markdown）','schema',12,'',30000)+'<div class="row" style="margin-top:8px">'+button('saveSchema','保存 Schema','primary')+'</div></div>';
     var file='';
     if(state.file==='schema'){/* schema editor is always visible */}
     else if(state.file){file='<div class="card"><h3>'+esc(state.file==='log'?'log.md':state.file==='index'?'index.md':'体检结果')+'</h3><pre id="fileContent" style="white-space:pre-wrap;max-height:420px;overflow:auto"></pre></div>'}
@@ -228,7 +301,7 @@ export const notesWikiScript = String.raw`
     var progress=tasks.length?'<div class="progress"><span class="spinner"></span>'+esc(tasks[0].label)+' · '+esc(tasks[0].progress)+'</div>':'';
     host.innerHTML=info+progress+key+schema+file;
     if(state.file&&state.file!=='schema')loadFile(state.file);
-    var schemaBox=document.querySelector('[data-field="schema"]');
+    var schemaBox=field('schema',host);
     if(schemaBox)call('schema').then(function(value){if(schemaBox.isConnected&&!schemaBox.value.trim())schemaBox.value=value}).catch(err);
   }
   function loadFile(name){
@@ -294,6 +367,15 @@ export const notesWikiScript = String.raw`
     var node=event.target.closest('[data-action]');if(!node)return;
     var action=node.dataset.action,id=node.dataset.id,slug=node.dataset.slug,name=node.dataset.name;
     if(state.task&&['ask','compileSource','saveSource','approveDraft','rejectDraft','runLint','saveAnswer'].indexOf(action)>=0){err('当前任务仍在处理，请完成后再提交');return}
+    if(action==='mdPreview'){
+      var editor=node.closest('.md-editor');if(!editor)return;
+      var area=editor.querySelector('textarea'),preview=editor.querySelector('.md-preview');
+      var showing=preview.hidden;
+      preview.hidden=!showing;area.hidden=showing;
+      node.textContent=showing?'编辑':'预览';
+      if(showing)preview.innerHTML=markdown(area.value)||'<p class="muted">（空）</p>';
+      return;
+    }
     var go=function(promise,after){promise.then(ok()).then(after||function(){}).catch(err)};
     if(action==='openPage'){state.page=slug;state.editing=false;state.newPage=false;state.tab='wiki';setTab('wiki');return}
     if(action==='newPage'){state.newPage=true;state.page=null;state.editing=false;renderPage();return}
@@ -316,7 +398,7 @@ export const notesWikiScript = String.raw`
       });return;
     }
     if(action==='saveSource'){
-      var files=Array.prototype.slice.call((document.querySelector('[data-field="images"]')||{}).files||[]).slice(0,4);
+      var files=Array.prototype.slice.call((field('images')||{}).files||[]).slice(0,4);
       var title=val('title'),text=val('text');
       if(!text.trim()&&!files.length){err('请填写正文或选择图片');return}
       var progress=function(value){var box=$('sourceProgress');if(box)box.textContent=value};

@@ -38,6 +38,7 @@
     "highlight.js": "11.12.0",
     "js-yaml": "4.3.2",
     "node-pty": "1.1.0",
+    "pdfjs-dist": "^3.11.174",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
@@ -76,7 +77,8 @@
       "package.json"
     ],
     "asarUnpack": [
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/pdfjs-dist/**/*"
     ],
     "npmRebuild": true,
     "win": {

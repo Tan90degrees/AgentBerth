@@ -47,9 +47,9 @@ export const notesWikiMarkup = String.raw`
           <button data-file="log">查看 log.md</button>
           <button data-file="schema">编辑 Schema</button>
           <button data-file="lint">体检结果</button>
-          <button id="openPluginSettings" data-action="openPluginSettings">插件中心配置</button>
+          <button id="openPluginSettings" data-action="openPluginSettings">插件设置</button>
         </div>
-        <p class="muted" style="margin-top:12px">模型地址、模型名与自动化开关在插件中心 → 笔记 Wiki → 配置。</p>
+        <p class="muted" style="margin-top:12px">模型地址、模型名与自动化开关：点「插件设置」会直接在本页弹出修改面板，无需跳转。</p>
       </section>
     </aside>
     <article>
