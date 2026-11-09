@@ -16,6 +16,7 @@ await git('init','--initial-branch=main');await git('config','user.name','ACP sm
 let app,daemonPid,failure;const errors=[];
 try{
   const args=[...(process.env.AGENTBERTH_TEST_PRELOAD?['-r',process.env.AGENTBERTH_TEST_PRELOAD]:[]),...(packaged?[]:[path.resolve('.')]),'--user-data-dir='+path.join(folder,'profile'),'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader'];if(process.platform==='linux'&&process.getuid?.()===0)args.push('--no-sandbox');
+  if(process.env.AGENTBERTH_SMOKE_HEADLESS==='1')args.push('--ozone-platform=headless');
   const env={...process.env,AGENTBERTH_DATA_DIR:path.join(folder,'data')};delete env.ELECTRON_RUN_AS_NODE;
   app=await electron.launch({executablePath:packaged?path.resolve('release/win-unpacked/AgentBerth.exe'):undefined,args,env,timeout:25000});
   const page=await app.firstWindow();

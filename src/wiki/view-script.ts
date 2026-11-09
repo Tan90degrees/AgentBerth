@@ -17,7 +17,7 @@ export const notesWikiScript = String.raw`
       var line=lines[i];
       if(line.indexOf(fence)===0){if(inList){out.push('</ul>');inList=false}inCode=!inCode;out.push(inCode?'<pre>':'</pre>');continue}
       if(inCode){out.push(line);continue}
-      var link=function(_,target,label){var slug=target.trim().replace(/[^0-9a-z\u4e00-\u9fff._-]/gi,'-');return '<button class="wikilink" data-action="openPage" data-slug="'+esc(slug)+'">'+esc(label||target)+'</button>'};
+      var link=function(_,target,label){var slug=target.trim().toLowerCase().replace(/[^0-9a-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af._-]+/g,'-').replace(/[-_]{2,}/g,'-').replace(/\.{2,}/g,'.').replace(/^[-_.]+|[-_.]+$/g,'').slice(0,80);return '<button class="wikilink" data-action="openPage" data-slug="'+esc(slug)+'">'+esc(label||target)+'</button>'};
       line=line.replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g,link);
       line=line.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
       if(/^### /.test(line)){if(inList){out.push('</ul>');inList=false}out.push('<h3>'+line.slice(4)+'</h3>');continue}
@@ -29,6 +29,7 @@ export const notesWikiScript = String.raw`
       if(line.trim())out.push('<p>'+line+'</p>');
     }
     if(inList)out.push('</ul>');
+    if(inCode)out.push('</pre>');
     return out.join('');
   }
   function empty(text){return '<div class="empty">'+esc(text)+'</div>'}
@@ -91,7 +92,8 @@ export const notesWikiScript = String.raw`
     if(!state.page){host.innerHTML=empty('从左侧选择一个页面，或点 ＋ 新建。');return}
     call('get_page',{slug:state.page}).then(function(result){
       if(!result||state.page!==result.page.slug||state.tab!=='wiki')return;
-      var p=result.page;
+      var p=result.page;state.editToken=result.editToken;
+      if(state.editing&&result.truncated){state.editing=false;err('页面过长，请在本地 Markdown 文件中编辑完整内容');}
       if(state.editing){
         host.innerHTML=card('编辑「'+p.title+'」','<label>标题<input data-field="title" value="'+esc(p.title)+'"></label><label>摘要<input data-field="summary" value="'+esc(p.summary)+'"></label><label>类型<select data-field="kind">'+Object.keys(kindName).map(function(k){return '<option value="'+k+'"'+(k===p.kind?' selected':'')+'>'+kindName[k]+'</option>'}).join('')+'</select></label><label>正文<textarea data-field="body" rows="18" maxlength="30000">'+esc(p.body)+'</textarea></label><p class="muted">人工编辑的页面不会被自动编译覆盖。</p><div class="row">'+button('savePage','保存','primary')+button('cancelEdit','取消')+'</div>');
         return;
@@ -119,13 +121,15 @@ export const notesWikiScript = String.raw`
     if(!state.source){host.innerHTML=captureCard()+empty('从左侧选择素材，或点 ＋ 新增。');return}
     call('get_source',{id:state.source}).then(function(result){
       if(!result||state.source!==result.id||state.tab!=='sources')return;
-      var images=result.images.length?'<p class="muted">附件：'+result.images.length+' 张图片'+(result.hasVision?'（已生成图片理解）':'')+'</p>':'';
+      var images=result.images.length?'<p class="muted">附件：'+result.images.length+' 张图片'+(result.vision?'（已生成图片理解）':'')+'</p>':'';
       var vision=result.vision?'<h3>图片理解</h3><div class="markdown">'+markdown(result.vision)+'</div>':'';
       host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(result.title)+'</h2><p class="muted">'+esc(date(result.createdAt))+' · 素材 ID '+esc(result.id.slice(0,8))+'</p></div><div class="row">'+button('compileSource','重新编译','primary',' data-id="'+esc(result.id)+'"')+button('deleteSource','删除','danger',' data-id="'+esc(result.id)+'"')+'</div></div>'+images+vision+'<hr><div class="markdown">'+markdown(result.text.slice(0,8000))+'</div></div>';
     }).catch(err);
   }
   function compressImage(file,done){
+    var failed=arguments[2]||err;
     var reader=new FileReader();
+    reader.onerror=function(){failed(new Error('图片读取失败：'+file.name))};
     reader.onload=function(){
       var image=new Image();
       image.onload=function(){
@@ -133,10 +137,14 @@ export const notesWikiScript = String.raw`
         canvas.width=Math.max(1,Math.round(image.width*scale));canvas.height=Math.max(1,Math.round(image.height*scale));
         canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height);
         var quality=0.78,data=canvas.toDataURL('image/jpeg',quality);
-        while(data.length>58000&&quality>0.3){quality-=0.08;data=canvas.toDataURL('image/jpeg',quality)}
+        while(data.length>52000){
+          if(quality>0.3)quality-=0.08;
+          else {canvas.width=Math.max(1,Math.floor(canvas.width*0.75));canvas.height=Math.max(1,Math.floor(canvas.height*0.75));canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height)}
+          data=canvas.toDataURL('image/jpeg',quality);
+        }
         done({mime:'image/jpeg',base64:data.split(',')[1]});
       };
-      image.onerror=function(){err('图片读取失败：'+file.name)};
+      image.onerror=function(){failed(new Error('图片读取失败：'+file.name))};
       image.src=reader.result;
     };
     reader.readAsDataURL(file);
@@ -161,11 +169,13 @@ export const notesWikiScript = String.raw`
       if(state.draftSlug)loadDraftPage(draft.id,state.draftSlug);
     }).catch(err);
   }
-  function loadDraftPage(id,slug){
-    call('draft_page',{id:id,slug:slug}).then(function(page){
-      if(!page||state.draftSlug!==slug)return;
+  function loadDraftPage(id,slug,offset){
+    call('draft_page',{id:id,slug:slug,offset:offset||0}).then(function(page){
+      if(!page||state.draft!==id||state.draftSlug!==slug)return;
       var box=$('draftDiff');if(!box)return;
-      box.innerHTML='<div class="card"><h3>'+esc(page.title)+' · 变更预览</h3><div class="diff">'+page.diff.map(function(row){return '<div class="'+row.type+'">'+(row.type==='add'?'+ ':row.type==='del'?'- ':'  ')+esc(row.text)+'</div>'}).join('')+'</div></div>';
+      if(!offset)box.innerHTML='<div class="card"><h3>'+esc(page.title)+' · 变更预览</h3><div class="diff"></div><div class="diff-more"></div></div>';
+      box.querySelector('.diff').insertAdjacentHTML('beforeend',page.diff.map(function(row){return '<div class="'+row.type+'">'+(row.type==='add'?'+ ':row.type==='del'?'- ':'  ')+esc(row.text)+'</div>'}).join(''));
+      box.querySelector('.diff-more').innerHTML=page.hasMore?button('moreDraftDiff','加载后续变更（'+page.nextOffset+'/'+page.totalLines+' 行）','',' data-offset="'+page.nextOffset+'"'):'';
     }).catch(err);
   }
   // ---- Ask
@@ -176,6 +186,7 @@ export const notesWikiScript = String.raw`
     renderAnswerList();var host=$('answerView');
     var a=state.answer===null?null:state.answers[state.answer];
     if(!a)return;
+    if(!a.full){call('get_answer',{at:a.at}).then(function(full){if(!full)return;full.full=true;var index=state.answers.findIndex(function(item){return item.at===full.at});if(index<0)return;state.answers[index]=full;if(state.answer===index)renderAsk()}).catch(err);return}
     host.innerHTML='<div class="card"><h2>'+esc(a.question)+'</h2><div class="answer markdown">'+markdown(a.answer)+'</div><div class="citations">'+a.citations.map(function(slug){return button('openPage',slug,'',' data-slug="'+esc(slug)+'"')}).join('')+'</div>'+evidenceBlock(a.evidence)+'<div class="row" style="margin-top:10px">'+button('saveAnswer','归档为新页面','primary')+button('openPluginSettings','模型：'+esc(a.model),'ghost')+'</div></div>';
   }
   // ---- Skills
@@ -206,7 +217,7 @@ export const notesWikiScript = String.raw`
     var host=$('settingsView'),s=state.status;if(!s)return;
     var info=card('模型与自动化',
       '<div class="grid2"><div><small>服务地址</small><p>'+esc(s.model.baseURL)+'</p><small>文本模型</small><p>'+esc(s.model.textModel)+'</p></div><div><small>视觉模型</small><p>'+esc(s.model.visionModel||'（未启用）')+'</p><small>API Key</small><p>'+esc(s.model.keyHint)+'</p></div></div>'+
-      '<hr><p class="muted">自动编译：'+(s.automation.autoCompile?'开':'关')+' · 自动发布：'+(s.automation.autoApprove?'开':'关（推荐）')+' · 体检间隔：'+(s.automation.lintMinutes||'关闭')+' 分钟 · 上次体检：'+esc(s.lastLint?date(s.lastLint):'尚未运行')+'</p>'+
+      '<hr><p class="muted">自动编译：'+(s.automation.autoCompile?'开':'关')+' · 发布方式：人工审阅 · 体检间隔：'+(s.automation.lintMinutes||'关闭')+' 分钟 · 上次体检：'+esc(s.lastLint?date(s.lastLint):'尚未运行')+'</p>'+
       '<div class="row">'+button('testConnection','测试连接')+button('openPluginSettings','修改模型配置')+button('runLint','立即体检')+'</div>');
     var key='<div class="card"><h3>API Key（仅存于本机插件私有文件）</h3><label>密钥<input type="password" data-field="apiKey" placeholder="sk-…" autocomplete="off"></label><div class="row" style="margin-top:8px">'+button('setKey','保存密钥','primary')+button('clearKey','清除')+'</div><p class="muted">不会写入插件配置表单，也不会出现在日志里。</p></div>';
     var schema='<div class="card"><h3>Schema 约定</h3><p class="muted">定义页面规范、链接风格与编译边界，会随每次模型调用一起发送。</p><textarea data-field="schema" rows="12" maxlength="30000"></textarea><div class="row" style="margin-top:8px">'+button('saveSchema','保存 Schema','primary')+'</div></div>';
@@ -233,8 +244,13 @@ export const notesWikiScript = String.raw`
     state.page=state.pages.length?state.pages[0].slug:null;
     return true;
   }
+  function all(command,limit){
+    var rows=[];
+    function next(){return call(command,{offset:rows.length,limit:limit}).then(function(batch){rows=rows.concat(batch);return batch.length===limit?next():rows})}
+    return next();
+  }
   function refreshLists(){
-    return Promise.all([call('list_pages'),call('list_sources'),call('list_drafts'),call('list_skills'),call('answers'),call('list_capture_sessions').catch(function(){return []})]).then(function(values){
+    return Promise.all([all('list_pages',50),all('list_sources',50),all('list_drafts',10),call('list_skills'),call('answers'),call('list_capture_sessions').catch(function(){return []})]).then(function(values){
       state.pages=values[0];state.sources=values[1];state.drafts=values[2];state.skills=values[3];state.answers=values[4];state.sessions=values[5];
       var picked=pickPage();renderListsOnly();
       if(picked&&state.tab==='wiki')renderPage();
@@ -250,7 +266,7 @@ export const notesWikiScript = String.raw`
   }
   function pollTask(){
     if(!state.task)return;
-    call('task',{id:state.task}).then(function(task){
+    return call('task',{id:state.task}).then(function(task){
       if(!task||state.task!==task.id)return;
       if(task.status==='queued'||task.status==='running'){
         if(state.taskOrigin==='ask')$('askProgress').textContent=task.progress+'…';
@@ -263,6 +279,8 @@ export const notesWikiScript = String.raw`
         $('askProgress').textContent='';
       }else if(origin==='compile'||origin==='review'){
         state.tab='review';setTab('review');return refreshLists().then(refreshStatus);
+      }else if(origin==='archive'){
+        if(task.result){state.page=task.result.slug;setTab('wiki')}
       }else if(origin==='lint'){
         return refreshStatus();
       }
@@ -275,13 +293,14 @@ export const notesWikiScript = String.raw`
     if(tab){setTab(tab.dataset.tab);return}
     var node=event.target.closest('[data-action]');if(!node)return;
     var action=node.dataset.action,id=node.dataset.id,slug=node.dataset.slug,name=node.dataset.name;
+    if(state.task&&['ask','compileSource','saveSource','approveDraft','rejectDraft','runLint','saveAnswer'].indexOf(action)>=0){err('当前任务仍在处理，请完成后再提交');return}
     var go=function(promise,after){promise.then(ok()).then(after||function(){}).catch(err)};
     if(action==='openPage'){state.page=slug;state.editing=false;state.newPage=false;state.tab='wiki';setTab('wiki');return}
     if(action==='newPage'){state.newPage=true;state.page=null;state.editing=false;renderPage();return}
     if(action==='cancelPage'){state.newPage=false;renderPage();return}
     if(action==='editPage'){state.editing=true;renderPage();return}
     if(action==='cancelEdit'){state.editing=false;renderPage();return}
-    if(action==='savePage'){var target=state.newPage?val('slug'):state.page;go(call('save_page',{slug:target,title:val('title'),summary:val('summary'),body:val('body'),kind:val('kind')||undefined}),function(){state.newPage=false;state.editing=false;state.page=target;return refreshLists().then(function(){if(state.tab==='wiki')renderPage()})});return}
+    if(action==='savePage'){var target=state.newPage?val('slug'):state.page;go(call('save_page',{slug:target,title:val('title'),summary:val('summary'),body:val('body'),kind:val('kind')||undefined,createOnly:state.newPage,expected:state.newPage?undefined:state.editToken}),function(saved){state.newPage=false;state.editing=false;state.page=saved.slug;return refreshLists().then(function(){if(state.tab==='wiki')renderPage()})});return}
     if(action==='deletePage'){go(call('delete_page',{slug:state.page}),function(){state.page=null;return refreshLists().then(function(){if(state.tab==='wiki')renderPage()})});return}
     if(action==='revertPage'){go(call('revert_page',{slug:slug,name:node.dataset.name}),function(){return renderPage()});return}
     if(action==='newSource'){state.newSource=true;state.source=null;renderSource();return}
@@ -302,23 +321,39 @@ export const notesWikiScript = String.raw`
       if(!text.trim()&&!files.length){err('请填写正文或选择图片');return}
       var progress=function(value){var box=$('sourceProgress');if(box)box.textContent=value};
       progress('正在保存素材…');
-      call('add_source',{title:title,text:text}).then(function(source){
+      var savedSource=null;node.disabled=true;
+      call('add_source',{title:title,text:text,staging:files.length>0}).then(function(source){
+        savedSource=source;
         var chain=Promise.resolve();
-        files.forEach(function(file){chain=chain.then(function(){return new Promise(function(resolve,reject){compressImage(file,function(image){call('add_image',{sourceId:source.id,mime:image.mime,base64:image.base64}).then(resolve,reject)})})})});
-        return chain.then(function(){
-          progress('图片已保存，正在启动编译…');
+        files.forEach(function(file){
+          chain=chain.then(function(){
+            return new Promise(function(resolve,reject){
+              compressImage(file,function(image){
+                call('add_image',{sourceId:source.id,mime:image.mime,base64:image.base64}).then(resolve,reject);
+              },reject);
+            });
+          });
+        });
+        return chain.then(function(){return call('finalize_source',{id:source.id})}).then(function(){
+          savedSource=null;state.newSource=false;state.source=source.id;
+          progress('素材已保存，正在启动编译…');
           return call('compile',{sourceId:source.id}).then(function(taskId){
             state.newSource=false;state.source=source.id;state.tab='sources';setTab('sources');startTask(taskId,'compile');
             return refreshLists();
           });
         });
-      }).catch(function(error){progress('');err(error)});
+      }).catch(function(error){
+        progress('');err(error);
+        if(savedSource&&files.length)call('delete_source',{id:savedSource.id}).catch(err);
+        if(!state.newSource){setTab('sources');refreshLists()}
+      }).finally(function(){if(node.isConnected)node.disabled=false});
       return;
     }
     if(action==='compileSource'){go(call('compile',{sourceId:id}),function(taskId){startTask(taskId,'compile')});return}
     if(action==='deleteSource'){go(call('delete_source',{id:id}),function(){state.source=null;return refreshLists().then(function(){if(state.tab==='sources')renderSource()})});return}
     if(action==='openDraft'){state.draft=id;state.draftSlug='';renderReview();return}
     if(action==='draftPage'){state.draftSlug=slug;loadDraftPage(state.draft,slug);document.querySelectorAll('[data-action="draftPage"]').forEach(function(b){b.classList.toggle('active',b.dataset.slug===slug)});return}
+    if(action==='moreDraftDiff'){loadDraftPage(state.draft,state.draftSlug,Number(node.dataset.offset));return}
     if(action==='approveDraft'){go(call('review_draft',{id:state.draft,action:'approve'}),function(taskId){startTask(taskId,'review')});return}
     if(action==='rejectDraft'){go(call('review_draft',{id:state.draft,action:'reject',feedback:val('feedback')}),function(taskId){startTask(taskId,'review')});return}
     if(action==='ask'){
@@ -328,7 +363,7 @@ export const notesWikiScript = String.raw`
     if(action==='openAnswer'){state.answer=Number(node.dataset.index);renderAsk();return}
     if(action==='saveAnswer'){
       var a=state.answers[state.answer];if(!a)return;
-      go(call('save_answer',{question:a.question,answer:a.answer,citations:a.citations,evidence:(a.evidence||[]).map(function(e){return {sourceId:e.sourceId,quote:e.quote}})}),function(){return refreshLists()});return;
+      go(call('get_answer',{at:a.at}).then(function(full){if(!full)throw new Error('问答记录已过期，请重新提问');return call('save_answer',{question:full.question,answer:full.answer,citations:full.citations,evidence:(full.evidence||[]).map(function(e){return {sourceId:e.sourceId,quote:e.quote}})})}),function(taskId){startTask(taskId,'archive')});return;
     }
     if(action==='newSkill'){state.newSkill=true;state.skill=null;renderSkill();return}
     if(action==='cancelSkill'){state.newSkill=false;renderSkill();return}
@@ -355,11 +390,11 @@ export const notesWikiScript = String.raw`
 
   setTab('wiki');
   refreshStatus().then(refreshLists);
-  var ticks=0;
+  var ticks=0,polling=false;
   // refreshLists only repaints the side lists, never the active panel, so a
   // form being edited is safe. Polling it lets inbox imports appear on their
   // own (they do not create a background task and would otherwise be invisible).
-  setInterval(function(){refreshStatus();pollTask();ticks++;if(!state.task&&ticks%3===0)refreshLists()},2000);
+  setInterval(function(){if(polling)return;polling=true;ticks++;Promise.all([refreshStatus(),pollTask(),!state.task&&ticks%3===0?refreshLists():Promise.resolve()]).finally(function(){polling=false})},2000);
   setInterval(function(){if(!state.task&&state.tab==='review')refreshLists()},10000);
 })();
 `;

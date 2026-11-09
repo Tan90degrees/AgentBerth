@@ -43,6 +43,7 @@ export function startInbox(options: InboxOptions): InboxHandle {
   const failedAt = new Map<string, number>();
   const attempts = new Map<string, number>();
   const settling = new Map<string, number>();
+  const observed = new Map<string, { signature: string; at: number }>();
   let busy: Promise<unknown> = Promise.resolve();
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
@@ -70,19 +71,23 @@ export function startInbox(options: InboxOptions): InboxHandle {
   function schedule(): void {
     if (stopped) return;
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { busy = busy.catch(() => undefined).then(scan); }, DEBOUNCE_MS);
+    timer = setTimeout(() => { void scan(); }, DEBOUNCE_MS);
   }
 
-  async function scan(): Promise<void> {
+  async function processScan(): Promise<void> {
     if (stopped) return;
     let rescan = false;
     for (const name of list()) {
       const file = path.join(dir, name);
       try {
+        if (stopped) return;
         const info = statSync(file);
+        const signature = `${info.size}:${info.mtimeMs}:${info.ctimeMs}:${info.ino}`;
+        const last = observed.get(name);
+        if (!last || last.signature !== signature) observed.set(name, { signature, at: Date.now() });
         // Two observations separated by a debounce, plus a quiet mtime, keep a
         // slow copy from being imported as a truncated immutable source.
-        if (info.size === 0 || Date.now() - info.mtimeMs < SETTLE_MS) {
+        if (!last || last.signature !== signature || Date.now() - last.at < SETTLE_MS || Date.now() - info.mtimeMs < SETTLE_MS) {
           const checks = (settling.get(name) ?? 0) + 1;
           settling.set(name, checks);
           if (checks <= MAX_SETTLE_CHECKS) { rescan = true; continue; }
@@ -91,9 +96,14 @@ export function startInbox(options: InboxOptions): InboxHandle {
         if (info.size > MAX_BYTES) throw new PermanentInboxError('文件超过 1 MiB 上限');
         settling.delete(name);
         const text = readFileSync(file, 'utf8');
-        if (!text.trim()) continue;
+        if (!text.trim()) throw new PermanentInboxError('文件内容为空');
+        if (text.length > 200_000) throw new PermanentInboxError('素材超过 200000 字符上限，请拆分后导入');
         await options.onFile(name, text);
+        if (stopped) return;
+        const after = statSync(file);
+        if (`${after.size}:${after.mtimeMs}:${after.ctimeMs}:${after.ino}` !== signature) { rescan = true; continue; }
         renameSync(file, path.join(importedDir, archivedName(name)));
+        observed.delete(name);
         failedAt.delete(name); attempts.delete(name);
         prune();
       } catch (error) {
@@ -103,17 +113,24 @@ export function startInbox(options: InboxOptions): InboxHandle {
         failedAt.set(name, Date.now());
         if (error instanceof PermanentInboxError || count >= MAX_FAILURES) {
           quarantine(file, name, failedDir);
-          failedAt.delete(name); attempts.delete(name);
+          if (!readdirSync(dir).includes(name)) { failedAt.delete(name); attempts.delete(name); observed.delete(name); }
         }
-        options.onError?.(name, error);
+        try { options.onError?.(name, error); } catch { /* Reporting must not break retries. */ }
       }
     }
     if (rescan) schedule();
   }
 
+  function scan(): Promise<void> {
+    const next = busy.catch(() => undefined).then(processScan);
+    busy = next;
+    return next;
+  }
+  const retryTimer = setInterval(() => { void scan(); }, RETRY_MS);
+  retryTimer.unref();
   const watcher: FSWatcher = watch(dir, () => schedule());
   watcher.on('error', () => { /* startup scans still cover files if watching fails */ });
-  busy = busy.then(scan);
+  void scan();
 
   return {
     dir, importedDir, failedDir,
@@ -123,6 +140,7 @@ export function startInbox(options: InboxOptions): InboxHandle {
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      clearInterval(retryTimer);
       watcher.close();
     },
   };

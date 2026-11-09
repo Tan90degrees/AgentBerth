@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { logLine, pageFromDocument, pageToDocument, skillFromDocument, skillToDocument, truncate, validateSkillName, slugify } from './core';
+import { logLine, pageHash, pageFromDocument, pageToDocument, skillFromDocument, skillToDocument, truncate, validateSkillName, slugify } from './core';
 import type { WikiAnswer, WikiDraft, WikiLint, WikiPage, WikiSkill, WikiSource } from './types';
 
 const IMAGE_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -26,6 +26,18 @@ function serialize<T>(action: () => T): Promise<T> {
 
 export class WikiStore {
   readonly root: string;
+  revision = 0;
+  private readonly cache = new Map<string, { stamp: string; value: unknown }>();
+  private cached<T>(file: string, read: () => T): T {
+    const info = statSync(file);
+    const stamp = `${info.mtimeMs}:${info.ctimeMs}:${info.size}:${info.ino}`;
+    const hit = this.cache.get(file);
+    if (hit?.stamp === stamp) return structuredClone(hit.value) as T;
+    const value = read();
+    if (this.cache.size >= 2000) this.cache.delete(this.cache.keys().next().value!);
+    this.cache.set(file, { stamp, value });
+    return structuredClone(value);
+  }
   private readonly wikiDir: string;
   private readonly rawDir: string;
   private readonly assetDir: string;
@@ -52,9 +64,10 @@ export class WikiStore {
   private read(file: string): string { return existsSync(file) ? readFileSync(file, 'utf8') : ''; }
   private readJson<T>(file: string, fallback: T): T {
     if (!existsSync(file)) return fallback;
-    try { return JSON.parse(readFileSync(file, 'utf8')) as T; } catch { return fallback; }
+    try { return this.cached(file, () => JSON.parse(readFileSync(file, 'utf8')) as T); } catch { return fallback; }
   }
   private write(file: string, value: string, mode?: number): void {
+    this.cache.delete(file); this.revision++;
     const tmp = file + '.' + randomUUID().slice(0, 8) + '.tmp';
     writeFileSync(tmp, value, { encoding: 'utf8', mode: mode ?? 0o600 });
     try { renameSync(tmp, file); }
@@ -81,7 +94,7 @@ export class WikiStore {
   // ---- Credentials (never part of the plugin manifest config) -----------
   credentials(): { apiKey: string } { return this.readJson(path.join(this.root, 'credentials.json'), { apiKey: '' }); }
   saveCredentials(apiKey: string): void { this.writeJson(path.join(this.root, 'credentials.json'), { apiKey }, 0o600); }
-  clearCredentials(): void { rmSync(path.join(this.root, 'credentials.json'), { force: true }); }
+  clearCredentials(): void { this.revision++; rmSync(path.join(this.root, 'credentials.json'), { force: true }); }
 
   // ---- Sources (immutable raw layer) ------------------------------------
   listSources(): WikiSource[] {
@@ -97,6 +110,7 @@ export class WikiStore {
     this.writeJson(this.file(this.rawDir, source.id, '.json'), source);
   }
   deleteSource(id: string): void {
+    this.revision++;
     const source = this.getSource(id);
     rmSync(this.file(this.rawDir, id, '.json'), { force: true });
     for (const image of source?.images ?? []) rmSync(this.file(this.assetDir, image, ''), { force: true });
@@ -118,31 +132,33 @@ export class WikiStore {
     return { mime, base64: readFileSync(file).toString('base64') };
   }
   sourceHash(source: Pick<WikiSource, 'title' | 'text' | 'images' | 'vision'>): string {
-    return createHash('sha256').update(JSON.stringify([source.title, source.text, source.images, source.vision])).digest('hex').slice(0, 32);
+    return createHash('sha256').update(JSON.stringify([source.text, source.images])).digest('hex').slice(0, 32);
   }
 
   // ---- Wiki pages -------------------------------------------------------
   listPages(): WikiPage[] {
     return readdirSync(this.wikiDir).filter(name => name.endsWith('.md')).map(name => {
       const slug = name.slice(0, -3), file = path.join(this.wikiDir, name);
-      return pageFromDocument(slug, readFileSync(file, 'utf8'), new Date(statSync(file).mtimeMs).toISOString());
+      return this.cached(file, () => pageFromDocument(slug, readFileSync(file, 'utf8'), new Date(statSync(file).mtimeMs).toISOString()));
     }).sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'));
   }
   getPage(slug: string): WikiPage | null {
     const file = this.file(this.wikiDir, slugify(slug), '.md');
     if (!existsSync(file)) return null;
-    return pageFromDocument(slugify(slug), readFileSync(file, 'utf8'), new Date(statSync(file).mtimeMs).toISOString());
+    return this.cached(file, () => pageFromDocument(slugify(slug), readFileSync(file, 'utf8'), new Date(statSync(file).mtimeMs).toISOString()));
   }
   pageText(slug: string): string { return this.read(this.file(this.wikiDir, slugify(slug), '.md')); }
   savePage(page: WikiPage): void { this.write(this.file(this.wikiDir, page.slug, '.md'), pageToDocument(page)); }
   deletePage(slug: string): void {
+    this.revision++;
     this.snapshot(slug);
     rmSync(this.file(this.wikiDir, slugify(slug), '.md'), { force: true });
   }
   snapshot(slug: string): void {
     const text = this.pageText(slug);
     if (!text) return;
-    const stamp = Date.now();
+    let stamp = Date.now();
+    while (existsSync(this.file(this.historyDir, `${slugify(slug)}.${stamp}`, '.md'))) stamp++;
     this.write(this.file(this.historyDir, `${slugify(slug)}.${stamp}`, '.md'), text);
     const previous = readdirSync(this.historyDir).filter(name => name.startsWith(slugify(slug) + '.')).sort().reverse();
     for (const name of previous.slice(10)) rmSync(path.join(this.historyDir, name), { force: true });
@@ -153,11 +169,12 @@ export class WikiStore {
       .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 10);
   }
   revertPage(slug: string, name: string): WikiPage | null {
+    if (!this.history(slug).some(item => item.name === name)) throw new Error('历史版本不属于此页面');
     const file = this.file(this.historyDir, path.basename(name, '.md'), '.md');
     if (!file.startsWith(this.historyDir) || !existsSync(file)) throw new Error('历史版本不存在');
     const parsed = pageFromDocument(slugify(slug), readFileSync(file, 'utf8'), new Date().toISOString());
     this.snapshot(slug);
-    parsed.humanEdited = true; parsed.updatedAt = new Date().toISOString();
+    parsed.humanEdited = true; parsed.hash = pageHash(parsed); parsed.updatedAt = new Date().toISOString();
     this.savePage(parsed);
     return parsed;
   }

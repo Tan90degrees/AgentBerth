@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
+import { cleanupSmoke } from './smoke-cleanup.mjs';
 
 const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-wiki-window-'));
 await mkdir('test-results', { recursive: true });
@@ -29,7 +30,7 @@ const model = createServer(async (request, response) => {
 await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
 const port = model.address().port;
 
-let application;
+let application, daemonPid, failure;
 const errors = [];
 const step = value => console.log('STEP', value);
 const until = async (check, label) => {
@@ -42,6 +43,8 @@ const until = async (check, label) => {
 };
 try {
   const args = [path.resolve('.'), '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--user-data-dir=' + path.join(folder, 'profile')];
+  if (process.env.AGENTBERTH_SMOKE_HEADLESS === '1') args.push('--ozone-platform=headless');
+  if (process.platform === 'linux' && process.getuid?.() === 0) args.push('--no-sandbox');
   const env = { ...process.env, AGENTBERTH_DATA_DIR: path.join(folder, 'data') };
   delete env.ELECTRON_RUN_AS_NODE;
   step('launch isolated window');
@@ -66,11 +69,12 @@ try {
     const snapshot = await ext({ action: 'list' });
     return snapshot.plugins.some(plugin => plugin.manifest.id === 'notes-wiki' && plugin.status === 'active');
   }, 'notes-wiki extension active');
+  daemonPid = JSON.parse(await readFile(path.join(folder, 'data', 'runtime.json'), 'utf8')).pid;
   step('extension is active');
 
   await ext({ action: 'configure', id: 'notes-wiki', config: {
     baseURL: `http://127.0.0.1:${port}/v1`, textModel: 'mock-text', visionModel: 'mock-vision',
-    autoCompile: false, autoApprove: false, lintMinutes: 0, maxContextPages: 8,
+    autoCompile: false, allowAgentAccess: true, allowAgentQueries: true, lintMinutes: 0, maxContextPages: 8,
   } });
   await call('set_api_key', { value: 'sk-window-test' });
   const status = await call('status');
@@ -140,7 +144,7 @@ try {
   assert.ok(answer.answer.includes('[[向量检索]]'));
   assert.deepEqual(answer.citations.sort(), ['向量检索', '重排序'].sort());
   assert.ok(answer.evidence.length > 0, 'answers carry raw source excerpts');
-  const archived = await call('save_answer', { question: '召回和精度怎么处理？', answer: answer.answer, citations: answer.citations });
+  const archived = await waitTask(await call('save_answer', { question: '召回和精度怎么处理？', answer: answer.answer, citations: answer.citations }));
   assert.equal(archived.humanEdited, true);
   const lint = await waitTask(await call('lint'));
   assert.ok(lint.suggestions.length > 0);
@@ -183,6 +187,14 @@ try {
   await frame.locator('#newSkill').click();
   await until(async () => (await frame.locator('#skillView [data-field="name"]').count()) > 0, 'new skill form');
   await frame.locator('#skillView [data-action="cancelSkill"]').click();
+  await frame.locator('[data-tab="sources"]').click();
+  await frame.locator('#newSource').click();
+  await frame.locator('#sourceView [data-field="title"]').fill('纯图片窗口素材');
+  await frame.locator('#sourceView [data-field="images"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
+  await frame.locator('#sourceView [data-action="saveSource"]').click();
+  await until(async () => (await call('list_sources')).some(source => source.title === '纯图片窗口素材' && source.images === 1 && source.compiled), 'image-only source saved and compiled');
+  await until(async () => await frame.locator('[data-tab="review"]').evaluate(node => node.classList.contains('active')), 'image compile task completed in the view');
+  step('image-only source uploads before compilation');
   await frame.locator('[data-tab="ask"]').click();
   await frame.locator('#question').fill('窗口里直接提问可以吗？');
   await frame.locator('#ask').click();
@@ -191,6 +203,7 @@ try {
   const archivedBefore = (await call('list_pages')).length;
   await frame.locator('#answerView [data-action="saveAnswer"]').click();
   await until(async () => (await call('list_pages')).length > archivedBefore, 'iframe archives an answer with evidence');
+  await until(async () => await frame.locator('[data-tab="wiki"]').evaluate(node => node.classList.contains('active')), 'archive task completed in the view');
   await frame.locator('[data-tab="review"]').click();
   const lintBefore = (await call('status')).tasks.filter(task => task.kind === 'lint').length;
   await frame.locator('#runLint').click();
@@ -201,13 +214,13 @@ try {
   assert.deepEqual(errors, [], 'no renderer page errors');
   console.log('RESULT OK', JSON.stringify({ pages: (await call('list_pages')).length, requests: requests.length, errors }));
 } catch (error) {
+  failure = error;
   console.error('RESULT FAIL', error);
   if (application) {
     try { const page = await application.firstWindow(); await page.screenshot({ path: 'test-results/wiki-window-failure.png' }); } catch { /* ignore */ }
   }
   process.exitCode = 1;
 } finally {
-  if (application) await application.close().catch(() => {});
   model.close();
-  await rm(folder, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
+  try { await cleanupSmoke(application, daemonPid, folder); } catch (error) { if (!failure) throw error; }
 }

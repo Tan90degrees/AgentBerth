@@ -15,7 +15,8 @@ export function slugify(value: string): string {
     // model-produced slug can never make publishing fail with "名称无效".
     .replace(/\.{2,}/g, '.')
     .replace(/^[-_.]+|[-_.]+$/g, '');
-  return (cleaned || 'untitled').slice(0, 80);
+  const slug = (cleaned || 'untitled').slice(0, 80).replace(/[.]+$/, '');
+  return /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(slug) ? 'page-' + slug : slug;
 }
 
 export function parseDocument(text: string): { data: Record<string, unknown>; body: string } {
@@ -33,7 +34,7 @@ export function parseDocument(text: string): { data: Record<string, unknown>; bo
 
 export function stringifyDocument(data: Record<string, unknown>, body: string): string {
   const header = dump(data, { schema: JSON_SCHEMA, noRefs: true, sortKeys: false, lineWidth: -1 }).trimEnd();
-  return `---\n${header}\n---\n\n${String(body ?? '').replace(/^\s+/, '')}`;
+  return `---\n${header}\n---\n\n${String(body ?? '')}`;
 }
 
 const stringList = (value: unknown): string[] => Array.isArray(value)
@@ -57,7 +58,7 @@ export function evidenceList(value: unknown, sourceText?: string, allowed?: Set<
     const sourceId = typeof row.sourceId === 'string' ? row.sourceId.slice(0, 100) : '';
     if (compact(quote).length < MIN_QUOTE_CHARS) continue;
     if (allowed && sourceId && !allowed.has(sourceId)) continue;
-    if (sourceText && !haystack.includes(compact(quote))) continue;
+    if (sourceText !== undefined && !haystack.includes(compact(quote))) continue;
     out.push({ sourceId, quote });
   }
   return out.slice(0, 8);
@@ -78,7 +79,7 @@ function findSpan(text: string, quote: string): { start: number; end: number } {
 export function sourceExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text'>, quote: string): SourceExcerpt {
   const text = String(source.text ?? '');
   const { start, end } = findSpan(text, quote);
-  const base: SourceExcerpt = { sourceId: source.id, title: source.title, quote, context: '', verified: start >= 0 };
+  const base: SourceExcerpt = { sourceId: source.id, title: source.title, quote, context: '', verified: compact(quote).length >= MIN_QUOTE_CHARS && start >= 0 };
   if (start < 0) return base;
   const from = Math.max(0, start - 180), to = Math.min(text.length, end + 180);
   return { ...base, context: (from > 0 ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '') };
@@ -89,14 +90,14 @@ export function sourceExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text'>,
 export function bestExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text'>, pageBody: string): SourceExcerpt {
   const text = String(source.text ?? '');
   const words = tokens(pageBody);
-  const chunks = text.split(/\n\s*\n|\n/).map(value => value.trim()).filter(value => value.length > 20).slice(0, 200);
+  const chunks = text.split(/\n\s*\n|\n/).map(value => value.trim()).filter(value => compact(value).length >= MIN_QUOTE_CHARS).slice(0, 200);
   let best = '', score = 0;
   for (const chunk of chunks) {
     const lower = chunk.toLowerCase();
     const hits = words.reduce((total, word) => total + (lower.includes(word) ? 1 : 0), 0);
     if (hits > score) { score = hits; best = chunk; }
   }
-  return sourceExcerpt(source, best ? best.slice(0, 300) : text.slice(0, 300));
+  return sourceExcerpt(source, best ? best.slice(0, 300) : '');
 }
 
 export function resolveExcerpts(page: WikiPage, sources: WikiSource[], limit = 6): SourceExcerpt[] {
@@ -104,7 +105,7 @@ export function resolveExcerpts(page: WikiPage, sources: WikiSource[], limit = 6
   const out: SourceExcerpt[] = [];
   for (const item of page.evidence) {
     if (out.length >= limit) break;
-    const source = byId.get(item.sourceId) ?? (page.sources.length === 1 ? byId.get(page.sources[0]) : undefined);
+    const source = byId.get(item.sourceId);
     if (!source) continue;
     const excerpt = sourceExcerpt(source, item.quote);
     if (excerpt.verified && !out.some(value => value.sourceId === excerpt.sourceId && value.quote === excerpt.quote)) out.push(excerpt);
@@ -113,7 +114,7 @@ export function resolveExcerpts(page: WikiPage, sources: WikiSource[], limit = 6
     if (out.length >= limit) break;
     if (out.some(value => value.sourceId === id)) continue;
     const source = byId.get(id);
-    if (source) out.push(bestExcerpt(source, page.body));
+    if (source) { const excerpt = bestExcerpt(source, page.body); if (excerpt.verified) out.push(excerpt); }
   }
   return out.map(item => ({ ...item, quote: truncate(item.quote, 400), context: truncate(item.context, 1200) }));
 }
@@ -154,8 +155,8 @@ export function pageToDocument(page: WikiPage): string {
   }, page.body);
 }
 
-export function pageHash(page: Pick<WikiPage, 'title' | 'summary' | 'body' | 'sources' | 'evidence'>): string {
-  return createHash('sha256').update(JSON.stringify([page.title, page.summary, page.body, page.sources, page.evidence])).digest('hex').slice(0, 32);
+export function pageHash(page: Pick<WikiPage, 'title' | 'summary' | 'body' | 'sources' | 'evidence' | 'kind' | 'tags'>): string {
+  return createHash('sha256').update(JSON.stringify([page.title, page.summary, page.body, page.sources, page.evidence, page.kind, page.tags])).digest('hex').slice(0, 32);
 }
 
 export function extractLinks(body: string): string[] {
@@ -204,7 +205,7 @@ export function searchPages(query: string, pages: WikiPage[], limit = 8): WikiPa
       const hits = body.split(word).length - 1;
       score += Math.min(hits, 6) * 1.5;
     }
-    score += Math.min((inbound.get(page.slug)?.length ?? 0), 8) * 0.4;
+    if (score > 0) score += Math.min((inbound.get(page.slug)?.length ?? 0), 8) * 0.4;
     return { page, score };
   }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || b.page.updatedAt.localeCompare(a.page.updatedAt));
   return scored.slice(0, limit).map(item => item.page);
@@ -284,7 +285,7 @@ export function truncate(text: string, max: number): string {
 export function byteTruncate(text: string, maxBytes: number): string {
   const value = String(text ?? '');
   if (Buffer.byteLength(value) <= maxBytes) return value;
-  const marker = '\n\n…（内容已截断，完整版本保存在本地文件中）';
+  const marker = '\n\n…（显示内容已截断）';
   const budget = Math.max(0, maxBytes - Buffer.byteLength(marker));
   let low = 0, high = value.length;
   while (low < high) {
@@ -305,7 +306,7 @@ export function lineDiff(before: string, after: string): { type: 'same' | 'add' 
   for (let i = head; i < a.length - tail; i++) result.push({ type: 'del', text: a[i] });
   for (let i = head; i < b.length - tail; i++) result.push({ type: 'add', text: b[i] });
   for (let i = 0; i < tail; i++) result.push({ type: 'same', text: a[a.length - tail + i] });
-  return result.slice(0, 400);
+  return result;
 }
 
 export function skillFromDocument(name: string, text: string, builtin: boolean, fallbackTime: string): WikiSkill {
@@ -342,16 +343,19 @@ export function draftPages(value: unknown, pages: WikiPage[], sourceId: string |
     const title = typeof row.title === 'string' && row.title.trim() ? row.title.trim().slice(0, 160) : '';
     if (!title) continue;
     const slug = slugify(typeof row.slug === 'string' && row.slug.trim() ? row.slug : title);
+    if (result.some(page => page.slug === slug)) throw new Error('模型生成了重复的页面名称，请重试');
     const existing = bySlug.get(slug);
-    const body = typeof row.body === 'string' ? byteTruncate(row.body, 48 * 1024) : '';
-    const sources = [...new Set([...(Array.isArray(row.sources) ? row.sources.filter((value): value is string => typeof value === 'string') : []), ...(sourceId ? [sourceId] : [])])].slice(0, 50);
-    const quoted = evidenceList(row.evidence, sourceText, new Set(sources))
-      .map(item => ({ sourceId: item.sourceId || sources[0] || sourceId || '', quote: item.quote }))
+    const body = typeof row.body === 'string' ? row.body : '';
+    if (Buffer.byteLength(body) > 48 * 1024) throw new Error('模型页面超过 48 KiB，请拆分主题后重新编译');
+    if (!body.trim()) continue;
+    const sources = [...new Set([...(existing?.sources ?? []), ...(sourceId ? [sourceId] : [])])].slice(0, 50);
+    const quoted = evidenceList(row.evidence, sourceText, new Set(sourceId ? [sourceId] : []))
+      .map(item => ({ sourceId: item.sourceId || sourceId || '', quote: item.quote }))
       .filter(item => item.sourceId);
     const next: WikiDraft['pages'][number] = {
       slug, title, summary: typeof row.summary === 'string' ? row.summary.trim().slice(0, 400) : '',
       kind: PAGE_KINDS.includes(row.kind as PageKind) ? row.kind as PageKind : 'concept',
-      body, sources, evidence: quoted.length ? quoted : (existing?.evidence ?? []), tags: Array.isArray(row.tags) ? row.tags.filter((value): value is string => typeof value === 'string').slice(0, 20) : [],
+      body, sources, evidence: [...(existing?.evidence ?? []), ...quoted].filter((item, index, all) => all.findIndex(other => other.sourceId === item.sourceId && other.quote === item.quote) === index).slice(0, 20), tags: Array.isArray(row.tags) ? row.tags.filter((value): value is string => typeof value === 'string').slice(0, 20) : [],
       previous: existing ? pageToDocument(existing) : null,
       action: existing ? (existing.humanEdited ? 'skip' : 'update') : 'create',
     };

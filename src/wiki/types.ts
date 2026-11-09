@@ -40,6 +40,7 @@ export interface WikiSource {
   text: string;
   images: string[];
   vision: string;
+  staging?: boolean;
   compiled: boolean;
   hash: string;
   createdAt: string;
@@ -72,6 +73,7 @@ export interface WikiDraft {
   id: string;
   sourceId: string | null;
   sourceTitle: string;
+  sourceHash?: string;
   createdAt: string;
   model: string;
   summary: string;
@@ -84,7 +86,7 @@ export interface WikiDraft {
 
 export interface WikiTask {
   id: string;
-  kind: 'compile' | 'ask' | 'lint' | 'vision';
+  kind: 'compile' | 'ask' | 'lint' | 'vision' | 'archive';
   label: string;
   status: 'queued' | 'running' | 'done' | 'failed';
   progress: string;
@@ -134,6 +136,8 @@ export interface WikiConfig {
   visionModel: string;
   autoCompile: boolean;
   autoApprove: boolean;
+  allowAgentAccess?: boolean;
+  allowAgentQueries?: boolean;
   lintMinutes: number;
   maxContextPages: number;
 }

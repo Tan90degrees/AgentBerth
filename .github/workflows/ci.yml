@@ -114,6 +114,14 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-extensions.mjs
         timeout-minutes: 2
+      - name: Notes Wiki smoke (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        run: xvfb-run -a node scripts/smoke-wiki.mjs
+        timeout-minutes: 3
+      - name: Notes Wiki smoke (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        run: node scripts/smoke-wiki.mjs
+        timeout-minutes: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:

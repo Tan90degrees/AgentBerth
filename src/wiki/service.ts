@@ -7,7 +7,7 @@ import {
 } from './core';
 import { chat, maskedKey, type ChatMessage } from './llm';
 import {
-  BUILTIN_SKILLS, DEFAULT_SCHEMA, compileMessages, ingestMessages, lintMessages,
+  BUILTIN_SKILLS, DEFAULT_SCHEMA, compileContext, compileMessages, ingestMessages, lintMessages,
   queryMessages, resolveSkill, synthesizeMessages,
 } from './prompts';
 import { withWriteLock, type WikiStore } from './store';
@@ -43,6 +43,8 @@ export class WikiService {
   private readonly queue: { id: string; run: (task: WikiTask) => Promise<unknown>; onError?: () => void }[] = [];
   private draining = false;
   private lastTickLint = 0;
+  private counts?: { revision: number; at: number; pages: number; sources: number; pendingDrafts: number; skills: number; links: number; orphans: number };
+  private readonly compiling = new Map<string, string>();
   private readonly failedSources = new Map<string, number>();
 
   constructor(options: ServiceOptions) {
@@ -52,6 +54,7 @@ export class WikiService {
     this.fetchImpl = options.fetchImpl;
     this.publish = options.publish;
     this.call = options.call;
+    this.lastTickLint = Date.parse(this.store.meta().lastLint ?? '') || 0;
     if (!this.store.schema().trim()) this.store.saveSchema(DEFAULT_SCHEMA);
     if (!this.store.index().trim()) this.store.saveIndex(buildIndex([]));
   }
@@ -79,21 +82,22 @@ export class WikiService {
 
   // ---- Status -----------------------------------------------------------
   status(): WikiStatus {
-    const pages = this.store.listPages();
-    const links = new Set(pages.flatMap(page => extractLinks(page.body))).size;
+    if (!this.counts || this.counts.revision !== this.store.revision || Date.now() - this.counts.at > 5000) {
+      const pages = this.store.listPages();
+      this.counts = { revision: this.store.revision, at: Date.now(), pages: pages.length,
+        sources: this.store.listSources().filter(source => !source.staging).length,
+        pendingDrafts: this.store.listDrafts().filter(draft => draft.status === 'pending').length,
+        skills: this.allSkills().length, links: new Set(pages.flatMap(page => extractLinks(page.body))).size, orphans: lintWiki(pages).orphans.length };
+    }
     const meta = this.store.meta();
     return {
-      pages: pages.length,
-      sources: this.store.listSources().length,
-      pendingDrafts: this.store.listDrafts().filter(draft => draft.status === 'pending').length,
-      skills: this.allSkills().length,
-      links,
-      orphans: (meta.lint?.orphans.length ?? 0) || lintWiki(pages).orphans.length,
+      pages: this.counts.pages, sources: this.counts.sources, pendingDrafts: this.counts.pendingDrafts,
+      skills: this.counts.skills, links: this.counts.links, orphans: this.counts.orphans,
       model: {
         baseURL: this.config.baseURL, textModel: this.config.textModel, visionModel: this.config.visionModel,
         keyConfigured: !!this.key(), keyHint: maskedKey(this.key()),
       },
-      automation: { autoCompile: this.config.autoCompile, autoApprove: this.config.autoApprove, lintMinutes: this.config.lintMinutes },
+      automation: { autoCompile: this.config.autoCompile, autoApprove: false, lintMinutes: this.config.lintMinutes },
       lastLint: meta.lastLint,
       tasks: [...this.tasks.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 20),
       ready: !!this.key() && !!this.config.textModel.trim(),
@@ -103,6 +107,11 @@ export class WikiService {
 
   // ---- Background queue -------------------------------------------------
   private enqueue(kind: WikiTask['kind'], label: string, run: (task: WikiTask) => Promise<unknown>, onError?: () => void): string {
+    if (this.queue.length >= 100) throw new Error('后台任务过多，请稍后重试');
+    for (const [id, task] of this.tasks) {
+      if (this.tasks.size < 200) break;
+      if (['done', 'failed'].includes(task.status)) this.tasks.delete(id);
+    }
     const task: WikiTask = { id: randomUUID(), kind, label, status: 'queued', progress: '排队中', startedAt: now() };
     this.tasks.set(task.id, task);
     this.queue.push({ id: task.id, run, onError });
@@ -126,7 +135,8 @@ export class WikiService {
           job.onError?.();
         }
         task.finishedAt = now();
-        this.publish?.();
+        for (const [sourceId, id] of this.compiling) if (id === task.id) this.compiling.delete(sourceId);
+        try { this.publish?.(); } catch { /* A view notification cannot stop the queue. */ }
       }
     } finally { this.draining = false; }
   }
@@ -140,7 +150,7 @@ export class WikiService {
     if (this.signal.aborted) return;
     if (this.config.autoCompile && !this.queued('compile')) {
       const pending = this.store.listSources().find(source =>
-        !source.compiled && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
+        !source.staging && !source.compiled && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
       if (pending && this.key()) void this.compile(pending.id);
     }
     const interval = Math.max(0, this.config.lintMinutes) * 60_000;
@@ -154,12 +164,13 @@ export class WikiService {
   // ---- Raw sources ------------------------------------------------------
   listSources(): WikiSource[] { return this.store.listSources(); }
   getSource(id: string): WikiSource | null { return this.store.getSource(id); }
-  async addSource(input: { title: string; text: string; images?: { mime: string; base64: string }[]; origin?: string }): Promise<WikiSource> {
+  async addSource(input: { title: string; text: string; images?: { mime: string; base64: string }[]; origin?: string; staging?: boolean }): Promise<WikiSource> {
     const title = truncate(String(input.title ?? '').trim() || '未命名素材', 160);
-    const text = truncate(String(input.text ?? ''), 200_000);
-    if (!text.trim() && !(input.images?.length)) throw new Error('素材内容不能为空');
+    const text = String(input.text ?? '');
+    if (text.length > 200_000) throw new Error('素材超过 200000 字符上限，请拆分后导入');
+    if (!text.trim() && !(input.images?.length) && !input.staging) throw new Error('素材内容不能为空');
     const images = (input.images ?? []).slice(0, 8).map(image => this.store.addImage(image.mime, image.base64));
-    const source: WikiSource = { id: randomUUID(), title, text, images, vision: '', compiled: false, hash: '', createdAt: now() };
+    const source: WikiSource = { id: randomUUID(), title, text, images, vision: '', compiled: false, hash: '', createdAt: now(), ...(input.staging ? { staging: true } : {}) };
     source.hash = this.store.sourceHash(source);
     await withWriteLock(() => {
       this.store.saveSource(source);
@@ -175,9 +186,10 @@ export class WikiService {
    * keeps a re-scan (or a duplicated fs.watch event) from importing twice. */
   async ingestInboxFile(name: string, text: string): Promise<{ id: string; skipped: boolean }> {
     const title = truncate(path.basename(name).replace(/\.(md|markdown|txt|json)$/i, ''), 160) || '导入素材';
-    const body = truncate(String(text ?? ''), 200_000);
+    const body = String(text ?? '');
+    if (body.length > 200_000) throw new Error('素材超过 200000 字符上限，请拆分后导入');
     const hash = this.store.sourceHash({ title, text: body, images: [], vision: '' });
-    const existing = this.store.listSources().find(source => source.hash === hash);
+    const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
     if (existing) return { id: existing.id, skipped: true };
     const source = await this.addSource({ title, text: body, origin: `自动采集 ${path.basename(name)}` });
     return { id: source.id, skipped: false };
@@ -186,8 +198,8 @@ export class WikiService {
   async listCaptureSessions(): Promise<{ id: string; title: string; status: string }[]> {
     if (!this.call) return [];
     try {
-      const state = await this.call('state', {}) as { sessions?: { id: string; title?: string; latestRun?: { status?: string } }[] } | null;
-      return (state?.sessions ?? []).filter(session => !!session.id).slice(0, 50).map(session => ({
+      const state = await this.call('state', {}) as { sessions?: { id: string; title?: string; agent?: string; latestRun?: { status?: string } }[]; agents?: { id: string; acp?: unknown }[] } | null;
+      return (state?.sessions ?? []).filter(session => !!session.id && state?.agents?.some(agent => agent.id === session.agent && !!agent.acp)).slice(0, 50).map(session => ({
         id: session.id, title: truncate(String(session.title ?? session.id), 120),
         status: String(session.latestRun?.status ?? 'idle'),
       }));
@@ -203,12 +215,13 @@ export class WikiService {
     let sessionTitle = sessionId.slice(0, 8);
     let events: { sequence?: number; kind?: string; text: string }[] = [];
     try {
-      const state = await this.call('state', {}) as { sessions?: { id: string; title?: string }[] } | null;
+      const state = await this.call('state', {}) as { sessions?: { id: string; title?: string; agent?: string }[]; agents?: { id: string; acp?: unknown }[] } | null;
       const session = state?.sessions?.find(item => item.id === sessionId);
       if (!session) throw new Error('会话不存在');
+      if (!state?.agents?.some(agent => agent.id === session.agent && !!agent.acp)) throw new Error('仅支持捕获 ACP 对话会话');
       sessionTitle = session.title || sessionTitle;
       const snapshot = await this.call('acpSnapshot', { sessionId, limit: 200 }) as {
-        events?: { sequence?: number; kind?: string; text?: string }[];
+        events?: { sequence?: number; kind?: string; text?: string }[]; hasMore?: boolean;
       } | null;
       events = (snapshot?.events ?? [])
         .filter(event => event && typeof event.text === 'string' && event.text.trim())
@@ -220,9 +233,9 @@ export class WikiService {
     const labels: Record<string, string> = { user: '用户', assistant: '助手', thought: '思考', tool: '工具', plan: '计划', notice: '提示', error: '错误', permission: '授权', turn: '轮次', terminal: '终端' };
     const lines = events.map(event => `### ${event.sequence ?? '-'} · ${labels[event.kind ?? ''] ?? event.kind ?? '记录'}\n\n${truncate(event.text, 4000)}`);
     const title = truncate(`会话记录：${sessionTitle}`, 160);
-    const text = truncate(`# ${title}\n\n> 采集自工作台会话 ${sessionId}，共 ${events.length} 条记录。\n\n${lines.join('\n\n')}`, 200_000);
+    const text = truncate(`# ${title}\n\n> 采集自工作台会话 ${sessionId}，仅包含最近最多 200 条记录；每条最多 4000 字，整体最多 200000 字符。共 ${events.length} 条记录。\n\n${lines.join('\n\n')}`, 200_000);
     const hash = this.store.sourceHash({ title, text, images: [], vision: '' });
-    const existing = this.store.listSources().find(source => source.hash === hash);
+    const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
     if (existing) return { id: existing.id, skipped: true, events: events.length };
     const source = await this.addSource({ title, text, origin: `工作台会话 ${sessionId}` });
     return { id: source.id, skipped: false, events: events.length };
@@ -237,6 +250,7 @@ export class WikiService {
       if (source.images.length >= 8) throw new Error('单个素材最多 8 张图片');
       const name = this.store.addImage(mime, base64);
       source.images.push(name);
+      source.vision = '';
       source.compiled = false;
       source.hash = this.store.sourceHash(source);
       this.store.saveSource(source);
@@ -244,25 +258,44 @@ export class WikiService {
     });
   }
 
+  async finalizeSource(id: string): Promise<WikiSource> {
+    return withWriteLock(() => {
+      const source = this.store.getSource(id);
+      if (!source) throw new Error('素材不存在');
+      if (!source.text.trim() && !source.images.length) throw new Error('素材内容不能为空');
+      source.staging = false;
+      this.store.saveSource(source);
+      return source;
+    });
+  }
+
   // ---- Wiki pages -------------------------------------------------------
   listPages(): WikiPage[] { return this.store.listPages(); }
   getPage(slug: string): WikiPage | null { return this.store.getPage(slug); }
-  async savePage(input: { slug: string; title?: string; summary?: string; body?: string; kind?: WikiPage['kind']; tags?: string[]; evidence?: SourceEvidence[] }): Promise<WikiPage> {
-    const slug = slugify(input.slug);
+  async savePage(input: { slug: string; title?: string; summary?: string; body?: string; kind?: WikiPage['kind']; tags?: string[]; evidence?: SourceEvidence[]; createOnly?: boolean; expected?: string }): Promise<WikiPage> {
+    let slug = slugify(input.slug);
+    if (input.body !== undefined && Buffer.byteLength(input.body) > 60 * 1024) throw new Error('页面超过 60 KiB，请拆分内容后保存');
     if (!slug || slug === 'untitled') throw new Error('页面名称无效');
     return withWriteLock(() => {
+      if (input.createOnly) {
+        const base = slug;
+        let suffix = 2;
+        while (this.store.getPage(slug)) slug = slugify(base.slice(0, 68) + '-' + suffix++);
+      }
       const previous = this.store.getPage(slug);
+      if (input.expected !== undefined && (previous ? pageHash(previous) : '') !== input.expected) throw new Error('页面已变化，请重新打开后编辑');
       const at = now();
       // Hand edits and archived answers must not be able to attach a quote to
       // an unknown source or a one-character "proof".
-      const allowed = new Set(this.store.listSources().map(source => source.id));
+      const raw = this.store.listSources();
+      const allowed = new Set(raw.map(source => source.id));
       const evidence = evidenceList(input.evidence ?? previous?.evidence ?? [], undefined, allowed)
-        .filter(item => item.sourceId);
+        .filter(item => item.sourceId && evidenceList([item], raw.find(source => source.id === item.sourceId)?.text ?? '').length > 0);
       const page: WikiPage = {
         slug, title: truncate(String(input.title ?? previous?.title ?? slug), 160) || slug,
         summary: truncate(String(input.summary ?? previous?.summary ?? ''), 400),
         kind: input.kind ?? previous?.kind ?? 'note',
-        sources: previous?.sources ?? [], evidence,
+        sources: [...new Set([...(previous?.sources ?? []), ...evidence.map(item => item.sourceId)])], evidence,
         tags: input.tags ?? previous?.tags ?? [],
         body: byteTruncate(String(input.body ?? previous?.body ?? ''), 60 * 1024),
         humanEdited: true, hash: '', createdAt: previous?.createdAt ?? at, updatedAt: at,
@@ -354,10 +387,14 @@ export class WikiService {
   compile(sourceId?: string): string {
     const source = sourceId ? this.store.getSource(sourceId) : this.store.listSources().find(item => !item.compiled);
     if (!source) throw new Error(sourceId ? '素材不存在' : '没有待编译的素材');
+    if (source.staging) throw new Error('图片仍在上传，请完成素材保存后编译');
+    const existing = this.compiling.get(source.id);
+    if (existing && ['queued', 'running'].includes(this.tasks.get(existing)?.status ?? '')) return existing;
     if (!this.key()) throw new Error('请先在「设置」中填写 API Key');
-    return this.enqueue('compile', `编译「${source.title}」`, async task => {
+    const id = this.enqueue('compile', `编译「${source.title}」`, async task => {
       const fresh = this.store.getSource(source.id);
       if (!fresh) throw new Error('素材已被删除');
+      const inputHash = this.store.sourceHash(fresh);
       await this.describeImages(fresh, task);
       const schema = this.schema(), skills = this.allSkills();
       task.progress = '抽取概念';
@@ -365,12 +402,18 @@ export class WikiService {
       if (this.signal.aborted) throw new Error('编译已取消');
       const feedback = this.store.listDrafts().filter(draft => draft.sourceId === fresh.id && draft.status === 'rejected').flatMap(draft => draft.feedback).slice(-5);
       task.progress = '生成页面提案';
-      const compiled = await this.complete(compileMessages(fresh, ingested, this.store.listPages(), schema, resolveSkill(skills, 'compile'), feedback));
+      const baseline = this.store.listPages();
+      const context = compileContext(fresh, ingested, baseline);
+      const compiled = await this.complete(compileMessages(fresh, ingested, context, schema, resolveSkill(skills, 'compile'), feedback));
+      if (this.signal.aborted) throw new Error('编译已取消');
       const payload = parseJsonResponse(compiled);
       const draft: WikiDraft = {
         id: randomUUID(), sourceId: fresh.id, sourceTitle: fresh.title, createdAt: now(),
         model: this.model().model, summary: typeof payload.summary === 'string' ? truncate(payload.summary, 400) : '编译完成',
-        pages: draftPages(payload.pages, this.store.listPages(), fresh.id, fresh.text),
+        pages: draftPages(payload.pages, baseline, fresh.id, fresh.text).map(page => ({ ...page,
+          action: page.action === 'update' && !context.some(item => item.slug === page.slug) ? 'skip' as const : page.action,
+        })),
+        sourceHash: inputHash,
         contradictions: Array.isArray(payload.contradictions) ? payload.contradictions.filter((value): value is string => typeof value === 'string').slice(0, 20).map(value => truncate(value, 300)) : [],
         feedback: [], status: 'pending',
       };
@@ -380,6 +423,8 @@ export class WikiService {
         // model was running, and the in-memory `fresh` must not overwrite them.
         const current = this.store.getSource(fresh.id);
         if (!current) throw new Error('素材已被删除');
+        if (this.signal.aborted) throw new Error('编译已取消');
+        if (this.store.sourceHash(current) !== inputHash) throw new Error('素材图片已变化，请重新编译');
         current.compiled = true;
         this.store.saveSource(current);
         this.store.saveDraft(draft);
@@ -389,13 +434,19 @@ export class WikiService {
           typeof payload.log === 'string' ? truncate(payload.log, 200) : '',
         ]);
       });
-      if (this.config.autoApprove) return this.publishDraft(draft.id);
+      this.failedSources.delete(source.id);
       return draft.id;
     }, () => this.failedSources.set(source.id, Date.now()));
+    this.compiling.set(source.id, id);
+    return id;
   }
 
   private async describeImages(source: WikiSource, task?: WikiTask): Promise<void> {
-    if (!source.images.length || !this.config.visionModel.trim() || source.vision) return;
+    if (!source.images.length || source.vision) return;
+    if (!this.config.visionModel.trim()) {
+      if (!source.text.trim()) throw new Error('纯图片素材需要先配置视觉模型');
+      return;
+    }
     const images = source.images.map(name => this.store.imageData(name)).filter((value): value is { mime: string; base64: string } => !!value);
     if (!images.length) return;
     if (task) task.progress = '理解图片';
@@ -405,7 +456,8 @@ export class WikiService {
     ], 'vision', images);
     await withWriteLock(() => {
       const fresh = this.store.getSource(source.id);
-      if (!fresh) return;
+      if (this.signal.aborted) throw new Error('图片理解已取消');
+      if (!fresh || this.store.sourceHash(fresh) !== this.store.sourceHash(source)) throw new Error('素材图片已变化，请重新编译');
       fresh.vision = truncate(description, 8000);
       fresh.hash = this.store.sourceHash(fresh);
       this.store.saveSource(fresh);
@@ -443,16 +495,17 @@ export class WikiService {
       return this.publishDraftSync(current);
     }));
   }
-  private publishDraft(id: string): Promise<unknown> {
-    const draft = this.store.getDraft(id);
-    return draft ? withWriteLock(() => this.publishDraftSync(draft)) : Promise.resolve(null);
-  }
   private publishDraftSync(draft: WikiDraft): { published: string[]; skipped: string[] } {
+    if (this.signal.aborted) throw new Error('插件已停止');
+    if (draft.sourceId) {
+      const source = this.store.getSource(draft.sourceId);
+      if (!source || (draft.sourceHash && this.store.sourceHash(source) !== draft.sourceHash)) throw new Error('原始素材已删除或变化，请重新编译');
+    }
     const published: string[] = [], skipped: string[] = [];
     const at = now();
     for (const item of draft.pages) {
       const current = this.store.getPage(item.slug);
-      if (current?.humanEdited) { skipped.push(item.slug); continue; }
+      if (item.action === 'skip' || current?.humanEdited) { skipped.push(item.slug); continue; }
       // Compare normalized documents: hand edits and concurrent publishes must
       // never be silently overwritten by a stale proposal. A "create" page that
       // someone else published meanwhile is skipped for the same reason.
@@ -508,7 +561,8 @@ export class WikiService {
     return this.enqueue('ask', `提问「${truncate(text, 30)}」`, async () => {
       const pages = searchPages(text, this.store.listPages(), Math.max(1, Math.min(20, this.config.maxContextPages)));
       const answer = byteTruncate(await this.complete(queryMessages(text, pages, this.schema(), resolveSkill(this.allSkills(), 'query'))), 60 * 1024);
-      const citations = [...new Set(extractLinks(answer))].filter(slug => !!this.store.getPage(slug));
+      if (this.signal.aborted) throw new Error('提问已取消');
+      const citations = [...new Set(extractLinks(answer))].filter(slug => pages.some(page => page.slug === slug));
       const record: WikiAnswer = {
         question: text, answer, citations, pages: pages.map(page => page.slug),
         evidence: this.answerEvidence(citations), model: this.model().model, at: now(),
@@ -544,8 +598,12 @@ export class WikiService {
   answers(): WikiAnswer[] {
     return this.store.meta().answers.map(answer => ({ ...answer, evidence: Array.isArray(answer.evidence) ? answer.evidence : [] }));
   }
+  archiveAnswer(question: string, answer: string, citations: string[], evidence: SourceEvidence[] = []): string {
+    return this.enqueue('archive', '归档回答', () => this.saveAnswer(question, answer, citations, evidence));
+  }
   async saveAnswer(question: string, answer: string, citations: string[], evidence: Pick<SourceExcerpt, 'sourceId' | 'quote'>[] = []): Promise<WikiPage> {
-    const text = truncate(String(answer ?? ''), 20_000);
+    const text = String(answer ?? '');
+    if (Buffer.byteLength(text) > 60 * 1024) throw new Error('回答过长，请拆分后归档');
     if (!text.trim()) throw new Error('回答内容为空');
     let generated: Record<string, unknown> | null = null;
     if (this.key()) {
@@ -555,8 +613,9 @@ export class WikiService {
     }
     const title = truncate(String(generated?.title ?? `问答：${truncate(question, 40)}`), 160);
     const body = String(generated?.body ?? `> 由问题「${question}」归档。\n\n${text}\n\n## 引用\n${citations.map(slug => `- [[${slug}]]`).join('\n') || '（无）'}`);
+    if (this.signal.aborted) throw new Error('归档已取消');
     return this.savePage({
-      slug: slugify(title), title, summary: truncate(String(generated?.summary ?? `由「${truncate(question, 40)}」生成的归档`), 400),
+      slug: slugify(title), title, createOnly: true, summary: truncate(String(generated?.summary ?? `由「${truncate(question, 40)}」生成的归档`), 400),
       body, kind: (generated?.kind as WikiPage['kind']) ?? 'note',
       evidence: evidence.slice(0, 8).map(item => ({ sourceId: item.sourceId, quote: item.quote })),
       tags: Array.isArray(generated?.tags) ? generated.tags.filter((value): value is string => typeof value === 'string').slice(0, 20) : ['问答归档'],
@@ -573,11 +632,12 @@ export class WikiService {
           model = {
             contradictions: Array.isArray(reply.contradictions) ? reply.contradictions.flatMap(item => item && typeof item === 'object' && typeof (item as { text?: unknown }).text === 'string' ? [{ page: String((item as { page?: unknown }).page ?? ''), text: truncate((item as { text: string }).text, 300) }] : []).slice(0, 50) : [],
             suggestions: Array.isArray(reply.suggestions) ? reply.suggestions.filter((value): value is string => typeof value === 'string').slice(0, 8).map(value => truncate(value, 300)) : [],
-            orphans: Array.isArray(reply.orphans) ? reply.orphans.filter((value): value is string => typeof value === 'string').slice(0, 50) : [],
+            // Orphans and broken links are computed deterministically from pages.
           };
         } catch (error) { model = { suggestions: ['模型体检不可用，已使用本地结构检查：' + String(error instanceof Error ? error.message : error).slice(0, 120)] }; }
       }
       const result: WikiLint = { ...local, ...model, at: now(), suggestions: [...(model.suggestions ?? []), ...local.suggestions].slice(0, 12) };
+      if (this.signal.aborted) throw new Error('体检已取消');
       await withWriteLock(() => {
         const meta = this.store.meta(); meta.lint = result; meta.lastLint = result.at;
         this.store.saveMeta(meta);
@@ -591,7 +651,7 @@ export class WikiService {
   }
   lintResult(): WikiLint | null { return this.store.meta().lint; }
   indexText(): string { return this.store.index(); }
-  logText(): string { return truncate(this.store.log(), 60_000); }
+  logText(): string { return this.store.log().slice(-60_000); }
 
   /** Used by tests and by a manual "rebuild navigation" action. */
   async rebuildIndex(): Promise<string> {

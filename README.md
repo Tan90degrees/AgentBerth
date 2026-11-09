@@ -14,7 +14,7 @@
 - **ACP 对话与 Superagent**：接入已有 ACP Agent，以对话管理计划、工具、授权与流式回复；Superagent 插件选择 ACP 协调/执行者，支持命名管道、多来源汇入与多管道分发；每管道拥有固定独立工作区（Git Worktree 或非 Git 隔离副本），支持差异预览与选择应用，任务串行并可按管道管理。信息源由插件自定义，不附带 GitHub、飞书适配器。见 [使用与开发指南](docs/ACP_SUPERAGENT.md)。
 - 插件 ZIP 分块解压，支持 80 MiB 包；默认上限 256 MiB、展开 1 GiB、50000 条目。Cordis 通用不代表 DeepSeek Harness 宿主 API 通用。
 
-- **笔记 Wiki（LLM Wiki）**：内置扩展，按 `raw/ → wiki/ → schema/` 分层把笔记编译成可维护的 Markdown 知识库。素材（含图片）进入 `raw/` 后只读；文本/视觉模型产出只生成待审阅提案，人工批准后才写入 `wiki/`，人工编辑的页面不会被自动覆盖。支持双向链接与 `index.md` / `log.md` 导航、带引用的直接提问、定时体检、Skill 增删查改与 `SKILL.md` 导入导出、答案归档与历史版本恢复。把 `.md/.txt` 放进 `raw/inbox/` 会自动导入（按内容去重，处理后归档到 `imported/`），也可把工作台 Agent 会话一键沉淀为素材；编译时的逐字引文会写进页面 frontmatter，页面与回答都能展开「原始出处」回溯到原文。只读命令以 MCP 工具开放给工作台 Agent（`wiki_index` / `wiki_search` / `wiki_read` / `wiki_ask` 等），写操作一律保持人审。模型走任意 OpenAI 兼容 `/chat/completions` 端点，API Key 只存插件私有凭据文件，不进入插件配置表单。
+- **笔记 Wiki（LLM Wiki）**：内置扩展，按 `raw/ → wiki/ → schema/` 分层把笔记编译成可维护的 Markdown 知识库。素材（含图片）进入 `raw/` 后只读；文本/视觉模型产出只生成待审阅提案，人工批准后才写入 `wiki/`，人工编辑的页面不会被自动覆盖。支持双向链接与 `index.md` / `log.md` 导航、带引用的直接提问、定时体检、Skill 增删查改与 `SKILL.md` 导入导出、答案归档与历史版本恢复。把 `.md/.txt` 放进 `raw/inbox/` 会自动导入（按内容去重，处理后归档到 `imported/`），也可把工作台 Agent 会话一键沉淀为素材；编译时的逐字引文会写进页面 frontmatter，页面与回答都能展开「原始出处」回溯到原文。在插件设置中显式开启「允许 Agent 读取全局知识库」后，读取命令以 MCP 工具开放给所有连接工作台的 Agent（不按项目隔离）；模型提问需额外开启「允许 Agent 调用模型提问」，会使用本机模型凭据并产生请求费用。工具包括 `wiki_index` / `wiki_search` / `wiki_read` / `wiki_ask` 等，发布操作一律保持人审。模型走任意 OpenAI 兼容 `/chat/completions` 端点，API Key 只存插件私有凭据文件，不进入插件配置表单。
 
 - **核心工作台 + Cordis 扩展**：项目、会话、Agent 注册中心、Skills、文件、Git、Worktree、主题、SSH/MCP、资源监控均为默认基础能力，不出现在插件开关中。Codex、Claude Code、OpenCode 和自定义 Agent 各自通过独立 Cordis Agent 插件接入；桌宠等可选增强在插件中心管理。插件支持独立配置、启停、重载、卸载和开发目录热重载。参见 [插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)。
 

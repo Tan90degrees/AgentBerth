@@ -8,3 +8,21 @@ export function restoreHistoryAnchor(host:HTMLElement,anchor:ReturnType<typeof c
   if(anchor.node?.isConnected&&anchor.node.parentElement===host)host.scrollTop+=anchor.node.getBoundingClientRect().top-host.getBoundingClientRect().top-anchor.offset;
   else host.scrollTop=anchor.top+host.scrollHeight-anchor.height;
 }
+
+/** Markdown highlighting and font substitution may resize earlier messages
+ * after React's layout effect. Keep the same message in view until the next
+ * user gesture, rather than restoring against only the first layout. */
+export function maintainHistoryAnchor(host: HTMLElement, anchor: ReturnType<typeof captureHistoryAnchor>, onRestore: () => void) {
+  const restore = () => { restoreHistoryAnchor(host, anchor); onRestore(); };
+  const observer = new ResizeObserver(restore);
+  for (const child of host.children) observer.observe(child);
+  const events = ['wheel', 'pointerdown', 'keydown'] as const;
+  const frame = requestAnimationFrame(restore);
+  const stop = () => {
+    observer.disconnect(); cancelAnimationFrame(frame);
+    for (const event of events) host.removeEventListener(event, stop, true);
+  };
+  for (const event of events) host.addEventListener(event, stop, true);
+  restore();
+  return stop;
+}

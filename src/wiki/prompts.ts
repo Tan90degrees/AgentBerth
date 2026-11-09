@@ -1,4 +1,4 @@
-import { buildIndex, extractLinks, truncate } from './core';
+import { buildIndex, extractLinks, searchPages, truncate } from './core';
 import type { ChatMessage } from './llm';
 import type { WikiPage, WikiSkill, WikiSource } from './types';
 
@@ -135,13 +135,23 @@ export function ingestMessages(source: WikiSource, schema: string, skill: WikiSk
   return [{ role: 'system', content: system(schema, skill) }, { role: 'user', content: context }];
 }
 
+export function compileContext(source: WikiSource, ingest: string, pages: WikiPage[]): WikiPage[] {
+  let remaining = 48_000;
+  return searchPages(source.title + '\n' + source.text.slice(0, 6000) + '\n' + ingest, pages, 24).filter(page => {
+    if (page.humanEdited || page.body.length > remaining) return false;
+    remaining -= page.body.length;
+    return true;
+  });
+}
+
 export function compileMessages(
   source: WikiSource, ingest: string, pages: WikiPage[], schema: string, skill: WikiSkill, feedback: string[],
 ): ChatMessage[] {
-  const related = pages.slice(0, 24).map(page => `## [[${page.slug}]] ${page.title}\n摘要：${page.summary}\n现有链接：${extractLinks(page.body).slice(0, 12).join('、') || '无'}`).join('\n');
+  const related = pages.map(page => `## [[${page.slug}]] ${page.title}\n摘要：${page.summary}\n来源：${page.sources.join('、')}\n现有完整正文：\n${page.body}`).join('\n');
   const context = [
-    '# 现有页面（可更新，slug 必须一致）', related || '（尚无页面）',
+    '# 现有页面（仅可更新以下提供了完整正文的页面，保留旧结论与来源，slug 必须一致）', related || '（尚无页面）',
     '\n# 本次素材', `素材 ID：${source.id}`, `标题：${source.title}`, truncate(source.text, 16000),
+    source.vision ? '\n# 图片理解（模型生成，不属于原文引文）\n' + source.vision : '',
     '\n# 摄入结果（概念与论断）', truncate(ingest, 12000),
     feedback.length ? '\n# 上次拒绝反馈（必须逐条回应）\n' + feedback.map(item => '- ' + item).join('\n') : '',
     `\n请输出针对素材 ${source.id} 的编译提案 JSON。`,

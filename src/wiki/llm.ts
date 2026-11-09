@@ -23,6 +23,8 @@ export function completionUrl(baseURL: string): string {
   if (!value) throw new Error('请先在设置中填写模型服务地址');
   let url: URL;
   try { url = new URL(value); } catch { throw new Error('模型服务地址不是有效的 URL'); }
+  if (url.username || url.password) throw new Error('请通过 API Key 配置凭据，服务地址不能包含用户名或密码');
+  url.hash = '';
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('模型服务地址只支持 HTTP / HTTPS');
   if (url.pathname.endsWith('/chat/completions')) { url.search = ''; return url.toString(); }
   url.pathname = url.pathname.replace(/\/+$/, '') + '/chat/completions';
@@ -77,17 +79,17 @@ export async function chat(options: ChatOptions): Promise<string> {
       signal: controller.signal,
     });
     if (!response.ok) {
-      const detail = redact((await response.text().catch(() => '')).slice(0, 400), options.apiKey);
+      const detail = redact(await response.text().catch(() => ''), options.apiKey).slice(0, 400);
       throw new Error(`模型请求失败（HTTP ${response.status}）：${detail || '服务未返回错误详情'}`);
     }
     const payload = await response.json() as { choices?: { message?: { content?: unknown } }[]; error?: { message?: string } };
-    if (payload.error?.message) throw new Error('模型服务返回错误：' + redact(payload.error.message.slice(0, 300), options.apiKey));
+    if (payload.error?.message) throw new Error('模型服务返回错误：' + redact(payload.error.message, options.apiKey).slice(0, 300));
     const text = contentText(payload.choices?.[0]?.message?.content).trim();
     if (!text) throw new Error('模型返回了空内容');
     return text;
   } catch (error) {
     if (controller.signal.aborted && !options.signal?.aborted) throw new Error('模型响应超时，请检查服务地址或稍后重试');
-    throw error;
+    throw new Error(redact(error instanceof Error ? error.message : String(error), options.apiKey));
   } finally {
     clearTimeout(timeout);
     options.signal?.removeEventListener('abort', onAbort);

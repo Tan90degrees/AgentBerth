@@ -1,6 +1,6 @@
 import type { Context } from 'cordis';
 import path from 'node:path';
-import { byteTruncate, extractLinks, lineDiff, truncate } from './core';
+import { byteTruncate, extractLinks, lineDiff, pageHash, parseDocument, truncate } from './core';
 import { startInbox, type InboxHandle } from './inbox';
 import type { ServiceOptions } from './service';
 import { WikiService } from './service';
@@ -15,6 +15,8 @@ const text = (params: Params, key: string, fallback = ''): string => typeof para
 const bool = (params: Params, key: string): boolean => params[key] === true;
 const number = (params: Params, key: string, fallback = 0): number => typeof params[key] === 'number' ? params[key] as number : fallback;
 const strings = (params: Params, key: string): string[] => Array.isArray(params[key]) ? (params[key] as unknown[]).filter((value): value is string => typeof value === 'string') : [];
+const paging = { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 } };
+const pageSlice = <T>(items: T[], params: Params) => items.slice(number(params, 'offset'), number(params, 'offset') + Math.max(1, Math.min(50, number(params, 'limit', 50))));
 const field = (type: string, extra: Record<string, unknown> = {}): Properties[string] => ({ type, ...extra });
 const schema = (properties: Properties, required: string[] = []): Record<string, unknown> => ({ type: 'object', properties, additionalProperties: false, required });
 
@@ -58,7 +60,9 @@ function readConfig(config: Record<string, string | number | boolean>): WikiConf
     textModel: String(config.textModel ?? 'gpt-4o-mini'),
     visionModel: String(config.visionModel ?? ''),
     autoCompile: config.autoCompile !== false,
-    autoApprove: config.autoApprove === true,
+    autoApprove: false,
+    allowAgentAccess: config.allowAgentAccess === true,
+    allowAgentQueries: config.allowAgentQueries === true,
     lintMinutes: Number(config.lintMinutes ?? 0),
     maxContextPages: Number(config.maxContextPages ?? 8),
   };
@@ -95,11 +99,11 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('save_schema', '更新 Schema 约定', schema({ value: field('string', { maxLength: 20000 }) }, ['value']), params => service.saveSchema(text(params, 'value')).then(() => true));
 
   // Pages
-  add('list_pages', '列出所有 wiki 页面（摘要）', schema({}), () => {
+  add('list_pages', '列出所有 wiki 页面（摘要）', schema(paging), params => {
     const pages = service.listPages();
     const inbound = new Map<string, number>();
     for (const page of pages) for (const target of extractLinks(page.body)) inbound.set(target, (inbound.get(target) ?? 0) + 1);
-    return pages.slice(0, 500).map(page => ({ slug: page.slug, title: byteTruncate(page.title, 300), summary: byteTruncate(page.summary, 600), kind: page.kind, humanEdited: page.humanEdited, updatedAt: page.updatedAt, links: extractLinks(page.body).length, backlinks: inbound.get(page.slug) ?? 0 }));
+    return pageSlice(pages, params).map(page => ({ slug: page.slug, title: byteTruncate(page.title, 300), summary: byteTruncate(page.summary, 600), kind: page.kind, humanEdited: page.humanEdited, updatedAt: page.updatedAt, links: extractLinks(page.body).length, backlinks: inbound.get(page.slug) ?? 0 }));
   });
   add('get_page', '读取单页全文、反向链接与原始出处', schema({ slug: field('string') }, ['slug']), params => {
     const page = service.getPage(text(params, 'slug'));
@@ -109,16 +113,17 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     // double the payload and can push a long Chinese page past the bridge cap.
     return {
       page: { ...page, body: byteTruncate(page.body, 60 * 1024) },
+      editToken: pageHash(page), truncated: Buffer.byteLength(page.body) > 60 * 1024,
       backlinks: inbound.slice(0, 200), history: service.history(page.slug),
       excerpts: service.excerpts(page.slug),
     };
   });
   add('save_page', '人工编辑页面（自动编译将跳过）', schema({
-    slug: field('string'), title: field('string'), summary: field('string'), body: field('string'),
+    slug: field('string'), title: field('string'), summary: field('string'), body: field('string'), expected: field('string'), createOnly: field('boolean'),
     kind: field('string', { enum: ['concept', 'entity', 'source', 'comparison', 'overview', 'note'] }),
     tags: field('array', { items: { type: 'string' } }),
   }, ['slug', 'body']), params => service.savePage({
-    slug: text(params, 'slug'),
+    slug: text(params, 'slug'), expected: typeof params.expected === 'string' ? params.expected : undefined, createOnly: bool(params, 'createOnly'),
     ...(typeof params.title === 'string' ? { title: params.title as string } : {}),
     ...(typeof params.summary === 'string' ? { summary: params.summary as string } : {}),
     body: text(params, 'body'),
@@ -130,7 +135,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
 
   // Raw sources and multimodal attachments (one image per call: the view
   // bridge caps a command's params at 64 KiB).
-  add('list_sources', '列出原始素材', schema({}), () => service.listSources().slice(0, 300).map(source => ({
+  add('list_sources', '列出原始素材', schema(paging), params => pageSlice(service.listSources(), params).map(source => ({
     id: source.id, title: byteTruncate(source.title, 300), createdAt: source.createdAt, compiled: source.compiled,
     images: source.images.length, hasVision: !!source.vision, length: source.text.length,
   })));
@@ -143,8 +148,9 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
       images: source.images.slice(0, 40),
     } : null;
   });
-  add('add_source', '新增原始素材（不可变）', schema({ title: field('string'), text: field('string') }, ['text']), params => service.addSource({ title: text(params, 'title'), text: text(params, 'text') }));
+  add('add_source', '新增原始素材（不可变）', schema({ title: field('string'), text: field('string'), staging: field('boolean') }, ['text']), params => service.addSource({ title: text(params, 'title'), text: text(params, 'text'), staging: bool(params, 'staging') }));
   add('add_image', '为素材追加一张压缩后的图片', schema({ sourceId: field('string'), mime: field('string'), base64: field('string') }, ['sourceId', 'mime', 'base64']), params => service.addImage(text(params, 'sourceId'), text(params, 'mime'), text(params, 'base64')));
+  add('finalize_source', '完成素材图片上传', schema({ id: field('string') }, ['id']), params => service.finalizeSource(text(params, 'id')));
   add('delete_source', '删除原始素材', schema({ id: field('string') }, ['id']), params => service.deleteSource(text(params, 'id')).then(() => true));
 
   // Automatic capture: watch raw/inbox and import finished workbench sessions.
@@ -177,20 +183,26 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
 
   // Compile → draft → review
   add('compile', '把素材编译成待审阅提案', schema({ sourceId: field('string') }), params => service.compile(text(params, 'sourceId') || undefined));
-  add('list_drafts', '列出编译提案', schema({ status: field('string', { enum: ['pending', 'approved', 'rejected'] }) }), params => service.listDrafts(typeof params.status === 'string' ? params.status as 'pending' | 'approved' | 'rejected' : undefined)
-    .slice(0, 100).map(draft => ({ id: draft.id, sourceId: draft.sourceId, sourceTitle: draft.sourceTitle, createdAt: draft.createdAt, status: draft.status, model: draft.model, summary: byteTruncate(draft.summary, 600), pages: draft.pages.slice(0, 20).map(page => ({ slug: page.slug, title: byteTruncate(page.title, 300), action: page.action, summary: byteTruncate(page.summary, 600) })), contradictions: draft.contradictions.slice(0, 20).map(value => byteTruncate(value, 600)), feedback: draft.feedback.slice(0, 10) })));
+  add('list_drafts', '列出编译提案', schema({ ...paging, status: field('string', { enum: ['pending', 'approved', 'rejected'] }) }), params => pageSlice(service.listDrafts(typeof params.status === 'string' ? params.status as 'pending' | 'approved' | 'rejected' : undefined), { ...params, limit: Math.min(10, number(params, 'limit', 10)) }).map(draft => ({ id: draft.id, sourceId: draft.sourceId, sourceTitle: draft.sourceTitle, createdAt: draft.createdAt, status: draft.status, model: draft.model, summary: byteTruncate(draft.summary, 600), pages: draft.pages.slice(0, 20).map(page => ({ slug: page.slug, title: byteTruncate(page.title, 300), action: page.action, summary: byteTruncate(page.summary, 600) })), contradictions: draft.contradictions.slice(0, 20).map(value => byteTruncate(value, 600)), feedback: draft.feedback.slice(0, 10) })));
   add('get_draft', '读取单个提案（页摘要）', schema({ id: field('string') }, ['id']), params => {
     const draft = service.getDraft(text(params, 'id'));
     return draft ? { ...draft, pages: draft.pages.map(page => ({ slug: page.slug, title: page.title, action: page.action, summary: page.summary })) } : null;
   });
-  add('draft_page', '读取提案中某一页的完整 diff', schema({ id: field('string'), slug: field('string') }, ['id', 'slug']), params => {
+  add('draft_page', '读取提案中某一页的完整 diff', schema({ id: field('string'), slug: field('string'), offset: field('integer', { minimum: 0 }) }, ['id', 'slug']), params => {
     const draft = service.getDraft(text(params, 'id'));
     const page = draft?.pages.find(item => item.slug === text(params, 'slug'));
     if (!page) return null;
-    const previous = page.previous ? byteTruncate(page.previous, 24 * 1024) : null;
-    const body = byteTruncate(page.body, 48 * 1024);
-    return { ...page, previous, body, diff: lineDiff(previous ?? '', body).slice(0, 300)
-      .map(line => ({ ...line, text: byteTruncate(line.text, 2 * 1024) })) };
+    const lines = lineDiff(page.previous ? parseDocument(page.previous).body : '', page.body);
+    const offset = number(params, 'offset');
+    const diff: typeof lines = [];
+    let bytes = 0;
+    for (const line of lines.slice(offset)) {
+      const size = resultBytes(line);
+      if (diff.length && (bytes + size > 72 * 1024 || diff.length >= 200)) break;
+      diff.push(line); bytes += size;
+    }
+    return { slug: page.slug, title: page.title, action: page.action, diff, nextOffset: offset + diff.length,
+      hasMore: offset + diff.length < lines.length, totalLines: lines.length };
   });
   add('review_draft', '批准或拒绝提案（可附反馈）', schema({
     id: field('string'), action: field('string', { enum: ['approve', 'reject'] }), feedback: field('string'),
@@ -199,11 +211,12 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   // Query / lint / synthesis
   add('ask', '基于 wiki 提问（引用页面并回溯原文）', schema({ question: field('string') }, ['question']), params => service.ask(text(params, 'question')));
   add('answers', '最近的问答记录', schema({}), () => service.answers().slice(0, 5).map(answer => ({ ...answer, answer: truncate(answer.answer, 4000) })));
+  add('get_answer', '读取完整问答记录', schema({ at: field('string') }, ['at']), params => service.answers().find(answer => answer.at === text(params, 'at')) ?? null);
   add('save_answer', '把回答归档成新页面', schema({
     question: field('string'), answer: field('string'),
     citations: field('array', { items: { type: 'string' } }),
     evidence: field('array', { items: { type: 'object', properties: { sourceId: field('string'), quote: field('string') } } }),
-  }, ['question', 'answer']), params => service.saveAnswer(
+  }, ['question', 'answer']), params => service.archiveAnswer(
     text(params, 'question'), text(params, 'answer'), strings(params, 'citations'),
     (Array.isArray(params.evidence) ? params.evidence : [])
       .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
@@ -252,8 +265,13 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     }, true);
 
   for (const command of commands) {
-    api.command({ name: command.name, description: command.description, mcp: command.mcp, inputSchema: command.input },
-      async params => fit(await command.handler(params)));
+    api.command({ name: command.name, description: command.description, mcp: command.mcp && !!options.config.allowAgentAccess && (command.name !== 'wiki_ask' || !!options.config.allowAgentQueries), inputSchema: command.input },
+      async params => {
+        if (command.mcp && (!options.config.allowAgentAccess || (command.name === 'wiki_ask' && !options.config.allowAgentQueries))) throw new Error('请先在插件设置中启用 Agent 知识库访问权限');
+        const result = await command.handler(params);
+        if (['get_page', 'get_skill', 'schema'].includes(command.name) && resultBytes(result) > MAX_RESULT_BYTES) throw new Error('内容过大，请在本地文件中编辑完整内容');
+        return fit(result);
+      });
   }
 
   // Automatic maintenance: new material is compiled into a reviewable draft,
