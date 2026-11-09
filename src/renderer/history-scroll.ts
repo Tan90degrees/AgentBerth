@@ -15,7 +15,8 @@ export function restoreHistoryAnchor(host:HTMLElement,anchor:ReturnType<typeof c
 export function maintainHistoryAnchor(host: HTMLElement, anchor: ReturnType<typeof captureHistoryAnchor>, onRestore: () => void) {
   const restore = () => { restoreHistoryAnchor(host, anchor); onRestore(); };
   const observer = new ResizeObserver(restore);
-  for (const child of host.children) observer.observe(child);
+  // Padding and borders can move the anchor without resizing the content box.
+  for (const child of host.children) observer.observe(child, { box: 'border-box' });
   const events = ['wheel', 'pointerdown', 'keydown'] as const;
   const frame = requestAnimationFrame(restore);
   const stop = () => {
