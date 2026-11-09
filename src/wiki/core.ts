@@ -144,6 +144,11 @@ export function pageFromDocument(slug: string, text: string, fallbackTime: strin
     createdAt: typeof data.createdAt === 'string' ? data.createdAt : fallbackTime,
     updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : fallbackTime,
   };
+  // External Markdown editors cannot set the UI's humanEdited flag. Detect
+  // edits from the persisted fingerprint too, accepting v1 fingerprints for
+  // pages written before kind/tags became part of the hash.
+  const legacyHash = createHash('sha256').update(JSON.stringify([page.title, page.summary, page.body, page.sources, page.evidence])).digest('hex').slice(0, 32);
+  if (data.humanEdited === undefined || (page.hash && page.hash !== pageHash(page) && page.hash !== legacyHash)) page.humanEdited = true;
   return page;
 }
 

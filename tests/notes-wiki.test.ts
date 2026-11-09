@@ -816,3 +816,25 @@ test('long proposal diffs retain every changed line and oversized model pages ar
   assert.equal(slugify('CON'), 'page-con');
   assert.equal(slugify('LPT1.txt'), 'page-lpt1.txt');
 });
+
+
+test('external Markdown edits are protected even when frontmatter flags are unchanged', async t => {
+  const store = new WikiStore(temp(t));
+  const original = page('向量检索', '向量检索的自动生成正文');
+  original.hash = pageHash(original);
+  store.savePage(original);
+  assert.equal(store.getPage(original.slug)!.humanEdited, false);
+  const file = path.join(store.root, 'wiki', original.slug + '.md');
+  writeFileSync(file, pageToDocument(original).replace(original.body, '用户在外部编辑器写入的正文'));
+  assert.equal(store.getPage(original.slug)!.humanEdited, true);
+  const service = new WikiService({ store, config: config(), signal: new AbortController().signal, fetchImpl: modelFetch({ requests: [] }) });
+  await service.setApiKey('test');
+  const source = await service.addSource({ title: '向量检索', text: '向量检索与重排序的关系' });
+  const result = await waitFor(service, service.compile(source.id));
+  assert.equal(result.status, 'done', result.error);
+  const draft = service.getDraft(result.result as string)!;
+  assert.equal(draft.pages.find(item => item.slug === original.slug)!.action, 'skip');
+  await waitFor(service, service.reviewDraft(draft.id, 'approve'));
+  assert.equal(store.getPage(original.slug)!.body, '用户在外部编辑器写入的正文');
+  assert.equal(pageFromDocument('plain', '# 手工放入的 Markdown', '').humanEdited, true);
+});
