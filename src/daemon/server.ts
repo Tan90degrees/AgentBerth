@@ -744,7 +744,7 @@ export class DaemonServer {
       else live.outputTimer ??= setTimeout(() => this.flushOutput(live), 16);
     });
     let connectedRun = false, startupExit: number | null = null;
-    child.onExit(({ exitCode }) => { if (remote && !connectedRun) { startupExit = exitCode; return; } void this.finish(sessionId, live, exitCode); });
+    child.onExit(({ exitCode }) => { if (remote && !connectedRun) { startupExit = exitCode; return; } void this.finish(sessionId, live, exitCode).catch(error => this.logError(error)); });
     if (remote) {
       try { await remote.transport.connect(); this.store.setPid(run.id, child.pid); live.run = this.store.run(run.id); }
       catch (error) {
