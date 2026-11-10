@@ -370,11 +370,22 @@ try {
   await frame.locator('.tabs [data-tab="settings"]').click();
   await until(async () => await frame.locator('#backupControls').count() > 0, 'backup controls');
   const backupPath = path.join(folder, 'wiki-backup.zip');
-  await application.evaluate(({ session }, file) => { session.defaultSession.on('will-download', (_event, item) => item.setSavePath(file)); }, backupPath);
-  const downloading = page.waitForEvent('download');
+  // Electron keeps its native download behavior; unlike a managed browser,
+  // Playwright does not guarantee a Page.download event for that session.
+  await application.evaluate(({ session }, file) => {
+    globalThis.__wikiSmokeDownload = { state: 'waiting' };
+    session.defaultSession.once('will-download', (_event, item) => {
+      item.setSavePath(file);
+      globalThis.__wikiSmokeDownload = { state: 'downloading', name: item.getFilename() };
+      item.once('done', (_event, state) => { globalThis.__wikiSmokeDownload = { state, bytes: item.getReceivedBytes() }; });
+    });
+  }, backupPath);
   await frame.locator('[data-action="exportBackup"]').click();
-  const downloaded = await downloading;
-  await downloaded.path();
+  await until(async () => {
+    const download = await application.evaluate(() => globalThis.__wikiSmokeDownload);
+    if (['cancelled', 'interrupted'].includes(download.state)) throw new Error('Native backup download failed: ' + JSON.stringify(download));
+    return download.state === 'completed';
+  }, 'native backup download completes');
   const backupBytes = await readFile(backupPath), archive = unzipSync(backupBytes);
   assert.ok(archive['wiki/window-trash.md'], 'download contains restored page');
   assert.equal(archive['credentials.json'], undefined, 'portable backup excludes credentials');
@@ -397,7 +408,7 @@ try {
     try {
       const page = await application.firstWindow();
       const frame = page.frameLocator('iframe.extension-view');
-      console.error('Wiki view failure context', JSON.stringify({ errors, events: await frame.locator('body').evaluate(() => window.__wikiSmokeEvents), error: await frame.locator('#error').innerText(), panel: await frame.locator('.panel.active').innerText() }));
+      console.error('Wiki view failure context', JSON.stringify({ errors, events: await frame.locator('body').evaluate(() => window.__wikiSmokeEvents), download: await application.evaluate(() => globalThis.__wikiSmokeDownload), notice: await frame.locator('#uxNotice').innerText(), error: await frame.locator('#error').innerText(), panel: await frame.locator('.panel.active').innerText() }));
       await page.screenshot({ path: 'test-results/wiki-window-failure.png' });
     } catch { /* ignore */ }
   }
