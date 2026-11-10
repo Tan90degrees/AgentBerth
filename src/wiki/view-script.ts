@@ -287,7 +287,7 @@ export const notesWikiScript = String.raw`
         '<p class="muted">同类型的自定义 Skill 会优先于内置版本；用同名保存可覆盖内置指令。</p>'+
         '<div class="row">'+button('saveSkill','保存','primary')+(state.newSkill?'':button('deleteSkill','删除','danger')+button('exportSkill','导出 SKILL.md'))+button('cancelSkill','取消')+'</div><p id="skillStatus" class="muted"></p><div id="skillExport"></div>');
       var body=field('body',host);
-      if(body&&!state.newSkill)call('get_skill',{name:state.skill}).then(function(value){if(value&&body.isConnected&&!body.value.trim())body.value=value.body}).catch(err);
+      if(body&&!state.newSkill)call('get_skill',{name:state.skill}).then(function(value){if(value&&body.isConnected&&body.closest('[data-draft-key]')?.dataset.dirty!=='true'&&!body.value.trim())body.value=value.body}).catch(err);
       return;
     }
     host.innerHTML=card('工作流 Skill','<p>每个 Skill 是一个可编辑的 Markdown 指令模板，对应 LLM Wiki 的 Schema 层：摄入、编译、查询、体检、归档。</p><p class="muted">内置 Skill 可编辑覆盖但不能删除；自定义 Skill 可自由增删改查，导出的 SKILL.md 与工作台 Agent 的技能格式兼容。</p><div class="row">'+button('newSkill','新建 Skill','primary')+'</div><details><summary>导入 SKILL.md</summary><label>粘贴内容<textarea data-field="import" rows="8" maxlength="30000" placeholder="粘贴 SKILL.md 全文（含 --- 头部）"></textarea></label>'+button('importSkill','导入','primary')+'</details><div id="skillExport"></div>');
@@ -309,7 +309,7 @@ export const notesWikiScript = String.raw`
     host.innerHTML=info+progress+'<details><summary>高级凭据管理</summary>'+key+'</details><details><summary>高级：知识库约定（Schema）</summary>'+schema+'</details>'+file;
     if(state.file&&state.file!=='schema')loadFile(state.file);
     var schemaBox=field('schema',host);
-    if(schemaBox)call('schema').then(function(value){if(schemaBox.isConnected&&!schemaBox.value.trim())schemaBox.value=value}).catch(err);
+    if(schemaBox)call('schema').then(function(value){if(schemaBox.isConnected&&schemaBox.closest('[data-draft-key]')?.dataset.dirty!=='true'&&!schemaBox.value.trim())schemaBox.value=value}).catch(err);
   }
   function loadFile(name){
     if(name==='lint'){call('lint_result').then(function(result){var box=$('fileContent');if(box)box.textContent=result?JSON.stringify(result,null,2):'尚未运行体检。'}).catch(err);return}
@@ -405,6 +405,7 @@ export const notesWikiScript = String.raw`
       });return;
     }
     if(action==='saveSource'){
+      var sourceSnapshot=captureDraft($('sourceView'),'source:new');
       var files=Array.prototype.slice.call((field('images')||{}).files||[]).slice(0,4);
       var title=val('title'),text=val('text');
       if(!text.trim()&&!files.length){err('请填写正文或选择图片');return}
@@ -424,18 +425,18 @@ export const notesWikiScript = String.raw`
           });
         });
         return chain.then(function(){return call('finalize_source',{id:source.id})}).then(function(){
-          forgetDraft('source:new');
-          savedSource=null;state.newSource=false;state.source=source.id;
+          var sourceChanged=acknowledgeDraft(sourceSnapshot);
+          savedSource=null;if(state.newSource&&!sourceChanged){state.newSource=false;state.source=source.id;}
           progress('素材已保存，正在启动编译…');
           return call('compile',{sourceId:source.id}).then(function(taskId){
-            state.newSource=false;state.source=source.id;state.tab='sources';setTab('sources');startTask(taskId,'compile');
+            if(!sourceChanged&&ux.nav===sourceSnapshot.nav&&state.tab==='sources')renderSource();startTask(taskId,'compile',sourceSnapshot.nav);
             return refreshLists();
           });
         });
       }).catch(function(error){
         progress('');err(error);
         if(savedSource&&files.length)call('delete_source',{id:savedSource.id}).catch(err);
-        if(!state.newSource){setTab('sources');refreshLists()}
+        if(!state.newSource){if(ux.nav===sourceSnapshot.nav&&state.tab==='sources')renderSource();refreshLists()}
       }).finally(function(){if(node.isConnected)node.disabled=false});
       return;
     }

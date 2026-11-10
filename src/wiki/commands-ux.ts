@@ -66,8 +66,10 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   cmd('export_backup', '导出完整知识库（不含模型密钥）', {}, [], () => write(() => transfers.download('AgentBerth-Wiki-' + new Date().toISOString().slice(0, 10) + '.zip', workspace.backup())));
   cmd('backup_upload_start', '开始导入知识库备份', {}, [], () => transfers.start('backup.zip'));
   cmd('backup_upload_chunk', '上传备份并预览冲突', { ...id, base64: field('string'), done: field('boolean') }, ['id', 'base64'], p => { const bytes = transfers.append(str(p, 'id'), str(p, 'base64'), p.done === true); return bytes ? workspace.previewBackup(bytes) : null; });
-  const idle = () => { if (service.taskList().some(task => ['queued', 'running'].includes(task.status))) throw new Error('请先完成或取消当前任务再恢复备份'); };
-  cmd('apply_backup', '导入备份，自动保留恢复前备份', { ...id, overwrite: field('boolean') }, ['id'], p => write(() => { idle(); const result = workspace.importBackup(transfers.bytes(str(p, 'id')), p.overwrite === true); transfers.cancel(str(p, 'id')); store.saveIndex(buildIndex(store.listPages())); return result; }));
+  const idle = () => service.assertWorkspaceIdle();
+  cmd('apply_backup', '导入备份，自动保留恢复前备份', { ...id, overwrite: field('boolean') }, ['id'], p => write(() => { idle(); const result = workspace.importBackup(transfers.bytes(str(p, 'id')), p.overwrite === true); service.reloadWorkspaceState(); transfers.cancel(str(p, 'id')); store.saveIndex(buildIndex(store.listPages())); return result; }));
   cmd('rollback_backups', '列出恢复前的自动备份', {}, [], () => workspace.rollbackBackups());
-  cmd('restore_backup', '恢复一份自动备份', { name: field('string') }, ['name'], p => write(() => { idle(); const result = workspace.importBackup(workspace.readRollback(str(p, 'name')), true); store.saveIndex(buildIndex(store.listPages())); return result; }));
+  cmd('rollback_snapshots', '按时间列出自动快照与大小', {}, [], () => workspace.rollbackSnapshots());
+  cmd('preview_rollback', '预览完整快照恢复时移除的新增内容', { name: field('string') }, ['name'], p => workspace.previewRollback(str(p, 'name')));
+  cmd('restore_backup', '完整恢复一份自动备份，移除快照之外的知识内容', { name: field('string') }, ['name'], p => write(() => { idle(); const result = workspace.restoreRollback(str(p, 'name')); service.reloadWorkspaceState(); store.saveIndex(buildIndex(store.listPages())); return result; }));
 }

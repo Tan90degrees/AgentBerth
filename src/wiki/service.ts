@@ -61,13 +61,7 @@ export class WikiService {
   constructor(options: ServiceOptions) {
     this.store = options.store;
     this.workspace = new WikiWorkspace(options.store);
-    const savedTasks = this.workspace.tasks<WikiTask[]>([]);
-    for (const task of (Array.isArray(savedTasks) ? savedTasks : []).slice(0, 200)) {
-      if (!task || !task.id || !task.kind || typeof task.startedAt !== 'string') continue;
-      if (['queued', 'running'].includes(task.status)) { task.status = 'failed'; task.error = '后台已重启，请重试'; task.finishedAt = now(); }
-      this.tasks.set(task.id, task);
-      if (task.status === 'cancelled' && task.retry?.action === 'compile') this.pausedSources.add(String(task.retry.params.sourceId));
-    }
+    this.loadTaskHistory('后台已重启，请重试');
     this.config = options.config;
     this.signal = options.signal;
     this.fetchImpl = options.fetchImpl;
@@ -89,6 +83,28 @@ export class WikiService {
   private key(): string { return this.store.credentials().apiKey; }
   private modelReady(): boolean { return !!this.config.textModel.trim() && (this.config.authRequired === false || !!this.key()); }
   private assertOperation(): void { if (this.signal.aborted || this.operationContext.getStore()?.aborted) throw new Error('任务已取消'); }
+  private loadTaskHistory(reason: string): void {
+    this.tasks.clear(); this.pausedSources.clear();
+    const saved = this.workspace.tasks<WikiTask[]>([]);
+    for (const task of (Array.isArray(saved) ? saved : []).slice(-200)) {
+      if (!task || typeof task.id !== 'string' || typeof task.label !== 'string' || typeof task.startedAt !== 'string' || !['compile', 'ask', 'lint', 'vision', 'archive'].includes(task.kind) || !['queued', 'running', 'done', 'failed', 'cancelled'].includes(task.status)) continue;
+      if (['queued', 'running'].includes(task.status)) { task.status = 'failed'; task.error = reason; task.finishedAt = now(); task.manualRetry = true; }
+      if (task.retry && (!task.retry.params || typeof task.retry.params !== 'object' || Array.isArray(task.retry.params))) delete task.retry;
+      if (typeof task.progress !== 'string') task.progress = '';
+      this.tasks.set(task.id, task);
+      if ((task.status === 'cancelled' || task.manualRetry) && task.retry?.action === 'compile') this.pausedSources.add(String(task.retry.params.sourceId));
+    }
+  }
+  assertWorkspaceIdle(): void {
+    this.prunePdfUploads();
+    if (this.draining || this.queue.length || this.taskControllers.size || this.taskList().some(task => ['queued', 'running'].includes(task.status))) throw new Error('请先完成任务或等待取消处理结束，再恢复备份');
+    if (this.pdfUploads.size) throw new Error('请先完成或取消 PDF 上传，再恢复备份');
+  }
+  reloadWorkspaceState(): void {
+    this.assertWorkspaceIdle(); this.loadTaskHistory('备份中的未完成任务，请手动重试');
+    this.compiling.clear(); this.failedSources.clear(); this.counts = undefined;
+    this.lastTickLint = Date.parse(this.store.meta().lastLint ?? '') || 0; this.persistTasks();
+  }
   private persistTasks(): void { this.workspace.saveTasks([...this.tasks.values()].slice(-200)); }
   taskList(): WikiTask[] { return [...this.tasks.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)); }
   cancelTask(id: string): boolean {

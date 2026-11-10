@@ -98,6 +98,8 @@ export interface WikiTask {
   finishedAt?: string;
   error?: string;
   result?: unknown;
+  /** Interrupted requests require explicit retry, including auto-compile. */
+  manualRetry?: boolean;
   retry?: { action: string; params: Record<string, unknown> };
 }
 

@@ -398,6 +398,33 @@ try {
   assert.equal((await call('get_page', { slug: 'window-trash' })).page.body.includes('恢复后仍然完整'), true);
   step('sandboxed backup download, conflict preview and safe import work');
 
+  const snapshotsBeforeRestore = await call('rollback_backups');
+  const snapshotName = snapshotsBeforeRestore[0];
+  assert.ok(snapshotName, 'import retained an automatic snapshot');
+  await call('save_page', { slug: 'snapshot-addition', title: '快照后新增', body: '完整恢复时应移除，撤销恢复时应回来' });
+  await frame.locator('.tabs [data-tab="wiki"]').click();
+  await frame.locator('#newPage').click();
+  await frame.locator('#pageView [data-field="body"]').fill('恢复之前最后输入的未保存草稿');
+  await frame.locator('.tabs [data-tab="settings"]').click();
+  await until(async () => await frame.locator('[data-action="restoreBackup"][data-name="' + snapshotName + '"]').count() > 0, 'snapshot controls reloaded');
+  await frame.locator('#backupControls details > summary').click();
+  await frame.locator('[data-action="restoreBackup"][data-name="' + snapshotName + '"]').click();
+  await until(async () => (await frame.locator('[role="dialog"]').innerText()).includes('将移除快照后新增的'), 'snapshot removal impact is visible');
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => (await frame.locator('#uxNotice').innerText()).includes('完整快照已恢复'), 'full snapshot restored');
+  assert.equal(await call('get_page', { slug: 'snapshot-addition' }), null, 'rollback removes additions');
+  assert.equal((await call('editor_drafts')).some(draft => draft.key === 'page:new'), false, 'removed drafts do not return from hidden editors');
+  assert.ok(await call('get_page', { slug: 'window-trash' }), 'original notes remain');
+  const undoName = (await call('rollback_backups')).find(name => !snapshotsBeforeRestore.includes(name));
+  assert.ok(undoName, 'restoring a snapshot retains an undo snapshot');
+  await until(async () => await frame.locator('[data-action="restoreBackup"][data-name="' + undoName + '"]').count() > 0, 'undo snapshot is visible');
+  await frame.locator('#backupControls details > summary').click();
+  await frame.locator('[data-action="restoreBackup"][data-name="' + undoName + '"]').click();
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => !!await call('get_page', { slug: 'snapshot-addition' }), 'snapshot restoration can be undone');
+  assert.equal((await call('get_editor_draft', { key: 'page:new' })).fields.body, '恢复之前最后输入的未保存草稿', 'undo retains the final editor input');
+  step('full snapshot rollback removes additions and supports undo');
+
   assert.equal((await frame.locator('#error').innerText()).trim(), '', 'no command errors in the view');
   assert.deepEqual(errors, [], 'no renderer page errors');
   console.log('RESULT OK', JSON.stringify({ pages: (await call('list_pages')).length, requests: requests.length, errors }));

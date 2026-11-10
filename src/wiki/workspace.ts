@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { unzipSync, zipSync } from 'fflate';
-import { pageHash, slugify } from './core';
+import { byteTruncate, pageHash, slugify } from './core';
 import type { WikiAnswer, WikiPage, WikiSource } from './types';
 import type { WikiStore } from './store';
 
@@ -81,17 +81,21 @@ export class WikiWorkspace {
   }
   saveTasks(value: import('./types').WikiTask[]): void { const records = new Map(this.tasks<import('./types').WikiTask[]>([]).map(task => [task.id, task])); for (const task of value) records.set(task.id, task); this.write(path.join(this.store.root, 'tasks.json'), JSON.stringify([...records.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt)).slice(-200))); }
   tasks<T>(fallback: T): T { return this.json(path.join(this.store.root, 'tasks.json'), fallback); }
-  backup(): Uint8Array {
-    const files: Record<string, Uint8Array> = {};
-    let total = 0, count = 0;
+  private portableFiles(): string[] {
+    const files: string[] = []; let total = 0;
     const visit = (dir: string, prefix = '') => {
       for (const item of readdirSync(dir, { withFileTypes: true })) {
         const name = prefix + item.name;
         if (item.isDirectory() && /^(?:wiki|raw|raw\/assets|skills|skills\/[a-z0-9-]+|drafts|history|trash|answers|editor-drafts)$/.test(name)) visit(path.join(dir, item.name), name + '/');
-        else if (item.isFile() && safePath(name)) { const file = path.join(dir, item.name); total += statSync(file).size; if (++count > 10000 || total > 256 * 1024 * 1024) throw new Error('备份原始数据超过 256 MiB 或 10000 个文件'); files[name] = new Uint8Array(readFileSync(file)); }
+        else if (item.isFile() && safePath(name)) { total += statSync(path.join(dir, item.name)).size; if (files.length >= 10000 || total > 256 * 1024 * 1024) throw new Error('备份原始数据超过 256 MiB 或 10000 个文件'); files.push(name); }
       }
     };
     visit(this.store.root);
+    return files;
+  }
+  backup(): Uint8Array {
+    const files: Record<string, Uint8Array> = {};
+    for (const name of this.portableFiles()) files[name] = new Uint8Array(readFileSync(path.join(this.store.root, name)));
     files['wiki-backup.json'] = new TextEncoder().encode(JSON.stringify({ format: 'agentberth-wiki', version: 1, at: new Date().toISOString() }));
     const data = zipSync(files, { level: 6 }); if (data.length > MAX_ARCHIVE) throw new Error('备份超过 64 MiB，请先整理附件'); return data;
   }
@@ -99,6 +103,7 @@ export class WikiWorkspace {
     if (bytes.length > MAX_ARCHIVE) throw new Error('备份超过 64 MiB');
     let size = 0, count = 0;
     const files = unzipSync(bytes, { filter: file => {
+      if (file.name === 'wiki-backup.json') { if (file.originalSize > 16384) throw new Error('备份清单过大'); return true; }
       if (++count > 10000 || (size += file.originalSize) > 256 * 1024 * 1024 || file.originalSize > 24 * 1024 * 1024) throw new Error('备份展开后过大');
       if (file.name !== 'wiki-backup.json' && !safePath(file.name)) throw new Error('备份包含不允许的路径：' + file.name);
       return true;
@@ -125,29 +130,37 @@ export class WikiWorkspace {
     }
     return files;
   }
-  previewBackup(bytes: Uint8Array) {
-    const files = this.unpack(bytes), conflicts: string[] = []; let added = 0, identical = 0;
+  private previewFiles(files: Record<string, Uint8Array>) {
+    const conflicts: string[] = []; let added = 0, identical = 0;
     for (const [name, value] of Object.entries(files)) {
       const file = path.join(this.store.root, name);
       if (!existsSync(file)) added++;
       else if (Buffer.from(value).equals(readFileSync(file))) identical++;
       else conflicts.push(name);
     }
-    return { files: Object.keys(files).length, added, identical, conflicts };
+    return { files: Object.keys(files).length, added, identical, conflictCount: conflicts.length, conflicts: conflicts.slice(0, 50).map(name => byteTruncate(name, 300)) };
   }
-  importBackup(bytes: Uint8Array, overwrite = false): { imported: number; skipped: number; rollback: string } {
-    const files = this.unpack(bytes), before = new Map<string, Buffer | null>(), rollback = randomUUID() + '.zip';
+  previewBackup(bytes: Uint8Array) { return this.previewFiles(this.unpack(bytes)); }
+  importBackup(bytes: Uint8Array, overwrite = false, exact = false): { imported: number; skipped: number; removed: number; rollback: string } {
+    const files = this.unpack(bytes), previousFiles = exact ? this.portableFiles() : [], before = new Map<string, Buffer | null>(), rollback = randomUUID() + '.zip';
     this.write(path.join(this.folder('backups'), rollback), this.backup());
-    let imported = 0, skipped = 0;
+    let imported = 0, skipped = 0, removed = 0;
     try {
       for (const [name, value] of Object.entries(files)) {
         const file = path.join(this.store.root, name);
         if (existsSync(file) && (!overwrite || Buffer.from(value).equals(readFileSync(file)))) { skipped++; continue; }
         before.set(file, existsSync(file) ? readFileSync(file) : null); this.write(file, value); imported++;
       }
+      if (exact) for (const name of previousFiles) {
+        if (Object.hasOwn(files, name)) continue;
+        const file = path.join(this.store.root, name); before.set(file, readFileSync(file)); rmSync(file); this.cache.delete(file); removed++;
+      }
     } catch (error) { for (const [file, value] of before) if (value === null) rmSync(file, { force: true }); else this.write(file, value); throw error; }
-    this.store.invalidate(); return { imported, skipped, rollback };
+    this.store.invalidate(); return { imported, skipped, removed, rollback };
   }
-  rollbackBackups(): string[] { return readdirSync(this.folder('backups')).filter(name => /^[a-f0-9-]{36}\.zip$/.test(name)); }
+  previewRollback(name: string) { const files = this.unpack(this.readRollback(name)), removed = this.portableFiles().filter(file => !Object.hasOwn(files, file)); return { ...this.previewFiles(files), removedCount: removed.length, removed: removed.slice(0, 50).map(file => byteTruncate(file, 300)) }; }
+  restoreRollback(name: string) { return this.importBackup(this.readRollback(name), true, true); }
+  rollbackSnapshots() { const folder = this.folder('backups'); return readdirSync(folder).filter(name => /^[a-f0-9-]{36}\.zip$/.test(name)).map(name => { const info = statSync(path.join(folder, name)); return { name, at: info.mtime.toISOString(), size: info.size }; }).sort((a, b) => b.at.localeCompare(a.at) || a.name.localeCompare(b.name)); }
+  rollbackBackups(): string[] { return this.rollbackSnapshots().map(item => item.name); }
   readRollback(name: string): Uint8Array { if (!this.rollbackBackups().includes(name)) throw new Error('备份不存在'); return new Uint8Array(readFileSync(path.join(this.folder('backups'), name))); }
 }

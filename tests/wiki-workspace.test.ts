@@ -31,6 +31,74 @@ test('editor drafts survive reopen, clear explicitly and exclude credential fiel
   workspace.saveEditorDraft('page:notes', null); assert.equal(workspace.editorDrafts().length, 0);
 });
 
+test('restoring an automatic snapshot removes imported additions and can itself be undone', async t => {
+  const before = fixture(t), imported = fixture(t);
+  before.store.saveCredentials('keep-this-key'); before.store.savePage(page('existing', 'before import'));
+  imported.store.savePage(page('existing', 'imported replacement')); imported.store.savePage(page('added', 'imported addition'));
+  await imported.service.addSource({ title: 'imported source', text: 'imported source body', images: [{ mime: 'image/png', base64: 'eA==' }] });
+  imported.workspace.saveEditorDraft('page:added', { body: 'imported draft' });
+  const result = before.workspace.importBackup(imported.workspace.backup(), true);
+  assert.ok(before.store.getPage('added')); assert.equal(before.store.listSources().length, 1);
+  const preview = before.workspace.previewRollback(result.rollback);
+  assert.ok(preview.removed.includes('wiki/added.md')); assert.ok(preview.removedCount >= 4);
+  const undo = before.workspace.restoreRollback(result.rollback);
+  assert.equal(before.store.getPage('existing')!.body, 'before import'); assert.equal(before.store.getPage('added'), null);
+  assert.equal(before.store.listSources().length, 0); assert.equal(before.workspace.editorDrafts().length, 0);
+  assert.equal(before.store.credentials().apiKey, 'keep-this-key');
+  before.workspace.restoreRollback(undo.rollback);
+  assert.equal(before.store.getPage('existing')!.body, 'imported replacement'); assert.ok(before.store.getPage('added'));
+  assert.equal(before.store.listSources().length, 1); assert.equal(before.store.credentials().apiKey, 'keep-this-key');
+});
+
+test('restoring workspace state waits for cancelled requests and incomplete PDF transfers', async t => {
+  let release!: (response: Response) => void;
+  const { service } = fixture(t, { fetchImpl: () => new Promise(resolve => { release = resolve; }) });
+  const task = service.ask('pending request'); service.cancelTask(task);
+  assert.throws(() => service.assertWorkspaceIdle(), /取消处理/);
+  release(new Response(JSON.stringify({ choices: [{ message: { content: 'late reply' } }] })));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.doesNotThrow(() => service.assertWorkspaceIdle());
+  const upload = service.beginPdfUpload('incomplete'); assert.throws(() => service.assertWorkspaceIdle(), /上传/);
+  service.cancelPdfUpload(upload.uploadId); assert.doesNotThrow(() => service.assertWorkspaceIdle());
+});
+
+test('interrupted compile history stays paused after restore and restart until explicitly retried', async t => {
+  let calls = 0;
+  const fetchImpl: typeof fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: 'compiled', concepts: [], claims: [], contradictions: [], pages: [] }) } }] })); };
+  const { store, service, workspace } = fixture(t, { config: { ...config, autoCompile: true }, fetchImpl });
+  const source = await service.addSource({ title: 'interrupted', text: 'source awaiting manual retry' });
+  workspace.saveTasks([{ id: 'interrupted', kind: 'compile', status: 'running', progress: 'running', label: 'Interrupted compile', startedAt: new Date().toISOString(), retry: { action: 'compile', params: { sourceId: source.id } } }]);
+  service.reloadWorkspaceState(); service.tick(); assert.equal(calls, 0);
+  assert.equal(service.taskStatus('interrupted')!.status, 'failed'); assert.equal(service.taskStatus('interrupted')!.manualRetry, true);
+  const controller = new AbortController(); t.after(() => controller.abort());
+  const reopened = new WikiService({ store: new WikiStore(store.root), config: { ...config, autoCompile: true }, signal: controller.signal, fetchImpl });
+  reopened.tick(); assert.equal(calls, 0, 'automatic compilation must not replay an interrupted request');
+  await finished(reopened, reopened.retryTask('interrupted')); assert.ok(calls > 0);
+});
+
+test('backup commands refresh task history immediately and normalise unfinished imported work', async t => {
+  const a = fixture(t), b = fixture(t), commands = new Map<string, (p: Record<string, unknown>) => unknown>();
+  a.workspace.saveTasks([{ id: 'imported-task', kind: 'ask', status: 'queued', progress: '', label: 'Imported task', startedAt: new Date().toISOString(), retry: { action: 'ask', params: { question: 'manual retry only' } } }]);
+  const bytes = a.workspace.backup();
+  apply({ berth: { dataDirectory: b.root, signal: b.controller.signal, interval() {}, call: async () => ({ sessions: [] }), command(d: { name: string }, handler: (p: Record<string, unknown>) => unknown) { commands.set(d.name, handler); } }, effect() {} } as never, { ...config });
+  const upload = await commands.get('backup_upload_start')!({}) as { id: string };
+  for (let i = 0; i < bytes.length; i += 36000) await commands.get('backup_upload_chunk')!({ id: upload.id, base64: Buffer.from(bytes.subarray(i, i + 36000)).toString('base64'), done: i + 36000 >= bytes.length });
+  await commands.get('apply_backup')!({ id: upload.id, overwrite: true });
+  const tasks = await commands.get('tasks')!({}) as WikiTask[];
+  assert.equal(tasks.length, 1); assert.equal(tasks[0].status, 'failed'); assert.equal(tasks[0].manualRetry, true); assert.match(tasks[0].error!, /手动重试/);
+});
+
+test('large backup conflict previews retain accurate totals within the desktop RPC budget', t => {
+  const { store, workspace } = fixture(t), files: Record<string, Uint8Array> = { 'wiki-backup.json': new TextEncoder().encode(JSON.stringify({ format: 'agentberth-wiki', version: 1 })) };
+  for (let i = 0; i < 220; i++) {
+    const slug = '多语言知识页面'.repeat(7) + '-' + i; store.savePage(page(slug, 'current'));
+    files['wiki/' + slug + '.md'] = new TextEncoder().encode('different archived body');
+  }
+  const preview = workspace.previewBackup(zipSync(files));
+  assert.equal(preview.conflictCount, 220); assert.equal(preview.conflicts.length, 50);
+  assert.ok(Buffer.byteLength(JSON.stringify(preview)) < 24 * 1024);
+});
+
 test('trash restores original sources and image bytes without overwriting an existing page', async t => {
   const { store, service, workspace } = fixture(t);
   const source = await service.addSource({ title: 'source', text: 'raw', images: [{ mime: 'image/png', base64: Buffer.from('original').toString('base64') }] });
