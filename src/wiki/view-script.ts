@@ -1,9 +1,15 @@
+import { slugify } from './core';
+
 export const notesWikiScript = String.raw`
 (function(){
   var $=function(id){return document.getElementById(id)};
   var state={tab:'wiki',status:null,pages:[],sources:[],drafts:[],skills:[],answers:[],sessions:[],page:null,source:null,draft:null,draftSlug:'',skill:null,answer:null,task:null,taskOrigin:'',editing:false,newSource:false,newSkill:false,newPage:false,file:'',lint:null};
   var call=function(command,params){return agentberth.call(command,params||{})};
   var esc=function(value){return String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')};
+  // Decode exactly one pass of our own esc(), only for computing a link's
+  // identity. Labels and attributes remain escaped when inserted into HTML.
+  var unesc=function(value){return value.replace(/&(amp|lt|gt|quot|#39);/g,function(entity){return {'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&#39;':"'"}[entity]})};
+  var pageSlug=${slugify.toString()};
   var err=function(value){$('error').textContent=String(value&&value.message||value||'')};
   var ok=function(value){return function(result){err('');return result};};
   // All panels stay mounted, so field lookups must be scoped to the visible
@@ -24,7 +30,7 @@ export const notesWikiScript = String.raw`
       var codes=[];
       value=value.replace(codeRe,function(_,code){codes.push('<code>'+code+'</code>');return '@@CODE'+(codes.length-1)+'@@'});
       value=value.replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g,function(_,target,label){
-        var slug=target.trim().toLowerCase().replace(/[^0-9a-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af._-]+/g,'-').replace(/[-_]{2,}/g,'-').replace(/\.{2,}/g,'.').replace(/^[-_.]+|[-_.]+$/g,'').slice(0,80);
+        var slug=pageSlug(unesc(target));
         return '<button class="wikilink" data-action="openPage" data-slug="'+esc(slug)+'">'+(label||target)+'</button>';
       });
       value=value.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');

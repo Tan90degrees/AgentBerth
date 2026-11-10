@@ -231,12 +231,14 @@ try {
   await frame.locator('#pageView [data-action="mdPreview"]').click();
   const preview = frame.locator('#pageView .md-preview');
   await until(async () => (await preview.locator('h1').count()) > 0, 'markdown preview rendered');
+  assert.ok(await frame.locator('#pageView [data-field="body"]').isHidden(), 'preview hides the editor');
   assert.equal(await preview.locator('ul li').count(), 2, 'unordered list renders');
   assert.equal(await preview.locator('ol li').count(), 2, 'ordered list renders');
   assert.equal(await preview.locator('table td').count(), 2, 'table renders');
   assert.ok((await preview.locator('pre').textContent()).includes('第一行代码\n第二行代码'), 'fenced code keeps its line breaks');
   assert.ok((await preview.locator('code').first().innerText()).includes('行内代码'), 'inline code renders');
   assert.ok((await preview.locator('.wikilink').allInnerTexts()).includes('A&B'), 'wikilink labels are not double-escaped');
+  assert.equal(await preview.locator('.wikilink').filter({ hasText: 'A&B' }).getAttribute('data-slug'), 'a-b', 'wikilinks resolve the original target');
   await frame.locator('#pageView [data-action="mdPreview"]').click();
   assert.equal(await frame.locator('#pageView [data-field="body"]').inputValue(), md, 'preview round-trip keeps the draft');
   step('markdown editor renders lists, tables, code and links without losing the draft');
@@ -314,7 +316,12 @@ try {
   failure = error;
   console.error('RESULT FAIL', error);
   if (application) {
-    try { const page = await application.firstWindow(); await page.screenshot({ path: 'test-results/wiki-window-failure.png' }); } catch { /* ignore */ }
+    try {
+      const page = await application.firstWindow();
+      const frame = page.frameLocator('iframe.extension-view');
+      console.error('Wiki view failure context', JSON.stringify({ errors, error: await frame.locator('#error').innerText(), panel: await frame.locator('.panel.active').innerText() }));
+      await page.screenshot({ path: 'test-results/wiki-window-failure.png' });
+    } catch { /* ignore */ }
   }
   process.exitCode = 1;
 } finally {

@@ -32,6 +32,7 @@ const now = () => new Date().toISOString();
 /** After a failed auto-compile, wait before retrying the same source instead of
  * paying for a model call every 60 seconds forever. Manual retry is unaffected. */
 const COMPILE_RETRY_MS = 5 * 60_000;
+type SourceInput = { title: string; text: string; images?: { mime: string; base64: string }[]; origin?: string; staging?: boolean };
 
 /** Everything the UI can do lives here; plugin.ts is only a thin Cordis adapter.
  * Long model calls run in a background queue so no RPC ever blocks the daemon. */
@@ -173,25 +174,40 @@ export class WikiService {
   }
 
   // ---- Raw sources ------------------------------------------------------
+  private assertActive(): void {
+    if (this.signal.aborted) throw new Error('插件已停止，素材未保存');
+  }
   listSources(): WikiSource[] { return this.store.listSources(); }
   getSource(id: string): WikiSource | null { return this.store.getSource(id); }
-  async addSource(input: { title: string; text: string; images?: { mime: string; base64: string }[]; origin?: string; staging?: boolean }): Promise<WikiSource> {
+  async addSource(input: SourceInput): Promise<WikiSource> {
+    return (await this.createSource(input)).source;
+  }
+  private async createSource(input: SourceInput, deduplicate = false): Promise<{ source: WikiSource; skipped: boolean }> {
+    this.assertActive();
     const title = truncate(String(input.title ?? '').trim() || '未命名素材', 160);
     const text = String(input.text ?? '');
     if (text.length > 200_000) throw new Error('素材超过 200000 字符上限，请拆分后导入');
     if (!text.trim() && !(input.images?.length) && !input.staging) throw new Error('素材内容不能为空');
-    const images = (input.images ?? []).slice(0, 8).map(image => this.store.addImage(image.mime, image.base64));
-    const source: WikiSource = { id: randomUUID(), title, text, images, vision: '', compiled: false, hash: '', createdAt: now(), ...(input.staging ? { staging: true } : {}) };
-    source.hash = this.store.sourceHash(source);
-    await withWriteLock(() => {
+    return withWriteLock(() => {
+      // A parser can finish after its plugin generation has been disposed, or
+      // disposal can happen while this write waits behind another operation.
+      this.assertActive();
+      if (deduplicate) {
+        const hash = this.store.sourceHash({ title, text, images: [], vision: '' });
+        const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
+        if (existing) return { source: existing, skipped: true };
+      }
+      const images = (input.images ?? []).slice(0, 8).map(image => this.store.addImage(image.mime, image.base64));
+      const source: WikiSource = { id: randomUUID(), title, text, images, vision: '', compiled: false, hash: '', createdAt: now(), ...(input.staging ? { staging: true } : {}) };
+      source.hash = this.store.sourceHash(source);
       this.store.saveSource(source);
       this.store.appendLog('ingest', title, [
         `素材 ID：${source.id}`, `${text.length} 字，${images.length} 张图片`,
         ...(input.origin ? [`来源：${truncate(String(input.origin).replace(/[\r\n]+/g, ' '), 120)}`] : []),
         '等待编译为审阅提案',
       ]);
+      return { source, skipped: false };
     });
-    return source;
   }
   /** Files dropped into raw/inbox become immutable sources. A content hash
    * keeps a re-scan (or a duplicated fs.watch event) from importing twice. */
@@ -207,17 +223,16 @@ export class WikiService {
     const cleanTitle = truncate(title.trim() || '未命名素材', 160);
     const text = String(body ?? '');
     if (!text.trim()) throw new Error('素材内容不能为空');
-    const hash = this.store.sourceHash({ title: cleanTitle, text, images: [], vision: '' });
-    const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
-    if (existing) return { id: existing.id, skipped: true };
-    const source = await this.addSource({ title: cleanTitle, text, origin });
-    return { id: source.id, skipped: false };
+    const { source, skipped } = await this.createSource({ title: cleanTitle, text, origin }, true);
+    return { id: source.id, skipped };
   }
 
   // ---- PDF import -------------------------------------------------------
   /** The inbox watcher parses PDFs with this; the chunked upload path shares it. */
   async extractPdfText(name: string, bytes: Uint8Array): Promise<string> {
+    this.assertActive();
     const { text } = await this.pdfExtract(bytes);
+    this.assertActive();
     if (!text.trim()) throw new Error(`PDF「${path.basename(name)}」没有可提取的文本（可能是扫描件或纯图片 PDF）`);
     return text;
   }
@@ -239,6 +254,7 @@ export class WikiService {
   }
 
   beginPdfUpload(title: string): { uploadId: string } {
+    this.assertActive();
     this.prunePdfUploads();
     if (this.pdfUploads.size >= 8) {
       const oldest = this.pdfUploads.keys().next().value;
@@ -249,6 +265,7 @@ export class WikiService {
     return { uploadId };
   }
   async appendPdfChunk(uploadId: string, base64: string, done: boolean): Promise<{ id: string; skipped: boolean; pages: number } | null> {
+    this.assertActive();
     if (!/^[a-f0-9-]{36}$/.test(uploadId)) throw new Error('无效的上传标识');
     const entry = this.pdfUploads.get(uploadId);
     if (!entry) throw new Error('上传已过期，请重新导入 PDF');
@@ -262,13 +279,10 @@ export class WikiService {
     this.pdfUploads.delete(uploadId);
     const bytes = Buffer.concat(entry.chunks);
     const { text, pages } = await this.pdfExtract(new Uint8Array(bytes));
+    this.assertActive();
     if (!text.trim()) throw new Error('PDF 没有可提取的文本（可能是扫描件或纯图片 PDF）');
     const title = entry.title || '导入素材';
-    const hash = this.store.sourceHash({ title, text, images: [], vision: '' });
-    const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
-    if (existing) return { id: existing.id, skipped: true, pages };
-    const source = await this.addSource({ title, text, origin: 'PDF 导入' });
-    return { id: source.id, skipped: false, pages };
+    return { ...await this.importText(title, text, 'PDF 导入'), pages };
   }
   cancelPdfUpload(uploadId: string): boolean { return this.pdfUploads.delete(uploadId); }
 
@@ -361,11 +375,7 @@ export class WikiService {
     const lines = events.map(event => `### ${event.sequence ?? '-'} · ${labels[event.kind ?? ''] ?? event.kind ?? '记录'}\n\n${truncate(event.text, 4000)}`);
     const title = truncate(`会话记录：${sessionTitle}`, 160);
     const text = truncate(`# ${title}\n\n> 采集自工作台会话 ${sessionId}，仅包含最近最多 200 条记录；每条最多 4000 字，整体最多 200000 字符。共 ${events.length} 条记录。\n\n${lines.join('\n\n')}`, 200_000);
-    const hash = this.store.sourceHash({ title, text, images: [], vision: '' });
-    const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
-    if (existing) return { id: existing.id, skipped: true, events: events.length };
-    const source = await this.addSource({ title, text, origin: `工作台会话 ${sessionId}` });
-    return { id: source.id, skipped: false, events: events.length };
+    return { ...await this.importText(title, text, `工作台会话 ${sessionId}`), events: events.length };
   }
   async deleteSource(id: string): Promise<void> {
     await withWriteLock(() => { this.store.deleteSource(id); this.store.appendLog('edit', '删除原始素材', [`素材 ID：${id}`, '已编译的 wiki 页面保留']); });

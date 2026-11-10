@@ -80,6 +80,7 @@ article{overflow:auto;padding:18px 22px;min-width:0}
 .md-tools button{border:0;background:transparent;padding:2px 10px;font-size:var(--fs-2xs,11px);color:var(--text-muted,#6b6b6b)}
 .md-tools button:hover{background:var(--hover,#eee);color:var(--text)}
 .md-editor textarea{border:0;box-shadow:none;width:100%;display:block;background:var(--input,#fff)}
+.md-editor [hidden]{display:none}
 .md-editor textarea:focus{border-color:transparent;box-shadow:none}
 .md-preview{padding:12px 14px;max-height:520px;overflow:auto;background:var(--surface,#fff)}
 .progress{display:flex;align-items:center;gap:8px;font-size:var(--fs-xs,12px);color:var(--text-secondary,#4d4d4d);margin:8px 0}

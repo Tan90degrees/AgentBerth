@@ -954,3 +954,85 @@ test('the pdf.js legacy build extracts text from a real minimal PDF', async () =
   assert.equal(result.pages, 1);
   assert.ok(result.text.includes('Hello AgentBerth PDF'));
 });
+
+test('PDF text limits include page separators and reject excess instead of saving a partial source', async t => {
+  const pdf = (texts: string[]) => {
+    const objects = ['<</Type/Catalog/Pages 2 0 R>>', `<</Type/Pages/Kids[${texts.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}]/Count ${texts.length}>>`, '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>'];
+    texts.forEach((text, i) => {
+      const stream = `BT /F1 0.01 Tf 20 100 Td (${text}) Tj ET`;
+      objects.push(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 1000000 144]/Contents ${5 + i * 2} 0 R/Resources<</Font<</F1 3 0 R>>>>>>`, `<</Length ${stream.length}>>stream\n${stream}\nendstream`);
+    });
+    return new Uint8Array(Buffer.from('%PDF-1.4\n' + objects.map((object, i) => `${i + 1} 0 obj\n${object}\nendobj\n`).join('') + 'trailer<</Root 1 0 R>>\n%%EOF\n'));
+  };
+  const { extractPdfText } = await import('../src/wiki/pdf');
+  const exact = await extractPdfText(pdf(['A'.repeat(99999), 'B'.repeat(99999)]));
+  assert.equal(exact.text.length, 200000);
+  assert.ok(exact.text.endsWith('B'.repeat(99999)), 'the final page remains complete at the limit');
+  await assert.rejects(extractPdfText(pdf(['A'.repeat(100000), 'B'.repeat(99999)])), /200000.*拆分/);
+  const store = new WikiStore(temp(t));
+  const controller = new AbortController(); t.after(() => controller.abort());
+  const service = new WikiService({ store, config: config(), signal: controller.signal });
+  await assert.rejects(service.ingestPdfFile('long.pdf', pdf(['A'.repeat(110000), 'B'.repeat(110000), 'TAIL-MARKER'])), /200000.*拆分/);
+  assert.equal(store.listSources().length, 0, 'a rejected PDF cannot become an immutable truncated source');
+});
+
+test('concurrent uploads and inbox imports dedupe atomically and preserve one complete source', async t => {
+  const store = new WikiStore(temp(t));
+  const controller = new AbortController(); t.after(() => controller.abort());
+  const text = '同一个完整 PDF 的内容';
+  const service = new WikiService({ store, config: config(), signal: controller.signal, pdfExtract: async () => ({ text, pages: 2 }) });
+  const one = service.beginPdfUpload('first'), two = service.beginPdfUpload('renamed');
+  const results = await Promise.all([
+    service.appendPdfChunk(one.uploadId, 'eA==', true),
+    service.appendPdfChunk(two.uploadId, 'eA==', true),
+    service.ingestInboxFile('same.md', text),
+  ]);
+  assert.equal(new Set(results.map(result => result!.id)).size, 1);
+  assert.equal(results.filter(result => !result!.skipped).length, 1);
+  assert.equal(store.listSources().length, 1);
+  assert.equal(store.listSources()[0].text, text);
+});
+
+test('disposing the plugin while PDF extraction runs prevents every import path from persisting its result', async t => {
+  for (const kind of ['upload', 'file', 'inbox'] as const) {
+    const store = new WikiStore(temp(t));
+    const controller = new AbortController();
+    let finish!: (result: { text: string; pages: number }) => void;
+    const service = new WikiService({ store, config: config(), signal: controller.signal,
+      pdfExtract: () => new Promise(resolve => { finish = resolve; }) });
+    const bytes = new Uint8Array([1]);
+    const pending = kind === 'upload' ? service.appendPdfChunk(service.beginPdfUpload('late').uploadId, 'eA==', true)
+      : kind === 'file' ? service.ingestPdfFile('late.pdf', bytes) : service.extractPdfText('late.pdf', bytes);
+    controller.abort();
+    finish({ text: '解析结束时插件已经停止', pages: 1 });
+    await assert.rejects(pending, /插件已停止/);
+    assert.equal(store.listSources().length, 0, kind);
+    assert.equal(store.log(), '', 'no ingest log is written after disposal');
+    assert.throws(() => service.beginPdfUpload('after-stop'), /插件已停止/);
+  }
+});
+
+test('a source waiting for its write turn cannot write images or text after disposal', async t => {
+  const store = new WikiStore(temp(t));
+  const controller = new AbortController();
+  const service = new WikiService({ store, config: config(), signal: controller.signal });
+  const pending = service.addSource({ title: 'queued', text: 'must not save', images: [{ mime: 'image/png', base64: 'eA==' }] });
+  controller.abort();
+  await assert.rejects(pending, /插件已停止/);
+  assert.equal(store.listSources().length, 0);
+  assert.equal(readdirSync(path.join(store.root, 'raw', 'assets')).length, 0);
+});
+
+test('rendered wikilinks use raw titles and the same filename rules as stored pages', () => {
+  const script = notesWikiView.slice(notesWikiView.indexOf('<script>') + 8, notesWikiView.lastIndexOf('</script>'));
+  // Execute the actual renderer's pure Markdown portion, without a DOM or a
+  // second implementation of its escaping/slug rules.
+  const context = {} as { renderMarkdown: (text: string) => string };
+  vm.runInNewContext(script.slice(0, script.indexOf('  function empty')) + 'globalThis.renderMarkdown=markdown;})();', context);
+  for (const [target, expected] of [['A&B', 'a-b'], ['R&D', 'r-d'], ['A&amp;B', 'a-amp-b'], ['CON', 'page-con'], ['a__b', 'a-b'], ['..', 'untitled']]) {
+    assert.ok(context.renderMarkdown(`[[${target}]]`).includes(`data-slug="${expected}"`), target);
+  }
+  const html = context.renderMarkdown('[[A&B|<img src=x onerror=alert(1)>]]');
+  assert.ok(!html.includes('<img'), 'rendering a raw target cannot re-enable HTML injection');
+  assert.ok(html.includes('&lt;img'));
+});

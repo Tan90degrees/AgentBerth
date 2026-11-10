@@ -46,7 +46,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
   try {
     const chunks: string[] = [];
     let total = 0;
-    for (let index = 1; index <= doc.numPages && total < MAX_CHARS; index++) {
+    for (let index = 1; index <= doc.numPages; index++) {
       const page = await doc.getPage(index);
       const content = await page.getTextContent();
       let line = '';
@@ -60,10 +60,13 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
       }
       if (line.trim()) lines.push(line.trim());
       const body = lines.join('\n');
-      if (body.trim()) chunks.push(body);
-      total += body.length;
+      if (body.trim()) {
+        total += body.length + (chunks.length ? 2 : 0);
+        if (total > MAX_CHARS) throw new Error('PDF 文本超过 200000 字符上限，请拆分后导入');
+        chunks.push(body);
+      }
     }
-    return { text: chunks.join('\n\n').slice(0, MAX_CHARS), pages: doc.numPages };
+    return { text: chunks.join('\n\n'), pages: doc.numPages };
   } catch (error) {
     throw new Error('PDF 文本提取失败：' + brief(error));
   } finally {
