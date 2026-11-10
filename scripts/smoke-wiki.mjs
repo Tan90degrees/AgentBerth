@@ -188,14 +188,14 @@ try {
   await until(async () => (await frame.locator('#pageView').locator('.card').count()) > 0, 'first page auto-selected');
   await frame.locator('#pageList [data-action="openPage"]', { hasText: '向量检索' }).first().click();
   await until(async () => (await frame.locator('#pageView').innerText()).includes('向量检索'), 'selected page detail');
-  await frame.locator('[data-tab="skills"]').click();
+  await frame.locator('.tabs [data-tab="skills"]').click();
   await until(async () => (await frame.locator('#skillList').innerText()).includes('window-skill'), 'skill list');
   await frame.locator('#skillList [data-action="openSkill"][data-name="window-skill"]').click();
   await frame.locator('#skillView [data-action="exportSkill"]').click();
   await until(async () => (await frame.locator('#skillExport textarea').inputValue()).includes('window-skill'), 'skill export appears in the editor');
-  await frame.locator('[data-tab="review"]').click();
+  await frame.locator('.tabs [data-tab="review"]').click();
   await until(async () => (await frame.locator('#draftList').innerText()).includes('已发布'), 'draft list');
-  await frame.locator('[data-tab="settings"]').click();
+  await frame.locator('.tabs [data-tab="settings"]').click();
   await until(async () => (await frame.locator('#settingsView').innerText()).includes('mock-text'), 'settings view');
   // The in-page plugin settings popover replaces the jump to the plugin center.
   await frame.locator('#openPluginSettings').click();
@@ -206,7 +206,7 @@ try {
   await page.locator('.plugin-settings-popover [aria-label="关闭配置面板"]').click();
   await until(async () => (await page.locator('.plugin-settings-popover').count()) === 0, 'popover closed');
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-window-settings.png' });
-  await frame.locator('[data-tab="wiki"]').click();
+  await frame.locator('.tabs [data-tab="wiki"]').click();
   await until(async () => (await frame.locator('#pageView').innerText()).includes('向量检索'), 'page detail');
   await until(async () => (await frame.locator('#pageView').innerText()).includes('原始出处'), 'page provenance rendered');
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-window-pages.png' });
@@ -264,7 +264,7 @@ try {
 
   // Keep the page editor mounted while another tab opens: field lookups must
   // resolve in the active panel, never in a stale background form.
-  await frame.locator('[data-tab="skills"]').click();
+  await frame.locator('.tabs [data-tab="skills"]').click();
   await frame.locator('#newSkill').click();
   await until(async () => (await frame.locator('#skillView [data-field="body"]').count()) > 0, 'skill editor');
   const scoped = await frame.locator('#skillView [data-field="body"]').evaluate(node => ({
@@ -274,7 +274,7 @@ try {
   assert.equal(scoped.total, 2, 'both panels keep their own editor mounted');
   assert.ok(scoped.same, 'field lookup resolves inside the active panel');
   await frame.locator('#skillView [data-action="cancelSkill"]').click();
-  await frame.locator('[data-tab="wiki"]').click();
+  await frame.locator('.tabs [data-tab="wiki"]').click();
   assert.equal(await frame.locator('#pageView [data-field="body"]').inputValue(), md, 'switching tabs restores the unsaved page draft');
   await frame.locator('#pageView [data-action="cancelEdit"]').click();
   await frame.locator('[data-action="dialogAccept"]').click();
@@ -298,41 +298,41 @@ try {
 
   // The static buttons are delegated through [data-action]; exercise them for
   // real so a missing attribute can never ship as a dead primary action again.
-  await frame.locator('[data-tab="sources"]').click();
+  await frame.locator('.tabs [data-tab="sources"]').click();
   await frame.locator('#newSource').click();
   await until(async () => (await frame.locator('#sourceView [data-field="text"]').count()) > 0, 'new source form');
   await frame.locator('#sourceView [data-action="cancelSource"]').click();
   await frame.locator('[data-action="showCapture"]').click();
   await until(async () => (await frame.locator('#sourceView').innerText()).includes('raw/inbox'), 'capture panel');
-  await frame.locator('[data-tab="wiki"]').click();
+  await frame.locator('.tabs [data-tab="wiki"]').click();
   await frame.locator('#newPage').click();
   await until(async () => (await frame.locator('#pageView [data-field="slug"]').count()) > 0, 'new page form');
   await frame.locator('#pageView [data-action="cancelPage"]').click();
-  await frame.locator('[data-tab="skills"]').click();
+  await frame.locator('.tabs [data-tab="skills"]').click();
   await frame.locator('#newSkill').click();
   await until(async () => (await frame.locator('#skillView [data-field="name"]').count()) > 0, 'new skill form');
   await frame.locator('#skillView [data-action="cancelSkill"]').click();
-  await frame.locator('[data-tab="sources"]').click();
+  await frame.locator('.tabs [data-tab="sources"]').click();
   await frame.locator('#newSource').click();
   await frame.locator('#sourceView [data-field="title"]').fill('纯图片窗口素材');
   await frame.locator('#sourceView [data-field="images"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
   await frame.locator('#sourceView [data-action="saveSource"]').click();
   await until(async () => (await call('list_sources')).some(source => source.title === '纯图片窗口素材' && source.images === 1 && source.compiled), 'image-only source saved and compiled');
-  await until(async () => await frame.locator('[data-tab="review"]').evaluate(node => node.classList.contains('active')), 'image compile task completed in the view');
+  await until(async () => await frame.locator('.tabs [data-tab="review"]').evaluate(node => node.classList.contains('active')), 'image compile task completed in the view');
   step('image-only source uploads before compilation');
-  await frame.locator('[data-tab="sources"]').click();
+  await frame.locator('.tabs [data-tab="sources"]').click();
   await frame.locator('#newSource').click();
   await frame.locator('#sourceView [data-field="pdf"]').setInputFiles({ name: 'window-upload.pdf', mimeType: 'application/pdf', buffer: iframePdf });
   await frame.locator('#sourceView [data-field="compileImported"]').check();
   await frame.locator('[data-action="startImport"]').click();
   await until(async () => (await call('list_sources')).some(item => item.title === 'window-upload' && item.compiled), 'iframe PDF upload imported and compiled');
-  await frame.locator('[data-tab="tasks"]').click();
+  await frame.locator('.tabs [data-tab="tasks"]').click();
   await until(async () => (await frame.locator('[data-action="taskDraft"]').count()) > 0, 'completed import exposes a proposal action');
   await frame.locator('[data-action="taskDraft"]').first().click();
-  await until(async () => await frame.locator('[data-tab="review"]').evaluate(node => node.classList.contains('active')), 'iframe PDF compile task completed in the view');
+  await until(async () => await frame.locator('.tabs [data-tab="review"]').evaluate(node => node.classList.contains('active')), 'iframe PDF compile task completed in the view');
   assert.ok((await call('get_source', { id: (await call('list_sources')).find(item => item.title === 'window-upload').id })).text.includes('Hello AgentBerth IFR'), 'iframe upload extracted its own text');
   step('the iframe PDF input uploads, extracts and compiles');
-  await frame.locator('[data-tab="ask"]').click();
+  await frame.locator('.tabs [data-tab="ask"]').click();
   await frame.locator('#question').fill('向量检索：窗口里直接提问可以吗？');
   await frame.locator('#ask').click();
   await until(async () => (await frame.locator('#answerView').innerText()).includes('向量检索'), 'ask button produced an answer');
@@ -343,9 +343,9 @@ try {
   const archivedBefore = (await call('list_pages')).length;
   await frame.locator('#answerView [data-action="saveAnswer"]').click();
   await until(async () => (await call('list_pages')).length > archivedBefore, 'iframe archives an answer with evidence');
-  await until(async () => await frame.locator('[data-tab="wiki"]').evaluate(node => node.classList.contains('active')), 'archive task completed in the view');
+  await until(async () => await frame.locator('.tabs [data-tab="wiki"]').evaluate(node => node.classList.contains('active')), 'archive task completed in the view');
   assert.ok((await call('list_pages')).some(page => page.title.includes('窗口里直接提问')), 'archive targets the visible answer, not its former array index');
-  await frame.locator('[data-tab="review"]').click();
+  await frame.locator('.tabs [data-tab="review"]').click();
   const lintBefore = (await call('status')).tasks.filter(task => task.kind === 'lint').length;
   await frame.locator('#runLint').click();
   await until(async () => (await call('status')).tasks.filter(task => task.kind === 'lint').length > lintBefore, 'lint button enqueued a task');
@@ -354,7 +354,7 @@ try {
 
   await until(async () => (await call('status')).tasks.every(task => !['queued', 'running'].includes(task.status)), 'background tasks drained before backup');
   await call('save_page', { slug: 'window-trash', title: '窗口回收站验证', body: '恢复后仍然完整的正文' });
-  await frame.locator('[data-tab="wiki"]').click();
+  await frame.locator('.tabs [data-tab="wiki"]').click();
   await until(async () => await frame.locator('#pageList [data-slug="window-trash"]').count() > 0, 'new page appears');
   await frame.locator('#pageList [data-slug="window-trash"]').click();
   await until(async () => (await frame.locator('#pageView').innerText()).includes('窗口回收站验证'), 'trash fixture opened');
@@ -362,12 +362,12 @@ try {
   assert.ok(await call('get_page', { slug: 'window-trash' }), 'confirmation has not deleted anything');
   await frame.locator('[data-action="dialogAccept"]').click();
   await until(async () => !(await call('get_page', { slug: 'window-trash' })), 'page moved to trash');
-  await frame.locator('[data-tab="trash"]').click();
+  await frame.locator('.tabs [data-tab="trash"]').click();
   await until(async () => (await frame.locator('#trashView').innerText()).includes('窗口回收站验证'), 'trash entry visible');
   await frame.locator('#trashView .card', { hasText: '窗口回收站验证' }).locator('[data-action="restoreTrash"]').click();
   await until(async () => (await call('get_page', { slug: 'window-trash' }))?.page.body.includes('恢复后仍然完整'), 'trash restores the actual content');
   step('confirmed deletion and recovery work in the real window');
-  await frame.locator('[data-tab="settings"]').click();
+  await frame.locator('.tabs [data-tab="settings"]').click();
   await until(async () => await frame.locator('#backupControls').count() > 0, 'backup controls');
   const backupPath = path.join(folder, 'wiki-backup.zip');
   await application.evaluate(({ session }, file) => { session.defaultSession.on('will-download', (_event, item) => item.setSavePath(file)); }, backupPath);

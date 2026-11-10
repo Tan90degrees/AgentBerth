@@ -76,6 +76,9 @@ try {
   await page.bringToFront();await page.locator('iframe[title="Plugin info"]').focus();
   await frame.getByRole('button',{name:'Read plugin'}).focus();
   assert.equal(await frame.locator('body').evaluate(()=>document.hasFocus()),true,'Plugin iframe must own focus before its single activation');
+  // Flush the newly focused iframe surface before sending native pointer
+  // input; otherwise Xvfb can still hit-test its previous embedding bounds.
+  await page.screenshot({animations:'disabled',path:`test-results/${packaged?'packaged-':''}extensions-view-ready.png`});
   await frame.getByRole('button',{name:'Read plugin'}).click();
   try{await frame.locator('#result').filter({hasText:'Updated Agent'}).waitFor();}
   catch(error){

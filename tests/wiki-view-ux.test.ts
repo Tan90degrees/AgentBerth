@@ -67,6 +67,19 @@ test('delete requires an explicit decision and recovery is available from the sa
   await until(() => store.getPage('notes'), 'page restored'); assert.equal(store.getPage('notes')!.body, 'important');
 });
 
+test('saving a source clears its recovery draft even when model compilation is unavailable', async t => {
+  const { service, open } = setup(t), dom = open();
+  click(dom, '[data-tab="sources"]'); click(dom, '#newSource');
+  input(dom, '#sourceView [data-field="title"]', '已保存的素材');
+  input(dom, '#sourceView [data-field="text"]', '已经保存的正文不应该再次恢复成未保存草稿。');
+  await until(() => service.workspace.editorDrafts().some(draft => draft.key === 'source:new'), 'source draft persisted');
+  click(dom, '#sourceView [data-action="saveSource"]');
+  await until(() => service.listSources().some(source => source.title === '已保存的素材'), 'source saved');
+  await until(() => !service.workspace.editorDrafts().some(draft => draft.key === 'source:new'), 'saved draft cleared');
+  click(dom, '#newSource');
+  assert.equal(dom.window.document.querySelector<HTMLTextAreaElement>('#sourceView [data-field="text"]')!.value, '', 'the next source starts empty');
+});
+
 test('body search and question history paginate beyond their previous sidebar limits', async t => {
   const { service, commands, open } = setup(t);
   for (let i = 0; i < 28; i++) await service.savePage({ slug: 'page-' + i, title: 'page ' + i, body: i === 27 ? 'only-body-needle' : 'body' });

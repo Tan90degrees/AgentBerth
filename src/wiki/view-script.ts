@@ -146,7 +146,7 @@ export const notesWikiScript = String.raw`
   function renderStatus(){
     var s=state.status;if(!s)return;
     $('statusDot').className='dot'+(s.ready?' ok':'');
-    $('statusText').textContent=s.ready?s.pages+' 页 · '+s.sources+' 素材 · '+s.pendingDrafts+' 待审阅':'未配置模型 Key';
+    $('statusText').textContent=s.ready?s.pages+' 页 · '+s.sources+' 素材 · '+s.pendingDrafts+' 待审阅':'尚未完成模型配置';
     $('draftCount').hidden=!s.pendingDrafts;$('draftCount').textContent=s.pendingDrafts;
   }
   // ---- Pages
@@ -424,6 +424,7 @@ export const notesWikiScript = String.raw`
           });
         });
         return chain.then(function(){return call('finalize_source',{id:source.id})}).then(function(){
+          forgetDraft('source:new');
           savedSource=null;state.newSource=false;state.source=source.id;
           progress('素材已保存，正在启动编译…');
           return call('compile',{sourceId:source.id}).then(function(taskId){
