@@ -153,3 +153,12 @@ test('large question and proposal summaries stay within the view message budget'
   assert.ok(Buffer.byteLength(JSON.stringify(drafts)) < 96 * 1024); assert.equal((drafts as unknown[]).length, 10);
   assert.equal(service.answers().length, 30, 'summary budgets never change the full stored history');
 });
+
+test('answers completed in the same millisecond keep distinct records and UI identities', t => {
+  const { workspace } = fixture(t);
+  const first = { at: '2026-11-10T00:00:00.000Z', question: 'first', answer: 'one', citations: [], pages: [], evidence: [], model: 'local' };
+  const second = { ...first, question: 'second', answer: 'two' };
+  workspace.saveAnswer(first); workspace.saveAnswer(second);
+  assert.notEqual(first.at, second.at); assert.equal(workspace.answers().length, 2);
+  assert.deepEqual(workspace.answers().map(answer => answer.answer).sort(), ['one', 'two']);
+});

@@ -66,7 +66,14 @@ export class WikiWorkspace {
     else throw new Error('回收记录已损坏');
     rmSync(file); this.store.invalidate(); return entry;
   }
-  saveAnswer(answer: WikiAnswer): void { this.write(path.join(this.folder('answers'), createHash('sha256').update(answer.at).digest('hex') + '.json'), JSON.stringify(answer)); }
+  saveAnswer(answer: WikiAnswer): void {
+    const directory = this.folder('answers');
+    let file = path.join(directory, createHash('sha256').update(answer.at).digest('hex') + '.json');
+    // Fast local endpoints can complete twice in one millisecond. The record's
+    // timestamp is also its UI identity, so retain both instead of replacing one.
+    while (existsSync(file)) { answer.at = new Date(Date.parse(answer.at) + 1).toISOString(); file = path.join(directory, createHash('sha256').update(answer.at).digest('hex') + '.json'); }
+    this.write(file, JSON.stringify(answer));
+  }
   answers(): WikiAnswer[] {
     const records = new Map(this.store.meta().answers.map(answer => [answer.at, answer]));
     for (const answer of this.entries<WikiAnswer>('answers')) records.set(answer.at, answer);
