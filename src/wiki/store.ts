@@ -27,6 +27,7 @@ function serialize<T>(action: () => T): Promise<T> {
 export class WikiStore {
   readonly root: string;
   revision = 0;
+  invalidate(): void { this.cache.clear(); this.revision++; }
   private readonly cache = new Map<string, { stamp: string; value: unknown }>();
   private cached<T>(file: string, read: () => T): T {
     const info = statSync(file);
@@ -115,6 +116,12 @@ export class WikiStore {
     rmSync(this.file(this.rawDir, id, '.json'), { force: true });
     for (const image of source?.images ?? []) rmSync(this.file(this.assetDir, image, ''), { force: true });
   }
+  hideSource(id: string): void { rmSync(this.file(this.rawDir, id, '.json'), { force: true }); this.invalidate(); }
+  addDocument(bytes: Uint8Array): string {
+    if (bytes.length > 20 * 1024 * 1024) throw new Error('PDF 超过 20 MiB');
+    const name = randomUUID() + '.pdf'; writeFileSync(path.join(this.assetDir, name), bytes, { mode: 0o600 }); return name;
+  }
+  assetBytes(name: string): Uint8Array { return new Uint8Array(readFileSync(this.file(this.assetDir, name, ''))); }
   addImage(mime: string, base64: string): string {
     const ext = IMAGE_TYPES[mime];
     if (!ext) throw new Error('图片仅支持 PNG / JPEG / WebP / GIF');

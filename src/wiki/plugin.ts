@@ -5,6 +5,7 @@ import { startInbox, type InboxHandle } from './inbox';
 import type { ServiceOptions } from './service';
 import { WikiService } from './service';
 import { WikiStore } from './store';
+import { registerWorkspaceCommands } from './commands-ux';
 import type { WikiConfig } from './types';
 
 type Params = Record<string, unknown>;
@@ -65,6 +66,7 @@ function readConfig(config: Record<string, string | number | boolean>): WikiConf
     allowAgentQueries: config.allowAgentQueries === true,
     lintMinutes: Number(config.lintMinutes ?? 0),
     maxContextPages: Number(config.maxContextPages ?? 8),
+    authRequired: config.authRequired !== false,
   };
 }
 
@@ -99,8 +101,9 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('save_schema', '更新 Schema 约定', schema({ value: field('string', { maxLength: 20000 }) }, ['value']), params => service.saveSchema(text(params, 'value')).then(() => true));
 
   // Pages
-  add('list_pages', '列出所有 wiki 页面（摘要）', schema(paging), params => {
-    const pages = service.listPages();
+  add('list_pages', '全文搜索和分页浏览 wiki 页面', schema({ ...paging, query: field('string'), kind: field('string'), tag: field('string') }), params => {
+    const query = text(params, 'query').trim().toLocaleLowerCase();
+    const pages = service.listPages().filter(page => (!query || [page.title, page.summary, page.body, ...page.tags].join(' ').toLocaleLowerCase().includes(query)) && (!text(params, 'kind') || page.kind === params.kind) && (!text(params, 'tag') || page.tags.some(tag => tag.toLocaleLowerCase() === text(params, 'tag').trim().toLocaleLowerCase())));
     const inbound = new Map<string, number>();
     for (const page of pages) for (const target of extractLinks(page.body)) inbound.set(target, (inbound.get(target) ?? 0) + 1);
     return pageSlice(pages, params).map(page => ({ slug: page.slug, title: byteTruncate(page.title, 300), summary: byteTruncate(page.summary, 600), kind: page.kind, humanEdited: page.humanEdited, updatedAt: page.updatedAt, links: extractLinks(page.body).length, backlinks: inbound.get(page.slug) ?? 0 }));
@@ -144,6 +147,8 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     return source ? {
       ...source,
       text: byteTruncate(source.text, 60 * 1024),
+      totalCharacters: source.text.length,
+      document: source.document ? { ...source.document, ranges: source.document.ranges.slice(0, 30) } : undefined,
       vision: byteTruncate(source.vision, 20 * 1024),
       images: source.images.slice(0, 40),
     } : null;
@@ -189,10 +194,10 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
 
   // Compile → draft → review
   add('compile', '把素材编译成待审阅提案', schema({ sourceId: field('string') }), params => service.compile(text(params, 'sourceId') || undefined));
-  add('list_drafts', '列出编译提案', schema({ ...paging, status: field('string', { enum: ['pending', 'approved', 'rejected'] }) }), params => pageSlice(service.listDrafts(typeof params.status === 'string' ? params.status as 'pending' | 'approved' | 'rejected' : undefined), { ...params, limit: Math.min(10, number(params, 'limit', 10)) }).map(draft => ({ id: draft.id, sourceId: draft.sourceId, sourceTitle: draft.sourceTitle, createdAt: draft.createdAt, status: draft.status, model: draft.model, summary: byteTruncate(draft.summary, 600), pages: draft.pages.slice(0, 20).map(page => ({ slug: page.slug, title: byteTruncate(page.title, 300), action: page.action, summary: byteTruncate(page.summary, 600) })), contradictions: draft.contradictions.slice(0, 20).map(value => byteTruncate(value, 600)), feedback: draft.feedback.slice(0, 10) })));
+  add('list_drafts', '列出编译提案', schema({ ...paging, status: field('string', { enum: ['pending', 'approved', 'rejected'] }) }), params => pageSlice(service.listDrafts(typeof params.status === 'string' ? params.status as 'pending' | 'approved' | 'rejected' : undefined), { ...params, limit: Math.min(10, number(params, 'limit', 10)) }).map(draft => ({ id: draft.id, sourceId: draft.sourceId, sourceTitle: byteTruncate(draft.sourceTitle, 300), createdAt: draft.createdAt, status: draft.status, model: byteTruncate(draft.model, 80), summary: byteTruncate(draft.summary, 600), pages: draft.pages.slice(0, 20).map(page => ({ action: page.action })), contradictions: [], feedback: [] })));
   add('get_draft', '读取单个提案（页摘要）', schema({ id: field('string') }, ['id']), params => {
     const draft = service.getDraft(text(params, 'id'));
-    return draft ? { ...draft, pages: draft.pages.map(page => ({ slug: page.slug, title: page.title, action: page.action, summary: page.summary })) } : null;
+    return draft ? { ...draft, pages: draft.pages.map(page => ({ slug: page.slug, title: page.title, action: page.action, summary: page.summary, selected: page.selected !== false, merge: !!page.allowHumanMerge })) } : null;
   });
   add('draft_page', '读取提案中某一页的完整 diff', schema({ id: field('string'), slug: field('string'), offset: field('integer', { minimum: 0 }) }, ['id', 'slug']), params => {
     const draft = service.getDraft(text(params, 'id'));
@@ -216,7 +221,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
 
   // Query / lint / synthesis
   add('ask', '基于 wiki 提问（引用页面并回溯原文）', schema({ question: field('string') }, ['question']), params => service.ask(text(params, 'question')));
-  add('answers', '最近的问答记录', schema({}), () => service.answers().slice(0, 5).map(answer => ({ ...answer, evidence: [], answer: truncate(answer.answer, 4000) })));
+  add('answers', '搜索并分页读取问答历史', schema({ ...paging, query: field('string') }), params => pageSlice(service.answers().filter(answer => !text(params, 'query') || (answer.question + answer.answer).toLocaleLowerCase().includes(text(params, 'query').toLocaleLowerCase())), { ...params, limit: number(params, 'limit', 5) }).map(answer => ({ ...answer, question: byteTruncate(answer.question, 600), model: byteTruncate(answer.model, 80), citations: answer.citations.slice(0, 10).map(slug => byteTruncate(slug, 80)), pages: [], evidence: [], answer: byteTruncate(answer.answer, 800) })));
   add('archive_answer', '将完整问答记录归档为新页面', schema({ at: field('string') }, ['at']), params => {
     const answer = service.answers().find(item => item.at === text(params, 'at'));
     if (!answer) throw new Error('问答记录已过期，请重新提问');
@@ -275,6 +280,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
       return { ...rest, result: result === undefined ? null : trimDeep(result, 32 * 1024) };
     }, true);
 
+  registerWorkspaceCommands(service, add, api.signal);
   for (const command of commands) {
     api.command({ name: command.name, description: command.description, mcp: command.mcp && !!options.config.allowAgentAccess && (command.name !== 'wiki_ask' || !!options.config.allowAgentQueries), inputSchema: command.input },
       async params => {
@@ -298,6 +304,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     inbox = startInbox({
       root: api.dataDirectory,
       parse: (name, bytes) => service.extractPdfText(name, new Uint8Array(bytes)),
+      onPdf: async (name, bytes) => { await service.ingestPdfFile(name, new Uint8Array(bytes)); },
       onFile: async (name, value) => { await service.ingestInboxFile(name, value); },
       onError: (name, error) => store.appendLog('ingest', '自动采集失败', [
         `文件：${path.basename(name)}`, String(error instanceof Error ? error.message : error).slice(0, 200),

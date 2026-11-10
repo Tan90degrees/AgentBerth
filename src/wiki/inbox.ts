@@ -25,6 +25,7 @@ export interface InboxOptions {
   onFile: (name: string, text: string) => Promise<void>;
   /** Binary → text conversion (used for PDF). Defaults to UTF-8 for text types. */
   parse?: (name: string, bytes: Buffer) => Promise<string>;
+  onPdf?: (name: string, bytes: Buffer) => Promise<void>;
   onError?: (name: string, error: unknown) => void;
 }
 export interface InboxHandle {
@@ -106,13 +107,14 @@ export function startInbox(options: InboxOptions): InboxHandle {
         try {
           // A binary parse failure is deterministic: the bytes will not change,
           // so unlike a transient FS error it must not be retried forever.
-          text = isPdf(name) && options.parse ? await options.parse(name, buffer) : buffer.toString('utf8');
+          if (isPdf(name) && options.onPdf) { await options.onPdf(name, buffer); text = 'PDF 已导入'; }
+          else text = isPdf(name) && options.parse ? await options.parse(name, buffer) : buffer.toString('utf8');
         } catch (error) {
           throw new PermanentInboxError(String(error instanceof Error ? error.message : error).slice(0, 200));
         }
         if (!text.trim()) throw new PermanentInboxError('文件内容为空');
         if (text.length > 200_000) throw new PermanentInboxError('素材超过 200000 字符上限，请拆分后导入');
-        await options.onFile(name, text);
+        if (!isPdf(name) || !options.onPdf) await options.onFile(name, text);
         if (stopped) return;
         const after = statSync(file);
         if (`${after.size}:${after.mtimeMs}:${after.ctimeMs}:${after.ino}` !== signature) { rescan = true; continue; }

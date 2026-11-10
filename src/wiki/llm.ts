@@ -9,6 +9,7 @@ export interface ChatMessage {
 export interface ChatOptions {
   baseURL: string;
   apiKey: string;
+  authRequired?: boolean;
   model: string;
   messages: ChatMessage[];
   images?: LlmImage[];
@@ -58,7 +59,7 @@ function contentText(value: unknown): string {
 }
 
 export async function chat(options: ChatOptions): Promise<string> {
-  if (!options.apiKey.trim()) throw new Error('请先在「设置」中填写 API Key');
+  if (options.authRequired !== false && !options.apiKey.trim()) throw new Error('请先在「设置」中填写 API Key');
   if (!options.model.trim()) throw new Error('请先在「设置」中填写模型名称');
   const url = completionUrl(options.baseURL);
   const messages = options.messages.slice();
@@ -74,7 +75,7 @@ export async function chat(options: ChatOptions): Promise<string> {
   try {
     const response = await (options.fetchImpl ?? fetch)(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${options.apiKey}` },
+      headers: { 'Content-Type': 'application/json', ...(options.authRequired !== false && options.apiKey.trim() ? { Authorization: `Bearer ${options.apiKey}` } : {}) },
       body: JSON.stringify({ model: options.model, messages, temperature: options.temperature ?? 0.2, stream: false }),
       signal: controller.signal,
     });

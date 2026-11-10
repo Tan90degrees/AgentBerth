@@ -81,6 +81,15 @@ article{overflow:auto;padding:18px 22px;min-width:0}
 .md-tools button:hover{background:var(--hover,#eee);color:var(--text)}
 .md-editor textarea{border:0;box-shadow:none;width:100%;display:block;background:var(--input,#fff)}
 .md-editor [hidden]{display:none}
+.ux-notice,.setup-guide,.draft-shelf{margin:4px 16px;flex-shrink:0;max-height:180px;overflow:auto}
+#draftSaveState{margin:0 16px;min-height:0}
+.pager{margin:10px 0;justify-content:space-between}
+.source-fulltext{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;padding:14px 0}
+.source-image img{display:block;max-width:100%;max-height:600px;object-fit:contain}
+.check{display:flex;align-items:center;gap:8px}.check input{width:auto}
+.dialog-backdrop{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:var(--overlay,rgba(0,0,0,.5));padding:24px}
+.ux-dialog{padding:22px;background:var(--surface,#fff);border:1px solid var(--border,#ddd);border-radius:12px;max-width:560px;max-height:85vh;overflow:auto}
+.ux-dialog .row{justify-content:flex-end;margin-top:16px}
 .md-editor textarea:focus{border-color:transparent;box-shadow:none}
 .md-preview{padding:12px 14px;max-height:520px;overflow:auto;background:var(--surface,#fff)}
 .progress{display:flex;align-items:center;gap:8px;font-size:var(--fs-xs,12px);color:var(--text-secondary,#4d4d4d);margin:8px 0}

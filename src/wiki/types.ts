@@ -44,6 +44,7 @@ export interface WikiSource {
   compiled: boolean;
   hash: string;
   createdAt: string;
+  document?: { name: string; asset: string; pages: number; ranges: { page: number; start: number; end: number }[] };
 }
 
 export interface WikiSkill {
@@ -67,6 +68,9 @@ export interface DraftPage {
   tags: string[];
   previous: string | null;
   action: 'create' | 'update' | 'skip';
+  selected?: boolean;
+  allowHumanMerge?: boolean;
+  reviewEdited?: boolean;
 }
 
 export interface WikiDraft {
@@ -88,12 +92,13 @@ export interface WikiTask {
   id: string;
   kind: 'compile' | 'ask' | 'lint' | 'vision' | 'archive';
   label: string;
-  status: 'queued' | 'running' | 'done' | 'failed';
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
   progress: string;
   startedAt: string;
   finishedAt?: string;
   error?: string;
   result?: unknown;
+  retry?: { action: string; params: Record<string, unknown> };
 }
 
 export interface WikiLint {
@@ -140,4 +145,5 @@ export interface WikiConfig {
   allowAgentQueries?: boolean;
   lintMinutes: number;
   maxContextPages: number;
+  authRequired?: boolean;
 }

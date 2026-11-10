@@ -37,8 +37,16 @@ function HtmlExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:Extensi
   const frame=useRef<HTMLIFrameElement>(null);
   // Attach the message bridge before paint: a fast iframe can otherwise send
   // its first command before the passive effect subscribes to window messages.
-  useLayoutEffect(()=>{let pending=0,alive=true;const theme=pluginTheme;const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
+  useLayoutEffect(()=>{let pending=0,alive=true,savingDraft=false;const draftWrites=new Map<string,Record<string,unknown>>();
+  // Keep the latest snapshot in the host, so closing/reloading an iframe does
+  // not discard writes queued behind an earlier save in that iframe.
+  const flushDrafts=async()=>{if(savingDraft)return;savingDraft=true;try{while(draftWrites.size){const [key,params]=draftWrites.entries().next().value!;draftWrites.delete(key);try{await window.berth.extensions({action:'call',id:plugin.manifest.id,command:'save_editor_draft',params});if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-draft-saved',key},'*');}catch(error){onError('草稿保存失败：'+String(error));}}}finally{savingDraft=false;}};
+  const theme=pluginTheme;const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
     if(!alive||event.source!==frame.current?.contentWindow)return;
+    if(event.data?.kind==='agentberth-plugin-save-draft'&&plugin.manifest.id==='notes-wiki'){
+      const params=event.data.params;try{if(!params||typeof params.key!=='string'||JSON.stringify(params).length>240000||draftWrites.size>=100&&!draftWrites.has(params.key))return;}catch{return;}
+      draftWrites.set(params.key,params);void flushDrafts();return;
+    }
     if(event.data?.kind==='agentberth-plugin-open-settings'){window.dispatchEvent(new CustomEvent('berth:plugin-settings',{detail:{pluginId:plugin.manifest.id,isAgent:plugin.isAgent}}));return;}
     if(event.data?.kind==='agentberth-plugin-ready'){
       frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-ready-ack',theme:theme()},'*');
@@ -52,5 +60,5 @@ function HtmlExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:Extensi
     try{const result=await window.berth.extensions({action:'call',id:plugin.manifest.id,command,params:params??{}});if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,result},'*');}catch(error){if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,error:String(error)},'*');}finally{pending--;}
   };window.addEventListener('message',receive);return()=>{alive=false;observer.disconnect();window.removeEventListener('message',receive);};},[plugin.manifest.id]);
   const src=`agentberth-plugin://view/${plugin.manifest.id}/${viewId}?generation=${plugin.generation}`+(initialTaskId?'&task='+encodeURIComponent(initialTaskId):'');
-  return <iframe className="extension-view" ref={frame} title={plugin.manifest.views.find(v=>v.id===viewId)?.title??plugin.manifest.name} sandbox="allow-scripts allow-forms" src={src}/>;
+  return <iframe className="extension-view" ref={frame} title={plugin.manifest.views.find(v=>v.id===viewId)?.title??plugin.manifest.name} sandbox={'allow-scripts allow-forms'+(plugin.manifest.id==='notes-wiki'?' allow-downloads':'')} src={src}/>;
 }

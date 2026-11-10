@@ -9,15 +9,21 @@ export const notesWikiMarkup = String.raw`
       <button data-tab="ask">提问</button>
       <button data-tab="skills">Skill</button>
       <button data-tab="settings">设置</button>
+      <button data-tab="tasks">任务 <span id="taskCount"></span></button>
+      <button data-tab="trash">回收站</button>
     </nav>
     <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">加载中…</span></div>
   </header>
   <p id="error" class="error" role="alert" style="margin:0 16px"></p>
+  <div id="uxNotice" class="notice ux-notice" role="status" hidden></div>
+  <div id="draftShelf" class="draft-shelf"></div><small id="draftSaveState" role="status"></small>
+  <div id="setupGuide" class="notice setup-guide" hidden><strong>开始使用知识库</strong><p>① 配置模型并测试连接 → ② 导入第一份素材 → ③ 审阅后发布。</p><button data-action="openPluginSettings">配置地址、模型与鉴权</button><button data-tab="sources">导入素材</button></div>
   <main>
     <aside>
       <section data-for="wiki">
         <div class="list-head"><strong>Wiki 页面</strong><button id="newPage" data-action="newPage" class="ghost" aria-label="新建页面">＋</button></div>
-        <input id="pageSearch" placeholder="搜索标题或摘要…" aria-label="搜索页面" maxlength="200">
+        <input id="pageSearch" placeholder="全文搜索页面…" aria-label="搜索页面" maxlength="200">
+        <label>类型<select id="pageKind"><option value="">全部类型</option><option value="concept">概念</option><option value="entity">实体</option><option value="source">来源</option><option value="comparison">对比</option><option value="overview">总览</option><option value="note">笔记</option></select></label><input id="pageTag" placeholder="按标签筛选" aria-label="标签筛选">
         <div id="pageList" style="margin-top:8px"></div>
       </section>
       <section data-for="sources" hidden>
@@ -33,6 +39,7 @@ export const notesWikiMarkup = String.raw`
       </section>
       <section data-for="ask" hidden>
         <div class="list-head"><strong>最近提问</strong></div>
+        <input id="answerSearch" placeholder="搜索全部问答历史" aria-label="搜索问答历史">
         <div id="answerList"></div>
       </section>
       <section data-for="skills" hidden>
@@ -56,16 +63,19 @@ export const notesWikiMarkup = String.raw`
       <section class="panel active" data-panel="wiki"><div id="pageView"></div></section>
       <section class="panel" data-panel="sources"><div id="sourceView"></div></section>
       <section class="panel" data-panel="review"><div id="draftView"></div></section>
-      <section class="panel" data-panel="ask">
+      <section class="panel" data-panel="ask" id="askPanel">
         <div class="card"><h2>基于 Wiki 提问</h2><p class="muted">回答只依据检索到的页面，并在结论后附上 [[引用]]；好答案可归档成新页面。</p>
-          <textarea id="question" rows="3" maxlength="2000" placeholder="例如：现有笔记里，关于 X 有哪些互相矛盾的说法？"></textarea>
+          <textarea id="question" data-field="question" rows="3" maxlength="2000" placeholder="例如：现有笔记里，关于 X 有哪些互相矛盾的说法？"></textarea>
           <div class="row" style="margin-top:8px"><button id="ask" data-action="ask" class="primary">提问</button><span id="askProgress" class="muted"></span></div>
         </div>
         <div id="answerView"></div>
       </section>
       <section class="panel" data-panel="skills"><div id="skillView"></div></section>
       <section class="panel" data-panel="settings"><div id="settingsView"></div></section>
+      <section class="panel" data-panel="tasks"><h2>任务中心</h2><p class="muted">可取消或重试任务；后台重启后会保留记录，并提示重试未完成任务。</p><div id="taskView"></div></section>
+      <section class="panel" data-panel="trash"><h2>回收站</h2><div id="trashView"></div></section>
     </article>
   </main>
 </div>
+<div id="uxDialog" hidden></div>
 `;

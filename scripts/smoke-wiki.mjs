@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
+import { unzipSync } from 'fflate';
 import { cleanupSmoke } from './smoke-cleanup.mjs';
 
 const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-wiki-window-'));
@@ -209,10 +210,11 @@ try {
   const knowledge = page.getByRole('button', { name: '笔记 Wiki · 知识库' });
   assert.equal(await knowledge.locator('.activity-label').innerText(), '知识库', 'extension icons carry a text label');
   assert.ok((await page.locator('.activity-label').allInnerTexts()).includes('会话'), 'the sessions icon is labelled');
+  assert.ok(await page.locator('#sidebar-content').isHidden(), 'wiki opens in its remembered focus layout');
   await knowledge.click();
-  await until(async () => page.locator('#sidebar-content').isHidden(), 're-click collapses the sidebar');
+  await until(async () => page.locator('#sidebar-content').isVisible(), 're-click restores the sidebar');
   await knowledge.click();
-  await until(async () => page.locator('#sidebar-content').isVisible(), 'another click restores the sidebar');
+  await until(async () => page.locator('#sidebar-content').isHidden(), 'another click collapses the sidebar');
   step('labelled activity icons toggle the sidebar on re-click');
 
   // Markdown editor: preview renders in place and never loses the draft.
@@ -256,8 +258,25 @@ try {
   assert.ok(scoped.same, 'field lookup resolves inside the active panel');
   await frame.locator('#skillView [data-action="cancelSkill"]').click();
   await frame.locator('[data-tab="wiki"]').click();
+  assert.equal(await frame.locator('#pageView [data-field="body"]').inputValue(), md, 'switching tabs restores the unsaved page draft');
   await frame.locator('#pageView [data-action="cancelEdit"]').click();
+  await frame.locator('[data-action="dialogAccept"]').click();
   step('form fields are scoped to the visible panel');
+
+  await until(async () => (await call('editor_drafts')).some(draft => draft.key === 'page:向量检索'), 'draft persisted outside the iframe');
+  await page.getByRole('button', { name: '关闭插件视图' }).click();
+  await knowledge.click();
+  const savedDraft = frame.locator('[data-action="restoreEditorDraft"][data-key="page:向量检索"]');
+  await until(async () => await savedDraft.count() > 0, 'draft recovery survives closing the view');
+  await savedDraft.click();
+  await until(async () => (await frame.locator('#pageView [data-field="body"]').inputValue()) === md, 'recovered body is complete');
+  await frame.locator('#pageView [data-action="cancelEdit"]').click();
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await frame.locator('[data-action="discardEditorDraft"][data-key="page:向量检索"]').click();
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => !(await call('editor_drafts')).some(draft => draft.key === 'page:向量检索'), 'explicit discard clears persistent draft');
+  step('edit drafts survive real iframe teardown and explicit discard');
+
 
   // The static buttons are delegated through [data-action]; exercise them for
   // real so a missing attribute can never ship as a dead primary action again.
@@ -286,7 +305,12 @@ try {
   await frame.locator('[data-tab="sources"]').click();
   await frame.locator('#newSource').click();
   await frame.locator('#sourceView [data-field="pdf"]').setInputFiles({ name: 'window-upload.pdf', mimeType: 'application/pdf', buffer: iframePdf });
+  await frame.locator('#sourceView [data-field="compileImported"]').check();
+  await frame.locator('[data-action="startImport"]').click();
   await until(async () => (await call('list_sources')).some(item => item.title === 'window-upload' && item.compiled), 'iframe PDF upload imported and compiled');
+  await frame.locator('[data-tab="tasks"]').click();
+  await until(async () => (await frame.locator('[data-action="taskDraft"]').count()) > 0, 'completed import exposes a proposal action');
+  await frame.locator('[data-action="taskDraft"]').first().click();
   await until(async () => await frame.locator('[data-tab="review"]').evaluate(node => node.classList.contains('active')), 'iframe PDF compile task completed in the view');
   assert.ok((await call('get_source', { id: (await call('list_sources')).find(item => item.title === 'window-upload').id })).text.includes('Hello AgentBerth IFR'), 'iframe upload extracted its own text');
   step('the iframe PDF input uploads, extracts and compiles');
@@ -308,6 +332,42 @@ try {
   await frame.locator('#runLint').click();
   await until(async () => (await call('status')).tasks.filter(task => task.kind === 'lint').length > lintBefore, 'lint button enqueued a task');
   step('all primary iframe buttons are wired');
+
+
+  await until(async () => (await call('status')).tasks.every(task => !['queued', 'running'].includes(task.status)), 'background tasks drained before backup');
+  await call('save_page', { slug: 'window-trash', title: '窗口回收站验证', body: '恢复后仍然完整的正文' });
+  await frame.locator('[data-tab="wiki"]').click();
+  await until(async () => await frame.locator('#pageList [data-slug="window-trash"]').count() > 0, 'new page appears');
+  await frame.locator('#pageList [data-slug="window-trash"]').click();
+  await until(async () => (await frame.locator('#pageView').innerText()).includes('窗口回收站验证'), 'trash fixture opened');
+  await frame.locator('[data-action="deletePage"]').click();
+  assert.ok(await call('get_page', { slug: 'window-trash' }), 'confirmation has not deleted anything');
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => !(await call('get_page', { slug: 'window-trash' })), 'page moved to trash');
+  await frame.locator('[data-tab="trash"]').click();
+  await until(async () => (await frame.locator('#trashView').innerText()).includes('窗口回收站验证'), 'trash entry visible');
+  await frame.locator('#trashView .card', { hasText: '窗口回收站验证' }).locator('[data-action="restoreTrash"]').click();
+  await until(async () => (await call('get_page', { slug: 'window-trash' }))?.page.body.includes('恢复后仍然完整'), 'trash restores the actual content');
+  step('confirmed deletion and recovery work in the real window');
+  await frame.locator('[data-tab="settings"]').click();
+  await until(async () => await frame.locator('#backupControls').count() > 0, 'backup controls');
+  const backupPath = path.join(folder, 'wiki-backup.zip');
+  await application.evaluate(({ session }, file) => { session.defaultSession.on('will-download', (_event, item) => item.setSavePath(file)); }, backupPath);
+  const downloading = page.waitForEvent('download');
+  await frame.locator('[data-action="exportBackup"]').click();
+  const downloaded = await downloading;
+  await downloaded.path();
+  const backupBytes = await readFile(backupPath), archive = unzipSync(backupBytes);
+  assert.ok(archive['wiki/window-trash.md'], 'download contains restored page');
+  assert.equal(archive['credentials.json'], undefined, 'portable backup excludes credentials');
+  assert.ok(Object.keys(archive).some(name => name.startsWith('raw/assets/') && name.endsWith('.pdf')), 'original PDFs are backed up');
+  await frame.locator('#backupFile').setInputFiles({ name: 'backup.zip', mimeType: 'application/zip', buffer: backupBytes });
+  await frame.locator('[data-action="previewBackup"]').click();
+  await until(async () => (await frame.locator('#backupPreview').innerText()).includes('冲突'), 'backup preview reports conflicts');
+  await frame.locator('[data-action="applyBackupMerge"]').click();
+  await until(async () => (await frame.locator('#uxNotice').innerText()).includes('备份导入完成'), 'safe backup merge completed');
+  assert.equal((await call('get_page', { slug: 'window-trash' })).page.body.includes('恢复后仍然完整'), true);
+  step('sandboxed backup download, conflict preview and safe import work');
 
   assert.equal((await frame.locator('#error').innerText()).trim(), '', 'no command errors in the view');
   assert.deepEqual(errors, [], 'no renderer page errors');

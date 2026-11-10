@@ -13,6 +13,7 @@ export const notesWikiManifest = extensionManifestSchema.parse({
   description: '以 LLM Wiki 方式编译笔记：原始素材只读、模型维护双向链接页面、编译结果人工审阅，可接入文本与视觉模型并自定义工作流 Skill。',
   dependencies: [],
   config: {
+    authRequired: { type: 'boolean', title: '服务需要 API Key', description: '本地 Ollama、LM Studio 等无鉴权服务可关闭；公网服务通常需要开启。', default: true },
     baseURL: { type: 'string', title: '模型服务地址', description: '任意 OpenAI 兼容 /chat/completions 端点，例如 https://api.openai.com/v1、DeepSeek、Groq、Ollama 或 LM Studio。', default: 'https://api.openai.com/v1' },
     textModel: { type: 'string', title: '文本模型', description: '用于摄入、编译、问答与体检。', default: 'gpt-4o-mini' },
     visionModel: { type: 'string', title: '视觉模型', description: '用于理解素材中的图片；留空则跳过图片理解。', default: 'gpt-4o-mini' },

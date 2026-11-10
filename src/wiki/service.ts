@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import {
   buildIndex, byteTruncate, draftPages, evidenceList, extractLinks, lintWiki, pageHash, pageToDocument,
@@ -11,6 +12,7 @@ import {
   queryMessages, resolveSkill, synthesizeMessages,
 } from './prompts';
 import { withWriteLock, type WikiStore } from './store';
+import { WikiWorkspace } from './workspace';
 import { extractPdfText, type PdfTextExtractor } from './pdf';
 import type {
   SourceEvidence, SourceExcerpt, WikiAnswer, WikiConfig, WikiDraft, WikiLint, WikiPage, WikiSkill, WikiSource, WikiStatus, WikiTask,
@@ -32,12 +34,16 @@ const now = () => new Date().toISOString();
 /** After a failed auto-compile, wait before retrying the same source instead of
  * paying for a model call every 60 seconds forever. Manual retry is unaffected. */
 const COMPILE_RETRY_MS = 5 * 60_000;
-type SourceInput = { title: string; text: string; images?: { mime: string; base64: string }[]; origin?: string; staging?: boolean };
+type SourceInput = { document?: { name: string; bytes: Uint8Array; pages: number; ranges: { page: number; start: number; end: number }[] }; guard?: () => void; title: string; text: string; images?: { mime: string; base64: string }[]; origin?: string; staging?: boolean };
 
 /** Everything the UI can do lives here; plugin.ts is only a thin Cordis adapter.
  * Long model calls run in a background queue so no RPC ever blocks the daemon. */
 export class WikiService {
   readonly store: WikiStore;
+  readonly workspace: WikiWorkspace;
+  private readonly operationContext = new AsyncLocalStorage<AbortSignal>();
+  private readonly taskControllers = new Map<string, AbortController>();
+  private readonly pausedSources = new Set<string>();
   readonly config: WikiConfig;
   private readonly signal: AbortSignal;
   private readonly fetchImpl?: typeof fetch;
@@ -54,6 +60,14 @@ export class WikiService {
 
   constructor(options: ServiceOptions) {
     this.store = options.store;
+    this.workspace = new WikiWorkspace(options.store);
+    const savedTasks = this.workspace.tasks<WikiTask[]>([]);
+    for (const task of (Array.isArray(savedTasks) ? savedTasks : []).slice(0, 200)) {
+      if (!task || !task.id || !task.kind || typeof task.startedAt !== 'string') continue;
+      if (['queued', 'running'].includes(task.status)) { task.status = 'failed'; task.error = '后台已重启，请重试'; task.finishedAt = now(); }
+      this.tasks.set(task.id, task);
+      if (task.status === 'cancelled' && task.retry?.action === 'compile') this.pausedSources.add(String(task.retry.params.sourceId));
+    }
     this.config = options.config;
     this.signal = options.signal;
     this.fetchImpl = options.fetchImpl;
@@ -73,13 +87,39 @@ export class WikiService {
 
   // ---- Model access -----------------------------------------------------
   private key(): string { return this.store.credentials().apiKey; }
+  private modelReady(): boolean { return !!this.config.textModel.trim() && (this.config.authRequired === false || !!this.key()); }
+  private assertOperation(): void { if (this.signal.aborted || this.operationContext.getStore()?.aborted) throw new Error('任务已取消'); }
+  private persistTasks(): void { this.workspace.saveTasks([...this.tasks.values()].slice(-200)); }
+  taskList(): WikiTask[] { return [...this.tasks.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)); }
+  cancelTask(id: string): boolean {
+    const task = this.tasks.get(id); if (!task || !['queued', 'running'].includes(task.status)) return false;
+    task.status = 'cancelled'; task.progress = '已取消'; task.finishedAt = now();
+    if (task.retry?.action === 'compile') this.pausedSources.add(String(task.retry.params.sourceId));
+    this.taskControllers.get(id)?.abort(new Error('用户取消了任务'));
+    for (const [source, active] of this.compiling) if (active === id) this.compiling.delete(source);
+    this.persistTasks(); return true;
+  }
+  retryTask(id: string): string {
+    const task = this.tasks.get(id), retry = task?.retry;
+    if (!task || !['failed', 'cancelled'].includes(task.status) || !retry) throw new Error('此任务暂不能重试');
+    const p = retry.params;
+    switch (retry.action) {
+      case 'compile': return this.compile(String(p.sourceId));
+      case 'ask': return this.ask(String(p.question));
+      case 'lint': return this.lint();
+      case 'review': return this.reviewDraft(String(p.id), p.action === 'reject' ? 'reject' : 'approve', String(p.feedback ?? ''));
+      case 'archive': return this.archiveAnswer(String(p.question), String(p.answer), Array.isArray(p.citations) ? p.citations as string[] : [], Array.isArray(p.evidence) ? p.evidence as SourceEvidence[] : []);
+      default: throw new Error('任务类型不支持重试');
+    }
+  }
   private model(kind: 'text' | 'vision' = 'text') {
     return {
       baseURL: this.config.baseURL,
       apiKey: this.key(),
       model: kind === 'vision' && this.config.visionModel.trim() ? this.config.visionModel : this.config.textModel,
       fetchImpl: this.fetchImpl,
-      signal: this.signal,
+      signal: this.operationContext.getStore() ?? this.signal,
+      authRequired: this.config.authRequired,
     };
   }
   private async complete(messages: ChatMessage[], kind: 'text' | 'vision' = 'text', images?: { mime: string; base64: string }[], timeoutMs = 110_000): Promise<string> {
@@ -112,21 +152,22 @@ export class WikiService {
       automation: { autoCompile: this.config.autoCompile, autoApprove: false, lintMinutes: this.config.lintMinutes },
       lastLint: meta.lastLint,
       tasks: [...this.tasks.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 20),
-      ready: !!this.key() && !!this.config.textModel.trim(),
+      ready: this.modelReady(),
     };
   }
   taskStatus(id: string): WikiTask | null { return this.tasks.get(id) ?? null; }
 
   // ---- Background queue -------------------------------------------------
-  private enqueue(kind: WikiTask['kind'], label: string, run: (task: WikiTask) => Promise<unknown>, onError?: () => void): string {
+  private enqueue(kind: WikiTask['kind'], label: string, run: (task: WikiTask) => Promise<unknown>, onError?: () => void, retry?: WikiTask['retry']): string {
     if (this.queue.length >= 100) throw new Error('后台任务过多，请稍后重试');
     for (const [id, task] of this.tasks) {
       if (this.tasks.size < 200) break;
-      if (['done', 'failed'].includes(task.status)) this.tasks.delete(id);
+      if (['done', 'failed', 'cancelled'].includes(task.status)) this.tasks.delete(id);
     }
-    const task: WikiTask = { id: randomUUID(), kind, label, status: 'queued', progress: '排队中', startedAt: now() };
+    const task: WikiTask = { id: randomUUID(), kind, label, status: 'queued', progress: '排队中', startedAt: now(), retry };
     this.tasks.set(task.id, task);
     this.queue.push({ id: task.id, run, onError });
+    this.persistTasks();
     void this.drain();
     return task.id;
   }
@@ -137,16 +178,20 @@ export class WikiService {
       while (this.queue.length) {
         const job = this.queue.shift()!;
         const task = this.tasks.get(job.id)!;
+        if (task.status === 'cancelled') continue;
         if (this.signal.aborted) { task.status = 'failed'; task.error = '插件已停止'; task.finishedAt = now(); continue; }
         task.status = 'running'; task.progress = '正在处理'; task.startedAt = now();
-        try { task.result = await job.run(task); task.status = 'done'; task.progress = '已完成'; }
+        const controller = new AbortController(); this.taskControllers.set(task.id, controller);
+        const operationSignal = AbortSignal.any([this.signal, controller.signal]); this.persistTasks();
+        try { task.result = await this.operationContext.run(operationSignal, () => job.run(task)); if (operationSignal.aborted) throw new Error('任务已取消'); task.status = 'done'; task.progress = '已完成'; }
         catch (error) {
-          task.status = 'failed';
+          task.status = controller.signal.aborted ? 'cancelled' : 'failed';
           task.error = String(error instanceof Error ? error.message : error).slice(0, 500);
-          task.progress = '失败';
-          job.onError?.();
+          task.progress = controller.signal.aborted ? '已取消' : '失败';
+          if (!controller.signal.aborted) job.onError?.();
         }
-        task.finishedAt = now();
+        this.taskControllers.delete(task.id);
+        task.finishedAt = now(); this.persistTasks();
         for (const [sourceId, id] of this.compiling) if (id === task.id) this.compiling.delete(sourceId);
         try { this.publish?.(); } catch { /* A view notification cannot stop the queue. */ }
       }
@@ -162,15 +207,15 @@ export class WikiService {
     if (this.signal.aborted) return;
     if (this.config.autoCompile && !this.queued('compile')) {
       const pending = this.store.listSources().find(source =>
-        !source.staging && !source.compiled && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
-      if (pending && this.key()) void this.compile(pending.id);
+        !source.staging && !source.compiled && !this.pausedSources.has(source.id) && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
+      if (pending && this.modelReady()) void this.compile(pending.id);
     }
     const interval = Math.max(0, this.config.lintMinutes) * 60_000;
-    if (interval > 0 && this.key() && Date.now() - this.lastTickLint >= interval && !this.queued('lint')) {
+    if (interval > 0 && this.modelReady() && Date.now() - this.lastTickLint >= interval && !this.queued('lint')) {
       this.lastTickLint = Date.now();
       void this.lint();
     }
-    for (const [id, task] of this.tasks) if (['done', 'failed'].includes(task.status) && task.finishedAt && Date.now() - Date.parse(task.finishedAt) > 3_600_000) this.tasks.delete(id);
+    for (const [id, task] of this.tasks) if (['done', 'failed', 'cancelled'].includes(task.status) && task.finishedAt && Date.now() - Date.parse(task.finishedAt) > 3_600_000) this.tasks.delete(id);
   }
 
   // ---- Raw sources ------------------------------------------------------
@@ -191,7 +236,7 @@ export class WikiService {
     return withWriteLock(() => {
       // A parser can finish after its plugin generation has been disposed, or
       // disposal can happen while this write waits behind another operation.
-      this.assertActive();
+      this.assertActive(); input.guard?.();
       if (deduplicate) {
         const hash = this.store.sourceHash({ title, text, images: [], vision: '' });
         const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
@@ -199,6 +244,7 @@ export class WikiService {
       }
       const images = (input.images ?? []).slice(0, 8).map(image => this.store.addImage(image.mime, image.base64));
       const source: WikiSource = { id: randomUUID(), title, text, images, vision: '', compiled: false, hash: '', createdAt: now(), ...(input.staging ? { staging: true } : {}) };
+      if (input.document) { const d = input.document; source.document = { name: d.name, asset: this.store.addDocument(d.bytes), pages: d.pages, ranges: d.ranges }; }
       source.hash = this.store.sourceHash(source);
       this.store.saveSource(source);
       this.store.appendLog('ingest', title, [
@@ -219,11 +265,11 @@ export class WikiService {
   }
 
   /** Shared dedupe-and-save for every ingest path (inbox file, PDF, session). */
-  private async importText(title: string, body: string, origin: string): Promise<{ id: string; skipped: boolean }> {
+  private async importText(title: string, body: string, origin: string, extra: Pick<SourceInput, 'guard' | 'document'> = {}): Promise<{ id: string; skipped: boolean }> {
     const cleanTitle = truncate(title.trim() || '未命名素材', 160);
     const text = String(body ?? '');
     if (!text.trim()) throw new Error('素材内容不能为空');
-    const { source, skipped } = await this.createSource({ title: cleanTitle, text, origin }, true);
+    const { source, skipped } = await this.createSource({ title: cleanTitle, text, origin, ...extra }, true);
     return { id: source.id, skipped };
   }
 
@@ -238,15 +284,17 @@ export class WikiService {
   }
   async ingestPdfFile(name: string, bytes: Uint8Array): Promise<{ id: string; skipped: boolean }> {
     const title = truncate(path.basename(name).replace(/\.pdf$/i, ''), 160) || '导入素材';
-    const text = await this.extractPdfText(name, bytes);
-    return this.importText(title, text, `自动采集 PDF ${path.basename(name)}`);
+    this.assertActive();
+    const { text, pages, ranges = [] } = await this.pdfExtract(bytes);
+    this.assertActive();
+    return this.importText(title, text, `自动采集 PDF ${path.basename(name)}`, { document: { name: path.basename(name), bytes, pages, ranges } });
   }
 
   // The iframe bridge caps one command's params at 64 KiB, so a PDF travels as
   // base64 chunks. Uploads live in memory only and expire after 10 minutes.
   private static readonly PDF_UPLOAD_TTL_MS = 10 * 60_000;
   private static readonly PDF_MAX_BYTES = 20 * 1024 * 1024;
-  private readonly pdfUploads = new Map<string, { title: string; chunks: Buffer[]; bytes: number; at: number }>();
+  private readonly pdfUploads = new Map<string, { title: string; chunks: Buffer[]; bytes: number; at: number; finishing?: boolean; cancelled?: boolean }>();
 
   private prunePdfUploads(): void {
     const cutoff = Date.now() - WikiService.PDF_UPLOAD_TTL_MS;
@@ -269,6 +317,7 @@ export class WikiService {
     if (!/^[a-f0-9-]{36}$/.test(uploadId)) throw new Error('无效的上传标识');
     const entry = this.pdfUploads.get(uploadId);
     if (!entry) throw new Error('上传已过期，请重新导入 PDF');
+    if (entry.finishing) throw new Error('PDF 正在解析，请勿重复提交');
     const chunk = Buffer.from(String(base64 ?? ''), 'base64');
     if (chunk.length > 64 * 1024) throw new Error('PDF 分片过大');
     entry.bytes += chunk.length;
@@ -276,15 +325,18 @@ export class WikiService {
     if (entry.bytes > WikiService.PDF_MAX_BYTES) { this.pdfUploads.delete(uploadId); throw new Error('PDF 超过 20 MiB 上限，请拆分后导入'); }
     entry.chunks.push(chunk);
     if (!done) return null;
-    this.pdfUploads.delete(uploadId);
-    const bytes = Buffer.concat(entry.chunks);
-    const { text, pages } = await this.pdfExtract(new Uint8Array(bytes));
-    this.assertActive();
-    if (!text.trim()) throw new Error('PDF 没有可提取的文本（可能是扫描件或纯图片 PDF）');
-    const title = entry.title || '导入素材';
-    return { ...await this.importText(title, text, 'PDF 导入'), pages };
+    entry.finishing = true;
+    try {
+      const bytes = new Uint8Array(Buffer.concat(entry.chunks));
+      const { text, pages, ranges = [] } = await this.pdfExtract(bytes);
+      this.assertActive();
+      const guard = () => { if (entry.cancelled) throw new Error('PDF 导入已取消'); };
+      guard();
+      if (!text.trim()) throw new Error('PDF 没有可提取的文本（可能是扫描件或纯图片 PDF）');
+      return { ...await this.importText(entry.title || '导入素材', text, 'PDF 导入', { guard, document: { name: (entry.title || 'document') + '.pdf', bytes, pages, ranges } }), pages };
+    } finally { this.pdfUploads.delete(uploadId); }
   }
-  cancelPdfUpload(uploadId: string): boolean { return this.pdfUploads.delete(uploadId); }
+  cancelPdfUpload(uploadId: string): boolean { const entry = this.pdfUploads.get(uploadId); if (entry) entry.cancelled = true; return this.pdfUploads.delete(uploadId); }
 
   /** Sessions that can be turned into an immutable source. ACP agents expose a
    * live conversation; custom agents (CLI / plugin based) expose an imported
@@ -378,7 +430,7 @@ export class WikiService {
     return { ...await this.importText(title, text, `工作台会话 ${sessionId}`), events: events.length };
   }
   async deleteSource(id: string): Promise<void> {
-    await withWriteLock(() => { this.store.deleteSource(id); this.store.appendLog('edit', '删除原始素材', [`素材 ID：${id}`, '已编译的 wiki 页面保留']); });
+    await withWriteLock(() => { this.workspace.deleteSource(id); this.store.appendLog('edit', '删除原始素材', [`素材 ID：${id}`, '已编译的 wiki 页面保留']); });
   }
   async addImage(sourceId: string, mime: string, base64: string): Promise<{ name: string; images: number }> {
     return withWriteLock(() => {
@@ -409,11 +461,12 @@ export class WikiService {
   // ---- Wiki pages -------------------------------------------------------
   listPages(): WikiPage[] { return this.store.listPages(); }
   getPage(slug: string): WikiPage | null { return this.store.getPage(slug); }
-  async savePage(input: { slug: string; title?: string; summary?: string; body?: string; kind?: WikiPage['kind']; tags?: string[]; evidence?: SourceEvidence[]; createOnly?: boolean; expected?: string }): Promise<WikiPage> {
+  async savePage(input: { slug: string; title?: string; summary?: string; body?: string; kind?: WikiPage['kind']; tags?: string[]; evidence?: SourceEvidence[]; createOnly?: boolean; expected?: string }, guard?: () => void): Promise<WikiPage> {
     let slug = slugify(input.slug);
     if (input.body !== undefined && Buffer.byteLength(input.body) > 60 * 1024) throw new Error('页面超过 60 KiB，请拆分内容后保存');
     if (!slug || slug === 'untitled') throw new Error('页面名称无效');
     return withWriteLock(() => {
+      guard?.();
       if (input.createOnly) {
         const base = slug;
         let suffix = 2;
@@ -447,7 +500,7 @@ export class WikiService {
   }
   async deletePage(slug: string): Promise<void> {
     await withWriteLock(() => {
-      this.store.deletePage(slug);
+      this.workspace.deletePage(slug);
       this.store.saveIndex(buildIndex(this.store.listPages()));
       this.store.appendLog('edit', '删除页面', [`页面：${slug}`, '仍保留历史版本，可恢复']);
     });
@@ -527,7 +580,8 @@ export class WikiService {
     if (source.staging) throw new Error('图片仍在上传，请完成素材保存后编译');
     const existing = this.compiling.get(source.id);
     if (existing && ['queued', 'running'].includes(this.tasks.get(existing)?.status ?? '')) return existing;
-    if (!this.key()) throw new Error('请先在「设置」中填写 API Key');
+    if (!this.modelReady()) throw new Error('请先配置文本模型和鉴权方式');
+    this.pausedSources.delete(source.id);
     const id = this.enqueue('compile', `编译「${source.title}」`, async task => {
       const fresh = this.store.getSource(source.id);
       if (!fresh) throw new Error('素材已被删除');
@@ -536,13 +590,13 @@ export class WikiService {
       const schema = this.schema(), skills = this.allSkills();
       task.progress = '抽取概念';
       const ingested = await this.complete(ingestMessages(fresh, schema, resolveSkill(skills, 'ingest'), this.store.index(), fresh.vision));
-      if (this.signal.aborted) throw new Error('编译已取消');
+      this.assertOperation();
       const feedback = this.store.listDrafts().filter(draft => draft.sourceId === fresh.id && draft.status === 'rejected').flatMap(draft => draft.feedback).slice(-5);
       task.progress = '生成页面提案';
       const baseline = this.store.listPages();
       const context = compileContext(fresh, ingested, baseline);
       const compiled = await this.complete(compileMessages(fresh, ingested, context, schema, resolveSkill(skills, 'compile'), feedback));
-      if (this.signal.aborted) throw new Error('编译已取消');
+      this.assertOperation();
       const payload = parseJsonResponse(compiled);
       const draft: WikiDraft = {
         id: randomUUID(), sourceId: fresh.id, sourceTitle: fresh.title, createdAt: now(),
@@ -560,7 +614,7 @@ export class WikiService {
         // model was running, and the in-memory `fresh` must not overwrite them.
         const current = this.store.getSource(fresh.id);
         if (!current) throw new Error('素材已被删除');
-        if (this.signal.aborted) throw new Error('编译已取消');
+        this.assertOperation();
         if (this.store.sourceHash(current) !== inputHash) throw new Error('素材图片已变化，请重新编译');
         current.compiled = true;
         this.store.saveSource(current);
@@ -573,7 +627,7 @@ export class WikiService {
       });
       this.failedSources.delete(source.id);
       return draft.id;
-    }, () => this.failedSources.set(source.id, Date.now()));
+    }, () => this.failedSources.set(source.id, Date.now()), { action: 'compile', params: { sourceId: source.id } });
     this.compiling.set(source.id, id);
     return id;
   }
@@ -593,7 +647,7 @@ export class WikiService {
     ], 'vision', images);
     await withWriteLock(() => {
       const fresh = this.store.getSource(source.id);
-      if (this.signal.aborted) throw new Error('图片理解已取消');
+      this.assertOperation();
       if (!fresh || this.store.sourceHash(fresh) !== this.store.sourceHash(source)) throw new Error('素材图片已变化，请重新编译');
       fresh.vision = truncate(description, 8000);
       fresh.hash = this.store.sourceHash(fresh);
@@ -609,6 +663,18 @@ export class WikiService {
     return this.store.listDrafts().filter(draft => !status || draft.status === status);
   }
   getDraft(id: string): WikiDraft | null { return this.store.getDraft(id); }
+  async editDraftPage(id: string, slug: string, selected: boolean, body?: string, merge = false): Promise<void> {
+    await withWriteLock(() => {
+      this.assertActive();
+      const draft = this.store.getDraft(id), item = draft?.pages.find(page => page.slug === slug);
+      if (!draft || draft.status !== 'pending' || !item) throw new Error('提案已处理或页面不存在');
+      if (body !== undefined) { if (!body.trim() || body.length > 30000) throw new Error('页面正文须为 1–30000 字符'); item.body = body; item.reviewEdited = true; }
+      item.selected = selected;
+      item.allowHumanMerge = merge;
+      if (merge) { if (item.previous === null) throw new Error('合并页面缺少原始版本，请重新编译'); item.action = 'update'; item.reviewEdited = true; }
+      this.store.saveDraft(draft);
+    });
+  }
   reviewDraft(id: string, action: 'approve' | 'reject', feedback?: string): string {
     const draft = this.store.getDraft(id);
     if (!draft) throw new Error('审阅提案不存在');
@@ -617,6 +683,7 @@ export class WikiService {
       // Re-read inside the lock: the queue may have waited while another view
       // resolved this same proposal.
       const current = this.store.getDraft(id);
+      this.assertOperation();
       if (!current || current.status !== 'pending') throw new Error('此提案已处理');
       if (action === 'reject') {
         current.status = 'rejected'; current.resolvedAt = now();
@@ -629,30 +696,34 @@ export class WikiService {
         this.store.appendLog('publish', '拒绝编译提案', [`提案：${id}`, ...(feedback ? [`反馈：${truncate(feedback, 200)}`] : []), '反馈会注入下次编译']);
         return { rejected: true };
       }
+      this.assertOperation();
       return this.publishDraftSync(current);
-    }));
+    }), undefined, { action: 'review', params: { id, action, feedback: feedback ?? '' } });
   }
-  private publishDraftSync(draft: WikiDraft): { published: string[]; skipped: string[] } {
-    if (this.signal.aborted) throw new Error('插件已停止');
+  private publishDraftSync(draft: WikiDraft): { published: string[]; skipped: string[]; skippedDetails: { slug: string; reason: string }[] } {
+    this.assertOperation();
     if (draft.sourceId) {
       const source = this.store.getSource(draft.sourceId);
       if (!source || (draft.sourceHash && this.store.sourceHash(source) !== draft.sourceHash)) throw new Error('原始素材已删除或变化，请重新编译');
     }
     const published: string[] = [], skipped: string[] = [];
+    const skippedDetails: { slug: string; reason: string }[] = [];
+    const skip = (slug: string, reason: string) => { skipped.push(slug); skippedDetails.push({ slug, reason }); };
     const at = now();
     for (const item of draft.pages) {
       const current = this.store.getPage(item.slug);
-      if (item.action === 'skip' || current?.humanEdited) { skipped.push(item.slug); continue; }
+      if (item.selected === false) { skip(item.slug, '审阅时未选中'); continue; }
+      if (item.action === 'skip' || current?.humanEdited && !item.allowHumanMerge) { skip(item.slug, '人工编辑保护或缺少完整上下文，可逐页审阅后合并'); continue; }
       // Compare normalized documents: hand edits and concurrent publishes must
       // never be silently overwritten by a stale proposal. A "create" page that
       // someone else published meanwhile is skipped for the same reason.
-      if (item.previous === null && current) { skipped.push(item.slug); continue; }
-      if (item.previous !== null && (!current || pageToDocument(current) !== item.previous)) { skipped.push(item.slug); continue; }
+      if (item.previous === null && current) { skip(item.slug, '同名页面已存在'); continue; }
+      if (item.previous !== null && (!current || pageToDocument(current) !== item.previous)) { skip(item.slug, '页面在提案生成后发生变化，请重新编译'); continue; }
       this.store.snapshot(item.slug);
       const page: WikiPage = {
         slug: item.slug, title: item.title, summary: item.summary, kind: item.kind,
         sources: item.sources, evidence: item.evidence, tags: item.tags, body: item.body,
-        humanEdited: false, hash: '', createdAt: current?.createdAt ?? at, updatedAt: at,
+        humanEdited: !!item.reviewEdited, hash: '', createdAt: current?.createdAt ?? at, updatedAt: at,
       };
       page.hash = pageHash(page);
       this.store.savePage(page);
@@ -667,7 +738,7 @@ export class WikiService {
     ]);
     const meta = this.store.meta(); meta.revision++;
     this.store.saveMeta(meta);
-    return { published, skipped };
+    return { published, skipped, skippedDetails };
   }
 
   // ---- Query / lint / synthesis ----------------------------------------
@@ -694,11 +765,11 @@ export class WikiService {
   ask(question: string): string {
     const text = truncate(String(question ?? '').trim(), 2000);
     if (!text) throw new Error('问题不能为空');
-    if (!this.key()) throw new Error('请先在「设置」中填写 API Key');
+    if (!this.modelReady()) throw new Error('请先配置文本模型和鉴权方式');
     return this.enqueue('ask', `提问「${truncate(text, 30)}」`, async () => {
       const pages = searchPages(text, this.store.listPages(), Math.max(1, Math.min(20, this.config.maxContextPages)));
       const answer = byteTruncate(await this.complete(queryMessages(text, pages, this.schema(), resolveSkill(this.allSkills(), 'query'))), 60 * 1024);
-      if (this.signal.aborted) throw new Error('提问已取消');
+      this.assertOperation();
       const citations = [...new Set(extractLinks(answer))].filter(slug => pages.some(page => page.slug === slug));
       const record: WikiAnswer = {
         question: text, answer, citations, pages: pages.map(page => page.slug),
@@ -706,12 +777,14 @@ export class WikiService {
       };
       await withWriteLock(() => {
         const meta = this.store.meta();
+        this.assertOperation();
+        this.workspace.saveAnswer(record);
         meta.answers = [record, ...meta.answers].slice(0, 20);
         this.store.saveMeta(meta);
         this.store.appendLog('query', text, [`引用页面：${citations.join('、') || '无'}`, `检索页面：${pages.length} 个`]);
       });
       return record;
-    });
+    }, undefined, { action: 'ask', params: { question: text } });
   }
   private answerEvidence(citations: string[]): SourceExcerpt[] {
     const sources = this.store.listSources();
@@ -733,37 +806,37 @@ export class WikiService {
     return page ? resolveExcerpts(page, this.store.listSources(), 6) : [];
   }
   answers(): WikiAnswer[] {
-    return this.store.meta().answers.map(answer => ({ ...answer, evidence: Array.isArray(answer.evidence) ? answer.evidence : [] }));
+    return this.workspace.answers().map(answer => ({ ...answer, evidence: Array.isArray(answer.evidence) ? answer.evidence : [] }));
   }
   archiveAnswer(question: string, answer: string, citations: string[], evidence: SourceEvidence[] = []): string {
-    return this.enqueue('archive', '归档回答', () => this.saveAnswer(question, answer, citations, evidence));
+    return this.enqueue('archive', '归档回答', () => this.saveAnswer(question, answer, citations, evidence), undefined, { action: 'archive', params: { question, answer, citations, evidence } });
   }
   async saveAnswer(question: string, answer: string, citations: string[], evidence: Pick<SourceExcerpt, 'sourceId' | 'quote'>[] = []): Promise<WikiPage> {
     const text = String(answer ?? '');
     if (Buffer.byteLength(text) > 60 * 1024) throw new Error('回答过长，请拆分后归档');
     if (!text.trim()) throw new Error('回答内容为空');
     let generated: Record<string, unknown> | null = null;
-    if (this.key()) {
+    if (this.modelReady()) {
       try {
         generated = parseJsonResponse(await this.complete(synthesizeMessages({ question, answer: text, citations }, this.schema(), resolveSkill(this.allSkills(), 'synthesize')), 'text', undefined, 20_000));
       } catch { /* Offline fallback still archives the answer as a page. */ }
     }
     const title = truncate(String(generated?.title ?? `问答：${truncate(question, 40)}`), 160);
     const body = String(generated?.body ?? `> 由问题「${question}」归档。\n\n${text}\n\n## 引用\n${citations.map(slug => `- [[${slug}]]`).join('\n') || '（无）'}`);
-    if (this.signal.aborted) throw new Error('归档已取消');
+    this.assertOperation();
     return this.savePage({
       slug: slugify(title), title, createOnly: true, summary: truncate(String(generated?.summary ?? `由「${truncate(question, 40)}」生成的归档`), 400),
       body, kind: (generated?.kind as WikiPage['kind']) ?? 'note',
       evidence: evidence.slice(0, 8).map(item => ({ sourceId: item.sourceId, quote: item.quote })),
       tags: Array.isArray(generated?.tags) ? generated.tags.filter((value): value is string => typeof value === 'string').slice(0, 20) : ['问答归档'],
-    });
+    }, () => this.assertOperation());
   }
   lint(): string {
     return this.enqueue('lint', '知识库体检', async () => {
       const pages = this.store.listPages();
       const local = lintWiki(pages);
       let model: Partial<WikiLint> = {};
-      if (this.key() && pages.length) {
+      if (this.modelReady() && pages.length) {
         try {
           const reply = parseJsonResponse(await this.complete(lintMessages(pages, this.schema(), resolveSkill(this.allSkills(), 'lint'))));
           model = {
@@ -774,8 +847,9 @@ export class WikiService {
         } catch (error) { model = { suggestions: ['模型体检不可用，已使用本地结构检查：' + String(error instanceof Error ? error.message : error).slice(0, 120)] }; }
       }
       const result: WikiLint = { ...local, ...model, at: now(), suggestions: [...(model.suggestions ?? []), ...local.suggestions].slice(0, 12) };
-      if (this.signal.aborted) throw new Error('体检已取消');
+      this.assertOperation();
       await withWriteLock(() => {
+        this.assertOperation();
         const meta = this.store.meta(); meta.lint = result; meta.lastLint = result.at;
         this.store.saveMeta(meta);
         this.store.appendLog('lint', '知识库体检', [
@@ -784,7 +858,7 @@ export class WikiService {
         ]);
       });
       return result;
-    });
+    }, undefined, { action: 'lint', params: {} });
   }
   lintResult(): WikiLint | null { return this.store.meta().lint; }
   indexText(): string { return this.store.index(); }

@@ -464,14 +464,14 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   // view), so clicking it repeatedly must always return to the session list
   // with the sidebar open rather than collapsing it.
   const stableSelectView = useStableCallback((pluginId: string, viewId: string) => {
-    if (page === 'workspace' && extensionView?.pluginId === pluginId && extensionView.viewId === viewId) { setSidebarCollapsed(value => !value); return; }
-    setExtensionView({ pluginId, viewId }); setPage('workspace'); setSidebarCollapsed(false);
+    if (page === 'workspace' && extensionView?.pluginId === pluginId && extensionView.viewId === viewId) { setSidebarCollapsed(value => { saveStored('berth.viewSidebar:' + pluginId, String(!value)); return !value; }); return; }
+    setExtensionView({ pluginId, viewId }); setPage('workspace'); const saved = readStored('berth.viewSidebar:' + pluginId); setSidebarCollapsed(saved === null ? pluginId === 'notes-wiki' : saved === 'true');
   });
   const stableOpenPlugins = useStableCallback(() => openPlugins());
 
   return <ExtensionsContext.Provider value={state.extensions}><div className={sshWindow?"ssh-window app":"app"}>
     {!sshWindow&&<><ResourceMonitor enabled={features.resources && connected && state.apiVersion >= API_VERSION} />
-    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} sessionUnread={localUnread} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>!value)} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
+    <ActivityBar snapshot={state.extensions} activities={state.agentActivities} sessionUnread={localUnread} selected={page==='workspace'?extensionView:null} sessionSelected={page==='workspace'&&!extensionView} sidebarCollapsed={sidebarCollapsed} draftDirty={draftDirty} appearance={features.appearance?<AppearanceToggle/>:undefined} onSessions={()=>{setExtensionView(null);setPage('workspace');setSidebarCollapsed(false);}} onToggleSidebar={()=>setSidebarCollapsed(value=>{if(extensionView)saveStored('berth.viewSidebar:'+extensionView.pluginId,String(!value));return !value;})} onSelect={stableSelectView} onManage={stableOpenPlugins} onSettings={()=>{setPage('settings');setError('');}} />
     <ResizableSidebar collapsed={sidebarCollapsed} side="left">
       <div id="sidebar-content" className="sidebar-content" hidden={sidebarCollapsed}>
         <div className="brand"><img className="brand-mark" src={appIcon} alt="" /><div><strong>AgentBerth</strong><small>泊栈 · 项目开发工作台</small></div></div>

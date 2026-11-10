@@ -1,8 +1,9 @@
 import { slugify } from './core';
+import { notesWikiUxScript } from './view-ux';
 
 export const notesWikiScript = String.raw`
 (function(){
-  var $=function(id){return document.getElementById(id)};
+  var $=function(id){return typeof document==='object'&&document?document.getElementById(id):null};
   var state={tab:'wiki',status:null,pages:[],sources:[],drafts:[],skills:[],answers:[],sessions:[],page:null,source:null,draft:null,draftSlug:'',skill:null,answer:null,task:null,taskOrigin:'',editing:false,newSource:false,newSkill:false,newPage:false,file:'',lint:null};
   var call=function(command,params){return agentberth.call(command,params||{})};
   var esc=function(value){return String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')};
@@ -10,7 +11,7 @@ export const notesWikiScript = String.raw`
   // identity. Labels and attributes remain escaped when inserted into HTML.
   var unesc=function(value){return value.replace(/&(amp|lt|gt|quot|#39);/g,function(entity){return {'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&#39;':"'"}[entity]})};
   var pageSlug=${slugify.toString()};
-  var err=function(value){$('error').textContent=String(value&&value.message||value||'')};
+  var err=function(value){var box=$('error');if(box)box.textContent=String(value&&value.message||value||'')};
   var ok=function(value){return function(result){err('');return result};};
   // All panels stay mounted, so field lookups must be scoped to the visible
   // one: an unscoped querySelector would read a stale form from another tab.
@@ -78,7 +79,7 @@ export const notesWikiScript = String.raw`
   function evidenceBlock(list){
     if(!list||!list.length)return '';
     return '<details class="evidence" open><summary>原始出处（'+list.length+'）</summary>'+list.map(function(e){
-      return '<div class="evidence-item"><div class="row" style="justify-content:space-between"><strong>'+esc(e.title||'素材')+'</strong>'+button('openSource','查看素材','',' data-id="'+esc(e.sourceId)+'"')+'</div><blockquote>'+esc(e.context||e.quote)+'</blockquote><small>引文：'+esc(e.quote)+'</small></div>';
+      return '<div class="evidence-item"><div class="row" style="justify-content:space-between"><strong>'+esc(e.title||'素材')+'</strong>'+button('openSource','定位原文','',' data-id="'+esc(e.sourceId)+'" data-quote="'+esc(e.quote)+'"')+'</div><blockquote>'+esc(e.context||e.quote)+'</blockquote><small>引文：'+esc(e.quote)+'</small></div>';
     }).join('')+'</details>';
   }
   function captureCard(){
@@ -159,7 +160,7 @@ export const notesWikiScript = String.raw`
   function renderPage(){
     renderPageList();var host=$('pageView');
     if(state.newPage){
-      host.innerHTML=card('新建页面','<label>页面名称（slug）<input data-field="slug" placeholder="例如：向量检索"></label><label>标题<input data-field="title"></label><label>一句话摘要<input data-field="summary"></label>'+mdEditor('正文（支持 [[双向链接]] 与 Markdown）','body',14,'',30000)+'<div class="row" style="margin-top:10px">'+button('savePage','保存页面','primary')+button('cancelPage','取消')+'</div>');return;
+      host.innerHTML=card('新建页面','<label>页面标识（由标题自动生成，可修改）<input data-field="slug" placeholder="例如：向量检索"></label><label>标题<input data-field="title"></label><label>一句话摘要<input data-field="summary"></label>'+mdEditor('正文（支持 [[双向链接]] 与 Markdown）','body',14,'',30000)+'<div class="row" style="margin-top:10px">'+button('savePage','保存页面','primary')+button('cancelPage','取消')+'</div>');return;
     }
     if(!state.page){host.innerHTML=empty('从左侧选择一个页面，或点 ＋ 新建。');return}
     call('get_page',{slug:state.page}).then(function(result){
@@ -185,7 +186,7 @@ export const notesWikiScript = String.raw`
   function renderSource(){
     renderSourceList();var host=$('sourceView');
     if(state.newSource){
-      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文（最多约 3 万字）<textarea data-field="text" rows="14" maxlength="30000" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片（可选，自动压缩后逐张上传）<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>PDF 文档（可选，分片上传后自动提取文本）<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><p class="muted">文本与图片进入 raw/ 后不可修改；模型只读取它们。</p><div class="row">'+button('saveSource','保存并编译','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
+      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文（最多约 3 万字）<textarea data-field="text" rows="14" maxlength="30000" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片（可选，自动压缩后逐张上传）<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>PDF 文档（可选，分片上传后自动提取文本）<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><p class="muted">保存后会保留原始素材；修改内容请新建一份，避免改变已有出处。</p><div class="row">'+button('saveSource','保存文字 / 图片并编译','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
       var input=field('images',host);
       if(input)input.onchange=function(){var files=Array.prototype.slice.call(input.files||[]).slice(0,4),box=$('imagePreview');box.innerHTML='';files.forEach(function(file){compressImage(file,function(image){var img=document.createElement('img');img.src='data:'+image.mime+';base64,'+image.base64;img.className='img-preview';box.appendChild(img)})})};
       var pdfInput=field('pdf',host);
@@ -240,10 +241,10 @@ export const notesWikiScript = String.raw`
     if(!state.draft){host.innerHTML=empty('选择一个提案查看逐页 diff，批准后才写入 wiki。');return}
     call('get_draft',{id:state.draft}).then(function(draft){
       if(!draft||state.draft!==draft.id||state.tab!=='review')return;
-      var pages='<div class="stack">'+draft.pages.map(function(p){return '<div class="row"><button data-action="draftPage" data-slug="'+esc(p.slug)+'" class="grow'+(state.draftSlug===p.slug?' active':'')+'">'+esc(p.title)+' · '+(p.action==='create'?'新建':p.action==='update'?'更新':'跳过')+'</button><small>'+esc(p.summary||'')+'</small></div>'}).join('')+'</div>';
+      var pages='<div class="stack">'+draft.pages.map(function(p){return '<div class="row"><button data-action="draftPage" data-slug="'+esc(p.slug)+'" class="grow'+(state.draftSlug===p.slug?' active':'')+'">'+esc(p.title)+' · '+(p.selected===false?'不发布':p.action==='create'?'新建':p.action==='update'?'更新':'人工编辑保护')+'</button><small>'+esc(p.summary||'')+'</small></div>'}).join('')+'</div>';
       var contradictions=draft.contradictions.length?'<div class="card"><h3>发现的矛盾</h3><ul>'+draft.contradictions.map(function(c){return '<li>'+esc(c)+'</li>'}).join('')+'</ul></div>':'';
       var feedback=draft.feedback.length?'<p class="muted">历史反馈：'+esc(draft.feedback.join('；'))+'</p>':'';
-      var actions=draft.status==='pending'?'<div class="row">'+button('approveDraft','批准并发布','primary')+button('rejectDraft','拒绝','danger')+'</div><label>拒绝反馈（会注入下次编译）<textarea data-field="feedback" rows="2" maxlength="500" placeholder="例如：概述太笼统，需要具体例子"></textarea></label>':'<p class="muted">此提案已处理。</p>';
+      var actions=draft.status==='pending'?'<div class="row">'+button('approveDraft','批准并发布（'+draft.pages.filter(function(p){return p.selected!==false&&p.action!=='skip'}).length+' 页）','primary')+button('rejectDraft','拒绝','danger')+'</div><label>拒绝反馈（会注入下次编译）<textarea data-field="feedback" rows="2" maxlength="500" placeholder="例如：概述太笼统，需要具体例子"></textarea></label>':'<p class="muted">此提案已处理。</p>';
       host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(draft.sourceTitle)+'</h2><p class="muted">'+esc(draft.summary)+' · 模型 '+esc(draft.model)+' · '+esc(date(draft.createdAt))+'</p></div><span class="badge">'+esc(draft.status)+'</span></div>'+feedback+actions+'</div>'+contradictions+card('页面提案',pages)+'<div id="draftDiff"></div>';
       if(state.draftSlug)loadDraftPage(draft.id,state.draftSlug);
     }).catch(err);
@@ -305,7 +306,7 @@ export const notesWikiScript = String.raw`
     else if(state.file){file='<div class="card"><h3>'+esc(state.file==='log'?'log.md':state.file==='index'?'index.md':'体检结果')+'</h3><pre id="fileContent" style="white-space:pre-wrap;max-height:420px;overflow:auto"></pre></div>'}
     var tasks=s.tasks.filter(function(t){return t.status==='queued'||t.status==='running'});
     var progress=tasks.length?'<div class="progress"><span class="spinner"></span>'+esc(tasks[0].label)+' · '+esc(tasks[0].progress)+'</div>':'';
-    host.innerHTML=info+progress+key+schema+file;
+    host.innerHTML=info+progress+'<details><summary>高级凭据管理</summary>'+key+'</details><details><summary>高级：知识库约定（Schema）</summary>'+schema+'</details>'+file;
     if(state.file&&state.file!=='schema')loadFile(state.file);
     var schemaBox=field('schema',host);
     if(schemaBox)call('schema').then(function(value){if(schemaBox.isConnected&&!schemaBox.value.trim())schemaBox.value=value}).catch(err);
@@ -372,7 +373,7 @@ export const notesWikiScript = String.raw`
     if(tab){setTab(tab.dataset.tab);return}
     var node=event.target.closest('[data-action]');if(!node)return;
     var action=node.dataset.action,id=node.dataset.id,slug=node.dataset.slug,name=node.dataset.name;
-    if(state.task&&['ask','compileSource','saveSource','approveDraft','rejectDraft','runLint','saveAnswer'].indexOf(action)>=0){err('当前任务仍在处理，请完成后再提交');return}
+    // Independent operations may queue behind the active model request.
     if(action==='mdPreview'){
       var editor=node.closest('.md-editor');if(!editor)return;
       var area=editor.querySelector('textarea'),preview=editor.querySelector('.md-preview');
@@ -476,8 +477,8 @@ export const notesWikiScript = String.raw`
   $('pageSearch').addEventListener('input',renderPageList);
   $('question').addEventListener('keydown',function(event){if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();var b=$('ask');if(b)b.click()}});
 
-  setTab('wiki');
-  refreshStatus().then(refreshLists);
+  ${notesWikiUxScript}
+  initializeUx();
   var ticks=0,polling=false;
   // refreshLists only repaints the side lists, never the active panel, so a
   // form being edited is safe. Polling it lets inbox imports appear on their

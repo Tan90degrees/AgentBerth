@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-export interface PdfExtractResult { text: string; pages: number; }
+export interface PdfExtractResult { text: string; pages: number; ranges?: { page: number; start: number; end: number }[]; }
 export type PdfTextExtractor = (bytes: Uint8Array) => Promise<PdfExtractResult>;
 
 const MAX_CHARS = 200_000;
@@ -45,6 +45,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
   }
   try {
     const chunks: string[] = [];
+    const ranges: { page: number; start: number; end: number }[] = [];
     let total = 0;
     for (let index = 1; index <= doc.numPages; index++) {
       const page = await doc.getPage(index);
@@ -61,12 +62,14 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
       if (line.trim()) lines.push(line.trim());
       const body = lines.join('\n');
       if (body.trim()) {
+        const start = total + (chunks.length ? 2 : 0);
         total += body.length + (chunks.length ? 2 : 0);
         if (total > MAX_CHARS) throw new Error('PDF 文本超过 200000 字符上限，请拆分后导入');
         chunks.push(body);
+        ranges.push({ page: index, start, end: total });
       }
     }
-    return { text: chunks.join('\n\n'), pages: doc.numPages };
+    return { text: chunks.join('\n\n'), pages: doc.numPages, ranges };
   } catch (error) {
     throw new Error('PDF 文本提取失败：' + brief(error));
   } finally {
