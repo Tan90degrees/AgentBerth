@@ -176,6 +176,13 @@ try {
   step('open the sandboxed extension view');
   await page.getByRole('button', { name: '笔记 Wiki · 知识库' }).click();
   const frame = page.frameLocator('iframe.extension-view');
+  await frame.locator('body').evaluate(() => {
+    window.__wikiSmokeEvents = [];
+    for (const type of ['pointerdown', 'pointerup', 'click']) document.addEventListener(type, event => {
+      window.__wikiSmokeEvents.push({ type, action: event.target.closest('[data-action]')?.dataset.action, tab: event.target.closest('[data-tab]')?.dataset.tab, x: event.clientX, y: event.clientY });
+      window.__wikiSmokeEvents = window.__wikiSmokeEvents.slice(-12);
+    }, true);
+  });
   await until(async () => (await frame.locator('#statusText').innerText()).includes('页'), 'wiki view status');
   await until(async () => (await frame.locator('#pageList').innerText()).includes('向量检索'), 'page list');
   await until(async () => (await frame.locator('#pageView').locator('.card').count()) > 0, 'first page auto-selected');
@@ -215,6 +222,16 @@ try {
   await until(async () => page.locator('#sidebar-content').isVisible(), 're-click restores the sidebar');
   await knowledge.click();
   await until(async () => page.locator('#sidebar-content').isHidden(), 'another click collapses the sidebar');
+  // Wait for the embedding frame, not just the iframe-local button: Chromium
+  // can still use the previous surface bounds just after the sidebar resizes.
+  let previousBounds = '', stableBounds = 0;
+  await until(async () => {
+    const bounds = JSON.stringify(await page.locator('iframe.extension-view').boundingBox());
+    stableBounds = bounds === previousBounds ? stableBounds + 1 : 0;
+    previousBounds = bounds;
+    return stableBounds >= 3;
+  }, 'iframe bounds settle after sidebar resize');
+  await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-focus-layout.png' });
   step('labelled activity icons toggle the sidebar on re-click');
 
   // Markdown editor: preview renders in place and never loses the draft.
@@ -268,6 +285,7 @@ try {
   await knowledge.click();
   const savedDraft = frame.locator('[data-action="restoreEditorDraft"][data-key="page:向量检索"]');
   await until(async () => await savedDraft.count() > 0, 'draft recovery survives closing the view');
+  await frame.locator('#draftShelf > details > summary').click();
   await savedDraft.click();
   await until(async () => (await frame.locator('#pageView [data-field="body"]').inputValue()) === md, 'recovered body is complete');
   await frame.locator('#pageView [data-action="cancelEdit"]').click();
@@ -379,7 +397,7 @@ try {
     try {
       const page = await application.firstWindow();
       const frame = page.frameLocator('iframe.extension-view');
-      console.error('Wiki view failure context', JSON.stringify({ errors, error: await frame.locator('#error').innerText(), panel: await frame.locator('.panel.active').innerText() }));
+      console.error('Wiki view failure context', JSON.stringify({ errors, events: await frame.locator('body').evaluate(() => window.__wikiSmokeEvents), error: await frame.locator('#error').innerText(), panel: await frame.locator('.panel.active').innerText() }));
       await page.screenshot({ path: 'test-results/wiki-window-failure.png' });
     } catch { /* ignore */ }
   }

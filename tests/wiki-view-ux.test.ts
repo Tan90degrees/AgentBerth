@@ -39,6 +39,9 @@ test('page drafts survive tab switches and closing the view, retaining their ori
   click(dom, '[data-action="editPage"]'); await until(() => dom.window.document.querySelector('[data-field="body"]'), 'edit page');
   input(dom, '#pageView [data-field="body"]', '未提交的最后一行');
   await until(() => service.workspace.editorDrafts().length, 'draft persisted');
+  dom.window.document.querySelector<HTMLDetailsElement>('#draftShelf details')!.open = true;
+  input(dom, '#pageView [data-field="body"]', '未提交的最后一行');
+  assert.equal(dom.window.document.querySelector<HTMLDetailsElement>('#draftShelf details')!.open, true, 'saving another keystroke keeps the recovery shelf expanded');
   click(dom, '[data-tab="skills"]'); click(dom, '[data-tab="wiki"]');
   await until(() => dom.window.document.querySelector<HTMLTextAreaElement>('#pageView [data-field="body"]')?.value === '未提交的最后一行', 'tab switch retains text');
   dom.window.close();
