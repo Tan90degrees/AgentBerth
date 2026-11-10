@@ -145,6 +145,18 @@ test('late Schema loading cannot replace an intentionally cleared draft', async 
   assert.equal(dom.window.document.querySelector<HTMLTextAreaElement>('#settingsView [data-field="schema"]')!.value, '');
 });
 
+test('Schema editing continues to autosave after a successful manual save', async t => {
+  const { service, open } = setup(t), dom = open();
+  await until(() => dom.window.document.querySelector('#statusText')?.textContent?.includes('尚未完成模型配置'), 'view ready');
+  click(dom, '.tabs [data-tab="settings"]');
+  await until(() => dom.window.document.querySelector<HTMLTextAreaElement>('#settingsView [data-field="schema"]')?.value, 'Schema loaded');
+  input(dom, '#settingsView [data-field="schema"]', 'saved Schema'); click(dom, '[data-action="saveSchema"]');
+  await until(() => dom.window.document.querySelector('#uxNotice')!.textContent?.includes('知识库约定已保存'), 'save acknowledged');
+  assert.equal(service.workspace.editorDrafts().some(draft => draft.key === 'schema'), false);
+  input(dom, '#settingsView [data-field="schema"]', 'the next unsaved change');
+  await until(() => service.workspace.editorDrafts().find(draft => draft.key === 'schema')?.fields.schema === 'the next unsaved change', 'autosave remains attached after save');
+});
+
 test('full snapshot restore flushes pending drafts and never resurrects pre-restore editors', async t => {
   const { service, commands, open } = setup(t);
   const original = service.workspace.importBackup(service.workspace.backup(), true).rollback;

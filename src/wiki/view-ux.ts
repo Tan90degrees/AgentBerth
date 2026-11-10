@@ -59,7 +59,7 @@ export const notesWikiUxScript = String.raw`
     if(same){state.newSkill=false;state.skill=saved.name}
     notify(changed?'Skill 已保存，后续输入仍保留在草稿中。':'Skill 已保存。');await refreshLists();if(same&&!state.newSkill&&state.skill===saved.name&&state.tab==='skills')renderSkill();
   }
-  async function saveSchemaEditor(){var snapshot=captureDraft($('settingsView'),'schema');await call('save_schema',{value:snapshot.fields.schema});var changed=acknowledgeDraft(snapshot);notify(changed?'约定已保存，后续输入仍保留在草稿中。':'知识库约定已保存。')}
+  async function saveSchemaEditor(){var snapshot=captureDraft($('settingsView'),'schema');await call('save_schema',{value:snapshot.fields.schema});var changed=acknowledgeDraft(snapshot);if(!changed)restoreHost($('settingsView'));notify(changed?'约定已保存，后续输入仍保留在草稿中。':'知识库约定已保存。')}
   async function reviewProposal(action){
     var draft=state.draft,snapshot=captureDraft($('draftView'),'review:'+draft);
     if(action==='approve'&&Object.keys(ux.drafts).some(function(key){return key.indexOf('review:'+draft+':')===0})){notify('有未保存的逐页审阅，请先保存对应页面的修改。');return}
