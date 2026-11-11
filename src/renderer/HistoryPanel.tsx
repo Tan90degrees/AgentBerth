@@ -1,7 +1,7 @@
 import { useDeferredValue,useEffect,useLayoutEffect, useRef, useState } from 'react';
 import type { History, NativeHistoryPage, Session } from '../shared/protocol';
 import { HistoryDiagnostics } from './HistoryDiagnostics';
-import {captureHistoryAnchor,restoreHistoryAnchor} from './history-scroll';
+import {captureHistoryAnchor,maintainHistoryAnchor} from './history-scroll';
 import {ConversationMessage} from './ConversationMessage';
 
 const emptyPage: NativeHistoryPage = { items: [], nextCursor: null, warnings: [] };
@@ -12,7 +12,7 @@ export function HistoryPanel({ session, history, label, canHistory, canAssociate
   onLink: (id: string) => Promise<History | undefined>; onUnlink: () => Promise<History | undefined>; onCopy: (id: string) => void;
 }) {
   const [messageQuery,setMessageQuery]=useState(''),[libraryOpen,setLibraryOpen]=useState(true);
-  const [visibleCount,setVisibleCount]=useState(50),deferredMessageQuery=useDeferredValue(messageQuery),reader=useRef<HTMLDivElement>(null),prependAnchor=useRef<ReturnType<typeof captureHistoryAnchor>|null>(null),loadingEarlier=useRef(false),previousTop=useRef(0),initialScroll=useRef<string|null>(null);
+  const [visibleCount,setVisibleCount]=useState(50),deferredMessageQuery=useDeferredValue(messageQuery),reader=useRef<HTMLDivElement>(null),prependAnchor=useRef<ReturnType<typeof captureHistoryAnchor>|null>(null),anchorCleanup=useRef<(()=>void)|null>(null),loadingEarlier=useRef(false),previousTop=useRef(0),initialScroll=useRef<string|null>(null);
   const [source, setSource] = useState<'saved' | 'discover'>('saved');
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(5);
@@ -68,10 +68,11 @@ export function HistoryPanel({ session, history, label, canHistory, canAssociate
   const linked = selectedId === session.nativeSessionId && !!selectedId;
   const matches=(shown?.messages??[]).map((message,index)=>({message,index})).filter(({message})=>!deferredMessageQuery||message.text.toLocaleLowerCase().includes(deferredMessageQuery.toLocaleLowerCase()));
   const readerScope=JSON.stringify([session.id,selectedId,shown?.path]);
-  useLayoutEffect(()=>{prependAnchor.current=null;loadingEarlier.current=false;previousTop.current=0;initialScroll.current=readerScope;setVisibleCount(50);setMessageQuery('');},[readerScope]);
+  useLayoutEffect(()=>{anchorCleanup.current?.();anchorCleanup.current=null;prependAnchor.current=null;loadingEarlier.current=false;previousTop.current=0;initialScroll.current=readerScope;setVisibleCount(50);setMessageQuery('');},[readerScope]);
   useLayoutEffect(()=>{const host=reader.current;if(initialScroll.current!==readerScope||!host||visibleCount!==50||deferredMessageQuery||working||!shown?.messages.length)return;host.scrollTop=host.scrollHeight;previousTop.current=host.scrollTop;initialScroll.current=null;},[readerScope,visibleCount,deferredMessageQuery,working,shown?.messages]);
-  useLayoutEffect(()=>{if(prependAnchor.current&&reader.current){restoreHistoryAnchor(reader.current,prependAnchor.current);previousTop.current=reader.current.scrollTop;prependAnchor.current=null;}loadingEarlier.current=false;},[visibleCount]);
-  function loadEarlier(){if(working||loadingEarlier.current||matches.length<=visibleCount||!reader.current)return;loadingEarlier.current=true;prependAnchor.current=captureHistoryAnchor(reader.current);setVisibleCount(value=>value+50);}
+  useLayoutEffect(()=>{if(prependAnchor.current&&reader.current){anchorCleanup.current?.();const host=reader.current;anchorCleanup.current=maintainHistoryAnchor(host,prependAnchor.current,()=>{previousTop.current=host.scrollTop;});prependAnchor.current=null;}loadingEarlier.current=false;},[visibleCount]);
+  useEffect(()=>()=>{anchorCleanup.current?.();},[]);
+  function loadEarlier(){if(working||loadingEarlier.current||matches.length<=visibleCount||!reader.current)return;anchorCleanup.current?.();anchorCleanup.current=null;loadingEarlier.current=true;prependAnchor.current=captureHistoryAnchor(reader.current);setVisibleCount(value=>value+50);}
   return <div className="history-panel">
     <div className="panel-toolbar"><span>原生对话历史 <small>· 只读记录</small></span><div><button className="subtle" aria-expanded={libraryOpen} onClick={()=>setLibraryOpen(value=>!value)}>{libraryOpen?'收起会话列表':'浏览会话'}</button>
       <button className="subtle" disabled={blocked || (!session.transcriptPath && !autoRead)} onClick={() => void onRefresh()}>{history?.messages.length || session.transcriptPath ? '刷新记录' : '读取对话'}</button>

@@ -16,12 +16,12 @@ export class OpenCodeHistory {
     }
     return [...new Map(items.sort((a, b) => b.modified - a.modified).map(item => [item.nativeSessionId, item])).values()];
   }
-  async history(id: string, project: string) {
+  async history(id: string, project: string, full = false) {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new Error('无效的 OpenCode 会话 ID');
     let value;
-    try { value = JSON.parse(await this.cli.run(['session', 'export', id], project)); }
-    catch { value = JSON.parse(await this.cli.run(['export', id], project)); }
-    const history = await parseOpenCodeHistory(value, project, null);
+    try { value = JSON.parse(await this.cli.run(['session', 'export', id], project, full ? Infinity : undefined)); }
+    catch { value = JSON.parse(await this.cli.run(['export', id], project, full ? Infinity : undefined)); }
+    const history = await parseOpenCodeHistory(value, project, null, { full });
     if (history.nativeSessionId !== id) throw new Error('OpenCode 返回的会话 ID 与选择不一致');
     return history;
   }

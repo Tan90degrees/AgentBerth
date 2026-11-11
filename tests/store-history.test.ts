@@ -32,7 +32,7 @@ test('projects deduplicate and sessions retain separate run history across daemo
 
 test('Codex JSONL associates native IDs, avoids event/response duplicates and rejects another directory', async t => {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-history-'));
-  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  t.after(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const file = path.join(folder, 'rollout.jsonl');
   writeFileSync(file, [
     { type: 'session_meta', payload: { session_id: '1234-abcd', cwd: folder } },
@@ -49,7 +49,7 @@ test('Codex JSONL associates native IDs, avoids event/response duplicates and re
 
 test('Claude native transcript preserves text and excludes tool payloads', async t => {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-claude-'));
-  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  t.after(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const file = path.join(folder, 'session.jsonl');
   writeFileSync(file, [
     { sessionId: 'claude-123', cwd: folder, type: 'user', message: { role: 'user', content: '你好' } },
@@ -73,7 +73,7 @@ test('native IDs cannot inject shell commands and invalid terminal dimensions ar
 
 test('run logs rotate at a fixed disk budget and retain the newest output', t => {
   const folder = mkdtempSync(path.join(os.tmpdir(), 'berth-log-'));
-  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  t.after(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const log = new RunLog(folder, 'run');
   for (let n = 0; n < 7; n++) log.append(String(n).repeat(LOG_SEGMENT_BYTES));
   const output = log.read();

@@ -13,7 +13,7 @@ jobs:
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +55,9 @@ jobs:
           bash scripts/setup-ssh-test.sh
         timeout-minutes: 5
       - run: npm run check
-        timeout-minutes: 8
+        # Native PTY/SSH integration tests run serially. Shared Windows runners
+        # can exceed eight minutes while tests are still passing and advancing.
+        timeout-minutes: 12
       - name: Workbench smoke (Linux)
         id: desktop-linux
         if: runner.os == 'Linux'
@@ -114,6 +116,14 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
         run: node scripts/smoke-extensions.mjs
         timeout-minutes: 2
+      - name: Notes Wiki smoke (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' && (steps.desktop-linux.outcome == 'success' || steps.desktop-linux.outcome == 'failure') }}
+        run: xvfb-run -a node scripts/smoke-wiki.mjs
+        timeout-minutes: 3
+      - name: Notes Wiki smoke (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && (steps.desktop-windows.outcome == 'success' || steps.desktop-windows.outcome == 'failure') }}
+        run: node scripts/smoke-wiki.mjs
+        timeout-minutes: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:

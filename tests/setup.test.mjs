@@ -94,7 +94,7 @@ function setupFixture(t) {
   writeFileSync(path.join(rebuild, 'lib/main.js'), '');
   writeFileSync(path.join(rebuild, 'lib/cli.js'), `
     const assert = require('node:assert/strict');
-    assert.deepEqual(process.argv.slice(2), ['-f', '-w', 'node-pty', '-v', '44.7.0']);
+    assert.deepEqual(process.argv.slice(2), ['-f', '-o', 'node-pty', '-v', '44.7.0']);
     require('node:fs').appendFileSync(process.env.SETUP_TRACE, 'rebuild\\n');
   `);
   const trace = path.join(project, 'trace.txt');

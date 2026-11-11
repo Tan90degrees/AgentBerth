@@ -21,7 +21,7 @@ export function loadSidebarWidth(storage?: ReadableStorage): number {
 }
 export function loadCollapsedProjects(storage?: ReadableStorage): string[] {
   const value = readJson('berth.collapsedProjects', storage);
-  return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)))].slice(0, 200) : [];
+  return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)))] : [];
 }
 export function loadSelections(storage?: ReadableStorage): Record<string, string> {
   const value = readJson('berth.selections', storage);

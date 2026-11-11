@@ -6,13 +6,16 @@
 
 ## 当前能力
 
-- 扩展应用集中在侧栏固定入口，通过可搜索、独立滚动的列表切换，不随插件增加挤占会话区域。
+- 扩展应用集中在侧栏固定入口，通过可搜索、独立滚动的列表切换，不随插件增加挤占会话区域。活动栏图标带文字标签；再次点击已选中的图标可折叠/展开侧栏。插件视图里的「设置」直接在本页浮窗修改配置，不再跳转到插件中心；设置中还提供界面字号整体缩放（85%–125%），终端与文件预览字号独立设置。
 
 - **服务终端**：普通终端可指定启动命令，以只读日志展示服务运行情况，支持启动、停止、重启；停止时终止整个进程树。
 - **DeepSeek Harness 原生 Web**：可选插件启动官方 `npx @deepseek-ai/dsh web`，在独立浏览器视图中显示原生界面，不修改其服务、前端或升级行为。启动项在插件设置中管理。
 
 - **ACP 对话与 Superagent**：接入已有 ACP Agent，以对话管理计划、工具、授权与流式回复；Superagent 插件选择 ACP 协调/执行者，支持命名管道、多来源汇入与多管道分发；每管道拥有固定独立工作区（Git Worktree 或非 Git 隔离副本），支持差异预览与选择应用，任务串行并可按管道管理。信息源由插件自定义，不附带 GitHub、飞书适配器。见 [使用与开发指南](docs/ACP_SUPERAGENT.md)。
 - 插件 ZIP 分块解压，支持 80 MiB 包；默认上限 256 MiB、展开 1 GiB、50000 条目。Cordis 通用不代表 DeepSeek Harness 宿主 API 通用。
+
+- **笔记 Wiki（LLM Wiki）**：内置扩展，按 `raw/`（素材）、`wiki/`（页面）、`schema.md` + `skills/`（约定与流程）分层把笔记编译成可维护的 Markdown 知识库。素材（含图片）进入 `raw/` 后只读；文本/视觉模型产出只生成待审阅提案，人工批准后才写入 `wiki/`，人工编辑的页面不会被自动覆盖。支持双向链接与 `index.md` / `log.md` 导航、带引用的直接提问、定时体检、Skill 增删查改与 `SKILL.md` 导入导出、答案归档与历史版本恢复。页面 / Skill / Schema 编辑器带 Markdown 实时预览（编辑内容不会被刷新丢失）。把 `.md/.txt/.pdf` 放进 `raw/inbox/` 会自动导入（PDF 自动提取文本，按内容去重，处理后归档到 `imported/`），新增素材表单也支持 PDF 分片上传；工作台的 ACP 对话、自定义 Agent 的导入历史，以及 Claude / OpenCode 等关联的原生对话记录都可在列表中选择并沉淀为素材。编译时的逐字引文会写进页面 frontmatter，页面与回答都能展开「原始出处」回溯到原文。在插件设置中显式开启「允许 Agent 读取全局知识库」后，读取命令以 MCP 工具开放给所有连接工作台的 Agent（不按项目隔离）；模型提问需额外开启「允许 Agent 调用模型提问」，会使用本机模型凭据并产生请求费用。工具包括 `wiki_index` / `wiki_search` / `wiki_read` / `wiki_ask` 等，发布操作一律保持人审。模型走任意 OpenAI 兼容 `/chat/completions` 端点，API Key 只存插件私有凭据文件，不进入插件配置表单。
+  支持编辑草稿恢复、回收站、可取消重试的任务中心、批量文件导入、逐页审阅、全文检索、完整问答历史与排除密钥的备份迁移。详见 [笔记 Wiki 使用指南](docs/NOTES_WIKI.md)。
 
 - **核心工作台 + Cordis 扩展**：项目、会话、Agent 注册中心、Skills、文件、Git、Worktree、主题、SSH/MCP、资源监控均为默认基础能力，不出现在插件开关中。Codex、Claude Code、OpenCode 和自定义 Agent 各自通过独立 Cordis Agent 插件接入；桌宠等可选增强在插件中心管理。插件支持独立配置、启停、重载、卸载和开发目录热重载。参见 [插件开发指南](docs/CORDIS_PLUGIN_DEVELOPMENT.md)。
 
@@ -237,6 +240,7 @@ npm run check          # TypeScript + 真实 PTY 测试 + 生产构建
 npm run test:desktop   # Playwright 驱动真实 Electron 窗口
 npm run dist:win       # Windows 本机生成 NSIS x64 安装包与 ZIP
 npm run test:packaged  # Windows 测试 release/win-unpacked/AgentBerth.exe
+node scripts/smoke-wiki.mjs  # 笔记 Wiki：本地 mock 模型 + 隔离 Electron 窗口
 ```
 
 Linux 无显示器环境：

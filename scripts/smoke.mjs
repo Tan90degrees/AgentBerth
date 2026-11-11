@@ -9,7 +9,7 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import {openRightSidebar} from './smoke-navigation.mjs';
+import {openRightSidebar,selectProjectForSessions,openNotifications} from './smoke-navigation.mjs';
 
 const { Terminal: HeadlessTerminal } = headless;
 const { Unicode11Addon } = unicode11;
@@ -337,7 +337,7 @@ try {
     assert.equal(await page.getByLabel('PowerShell 7 程序', { exact: true }).inputValue(), '');
     await page.getByRole('button', { name: '保存设置', exact: true }).click();
     await page.getByText('设置已保存', { exact: true }).waitFor();
-    await page.locator('.projects .project-item').click();
+    await selectProjectForSessions(page,page.locator('.projects .project-item'));
     await menuAction(page, '新建会话', 'project');
     await page.getByLabel('会话名称', { exact: true }).fill('PowerShell 检测验证');
     await page.getByLabel('Agent 类型', { exact: true }).selectOption('shell');
@@ -374,7 +374,7 @@ try {
   await closePluginSettings(page);
   const limits=await page.evaluate(()=>window.berth.rpc('state'));
   assert.equal(limits.maxActiveTerminals,24);assert.equal(limits.maxSshTerminals,8);
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   await menuAction(page, '新建会话', 'project');
   assert.equal(await page.getByLabel('Agent 类型', { exact: true }).inputValue(), 'opencode');
   await page.getByLabel('会话名称', { exact: true }).fill('后台驻留验证');
@@ -582,7 +582,7 @@ try {
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea'));
   await menuAction(page, '复制项目路径', 'project');
-  await page.getByText('项目路径已复制', { exact: true }).waitFor();
+  await page.locator('.notification-item').getByText('项目路径已复制', { exact: true }).first().waitFor();
   assert.equal(await application.evaluate(({ clipboard }) => clipboard.readText()), before.projects[0].path);
   await menuAction(page, '复制会话', 'session');
   assert.equal(await page.getByLabel('创建后立即启动', { exact: true }).isChecked(), false);
@@ -643,12 +643,12 @@ try {
   await page.getByLabel('创建后立即启动', { exact: true }).uncheck();
   await page.getByRole('button', { name: '创建会话', exact: true }).click();
   await page.getByRole('heading', { name: '辅助项目会话', exact: true }).waitFor();
-  await page.locator('.projects .project-item').filter({ hasText: 'AgentBerth 易用性' }).click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item').filter({ hasText: 'AgentBerth 易用性' }));
   await page.getByRole('heading', { name: '切换测试会话', exact: true }).waitFor();
   await page.locator('.session-list .session-item').filter({ hasText: '后台驻留验证' }).click();
-  await page.locator('.projects .project-item').filter({ hasText: '切换测试项目' }).click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item').filter({ hasText: '切换测试项目' }));
   await page.getByRole('heading', { name: '辅助项目会话', exact: true }).waitFor();
-  await page.locator('.projects .project-item').filter({ hasText: 'AgentBerth 易用性' }).click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item').filter({ hasText: 'AgentBerth 易用性' }));
   await page.getByRole('heading', { name: '后台驻留验证', exact: true }).waitFor();
   step('context menu targets an unselected session and project without switching or stopping the current terminal');
   const otherState = await page.evaluate(() => window.berth.rpc('state'));
@@ -856,7 +856,7 @@ try {
   await page.evaluate(({sessionId,runId}) => window.berth.rpc('input',{sessionId,runId,data:'r'}), {sessionId:before.sessions[0].id,runId:original.id});
   await clickTui(); await findTerminalText(page, 'MOUSE_SGR_1');
   await openSettings(page);
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   await findTerminalText(page, 'TUI_RESIZE_READY');
   step('restored TUI accepts SGR clicks, modifier selection/copy and legacy mouse reports');
   await clickTui(); await findTerminalText(page, 'MOUSE_SGR_2');
@@ -903,7 +903,7 @@ try {
   await page.getByLabel('默认终端', { exact: true }).selectOption(process.platform === 'win32' ? 'powershell' : 'auto');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.getByText('设置已保存', { exact: true }).waitFor();
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   assert.ok((await page.locator('.terminal-footer').innerText()).includes(path.basename(original.shell)));
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
   step('choose custom executable using native dialog while PTY keeps running');
@@ -914,7 +914,7 @@ try {
     dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; throw new Error('模拟文件选择失败'); };
   });
   await page.getByRole('button', { name: '选择程序', exact: true }).click();
-  await page.getByRole('alert').filter({ hasText: '模拟文件选择失败' }).waitFor();
+  await page.getByRole('region',{name:'应用设置',exact:true}).getByRole('alert').filter({ hasText: '模拟文件选择失败' }).waitFor();
   assert.equal(await page.getByLabel('默认终端', { exact: true }).inputValue(), 'custom');
   await page.waitForFunction(()=>document.querySelector('button[aria-label="选择程序"]')?.dataset.feedback==='error');
   await application.evaluate(({dialog})=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return {canceled:true,filePaths:[]};};});
@@ -932,7 +932,7 @@ try {
   await page.getByText('设置已保存', { exact: true }).waitFor();
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-settings' : 'settings'}.png` });
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).sessions[0].latestRun.pid, original.pid);
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   await page.getByLabel('搜索项目和会话', { exact: true }).fill('不存在');
   await page.locator('.session-list .session-item').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.session-list .session-item').count(), 0);
@@ -946,11 +946,11 @@ try {
   step('unsaved settings survive page navigation and remain unapplied');
   await page.keyboard.press('Control+,');
   await page.getByLabel('终端字号', { exact: true }).fill('19');
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   await page.keyboard.press('Control+,');
   assert.equal(await page.getByLabel('终端字号', { exact: true }).inputValue(), '19');
   assert.equal((await page.evaluate(() => window.berth.rpc('state'))).settings.fontSize, 16);
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   step('hide and reconnect terminal');
   await page.getByRole('button', { name: '收起终端' }).click();
   await page.getByRole('heading', { name: '终端已收起' }).waitFor();
@@ -971,7 +971,7 @@ try {
   // Playwright's close exits the entire Electron main process, not just the window.
   await page.getByRole('button', { name: '切换为深色模式', exact: true }).click();
   step('tray quit path stops all terminals and the detached daemon');
-  await page.getByRole('button', { name: '收起项目 AgentBerth 易用性', exact: true }).click();
+  await page.locator('.projects .project-item').filter({hasText:'AgentBerth 易用性'}).click();
   await page.getByRole('button',{name:'折叠会话侧栏',exact:true}).click();
   const quittingDaemon = daemonPid;
   await closeApplication(application); application = null;
@@ -1001,6 +1001,7 @@ try {
   assert.equal(Number(await page.getByRole('separator',{name:'调整侧栏宽度',exact:true}).getAttribute('aria-valuenow')), sidebarWidth);
   assert.equal(await page.getByRole('button',{name:'SSH 面板',exact:true}).getAttribute('aria-expanded'),'false','Plugin teardown on tray exit must not reopen the SSH dock on next launch');
   assert.equal(await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('.projects .project-item').filter({hasText:'AgentBerth 易用性'}).getAttribute('aria-expanded'),'false','Project label collapse survives reopening');
   await page.getByRole('button', { name: '展开项目 AgentBerth 易用性', exact: true }).click();
   assert.equal(after.settings.terminal.profile, 'custom');
   assert.equal(after.settings.terminal.executable, original.shell);
@@ -1017,7 +1018,7 @@ try {
   await pluginSettings(page,'ssh');
   assert.equal(await page.getByLabel('SSH 会话上限', { exact: true }).inputValue(), '8');
   await closePluginSettings(page);
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   const snapshot = await page.evaluate(id => window.berth.rpc('attach', { sessionId: id }), after.sessions[0].id);
   assert.doesNotMatch(snapshot.snapshot, /FLOW_DONE/, 'A restored terminal must not replay historical output or commands');
   const retainedLog = await page.evaluate(runId => window.berth.rpc('output', { runId }), original.id);
@@ -1082,8 +1083,9 @@ try {
   await eventually(async () => await page.locator('.run-item').filter({ hasText: original.id.slice(0,8) }).count() === 1, 'Undo did not restore the run record');
   await page.getByRole('button', { name: '清除已结束记录', exact: true }).click();
   await page.getByRole('heading', { name: '尚无运行记录', exact: true }).waitFor();
-  await page.locator('.success-toast').filter({ hasText: '已删除' }).last().getByRole('button', { name: '关闭成功提示', exact: true }).click();
+  await openNotifications(page);await page.locator('.notification-item').filter({ hasText: '已删除' }).last().getByRole('button', { name: '关闭提示', exact: true }).click();
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
+  await page.getByRole('button',{name:'收起通知中心',exact:true}).click();
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
   step('select an installed Agent provider in core Agent settings');
@@ -1095,7 +1097,7 @@ try {
   }
   assert.equal(await defaultAgentField.inputValue(), 'opencode');
   await closePluginSettings(page);
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   step('create OpenCode without starting, link ID and import native export through IPC');
   await menuAction(page, '新建会话', 'project');
   await page.getByLabel('会话名称', { exact: true }).fill('OpenCode 会话');
@@ -1165,7 +1167,7 @@ try {
   const restarted = await page.evaluate(() => window.berth.rpc('state'));
   assert.equal(restarted.settings.defaultAgent, 'opencode');
   assert.equal(restarted.sessions[0].nativeSessionId, 'ses_smoke');
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   // Custom Agent installation and configuration is covered by the Cordis
   // plugin integration smoke, not the retired standalone Agent manager.
   step('MCP configuration and remote session usability');
@@ -1205,7 +1207,7 @@ try {
   await page.locator('.ssh-profile').filter({hasText:'smoke-server-edited'}).getByRole('button',{name:'删除',exact:true}).click();
   await eventually(async()=> (await page.evaluate(()=>window.berth.rpc('sshConnections'))).length===0,'SSH profile was not deleted');
   await closePluginSettings(page);
-  await page.locator('.projects .project-item').click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item'));
   await menuAction(page, '新建会话', 'project');
   assert.equal(await page.getByLabel('运行位置',{exact:true}).count(),0,'Local session creation must not expose SSH');
   assert.equal(await page.getByLabel('SSH 连接',{exact:true}).count(),0);

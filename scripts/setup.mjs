@@ -35,7 +35,7 @@ async function setup() {
   console.log('为 Electron 编译 node-pty…');
   const rebuildScript = path.join(path.dirname(require.resolve('@electron/rebuild')), 'cli.js');
   try {
-    await run(rebuildScript, ['-f', '-w', 'node-pty', '-v', installation.version], env);
+    await run(rebuildScript, ['-f', '-o', 'node-pty', '-v', installation.version], env);
   } catch (error) {
     throw new Error(`node-pty 编译失败：${error.message}。Windows 请检查 Python 3、Visual Studio C++ Build Tools 与 Electron headers 网络访问；详见 README.md。`);
   }

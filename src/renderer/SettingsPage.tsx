@@ -78,6 +78,9 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           setSaveState('pending');try{if(await onSave(draft)){setSaved(true);setSaveState('success');}else setSaveState('error');}catch(reason){setSaveState('error');onError(String(reason));}
         }}>
           {item('appearance', <AppearanceControls />)}
+          {item('ui-font', <><label>界面字号<select aria-label="界面字号" value={String(draft.uiFontScale ?? 1)} disabled={disabled || apiVersion < 55} onChange={event=>change({...draft,uiFontScale:Number(event.target.value)})}>
+            <option value="0.85">小 · 85%</option><option value="0.925">较小 · 92%</option><option value="1">标准</option><option value="1.075">较大 · 108%</option><option value="1.15">大 · 115%</option><option value="1.25">特大 · 125%</option>
+          </select></label><p className="form-hint">{apiVersion < 55 ? '界面字号需要更新后台后才能调整；当前后台不支持该设置。' : '整体缩放界面文字，保存后应用；终端字号与文件预览字号独立设置。'}</p></>)}
           {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event=>change({...draft,defaultAgent:event.target.value as Settings['defaultAgent']})}>
             {!activeAgents.some(agent=>agent.id===draft.defaultAgent)&&draft.defaultAgent!=='shell'&&<option value={draft.defaultAgent}>已停用的 Agent（保留原设置）</option>}
             <option value="shell">普通终端</option>{activeAgents.map(agent=><option key={agent.id} value={agent.id}>{agent.name}</option>)}

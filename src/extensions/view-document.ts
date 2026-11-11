@@ -1,8 +1,11 @@
 // Each sandboxed plugin view has an opaque origin. Its message bridge must
 // handshake with the owning renderer before delivering a command: on Linux /
 // Xvfb the document can finish loading before the React frame is fully mounted.
-export const extensionDocument=(html:string)=>`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'"><style>body{font:var(--fs-md,14px)/1.6 var(--font-sans,system-ui);margin:16px;color:var(--text,#ddd);background:var(--surface,#212121)}button,input{font:inherit}button{border:1px solid var(--border,#444);border-radius:var(--radius-sm,6px);background:transparent;padding:6px 10px}button:hover{background:var(--hover,#333)}</style><script>
+export const extensionDocument=(html:string)=>`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'"><style>body{font:var(--fs-md,14px)/1.6 var(--font-sans,system-ui);margin:16px;color:var(--text,#ddd);background:var(--surface,#212121)}button,input{font:inherit}button{border:1px solid var(--border,#444);border-radius:var(--radius-sm,6px);background:transparent;padding:6px 10px}button:hover{background:var(--hover,#333)}</style><script>
 let requestSequence=0,bridgeReady;
+let bridgeInFlight=0;const bridgeQueue=[];
+function pumpBridge(){while(bridgeInFlight<6&&bridgeQueue.length){bridgeInFlight++;const next=bridgeQueue.shift();Promise.resolve().then(next.run).then(next.resolve,next.reject).finally(()=>{bridgeInFlight--;pumpBridge()})}}
+function queuedCall(run){return new Promise((resolve,reject)=>{if(bridgeQueue.length>=100){reject(new Error('插件请求排队过多，请稍后重试'));return}bridgeQueue.push({run,resolve,reject});pumpBridge()})}
 function applyTheme(theme){if(typeof document==='undefined'||!theme||typeof theme!=='object')return;for(const name of Object.keys(theme))if(/^--[a-z0-9-]+$/.test(name)&&typeof theme[name]==='string'&&theme[name].length<256)document.documentElement.style.setProperty(name,theme[name]);}
 addEventListener('message',event=>{if(event.source===parent&&event.data?.kind==='agentberth-plugin-theme')applyTheme(event.data.theme);});
 function waitForBridge(){
@@ -27,10 +30,11 @@ function waitForBridge(){
 }
 window.agentberth={
   ready:waitForBridge,
+  notify:(message,level='info')=>{void waitForBridge().then(()=>parent.postMessage({kind:'agentberth-plugin-notice',message,level},'*')).catch(()=>{});},
   openSession:sessionId=>parent.postMessage({kind:'agentberth-plugin-open-session',sessionId},'*'),
   call:async(command,params={})=>{
     await waitForBridge();
-    return new Promise((resolve,reject)=>{
+    return queuedCall(()=>new Promise((resolve,reject)=>{
       const id=String(++requestSequence);
       const timer=setTimeout(()=>{removeEventListener('message',listener);reject(new Error('等待插件结果超时，操作不会自动重试'))},60000);
       const listener=event=>{
@@ -40,7 +44,7 @@ window.agentberth={
       };
       addEventListener('message',listener);
       parent.postMessage({kind:'agentberth-plugin-call',id,command,params},'*');
-    });
+    }));
   }
 };
 </script>`+html;

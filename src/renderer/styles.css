@@ -2721,7 +2721,6 @@ textarea:focus-visible {
 .project-row[data-drop-edge]::after,.session-row[data-drop-edge]::after{content:'';position:absolute;left:2px;right:2px;height:2px;background:var(--focus);border-radius:2px;pointer-events:none;z-index:2}
 [data-drop-edge=before]::after{top:0}[data-drop-edge=after]::after{bottom:0}
 .extension-active .workbench-header{height:34px;min-height:34px}
-.extension-active .workbench-header .ssh-toggle{height:26px;min-height:26px;padding:3px 8px;font-size: var(--fs-xs);line-height:18px}
 .extension-active .extension-page{padding:0}
 .plugin-web-toolbar{padding:4px 10px;gap:6px;min-height:34px}
 .plugin-web-actions{margin-left:0;gap:4px}
@@ -2792,22 +2791,38 @@ textarea:focus-visible {
 }
 
 /* VS Code-style activity bar: sessions and extension applications stay one click away. */
-.activity-bar{flex:0 0 48px;width:48px;min-width:48px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:9px 0 10px;background:var(--surface-muted);border-right:1px solid var(--border);z-index:2}
-.activity-bar-main,.activity-bar-bottom{display:flex;flex-direction:column;align-items:center;gap:7px;width:100%}
+.activity-bar{flex:0 0 64px;width:64px;min-width:64px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:9px 0 10px;background:var(--surface-muted);border-right:1px solid var(--border);z-index:2}
+.activity-bar-main,.activity-bar-bottom{display:flex;flex-direction:column;align-items:center;gap:6px;width:100%}
 .activity-bar-main{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .activity-bar-main::-webkit-scrollbar{width:3px}
 .activity-bar-main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-.activity-item{position:relative;width:40px;height:40px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:8px;background:transparent;color:var(--text-muted);cursor:pointer;flex-shrink:0}
+.activity-item{position:relative;box-sizing:border-box;width:56px;height:50px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:0 3px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);cursor:pointer;flex-shrink:0}
 .activity-item:hover{background:var(--hover);color:var(--text)}
 .activity-item.selected{background:var(--selected);color:var(--text)}
-.activity-item.selected:before{content:'';position:absolute;left:-4px;top:7px;bottom:7px;width:3px;border-radius:0 2px 2px 0;background:var(--primary,#4b86d8)}
+.activity-item.selected:before{content:'';position:absolute;left:-4px;top:9px;bottom:9px;width:3px;border-radius:0 2px 2px 0;background:var(--primary,#4b86d8)}
 .activity-item:focus-visible{outline:2px solid var(--focus,#4b86d8);outline-offset:1px}
+.activity-label{font-size:var(--fs-2xs);line-height:1;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
 .activity-divider{width:24px;height:1px;background:var(--border);margin:2px 0 4px}
-.activity-badge{position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:var(--danger,#b54747);color:white;font-size:10px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums}
-.activity-draft-dot{position:absolute;right:5px;top:5px;width:6px;height:6px;border-radius:50%;background:var(--warning)}
+.activity-badge{position:absolute;right:-1px;top:-1px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:var(--danger,#b54747);color:white;font-size:10px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums}
+.activity-draft-dot{position:absolute;right:6px;top:6px;width:6px;height:6px;border-radius:50%;background:var(--warning)}
 .activity-appearance{display:flex;justify-content:center;width:100%}
-.activity-appearance .appearance-toggle{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0;color:var(--text-muted)}
+.activity-appearance .appearance-toggle{width:56px;height:50px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:0;color:var(--text-muted)}
 .activity-appearance .appearance-toggle:hover{background:var(--hover);color:var(--text)}
+/* In-page plugin config popover, opened from an extension view's 设置 button. */
+.plugin-settings-popover{position:fixed;top:54px;right:74px;width:360px;max-height:min(70vh,640px);overflow:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:0 12px 40px rgba(0,0,0,.18);z-index:60}
+.plugin-settings-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);z-index:1}
+.plugin-settings-head strong{font-size:var(--fs-md)}
+.plugin-settings-head small{display:block;color:var(--text-muted);font-size:var(--fs-xs)}
+.plugin-settings-form{padding:12px 14px}
+.plugin-settings-error{margin:10px 14px 0;padding:8px 10px;border-radius:var(--radius-sm);background:var(--danger-soft);color:var(--danger);font-size:var(--fs-xs);word-break:break-word}
+.plugin-settings-form label{display:block;font-size:var(--fs-xs);color:var(--text-secondary);margin:10px 0 4px}
+.plugin-settings-form input,.plugin-settings-form select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 9px}
+.plugin-settings-form input[type=checkbox]{width:auto}
+.plugin-settings-form small{color:var(--text-muted)}
+.plugin-settings-form footer{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
+.plugin-settings-form footer>span{font-size:var(--fs-xs);color:var(--text-muted)}
+.plugin-settings-actions{display:flex;gap:8px}
+@media(max-width:900px){.plugin-settings-popover{top:8px;right:66px;width:min(360px,calc(100vw - 74px))}}
 /* Left sidebar can collapse independently while the activity bar remains visible. */
 .sidebar.sidebar-collapsed:not(.sidebar-right){width:0;min-width:0;padding:0;border:0;overflow:hidden}
 .sidebar.sidebar-collapsed:not(.sidebar-right) .sidebar-resizer{display:none}
@@ -2836,10 +2851,26 @@ textarea:focus-visible {
 .right-sidebar-panel .sidebar-files-host>*{min-width:0;min-height:0;flex:1}
 .sidebar-right .sidebar-resizer:hover,.sidebar-right .sidebar-resizer:focus-visible{background:var(--selected)}
 @media(max-width:900px){
-  .activity-bar{flex-basis:44px;width:44px;min-width:44px}
-  .activity-item{width:36px;height:36px}
+  .activity-bar{flex-basis:56px;width:56px;min-width:56px}
+  .activity-item{width:48px;height:46px}
+  .activity-appearance .appearance-toggle{width:48px;height:46px}
   .sidebar.sidebar-right:not(.sidebar-collapsed){width:min(var(--sidebar-width,260px),34vw)}
 }
 .sidebar-panel{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
 .sidebar-panel[hidden]{display:none!important}
 .sidebar-panel>.sidebar-heading{flex-shrink:0}
+
+/* Keep project identity readable before truncating secondary session context. */
+.workbench-identity h1{flex-shrink:0;max-width:min(240px,calc(100% - 24px))}
+/* One compact toolbar contract for notifications, SSH, Git and status. */
+.workbench-header{position:relative;z-index:10;container-type:inline-size;container-name:workbench-header}
+.workbench-header .topbar-status{min-width:0;gap:6px}
+.workbench-header .workbench-control{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:0 0 auto;height:28px;min-height:28px;max-height:28px;min-width:28px;padding:0 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text-secondary);font-size:var(--fs-xs);line-height:1;white-space:nowrap}
+.workbench-header .workbench-control:hover,.workbench-header .workbench-control[aria-expanded=true],.workbench-header .workbench-control.selected{background:var(--selected);color:var(--text)}
+.workbench-header .workbench-control>svg{width:16px;height:16px;flex:0 0 16px}
+.workbench-header .workbench-control.icon-button{width:28px;padding:0}
+.workbench-header .git-branch{flex:0 1 auto;min-width:28px;max-width:200px;overflow:hidden}
+.workbench-header .git-branch>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.workbench-output-indicator{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:var(--success)}
+@container workbench-header (max-width:700px){.workbench-header .workbench-control-label,.workbench-header .status-label{display:none}.workbench-header .topbar-status{gap:4px}.workbench-header .git-branch{max-width:110px}.workbench-header .git-branch>small{display:none}}
+@container workbench-header (max-width:360px){.workbench-header .git-branch{max-width:70px}.workbench-header .workbench-control{padding-inline:5px;gap:4px}}

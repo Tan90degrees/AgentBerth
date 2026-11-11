@@ -22,9 +22,9 @@ test('core settings search exposes host capabilities but not optional extension 
 });
 test('default workbench settings remain in the core catalog',()=>{
   const entries=settingsCatalog([],40);
-  assert.deepEqual(filterSettings(entries,'','common').map(value=>value.id),['appearance','default-agent','skills','preview','shell','terminal-font','local-limit']);
+  assert.deepEqual(filterSettings(entries,'','common').map(value=>value.id),['appearance','ui-font','default-agent','skills','preview','shell','terminal-font','local-limit']);
   assert.deepEqual(filterSettings(entries,'','terminal').map(value=>value.id),['shell','terminal-font','local-limit']);
-  assert.deepEqual(filterSettings(entries,'','all').map(value=>value.id),['appearance','default-agent','skills','preview','ssh-limit','connections','mcp','shell','terminal-font','local-limit','backend','about']);
+  assert.deepEqual(filterSettings(entries,'','all').map(value=>value.id),['appearance','ui-font','default-agent','skills','preview','ssh-limit','connections','mcp','shell','terminal-font','local-limit','backend','about']);
   assert.equal(new Set(entries.map(value=>value.id)).size,entries.length);
   assert.ok(entries.every(entry=>!['theme','pet','plugins'].includes(entry.id)));
 });

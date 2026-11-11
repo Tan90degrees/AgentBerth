@@ -1,5 +1,5 @@
 import { cleanupSmoke } from './smoke-cleanup.mjs';
-import {openRightSidebar} from './smoke-navigation.mjs';
+import {openRightSidebar,selectProjectForSessions,openNotifications} from './smoke-navigation.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
@@ -304,9 +304,9 @@ try {
   const other = await page.evaluate(root => window.berth.rpc('createProject', { name: '另一个文件项目', path: root }), second);
   // Use the session tree: the old file-project dropdown already cleared navigation.
   await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();
-  await page.locator('.projects .project-item').filter({ hasText: '另一个文件项目' }).click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item').filter({ hasText: '另一个文件项目' }));
   await page.waitForFunction(() => document.querySelector('.workbench-header .project-name')?.textContent === '另一个文件项目');
-  await page.locator('.projects .project-item').filter({ hasText: '文件工作台' }).click();
+  await selectProjectForSessions(page,page.locator('.projects .project-item').filter({ hasText: '文件工作台' }));
   await page.waitForTimeout(350);
   assert.equal(await page.getByRole('dialog', { name: '定位文件或目录', exact: true }).count(), 0);
   await page.locator('.session-item').filter({ hasText: '保持运行的终端' }).click();

@@ -45,7 +45,7 @@ function useGitStatus(project: Project, enabled: boolean, worktreePath: string |
 const branchLabel=(status:GitStatus|null)=>status?.kind==='repository' ? status.branch || `游离 ${status.head?.slice(0,7)??'HEAD'}` : status?.kind==='not-repository'?'非 Git 项目':status?'Git 不可用':'Git…';
 export function GitBranch({project,enabled,worktreePath=null,onOpen}:{project:Project;enabled:boolean;worktreePath?:string|null;onOpen:()=>void}){
   const {status,error}=useGitStatus(project,enabled,worktreePath);
-  return <button className="git-branch" aria-label={`Git 管理 ${project.name}`} title={!enabled?'更新后台后可使用 Git 管理':error || status?.message || `${status?.root??project.path}\n${status?.upstream??'未配置上游'} · 领先/落后以最近获取为准`} onClick={onOpen} disabled={!enabled}>
+  return <button className="git-branch workbench-control" aria-label={`Git 管理 ${project.name}`} title={!enabled?'更新后台后可使用 Git 管理':error || status?.message || `${status?.root??project.path}\n${status?.upstream??'未配置上游'} · 领先/落后以最近获取为准`} onClick={onOpen} disabled={!enabled}>
     <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="5" cy="4" r="2"/><circle cx="15" cy="4" r="2"/><circle cx="5" cy="16" r="2"/><path d="M5 6v8m0-3c7 0 10-1 10-5"/></svg><span>{branchLabel(status)}</span>{status?.kind==='repository'&&<><small>{status.total?` · ${status.total} 项改动`:''}</small><small>↑{status.ahead} ↓{status.behind}</small>{status.busy&&<small>处理中…</small>}</>}
   </button>;
 }

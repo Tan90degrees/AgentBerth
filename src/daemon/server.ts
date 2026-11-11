@@ -47,6 +47,7 @@ import { mount as mountResources } from '../core/resources';
 import { mount as mountAcp } from '../core/acp';
 import { AcpSessions } from './acp';
 import { apply as mountSuperagent, superagentView } from '../superagent';
+import { apply as mountNotesWiki, notesWikiView } from '../wiki';
 import { Context } from 'cordis';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -113,7 +114,7 @@ export class DaemonServer {
     this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
-      builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:undefined,
+      builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:id==='notes-wiki'&&view==='wiki'?notesWikiView:undefined,
       beforeChange:async ids=>{
         const sessions=this.store.state().sessions;
         for(const session of sessions)if(this.live.has(session.id)||this.starting.has(session.id)||this.acp.active(session.id)){
@@ -285,6 +286,7 @@ export class DaemonServer {
   agentsCorePort() {
     const self=this;
     return {
+      fullHistory:self.fullHistory.bind(self),
       agentVersion:self.agentVersion.bind(self),
       requireIdle:self.requireIdle.bind(self),
       get agentVersions(){return self.agentVersions;},
@@ -345,6 +347,7 @@ export class DaemonServer {
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
     if(id==='deepseek-harness'){mountHarness(ctx,_config,pid=>{this.harnessPid=pid;});return;}
     if(id==='superagent'){mountSuperagent(ctx,_config as Record<string,string|number|boolean>);return;}
+    if(id==='notes-wiki'){mountNotesWiki(ctx,_config as Record<string,string|number|boolean>);return;}
     const providers:Record<string,{id:string;definition:import('../shared/protocol').AgentDefinitionConfig}>={
       'agent.codex':{id:'codex',definition:{name:'Codex',command:'codex',integration:'codex',resumeCommand:'codex resume {sessionId}',skills:{project:'.agents/skills',user:'~/.agents/skills'},plugin:null}},
       'agent.claude':{id:'claude',definition:{name:'Claude Code',command:'claude',integration:'claude',resumeCommand:'claude --resume {sessionId}',skills:{project:'.claude/skills',user:'~/.claude/skills'},plugin:null}},
@@ -527,14 +530,14 @@ export class DaemonServer {
     const projectPath = this.store.project(session.projectId).path;
     return session.remote || !session.worktreePath ? projectPath : this.resolveWorkspace(session.projectId,projectPath, session.worktreePath);
   }
-  private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
+  private async integratedHistory(session: import('../shared/protocol').Session, file: string | null, full = false): Promise<History> {
     const project = await this.sessionProjectPath(session);
-    if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file);
+    if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file, full);
     const provider = this.integration(session);
-    if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project);
+    if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project, full);
     if (!file && provider === 'claude' && session.nativeSessionId) file = (await this.nativeDiscovery.list('claude', project)).find(item => item.nativeSessionId === session.nativeSessionId)?.path ?? null;
     if (!file) throw new Error('请先关联原生记录文件');
-    return readHistory(file, provider, project);
+    return readHistory(file, provider, project, { full });
   }
   private assertAgentVersion(id: string, version: number): void {
     if (this.agentVersion(id) !== version) throw new Error('Agent 插件已更新，请重新读取或重试');
@@ -552,6 +555,15 @@ export class DaemonServer {
       if (this.nativeTracking.get(sessionId)?.hookNativeId !== history.nativeSessionId) this.nativeTracking.delete(sessionId);
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); this.historyWrites.delete(sessionId); }
+  }
+
+  private async fullHistory(sessionId: string): Promise<History> {
+    this.reserveHistory(sessionId);
+    try {
+      const session = this.store.session(sessionId), cached = this.store.history(sessionId);
+      if (!session.transcriptPath && !session.nativeSessionId && !cached.path) return cached;
+      return await this.integratedHistory(session, session.transcriptPath ?? cached.path, true);
+    } finally { this.historyBusy.delete(sessionId); }
   }
 
   private requireHistoryAvailable(sessionId: string): void {
@@ -742,7 +754,7 @@ export class DaemonServer {
       else live.outputTimer ??= setTimeout(() => this.flushOutput(live), 16);
     });
     let connectedRun = false, startupExit: number | null = null;
-    child.onExit(({ exitCode }) => { if (remote && !connectedRun) { startupExit = exitCode; return; } void this.finish(sessionId, live, exitCode); });
+    child.onExit(({ exitCode }) => { if (remote && !connectedRun) { startupExit = exitCode; return; } void this.finish(sessionId, live, exitCode).catch(error => this.logError(error)); });
     if (remote) {
       try { await remote.transport.connect(); this.store.setPid(run.id, child.pid); live.run = this.store.run(run.id); }
       catch (error) {

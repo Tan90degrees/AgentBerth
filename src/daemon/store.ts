@@ -520,7 +520,11 @@ export class Store {
   running(id: string): void { this.db.prepare("UPDATE runs SET status = 'running' WHERE id = ?").run(id); }
   finish(id: string, status: Run['status'], exitCode: number | null, error: string | null, snapshot: string, seq: number, cols: number, rows: number): void {
     if (!this.run(id).recordOutput) snapshot = '';
-    this.db.prepare('UPDATE runs SET status = ?, endedAt = ?, exitCode = ?, error = ?, snapshot = ?, seq = ?, cols = ?, rows = ? WHERE id = ?').run(status, new Date().toISOString(), exitCode, error, snapshot, seq, cols, rows, id);
+    // Native PTY exit callbacks can omit the code or report a non-finite value
+    // during Windows shutdown. Preserve unknown as NULL, rather than rejecting
+    // the completion write and leaving the terminal permanently live.
+    const safeExitCode = typeof exitCode === 'number' && Number.isSafeInteger(exitCode) ? exitCode : null;
+    this.db.prepare('UPDATE runs SET status = ?, endedAt = ?, exitCode = ?, error = ?, snapshot = ?, seq = ?, cols = ?, rows = ? WHERE id = ?').run(status, new Date().toISOString(), safeExitCode, error, snapshot, seq, cols, rows, id);
   }
   savedScreen(id: string): { snapshot: string; seq: number; cols: number; rows: number } {
     return this.db.prepare('SELECT snapshot, seq, cols, rows FROM runs WHERE id = ?').get(id) as unknown as { snapshot: string; seq: number; cols: number; rows: number };
