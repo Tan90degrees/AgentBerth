@@ -314,7 +314,9 @@ try {
   await knowledge.click();
   const savedDraft = frame.locator('[data-action="restoreEditorDraft"][data-key="page:向量检索"]');
   await until(async () => await savedDraft.count() > 0, 'draft recovery survives closing the view');
-  await frame.locator('#draftShelf > details > summary').click();
+  await frame.locator('#draftShelf > details > summary').focus();
+  await page.keyboard.press('Enter');
+  await until(async () => await frame.locator('#draftShelf > details').evaluate(node => node.open), 'draft recovery shelf expanded');
   await savedDraft.click();
   await until(async () => (await frame.locator('#pageView [data-field="body"]').inputValue()) === md, 'recovered body is complete');
   await frame.locator('#pageView [data-action="cancelEdit"]').click();
