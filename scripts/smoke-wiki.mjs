@@ -175,6 +175,8 @@ try {
   step('ask with citations, answer archiving and lint all work');
 
   step('open the sandboxed extension view');
+  await application.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.show(); window.focus(); window.webContents.focus(); });
+  await page.bringToFront();
   await page.getByRole('button', { name: '笔记 Wiki · 知识库' }).click();
   const frame = page.frameLocator('iframe.extension-view');
   await frame.locator('body').evaluate(() => {

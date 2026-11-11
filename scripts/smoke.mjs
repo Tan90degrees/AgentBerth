@@ -582,7 +582,7 @@ try {
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   await page.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea'));
   await menuAction(page, '复制项目路径', 'project');
-  await page.getByText('项目路径已复制', { exact: true }).waitFor();
+  await page.locator('.notification-item').getByText('项目路径已复制', { exact: true }).first().waitFor();
   assert.equal(await application.evaluate(({ clipboard }) => clipboard.readText()), before.projects[0].path);
   await menuAction(page, '复制会话', 'session');
   assert.equal(await page.getByLabel('创建后立即启动', { exact: true }).isChecked(), false);
