@@ -1,5 +1,6 @@
 import { type ToastAction } from './SuccessToast';
 import { NotificationCenter } from './NotificationCenter';
+import { useReportedError } from './useReportedError';
 import { dismissNotice, pushNotice, type Notice } from './notice-queue';
 import { WorkspaceSkeleton } from './WorkspaceSkeleton';
 import {reconcileSidebarOrder,loadSidebarOrder,orderSidebarItems,completeSidebarOrder,moveSidebarItem,type SidebarMove} from './sidebar-order';
@@ -113,14 +114,16 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
   const [busy, setBusy] = useState(false);
   const [pendingActions, setPendingActions] = useState<Record<string, boolean>>({});
   const [statusOpen, setStatusOpen] = useState(false);
-  const [error, setError] = useState('');
   // Actionable notices (undo / retry) keep their own slot so a later plain
   // success message cannot swallow the user's only chance to reverse a delete.
   const [notices, setNotices] = useState<Notice[]>([]);
   const notify = useCallback((text: string, action?: ToastAction, level: Notice['level']='info') => setNotices(list => pushNotice(list, text, action, level)), []);
   const closeNotice = useCallback((id: number) => setNotices(list => dismissNotice(list, id)), []);
-  const lastNotifiedError=useRef('');
-  useEffect(()=>{if(!error){lastNotifiedError.current='';return;}if(lastNotifiedError.current===error)return;lastNotifiedError.current=error;setNotices(list=>pushNotice(list,error.replace(/^Error: /,''),!connected?{label:'重新连接',onAction:()=>{setError('');void window.berth.reconnect().catch(reason=>setError(String(reason)));}}:undefined,'error'));},[error,connected]);
+  const [error, setError] = useReportedError(message => {
+    setNotices(list => pushNotice(list, message.replace(/^Error: /, ''), !connected ? {
+      label: '重新连接', onAction: () => { setError(''); void window.berth.reconnect().catch(reason => setError(String(reason))); },
+    } : undefined, 'error'));
+  });
   const [dismissedRecovery, setDismissedRecovery] = useState('');
   const [quickOpen, setQuickOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);

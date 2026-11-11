@@ -333,13 +333,19 @@ export class WikiService {
     if (!/^[a-f0-9-]{36}$/.test(uploadId)) throw new Error('无效的上传标识');
     const entry = this.pdfUploads.get(uploadId);
     if (!entry) throw new Error('上传已过期，请重新导入 PDF');
-    if (entry.finishing) throw new Error('PDF 正在解析，请勿重复提交');
+    if (entry.finishing || entry.queued) throw new Error('PDF 已提交或正在解析，请勿继续上传');
     const chunk = Buffer.from(String(base64 ?? ''), 'base64');
     if (chunk.length > 64 * 1024) throw new Error('PDF 分片过大');
     entry.bytes += chunk.length;
     entry.at = Date.now();
     const bytes = this.pdfTransfers.append(uploadId, base64, done);
     if (!bytes) return null;
+    return this.parsePdfUpload(uploadId, bytes);
+  }
+  private async parsePdfUpload(uploadId: string, bytes: Uint8Array): Promise<{ id: string; skipped: boolean; pages: number }> {
+    this.assertOperation();
+    const entry = this.pdfUploads.get(uploadId);
+    if (!entry || entry.cancelled) throw new Error('PDF 导入已取消');
     entry.finishing = true;
     try {
       const { text, pages, ranges = [] } = await this.pdfExtract(bytes);
@@ -351,10 +357,20 @@ export class WikiService {
     } finally { this.pdfUploads.delete(uploadId); this.pdfTransfers.cancel(uploadId); }
   }
   finishPdfUpload(uploadId: string): string {
+    this.assertActive();
     const entry = this.pdfUploads.get(uploadId); if (!entry || entry.queued || entry.finishing) throw new Error('PDF 上传不存在或已在解析');
+    this.pdfTransfers.retain(uploadId);
     entry.queued = true;
-    const id = this.enqueue('capture', `解析 PDF「${entry.title}」`, async task => { task.progress = '解析完整 PDF'; try { return await this.appendPdfChunk(uploadId, '', true); } finally { this.pdfTaskUploads.delete(task.id); } });
-    this.pdfTaskUploads.set(id, uploadId); return id;
+    try {
+      const id = this.enqueue('capture', `解析 PDF「${entry.title}」`, async task => {
+        task.progress = '解析完整 PDF';
+        try { return await this.parsePdfUpload(uploadId, this.pdfTransfers.append(uploadId, '', true)!); }
+        finally { this.pdfTaskUploads.delete(task.id); this.cancelPdfUpload(uploadId); }
+      });
+      this.pdfTaskUploads.set(id, uploadId); return id;
+    } catch (error) {
+      entry.queued = false; entry.at = Date.now(); this.pdfTransfers.retain(uploadId, false); throw error;
+    }
   }
   cancelPdfUpload(uploadId: string): boolean { const entry = this.pdfUploads.get(uploadId); if (entry) entry.cancelled = true; this.pdfTransfers.cancel(uploadId); return this.pdfUploads.delete(uploadId); }
 

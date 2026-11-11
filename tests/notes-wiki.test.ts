@@ -541,6 +541,11 @@ test('MCP exposes only read-only wiki commands and tolerates the injected agentI
   assert.equal(original, fullMaterial);
   const located = await byName.get('wiki_source')!.handler({ id: 'progressive-0', quote: '完整读取尾标' }) as { text: string };
   assert.ok(located.text.includes('完整读取尾标'));
+  for (const command of ['wiki_source', 'source_text']) {
+    const continued = await byName.get(command)!.handler({ id: 'progressive-0', quote: '完整读取尾标', offset: 12000 }) as { text: string; offset: number; next: number };
+    assert.equal(continued.offset, 12000, command + ' must honor an explicit cursor even when quote is repeated');
+    assert.equal(continued.text, fullMaterial.slice(12000, continued.next));
+  }
 
 });
 

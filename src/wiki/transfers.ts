@@ -8,7 +8,7 @@ import path from 'node:path';
 export class WikiTransfers {
   private stopped: boolean;
   private readonly directory = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-transfer-'));
-  private readonly entries = new Map<string, { file: string; owned: boolean; size: number; at: number; name: string; mime: string; ready: boolean; maximum: number }>();
+  private readonly entries = new Map<string, { file: string; owned: boolean; size: number; at: number; name: string; mime: string; ready: boolean; maximum: number; retained?: boolean }>();
   constructor(signal: AbortSignal) {
     this.stopped = signal.aborted;
     const dispose = () => { this.stopped = true; for (const id of this.entries.keys()) this.cancel(id); rmSync(this.directory, { recursive: true, force: true }); };
@@ -16,7 +16,7 @@ export class WikiTransfers {
   }
   start(name: string, mime = 'application/zip', maximum = Infinity) {
     if (this.stopped) throw new Error('插件已停止');
-    for (const [id, item] of this.entries) if (Date.now() - item.at > 600000) this.cancel(id);
+    for (const [id, item] of this.entries) if (!item.retained && Date.now() - item.at > 600000) this.cancel(id);
     const id = randomUUID(), file = path.join(this.directory, id); writeFileSync(file, new Uint8Array(), { mode: 0o600 });
     this.entries.set(id, { file, owned: true, size: 0, at: Date.now(), name, mime, ready: false, maximum }); return { id };
   }
@@ -28,7 +28,10 @@ export class WikiTransfers {
     const { id } = this.start(name, mime), entry = this.get(id); rmSync(entry.file); entry.file = file; entry.owned = false; entry.size = statSync(file).size; entry.ready = true;
     return { id, name, mime, size: entry.size };
   }
-  private get(id: string) { const entry = this.entries.get(id); if (!entry || Date.now() - entry.at > 600000) { this.cancel(id); throw new Error('传输已过期，请重新选择文件'); } entry.at = Date.now(); return entry; }
+  private get(id: string) { const entry = this.entries.get(id); if (!entry || !entry.retained && Date.now() - entry.at > 600000) { this.cancel(id); throw new Error('传输已过期，请重新选择文件'); } entry.at = Date.now(); return entry; }
+  /** Queued internal work owns its completed upload until finish/cancellation.
+   * Idle browser uploads still expire normally. */
+  retain(id: string, retained = true): void { this.get(id).retained = retained; }
   append(id: string, base64: string, done: boolean): Uint8Array | null {
     const entry = this.get(id); if (entry.ready) throw new Error('上传已完成');
     const chunk = Buffer.from(base64, 'base64'); if (chunk.length > 36 * 1024) throw new Error('分片过大');

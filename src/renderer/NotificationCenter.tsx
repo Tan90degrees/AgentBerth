@@ -8,12 +8,12 @@ export function NotificationCenter({ notices, onDismiss, onClear, onCopy }: { no
   const announced=useRef(0);
   const latest = notices.at(-1)?.id ?? 0, unread = notices.filter(item => item.id > seen).length;
   useEffect(() => {
-    if (!latest) { setOpen(false); return; }
+    if (!latest) { clearTimeout(timer.current); setOpen(false); return; }
     if(latest<=announced.current)return;announced.current=latest;
     setOpen(true); clearTimeout(timer.current);
     timer.current = setTimeout(() => setOpen(false), 5000);
-    return () => clearTimeout(timer.current);
   }, [latest]);
+  useEffect(() => () => { clearTimeout(timer.current); announced.current = 0; }, []);
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => { if (!host.current?.contains(event.target as Node)) setOpen(false); };

@@ -100,3 +100,69 @@ test('PDF originals with identical extracted text are distinct unless their orig
   assert.notEqual(first.id, second.id); assert.equal(repeat.id, first.id); assert.equal(repeat.skipped, true);
   assert.deepEqual([...store.assetBytes(store.getSource(second.id)!.document!.asset)], [4, 5, 6]);
 });
+
+test('a completely uploaded PDF survives queue waits beyond the idle upload TTL', async t => {
+  let clock = Date.now(); t.mock.method(Date, 'now', () => clock);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  t.after(() => release());
+  const { service, store } = setup(t, { pdfExtract: async bytes => {
+    if (bytes[0] === 1) await gate;
+    return { text: 'complete PDF ' + bytes[0], pages: 1 };
+  } });
+  const first = service.beginPdfUpload('first'); await service.appendPdfChunk(first.uploadId, 'AQ==', false);
+  const firstTask = service.finishPdfUpload(first.uploadId);
+  const second = service.beginPdfUpload('queued'); await service.appendPdfChunk(second.uploadId, 'Ag==', false);
+  const secondTask = service.finishPdfUpload(second.uploadId);
+  assert.equal(service.taskStatus(secondTask)!.status, 'queued');
+  const abandoned = service.beginPdfUpload('abandoned browser upload');
+  clock += 11 * 60_000;
+  const idle = service.beginPdfUpload('sweep expired idle uploads');
+  await assert.rejects(service.appendPdfChunk(abandoned.uploadId, 'Aw==', false), /过期/);
+  release();
+  assert.equal((await finished(service, firstTask)).status, 'done');
+  const result = await finished(service, secondTask);
+  assert.equal(result.status, 'done', result.error);
+  const source = store.getSource((result.result as { id: string }).id)!;
+  assert.equal(source.text, 'complete PDF 2');
+  assert.deepEqual([...store.assetBytes(source.document!.asset)], [2]);
+  assert.equal(service.cancelPdfUpload(idle.uploadId), true);
+});
+
+test('submitting a PDF freezes its bytes while another PDF is still being parsed', async t => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; }); t.after(() => release());
+  const { service } = setup(t, { pdfExtract: async bytes => {
+    if (bytes[0] === 1) await gate;
+    return { text: 'complete PDF ' + bytes[0], pages: 1 };
+  } });
+  const first = service.beginPdfUpload('blocker'); await service.appendPdfChunk(first.uploadId, 'AQ==', false);
+  const active = service.finishPdfUpload(first.uploadId);
+  const next = service.beginPdfUpload('immutable'); await service.appendPdfChunk(next.uploadId, 'Ag==', false);
+  const queued = service.finishPdfUpload(next.uploadId);
+  await assert.rejects(service.appendPdfChunk(next.uploadId, 'Aw==', false), /已提交|正在解析/);
+  await assert.rejects(service.appendPdfChunk(next.uploadId, '', true), /已提交|正在解析/);
+  assert.equal(service.cancelTask(queued), true); release();
+  assert.equal((await finished(service, active)).status, 'done');
+});
+
+test('a full task queue leaves the completed PDF upload available for a later submission', async t => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; }); t.after(() => release());
+  const { service, store } = setup(t, { pdfExtract: async bytes => {
+    if (bytes[0] === 1) await gate;
+    return { text: 'complete PDF ' + bytes[0], pages: 1 };
+  } });
+  const first = service.beginPdfUpload('blocker'); await service.appendPdfChunk(first.uploadId, 'AQ==', false);
+  const active = service.finishPdfUpload(first.uploadId);
+  const backlog = Array.from({ length: 100 }, () => service.lint());
+  const upload = service.beginPdfUpload('retry without reupload'); await service.appendPdfChunk(upload.uploadId, 'Ag==', false);
+  assert.throws(() => service.finishPdfUpload(upload.uploadId), /后台任务过多/);
+  assert.equal(await service.appendPdfChunk(upload.uploadId, '', false), null, 'failed submission must not freeze the upload');
+  backlog.forEach(id => assert.equal(service.cancelTask(id), true)); release();
+  assert.equal((await finished(service, active)).status, 'done');
+  const parsed = await finished(service, service.finishPdfUpload(upload.uploadId));
+  assert.equal(parsed.status, 'done', parsed.error);
+  const source = store.getSource((parsed.result as { id: string }).id)!;
+  assert.deepEqual([...store.assetBytes(source.document!.asset)], [2]);
+});

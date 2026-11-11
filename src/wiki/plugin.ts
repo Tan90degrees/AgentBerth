@@ -263,12 +263,13 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     mcpSchema(paging), params => { const sources = service.listSources(), offset = Math.max(0, number(params, 'offset')), items = pageSlice(sources, params).map(source => ({
       id: source.id, title: source.title, createdAt: source.createdAt, compiled: source.compiled, characters: source.text.length, images: source.images.length,
     })), next = offset + items.length; return { items, offset, next, total: sources.length, hasMore: next < sources.length }; }, true);
-  add('wiki_source', 'MCP：按需读取完整原始素材，quote 可定位；hasMore 时用 next 作为 offset 继续。section=vision 可读取图片理解',
+  add('wiki_source', 'MCP：按需读取完整原始素材；首次可用 quote 定位，继续时 offset 优先。hasMore 时用 next 继续。section=vision 可读取图片理解',
     mcpSchema({ id: field('string'), ...windowFields, quote: field('string'), section: field('string', { enum: ['text', 'vision'] }) }, ['id']), params => {
       const source = service.getSource(text(params, 'id'));
       if (!source) return null;
       const section = params.section === 'vision' ? 'vision' : 'text', content = source[section], quote = text(params, 'quote'), found = quote ? content.indexOf(quote) : -1;
-      return { id: source.id, title: source.title, createdAt: source.createdAt, section, images: source.images.length, ...materialWindow(content, found >= 0 ? Math.max(0, found - 150) : number(params, 'offset'), number(params, 'limit', 12000)) };
+      const offset = typeof params.offset === 'number' ? params.offset : found >= 0 ? Math.max(0, found - 150) : 0;
+      return { id: source.id, title: source.title, createdAt: source.createdAt, section, images: source.images.length, ...materialWindow(content, offset, number(params, 'limit', 12000)) };
     }, true);
   add('wiki_status', 'MCP：读取知识库规模与模型配置状态',
     mcpSchema({}), () => {

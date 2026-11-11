@@ -50,7 +50,7 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
     const source = service.getSource(str(p, 'id')); if (!source) throw new Error('素材不存在');
     const quote = str(p, 'quote'), found = quote ? source.text.indexOf(quote) : -1;
     const selectedPage = source.document?.ranges.find(range => range.page === num(p, 'page'));
-    const offset = selectedPage ? selectedPage.start : found >= 0 ? Math.max(0, found - 150) : num(p, 'offset'), end = Math.min(source.text.length, offset + num(p, 'limit', 12000));
+    const offset = selectedPage ? selectedPage.start : typeof p.offset === 'number' ? num(p, 'offset') : found >= 0 ? Math.max(0, found - 150) : 0, end = Math.min(source.text.length, offset + num(p, 'limit', 12000));
     return { offset, text: source.text.slice(offset, end), next: end, total: source.text.length, ranges: source.document?.ranges.slice(0, 30) ?? [] };
   });
   cmd('download_source_asset', '查看或下载素材图片和原 PDF', { ...id, name: field('string') }, ['id', 'name'], p => {
