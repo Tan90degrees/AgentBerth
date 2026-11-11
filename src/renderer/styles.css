@@ -2860,6 +2860,8 @@ textarea:focus-visible {
 .sidebar-panel[hidden]{display:none!important}
 .sidebar-panel>.sidebar-heading{flex-shrink:0}
 
+/* Keep project identity readable before truncating secondary session context. */
+.workbench-identity h1{flex-shrink:0;max-width:min(240px,calc(100% - 24px))}
 /* One compact toolbar contract for notifications, SSH, Git and status. */
 .workbench-header{position:relative;z-index:10;container-type:inline-size;container-name:workbench-header}
 .workbench-header .topbar-status{min-width:0;gap:6px}
@@ -2870,5 +2872,5 @@ textarea:focus-visible {
 .workbench-header .git-branch{flex:0 1 auto;min-width:28px;max-width:200px;overflow:hidden}
 .workbench-header .git-branch>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .workbench-output-indicator{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:var(--success)}
-@container workbench-header (max-width:520px){.workbench-header .workbench-control-label,.workbench-header .status-label{display:none}.workbench-header .topbar-status{gap:4px}.workbench-header .git-branch{max-width:110px}.workbench-header .git-branch>small{display:none}}
+@container workbench-header (max-width:700px){.workbench-header .workbench-control-label,.workbench-header .status-label{display:none}.workbench-header .topbar-status{gap:4px}.workbench-header .git-branch{max-width:110px}.workbench-header .git-branch>small{display:none}}
 @container workbench-header (max-width:360px){.workbench-header .git-branch{max-width:70px}.workbench-header .workbench-control{padding-inline:5px;gap:4px}}
