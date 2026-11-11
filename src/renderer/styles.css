@@ -2721,7 +2721,6 @@ textarea:focus-visible {
 .project-row[data-drop-edge]::after,.session-row[data-drop-edge]::after{content:'';position:absolute;left:2px;right:2px;height:2px;background:var(--focus);border-radius:2px;pointer-events:none;z-index:2}
 [data-drop-edge=before]::after{top:0}[data-drop-edge=after]::after{bottom:0}
 .extension-active .workbench-header{height:34px;min-height:34px}
-.extension-active .workbench-header .ssh-toggle{height:26px;min-height:26px;padding:3px 8px;font-size: var(--fs-xs);line-height:18px}
 .extension-active .extension-page{padding:0}
 .plugin-web-toolbar{padding:4px 10px;gap:6px;min-height:34px}
 .plugin-web-actions{margin-left:0;gap:4px}
@@ -2860,3 +2859,16 @@ textarea:focus-visible {
 .sidebar-panel{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
 .sidebar-panel[hidden]{display:none!important}
 .sidebar-panel>.sidebar-heading{flex-shrink:0}
+
+/* One compact toolbar contract for notifications, SSH, Git and status. */
+.workbench-header{position:relative;z-index:10;container-type:inline-size;container-name:workbench-header}
+.workbench-header .topbar-status{min-width:0;gap:6px}
+.workbench-header .workbench-control{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:0 0 auto;height:28px;min-height:28px;max-height:28px;min-width:28px;padding:0 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text-secondary);font-size:var(--fs-xs);line-height:1;white-space:nowrap}
+.workbench-header .workbench-control:hover,.workbench-header .workbench-control[aria-expanded=true],.workbench-header .workbench-control.selected{background:var(--selected);color:var(--text)}
+.workbench-header .workbench-control>svg{width:16px;height:16px;flex:0 0 16px}
+.workbench-header .workbench-control.icon-button{width:28px;padding:0}
+.workbench-header .git-branch{flex:0 1 auto;min-width:28px;max-width:200px;overflow:hidden}
+.workbench-header .git-branch>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.workbench-output-indicator{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:var(--success)}
+@container workbench-header (max-width:520px){.workbench-header .workbench-control-label,.workbench-header .status-label{display:none}.workbench-header .topbar-status{gap:4px}.workbench-header .git-branch{max-width:110px}.workbench-header .git-branch>small{display:none}}
+@container workbench-header (max-width:360px){.workbench-header .git-branch{max-width:70px}.workbench-header .workbench-control{padding-inline:5px;gap:4px}}

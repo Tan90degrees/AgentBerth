@@ -57,6 +57,8 @@
 
 HTML 视图通过独立本地协议加载，置于无 Node 的 sandbox iframe，不能联网或直接访问工作台。用 `await window.agentberth.call(command, params)` 调用**自己的**命令；不要加载外部 JS/CSS。sidebar / panel 入口显示在侧边栏并在主区打开，settings 视图在插件配置弹窗中展示，不再内嵌到设置页的插件卡片。主程序校验消息来源，不允许视图指定其他插件 ID。
 
+操作反馈使用 `window.agentberth.notify('回复已发送', 'info')`，级别支持 `info`、`warning`、`error`（默认 `info`）。工作台会附上插件名称，统一放入右上角「通知与告警」，新通知展开 5 秒后收起，历史可重新打开。不要创建独立悬浮 toast。此桥接仅对 sandbox HTML 视图开放，原生 Web 页仍保持隔离。
+
 `desktopEntry` 同样导出 Cordis 插件，通过 `require('electron')` 使用桌面 API。上下文提供 `ctx.desktop = {id,dataDirectory,call}`，每次配置和代码更新会释放旧作用域再加载新作用域。示例：
 
 ```js

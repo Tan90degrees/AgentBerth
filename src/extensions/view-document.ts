@@ -30,6 +30,7 @@ function waitForBridge(){
 }
 window.agentberth={
   ready:waitForBridge,
+  notify:(message,level='info')=>{void waitForBridge().then(()=>parent.postMessage({kind:'agentberth-plugin-notice',message,level},'*')).catch(()=>{});},
   openSession:sessionId=>parent.postMessage({kind:'agentberth-plugin-open-session',sessionId},'*'),
   call:async(command,params={})=>{
     await waitForBridge();

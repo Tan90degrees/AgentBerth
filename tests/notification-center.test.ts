@@ -69,3 +69,25 @@ test('identical batched errors are distinct notices and reopen the popup after a
   assert.equal(dom.window.document.querySelectorAll('.notification-item').length, 3);
   assert.equal(setters.size, 1, 'error callback identity must stay stable for child effects');
 });
+
+test('controlled popup synchronizes native view suspension and caps visual counters', async t => {
+  const { dom, root } = setup(t);
+  const notices = Array.from({length: 125}, (_, index): Notice => ({id: index + 1, text: 'Notice ' + index}));
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    return React.createElement('div', { 'data-native-suspended': String(open) }, React.createElement(NotificationCenter, { notices, open, onOpenChange: setOpen, onDismiss() {}, onClear() {}, onCopy() {} }));
+  }
+  await act(async () => root.render(React.createElement(Harness)));
+  assert.equal(dom.window.document.querySelector('[data-native-suspended]')!.getAttribute('data-native-suspended'), 'true');
+  assert.ok(dom.window.document.querySelector('[data-native-overlay="notifications"]'));
+  assert.equal(dom.window.document.querySelector('.notification-toggle')!.getAttribute('aria-expanded'), 'true');
+  assert.equal(dom.window.document.querySelector('.notification-count')!.textContent, '99+');
+  assert.match(dom.window.document.querySelector('.notification-toggle')!.getAttribute('aria-label')!, /125 条未读/);
+  await act(async () => t.mock.timers.tick(5000));
+  assert.equal(dom.window.document.querySelector('[data-native-suspended]')!.getAttribute('data-native-suspended'), 'false');
+  const button = dom.window.document.querySelector<HTMLButtonElement>('.notification-toggle')!;
+  await act(async () => button.click());
+  assert.equal(dom.window.document.querySelector('[data-native-suspended]')!.getAttribute('data-native-suspended'), 'true');
+  await act(async () => t.mock.timers.tick(5000));
+  assert.ok(dom.window.document.querySelector('.notification-panel'), 'manual history opening must remain open');
+});

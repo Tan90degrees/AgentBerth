@@ -49,6 +49,13 @@ test('sandboxed plugin view bridge works without Web Crypto and correlates paral
   reply(requests[1].id,'second');
   reply(requests[0].id,'first');
   assert.deepEqual(await Promise.all([first,second]),['first','second']);
+  bridge.notify('回复已发送到原渠道');bridge.notify('发送结果待核对','warning');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(requests.slice(2).map(({kind,message,level})=>({kind,message,level})),[
+    {kind:'agentberth-plugin-notice',message:'回复已发送到原渠道',level:'info'},
+    {kind:'agentberth-plugin-notice',message:'发送结果待核对',level:'warning'},
+  ]);
+  assert.equal(handshakes,1,'Notifications share the authenticated owning-frame bridge');
 });
 
 test('Cordis lifecycle, live config, dependency teardown, persistence and uninstall preserve data',async t=>{

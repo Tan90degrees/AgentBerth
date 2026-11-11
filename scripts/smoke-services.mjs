@@ -152,6 +152,25 @@ try{
   const zoom=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.getTitle()==='AgentBerth · 泊栈').webContents.getZoomFactor());
   assert.ok(Math.abs(resized.bounds.width-hostBounds.width*zoom)<=1,'Native browser width must follow its host after resize');
   assert.ok(Math.abs(resized.bounds.x-hostBounds.x*zoom)<=1,'Native browser position must follow its host after resize');
+  // Host notifications must remain interactive above a native WebContentsView.
+  await projectRow(project.id).click({button:'right'});await page.getByRole('menuitem',{name:'复制项目路径',exact:true}).click();
+  await page.locator('.notification-panel').waitFor();await until(async()=>(await native())?.visible===false);
+  const notificationPanel=page.locator('.notification-panel');
+  assert.ok(await notificationPanel.evaluate(element=>{const r=element.getBoundingClientRect();return element.contains(document.elementFromPoint(r.x+r.width/2,r.y+20));}));
+  await page.screenshot({path:'test-results/harness-notification-center.png'});
+  await until(async()=>await notificationPanel.count()===0);await until(async()=>(await native())?.visible===true);
+  assert.equal((await native()).id,original.id);assert.equal(await nativePage.getByLabel('原生输入').inputValue(),'Native interaction works');
+  await page.locator('.notification-toggle').click();await until(async()=>(await native())?.visible===false);
+  await page.getByRole('button',{name:'收起通知中心',exact:true}).click();await until(async()=>(await native())?.visible===true);
+  await page.locator('.status-summary').click();await until(async()=>(await native())?.visible===false);
+  await page.locator('.status-summary').click();await until(async()=>(await native())?.visible===true);
+  // Compact header controls share metrics even in a narrow, enlarged UI.
+  for(const width of [900,1000,1280]){
+    await app.evaluate(({BrowserWindow},width)=>{BrowserWindow.getAllWindows().find(w=>w.getTitle()==='AgentBerth · 泊栈').setSize(width,820);},width);
+    await page.evaluate(()=>document.documentElement.style.setProperty('--ui-font-scale','1.3'));
+    await until(()=>page.evaluate(()=>{const header=document.querySelector('.workbench-header').getBoundingClientRect();return [...document.querySelectorAll('.workbench-header .workbench-control')].every(button=>{const r=button.getBoundingClientRect();return Math.abs(r.height-28)<1&&r.top>=header.top&&r.bottom<=header.bottom&&r.left>=header.left&&r.right<=header.right;});}));
+  }
+  await page.evaluate(()=>document.documentElement.style.removeProperty('--ui-font-scale'));
   // Open a workbench modal while the native browser is active: it must hide.
   await page.locator('.plugin-web-toolbar').click({position:{x:5,y:5}});await page.keyboard.press('Control+Shift+p');await page.getByRole('dialog').waitFor();await until(async()=>(await native())?.visible===false);await page.keyboard.press('Escape');await until(async()=>(await native())?.visible===true);
   await page.locator('.activity-bar button[aria-label="设置"]').focus();await page.locator('.activity-bar button[aria-label="设置"]').press('Enter');await until(async()=>(await native())?.visible===false);

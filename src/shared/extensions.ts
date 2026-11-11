@@ -45,6 +45,11 @@ export const pluginWebStateSchema=z.object({
   error:z.string().max(4000).nullable(),log:z.string().max(24000),
 }).strict();
 export type PluginWebState=z.infer<typeof pluginWebStateSchema>;
+export const pluginNoticeSchema=z.object({
+  message:z.string().trim().min(1).max(12000),
+  level:z.enum(['info','warning','error']).default('info'),
+}).strict();
+export type PluginNotice=z.infer<typeof pluginNoticeSchema>;
 export const pluginBrowserRequestSchema=z.object({id:extensionId,view:extensionId,generation:z.number().int().nonnegative(),action:z.enum(['show','hide','reload']),bounds:z.object({x:z.number().finite(),y:z.number().finite(),width:z.number().finite(),height:z.number().finite()}).strict().optional()}).strict();
 export type PluginBrowserRequest=z.infer<typeof pluginBrowserRequestSchema>;
 export function localPluginUrl(value:string):URL{
