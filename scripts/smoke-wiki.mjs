@@ -189,8 +189,9 @@ try {
   await until(async () => (await frame.locator('#statusText').innerText()).includes('页'), 'wiki view status');
   await until(async () => (await frame.locator('#pageList').innerText()).includes('向量检索'), 'page list');
   await until(async () => (await frame.locator('#pageView').locator('.card').count()) > 0, 'first page auto-selected');
-  await frame.locator('#pageList [data-action="openPage"]', { hasText: '向量检索' }).first().click();
-  await until(async () => (await frame.locator('#pageView').innerText()).includes('向量检索'), 'selected page detail');
+  await frame.locator('#pageList [data-action="openPage"][data-slug="向量检索"]').focus();
+  await page.keyboard.press('Enter');
+  await frame.locator('#pageView').getByRole('heading',{name:'向量检索',exact:true}).waitFor();
   await frame.locator('.tabs [data-tab="skills"]').click();
   await until(async () => (await frame.locator('#skillList').innerText()).includes('window-skill'), 'skill list');
   await frame.locator('#skillList [data-action="openSkill"][data-name="window-skill"]').click();

@@ -914,7 +914,7 @@ try {
     dialog.showOpenDialog = async () => { dialog.showOpenDialog = original; throw new Error('模拟文件选择失败'); };
   });
   await page.getByRole('button', { name: '选择程序', exact: true }).click();
-  await page.getByRole('alert').filter({ hasText: '模拟文件选择失败' }).waitFor();
+  await page.getByRole('region',{name:'应用设置',exact:true}).getByRole('alert').filter({ hasText: '模拟文件选择失败' }).waitFor();
   assert.equal(await page.getByLabel('默认终端', { exact: true }).inputValue(), 'custom');
   await page.waitForFunction(()=>document.querySelector('button[aria-label="选择程序"]')?.dataset.feedback==='error');
   await application.evaluate(({dialog})=>{const original=dialog.showOpenDialog;dialog.showOpenDialog=async()=>{dialog.showOpenDialog=original;return {canceled:true,filePaths:[]};};});
