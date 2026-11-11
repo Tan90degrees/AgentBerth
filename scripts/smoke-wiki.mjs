@@ -191,7 +191,7 @@ try {
   await until(async () => (await frame.locator('#pageView').locator('.card').count()) > 0, 'first page auto-selected');
   await frame.locator('#pageList [data-action="openPage"][data-slug="向量检索"]').focus();
   await page.keyboard.press('Enter');
-  await frame.locator('#pageView').getByRole('heading',{name:'向量检索',exact:true}).waitFor();
+  await frame.locator('#pageView').getByRole('heading',{name:'向量检索',level:2,exact:true}).waitFor();
   await frame.locator('.tabs [data-tab="skills"]').click();
   await until(async () => (await frame.locator('#skillList').innerText()).includes('window-skill'), 'skill list');
   await frame.locator('#skillList [data-action="openSkill"][data-name="window-skill"]').click();

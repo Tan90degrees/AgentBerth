@@ -1085,6 +1085,7 @@ try {
   await page.getByRole('heading', { name: '尚无运行记录', exact: true }).waitFor();
   await openNotifications(page);await page.locator('.notification-item').filter({ hasText: '已删除' }).last().getByRole('button', { name: '关闭提示', exact: true }).click();
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-cleared-runs' : 'cleared-runs'}.png` });
+  await page.getByRole('button',{name:'收起通知中心',exact:true}).click();
   await page.getByRole('tab', { name: '终端', exact: true }).click();
   await page.getByRole('heading', { name: '会话已就绪', exact: true }).waitFor();
   step('select an installed Agent provider in core Agent settings');
