@@ -286,6 +286,7 @@ export class DaemonServer {
   agentsCorePort() {
     const self=this;
     return {
+      fullHistory:self.fullHistory.bind(self),
       agentVersion:self.agentVersion.bind(self),
       requireIdle:self.requireIdle.bind(self),
       get agentVersions(){return self.agentVersions;},
@@ -529,14 +530,14 @@ export class DaemonServer {
     const projectPath = this.store.project(session.projectId).path;
     return session.remote || !session.worktreePath ? projectPath : this.resolveWorkspace(session.projectId,projectPath, session.worktreePath);
   }
-  private async integratedHistory(session: import('../shared/protocol').Session, file: string | null): Promise<History> {
+  private async integratedHistory(session: import('../shared/protocol').Session, file: string | null, full = false): Promise<History> {
     const project = await this.sessionProjectPath(session);
-    if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file);
+    if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file, full);
     const provider = this.integration(session);
-    if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project);
+    if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project, full);
     if (!file && provider === 'claude' && session.nativeSessionId) file = (await this.nativeDiscovery.list('claude', project)).find(item => item.nativeSessionId === session.nativeSessionId)?.path ?? null;
     if (!file) throw new Error('请先关联原生记录文件');
-    return readHistory(file, provider, project);
+    return readHistory(file, provider, project, { full });
   }
   private assertAgentVersion(id: string, version: number): void {
     if (this.agentVersion(id) !== version) throw new Error('Agent 插件已更新，请重新读取或重试');
@@ -554,6 +555,15 @@ export class DaemonServer {
       if (this.nativeTracking.get(sessionId)?.hookNativeId !== history.nativeSessionId) this.nativeTracking.delete(sessionId);
       this.store.saveHistory(sessionId, history); this.changed(); return history;
     } finally { this.historyBusy.delete(sessionId); this.historyWrites.delete(sessionId); }
+  }
+
+  private async fullHistory(sessionId: string): Promise<History> {
+    this.reserveHistory(sessionId);
+    try {
+      const session = this.store.session(sessionId), cached = this.store.history(sessionId);
+      if (!session.transcriptPath && !session.nativeSessionId && !cached.path) return cached;
+      return await this.integratedHistory(session, session.transcriptPath ?? cached.path, true);
+    } finally { this.historyBusy.delete(sessionId); }
   }
 
   private requireHistoryAvailable(sessionId: string): void {

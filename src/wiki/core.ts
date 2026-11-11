@@ -339,7 +339,7 @@ export function validateSkillName(name: string): void {
 }
 
 export function draftPages(value: unknown, pages: WikiPage[], sourceId: string | null, sourceText?: string): WikiDraft['pages'] {
-  const list = Array.isArray(value) ? value.slice(0, 15) : [];
+  const list = Array.isArray(value) ? value : [];
   const bySlug = new Map(pages.map(page => [page.slug, page]));
   const result: WikiDraft['pages'] = [];
   for (const item of list) {

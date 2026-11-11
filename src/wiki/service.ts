@@ -1,6 +1,8 @@
 import path from 'node:path';
+import { WikiTransfers } from './transfers';
+import { materialSegments, partitionProposalPages } from './material';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   buildIndex, byteTruncate, draftPages, evidenceList, extractLinks, lintWiki, pageHash, pageToDocument,
   parseDocument, parseJsonResponse, resolveExcerpts, searchPages, skillFromDocument,
@@ -64,12 +66,13 @@ export class WikiService {
     this.loadTaskHistory('后台已重启，请重试');
     this.config = options.config;
     this.signal = options.signal;
+    this.pdfTransfers = new WikiTransfers(this.signal);
     this.fetchImpl = options.fetchImpl;
     this.publish = options.publish;
     this.call = options.call;
     this.pdfExtract = options.pdfExtract ?? extractPdfText;
     this.lastTickLint = Date.parse(this.store.meta().lastLint ?? '') || 0;
-    // Abandoned uploads otherwise pin up to 20 MiB of buffers each. Sweep on a
+    // Abandoned disk-backed uploads expire. Sweep on a
     // timer as well as on every new upload, and release everything on shutdown.
     const sweep = setInterval(() => this.prunePdfUploads(), 60_000);
     sweep.unref?.();
@@ -87,7 +90,7 @@ export class WikiService {
     this.tasks.clear(); this.pausedSources.clear();
     const saved = this.workspace.tasks<WikiTask[]>([]);
     for (const task of (Array.isArray(saved) ? saved : []).slice(-200)) {
-      if (!task || typeof task.id !== 'string' || typeof task.label !== 'string' || typeof task.startedAt !== 'string' || !['compile', 'ask', 'lint', 'vision', 'archive'].includes(task.kind) || !['queued', 'running', 'done', 'failed', 'cancelled'].includes(task.status)) continue;
+      if (!task || typeof task.id !== 'string' || typeof task.label !== 'string' || typeof task.startedAt !== 'string' || !['compile', 'ask', 'lint', 'vision', 'archive', 'capture'].includes(task.kind) || !['queued', 'running', 'done', 'failed', 'cancelled'].includes(task.status)) continue;
       if (['queued', 'running'].includes(task.status)) { task.status = 'failed'; task.error = reason; task.finishedAt = now(); task.manualRetry = true; }
       if (task.retry && (!task.retry.params || typeof task.retry.params !== 'object' || Array.isArray(task.retry.params))) delete task.retry;
       if (typeof task.progress !== 'string') task.progress = '';
@@ -109,6 +112,7 @@ export class WikiService {
   taskList(): WikiTask[] { return [...this.tasks.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)); }
   cancelTask(id: string): boolean {
     const task = this.tasks.get(id); if (!task || !['queued', 'running'].includes(task.status)) return false;
+    const pdf = this.pdfTaskUploads.get(id); if (pdf) { this.cancelPdfUpload(pdf); this.pdfTaskUploads.delete(id); }
     task.status = 'cancelled'; task.progress = '已取消'; task.finishedAt = now();
     if (task.retry?.action === 'compile') this.pausedSources.add(String(task.retry.params.sourceId));
     this.taskControllers.get(id)?.abort(new Error('用户取消了任务'));
@@ -120,6 +124,7 @@ export class WikiService {
     if (!task || !['failed', 'cancelled'].includes(task.status) || !retry) throw new Error('此任务暂不能重试');
     const p = retry.params;
     switch (retry.action) {
+      case 'capture': return this.beginCaptureSession(String(p.sessionId));
       case 'compile': return this.compile(String(p.sourceId));
       case 'ask': return this.ask(String(p.question));
       case 'lint': return this.lint();
@@ -246,21 +251,20 @@ export class WikiService {
   private async createSource(input: SourceInput, deduplicate = false): Promise<{ source: WikiSource; skipped: boolean }> {
     this.assertActive();
     const title = truncate(String(input.title ?? '').trim() || '未命名素材', 160);
-    const text = String(input.text ?? '');
-    if (text.length > 200_000) throw new Error('素材超过 200000 字符上限，请拆分后导入');
+    const text = String(input.text ?? ''), documentHash = input.document ? createHash('sha256').update(input.document.bytes).digest('hex') : undefined;
     if (!text.trim() && !(input.images?.length) && !input.staging) throw new Error('素材内容不能为空');
     return withWriteLock(() => {
       // A parser can finish after its plugin generation has been disposed, or
       // disposal can happen while this write waits behind another operation.
       this.assertActive(); input.guard?.();
       if (deduplicate) {
-        const hash = this.store.sourceHash({ title, text, images: [], vision: '' });
+        const hash = this.store.sourceHash({ title, text, images: [], vision: '', ...(documentHash ? { document: { hash: documentHash } } : {}) });
         const existing = this.store.listSources().find(source => this.store.sourceHash(source) === hash);
         if (existing) return { source: existing, skipped: true };
       }
-      const images = (input.images ?? []).slice(0, 8).map(image => this.store.addImage(image.mime, image.base64));
+      const images = (input.images ?? []).map(image => this.store.addImage(image.mime, image.base64));
       const source: WikiSource = { id: randomUUID(), title, text, images, vision: '', compiled: false, hash: '', createdAt: now(), ...(input.staging ? { staging: true } : {}) };
-      if (input.document) { const d = input.document; source.document = { name: d.name, asset: this.store.addDocument(d.bytes), pages: d.pages, ranges: d.ranges }; }
+      if (input.document) { const d = input.document; source.document = { name: d.name, asset: this.store.addDocument(d.bytes), hash: documentHash, pages: d.pages, ranges: d.ranges }; }
       source.hash = this.store.sourceHash(source);
       this.store.saveSource(source);
       this.store.appendLog('ingest', title, [
@@ -276,7 +280,6 @@ export class WikiService {
   async ingestInboxFile(name: string, text: string): Promise<{ id: string; skipped: boolean }> {
     const title = truncate(path.basename(name).replace(/\.(md|markdown|txt|json|pdf)$/i, ''), 160) || '导入素材';
     const body = String(text ?? '');
-    if (body.length > 200_000) throw new Error('素材超过 200000 字符上限，请拆分后导入');
     return this.importText(title, body, `自动采集 ${path.basename(name)}`);
   }
 
@@ -307,25 +310,22 @@ export class WikiService {
   }
 
   // The iframe bridge caps one command's params at 64 KiB, so a PDF travels as
-  // base64 chunks. Uploads live in memory only and expire after 10 minutes.
+  // base64 chunks. Uploads are spooled to disk and expire after 10 minutes.
   private static readonly PDF_UPLOAD_TTL_MS = 10 * 60_000;
-  private static readonly PDF_MAX_BYTES = 20 * 1024 * 1024;
-  private readonly pdfUploads = new Map<string, { title: string; chunks: Buffer[]; bytes: number; at: number; finishing?: boolean; cancelled?: boolean }>();
+  private readonly pdfTransfers: WikiTransfers;
+  private readonly pdfTaskUploads = new Map<string, string>();
+  private readonly pdfUploads = new Map<string, { title: string; bytes: number; at: number; finishing?: boolean; queued?: boolean; cancelled?: boolean }>();
 
   private prunePdfUploads(): void {
     const cutoff = Date.now() - WikiService.PDF_UPLOAD_TTL_MS;
-    for (const [id, entry] of this.pdfUploads) if (entry.at < cutoff) this.pdfUploads.delete(id);
+    for (const [id, entry] of this.pdfUploads) if (entry.at < cutoff && !entry.finishing && !entry.queued) { this.pdfUploads.delete(id); this.pdfTransfers.cancel(id); }
   }
 
   beginPdfUpload(title: string): { uploadId: string } {
     this.assertActive();
     this.prunePdfUploads();
-    if (this.pdfUploads.size >= 8) {
-      const oldest = this.pdfUploads.keys().next().value;
-      if (oldest) this.pdfUploads.delete(oldest);
-    }
-    const uploadId = randomUUID();
-    this.pdfUploads.set(uploadId, { title: truncate(String(title ?? '').trim(), 160), chunks: [], bytes: 0, at: Date.now() });
+    const uploadId = this.pdfTransfers.start(title, 'application/pdf').id;
+    this.pdfUploads.set(uploadId, { title: String(title ?? '').trim(), bytes: 0, at: Date.now() });
     return { uploadId };
   }
   async appendPdfChunk(uploadId: string, base64: string, done: boolean): Promise<{ id: string; skipped: boolean; pages: number } | null> {
@@ -338,52 +338,57 @@ export class WikiService {
     if (chunk.length > 64 * 1024) throw new Error('PDF 分片过大');
     entry.bytes += chunk.length;
     entry.at = Date.now();
-    if (entry.bytes > WikiService.PDF_MAX_BYTES) { this.pdfUploads.delete(uploadId); throw new Error('PDF 超过 20 MiB 上限，请拆分后导入'); }
-    entry.chunks.push(chunk);
-    if (!done) return null;
+    const bytes = this.pdfTransfers.append(uploadId, base64, done);
+    if (!bytes) return null;
     entry.finishing = true;
     try {
-      const bytes = new Uint8Array(Buffer.concat(entry.chunks));
       const { text, pages, ranges = [] } = await this.pdfExtract(bytes);
       this.assertActive();
-      const guard = () => { if (entry.cancelled) throw new Error('PDF 导入已取消'); };
+      const guard = () => { this.assertOperation(); if (entry.cancelled) throw new Error('PDF 导入已取消'); };
       guard();
       if (!text.trim()) throw new Error('PDF 没有可提取的文本（可能是扫描件或纯图片 PDF）');
       return { ...await this.importText(entry.title || '导入素材', text, 'PDF 导入', { guard, document: { name: (entry.title || 'document') + '.pdf', bytes, pages, ranges } }), pages };
-    } finally { this.pdfUploads.delete(uploadId); }
+    } finally { this.pdfUploads.delete(uploadId); this.pdfTransfers.cancel(uploadId); }
   }
-  cancelPdfUpload(uploadId: string): boolean { const entry = this.pdfUploads.get(uploadId); if (entry) entry.cancelled = true; return this.pdfUploads.delete(uploadId); }
+  finishPdfUpload(uploadId: string): string {
+    const entry = this.pdfUploads.get(uploadId); if (!entry || entry.queued || entry.finishing) throw new Error('PDF 上传不存在或已在解析');
+    entry.queued = true;
+    const id = this.enqueue('capture', `解析 PDF「${entry.title}」`, async task => { task.progress = '解析完整 PDF'; try { return await this.appendPdfChunk(uploadId, '', true); } finally { this.pdfTaskUploads.delete(task.id); } });
+    this.pdfTaskUploads.set(id, uploadId); return id;
+  }
+  cancelPdfUpload(uploadId: string): boolean { const entry = this.pdfUploads.get(uploadId); if (entry) entry.cancelled = true; this.pdfTransfers.cancel(uploadId); return this.pdfUploads.delete(uploadId); }
 
   /** Sessions that can be turned into an immutable source. ACP agents expose a
    * live conversation; custom agents (CLI / plugin based) expose an imported
    * transcript history. Both are selectable in the view. */
-  async listCaptureSessions(): Promise<{ id: string; title: string; status: string; agent: string; agentName: string; kind: 'acp' | 'history' }[]> {
+  async listCaptureSessions(): Promise<{ id: string; title: string; status: string; agent: string; agentName: string; kind: 'acp' | 'history'; projectId: string; projectName: string; projectPath: string; nativeSessionId: string | null }[]> {
     if (!this.call) return [];
     try {
       const state = await this.call('state', {}) as {
-        sessions?: { id: string; title?: string; agent?: string; service?: boolean; owner?: unknown; remote?: unknown; nativeSessionId?: string | null; transcriptPath?: string | null; updatedAt?: string; latestRun?: { status?: string } }[];
+        projects?: { id: string; name: string; path: string }[];
+        sessions?: { id: string; projectId?: string; title?: string; agent?: string; service?: boolean; owner?: unknown; remote?: unknown; nativeSessionId?: string | null; transcriptPath?: string | null; updatedAt?: string; latestRun?: { status?: string } }[];
         agents?: { id: string; name?: string; acp?: unknown; plugin?: { history?: boolean } | null }[];
       } | null;
       const names = new Map((state?.agents ?? []).map(agent => [agent.id, agent.name ?? agent.id]));
       const builtin: Record<string, string> = { codex: 'Codex', claude: 'Claude', opencode: 'OpenCode', shell: '终端', custom: '自定义' };
       const label = (id: string) => names.get(id) ?? builtin[id] ?? id;
       return (state?.sessions ?? [])
-        .filter(session => !!session.id && !session.service && !session.owner && !session.remote && session.agent !== 'shell')
+        .filter(session => !!session.id && !session.service && !session.remote && session.agent !== 'shell')
         .map(session => {
           const definition = state?.agents?.find(agent => agent.id === session.agent);
           const acp = !!definition?.acp;
           const history = !!session.transcriptPath || !!session.nativeSessionId || !!definition?.plugin?.history;
           if (!acp && !history) return null;
           return {
-            id: session.id, title: truncate(String(session.title ?? session.id), 120),
+            id: session.id, title: String(session.title ?? session.id),
+            projectId: session.projectId ?? '', projectName: state?.projects?.find(project => project.id === session.projectId)?.name ?? '未命名工作区', projectPath: state?.projects?.find(project => project.id === session.projectId)?.path ?? '', nativeSessionId: session.nativeSessionId ?? null,
             status: String(session.latestRun?.status ?? 'idle'),
             agent: String(session.agent ?? ''), agentName: label(String(session.agent ?? '')),
             kind: acp ? 'acp' as const : 'history' as const,
           };
         })
         .filter((value): value is NonNullable<typeof value> => value !== null)
-        .sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : 0))
-        .slice(0, 50);
+        .sort((a, b) => a.projectName.localeCompare(b.projectName) || a.title.localeCompare(b.title));
     } catch (error) {
       throw new Error('读取工作台会话失败：' + String(error instanceof Error ? error.message : error).slice(0, 160));
     }
@@ -391,59 +396,45 @@ export class WikiService {
 
   /** Turn a conversation into an immutable source. This is the workbench's
    * highest-value ingest path: agent runs already produce the raw material. */
-  async captureSession(sessionId: string): Promise<{ id: string; skipped: boolean; events: number }> {
+  beginCaptureSession(sessionId: string): string {
+    return this.enqueue('capture', '导入完整会话', task => this.captureSession(sessionId, progress => { task.progress = progress; }), undefined, { action: 'capture', params: { sessionId } });
+  }
+  async captureSession(sessionId: string, progress: (text: string) => void = () => {}): Promise<{ id: string; skipped: boolean; events: number }> {
     if (!this.call) throw new Error('会话捕获在当前环境不可用');
-    let sessionTitle = sessionId.slice(0, 8);
-    let events: { sequence?: number; kind?: string; text: string }[] = [];
-    try {
-      const state = await this.call('state', {}) as {
-        sessions?: { id: string; title?: string; agent?: string; nativeSessionId?: string | null }[];
-        agents?: { id: string; acp?: unknown }[];
-      } | null;
-      const session = state?.sessions?.find(item => item.id === sessionId);
-      if (!session) throw new Error('会话不存在');
-      if (session.agent === 'shell') throw new Error('普通终端会话没有可沉淀的对话记录');
-      const definition = state?.agents?.find(agent => agent.id === session.agent);
-      sessionTitle = session.title || sessionTitle;
-      if (definition?.acp) {
-        const snapshot = await this.call('acpSnapshot', { sessionId, limit: 200 }) as {
-          events?: { sequence?: number; kind?: string; text?: string }[];
-        } | null;
-        events = (snapshot?.events ?? [])
-          .filter(event => event && typeof event.text === 'string' && event.text.trim())
-          .map(event => ({ sequence: event.sequence, kind: event.kind, text: String(event.text) }));
-      } else {
-        // `history` only holds imported transcripts. A session that is merely
-        // linked to a native (Claude / OpenCode / plugin) record keeps its text
-        // in nativeHistory, so try that before declaring the session empty.
-        type Msg = { role?: string; text?: string; timestamp?: string | null };
-        let messages: Msg[] = [];
-        const history = await this.call('history', { sessionId }) as { messages?: Msg[] } | null;
-        messages = history?.messages ?? [];
-        if (!messages.length && session.nativeSessionId) {
-          const native = await this.call('nativeHistory', {
-            sessionId, nativeSessionId: session.nativeSessionId, refresh: false,
-          }) as { messages?: Msg[] } | null;
-          messages = native?.messages ?? [];
-        }
-        events = messages
-          .filter(message => message && typeof message.text === 'string' && message.text.trim())
-          .slice(-200)
-          .map((message, index) => ({
-            sequence: index + 1,
-            kind: message.role === 'assistant' ? 'assistant' : 'user',
-            text: (message.timestamp ? `（${message.timestamp}）\n\n` : '') + String(message.text),
-          }));
-      }
-    } catch (error) {
-      throw new Error('读取工作台会话失败：' + String(error instanceof Error ? error.message : error).slice(0, 160));
-    }
-    if (!events.length) throw new Error('该会话暂无可沉淀的对话记录；可先在会话的「对话历史」中导入或关联原生记录');
+    this.assertOperation();
+    const state = await this.call('state', {}) as { projects?: { id: string; name: string; path: string }[]; sessions?: { id: string; projectId?: string; title?: string; agent?: string; nativeSessionId?: string | null }[]; agents?: { id: string; acp?: unknown }[] };
+    const session = state.sessions?.find(item => item.id === sessionId);
+    if (!session) throw new Error('会话不存在');
+    if (session.agent === 'shell') throw new Error('普通终端会话没有可沉淀的对话记录');
+    const project = state.projects?.find(item => item.id === session.projectId), title = `会话记录：${session.title || sessionId}`;
+    const entries: string[] = []; let count = 0;
     const labels: Record<string, string> = { user: '用户', assistant: '助手', thought: '思考', tool: '工具', plan: '计划', notice: '提示', error: '错误', permission: '授权', turn: '轮次', terminal: '终端' };
-    const lines = events.map(event => `### ${event.sequence ?? '-'} · ${labels[event.kind ?? ''] ?? event.kind ?? '记录'}\n\n${truncate(event.text, 4000)}`);
-    const title = truncate(`会话记录：${sessionTitle}`, 160);
-    const text = truncate(`# ${title}\n\n> 采集自工作台会话 ${sessionId}，仅包含最近最多 200 条记录；每条最多 4000 字，整体最多 200000 字符。共 ${events.length} 条记录。\n\n${lines.join('\n\n')}`, 200_000);
-    return { ...await this.importText(title, text, `工作台会话 ${sessionId}`), events: events.length };
+    if (state.agents?.find(agent => agent.id === session.agent)?.acp) {
+      type Event = { sequence: number; kind?: string; text?: string; data?: unknown; timestamp?: string };
+      const latest = await this.call('acpSnapshot', { sessionId, limit: 1 }) as { events?: Event[] };
+      const highWater = Math.max(0, ...(latest.events ?? []).map(event => event.sequence));
+      let after = 0;
+      while (after < highWater) {
+        this.assertOperation();
+        const page = await this.call('acpSnapshot', { sessionId, after, limit: 100 }) as { events?: Event[]; hasMore?: boolean };
+        const events = (page.events ?? []).filter(event => event.sequence > after && event.sequence <= highWater).sort((a, b) => a.sequence - b.sequence);
+        if (!events.length) throw new Error('会话分页未前进，请刷新后重试');
+        for (const event of events) { entries.push(`### ${event.sequence} · ${labels[event.kind ?? ''] ?? event.kind ?? '记录'}\n\n${event.text ?? ''}${event.data ? '\n\n附加信息：\n' + JSON.stringify(event.data, null, 2) : ''}`); count++; }
+        after = events.at(-1)!.sequence; progress(`已读取 ${count} 条记录（截至序号 ${highWater}）`);
+      }
+    } else {
+      type Message = { role?: string; text?: string; timestamp?: string | null };
+      progress('正在读取完整原生记录');
+      let history = await this.call('history', { sessionId, full: true }) as { messages?: Message[]; warnings?: string[] };
+      if (!history.messages?.length && session.nativeSessionId) history = await this.call('nativeHistory', { sessionId, nativeSessionId: session.nativeSessionId, refresh: true }) as typeof history;
+      if (history.warnings?.some(warning => /仅显示|最近最多|截断/.test(warning))) throw new Error('当前提供的历史是截断预览，请更新后台并关联完整原生会话文件后重试');
+      for (const message of history.messages ?? []) { this.assertOperation(); if (typeof message.text !== 'string') continue; count++; entries.push(`### ${count} · ${labels[message.role ?? ''] ?? message.role ?? '记录'}${message.timestamp ? ' · ' + message.timestamp : ''}\n\n${message.text}`); }
+    }
+    this.assertOperation();
+    if (!count) throw new Error('该会话暂无可导入的记录，请先关联原生会话或导入对话历史');
+    const text = `# ${title}\n\n工作区：${project?.name ?? session.projectId ?? '未知'}\n工作区目录：${project?.path ?? ''}\n会话名称：${session.title ?? ''}\n会话 ID：${sessionId}\n原生会话 ID：${session.nativeSessionId ?? ''}\n\n> 采集自工作台会话 ${sessionId}。完整导入 ${count} 条记录，不截断单条正文。导入开始之后新增的记录可在下一次导入中更新。\n\n${entries.join('\n\n')}`;
+    const result = await this.importText(title, text, `工作台会话 ${sessionId}`, { guard: () => this.assertOperation() });
+    return { ...result, events: count };
   }
   async deleteSource(id: string): Promise<void> {
     await withWriteLock(() => { this.workspace.deleteSource(id); this.store.appendLog('edit', '删除原始素材', [`素材 ID：${id}`, '已编译的 wiki 页面保留']); });
@@ -452,7 +443,6 @@ export class WikiService {
     return withWriteLock(() => {
       const source = this.store.getSource(sourceId);
       if (!source) throw new Error('素材不存在');
-      if (source.images.length >= 8) throw new Error('单个素材最多 8 张图片');
       const name = this.store.addImage(mime, base64);
       source.images.push(name);
       source.vision = '';
@@ -604,25 +594,43 @@ export class WikiService {
       const inputHash = this.store.sourceHash(fresh);
       await this.describeImages(fresh, task);
       const schema = this.schema(), skills = this.allSkills();
-      task.progress = '抽取概念';
-      const ingested = await this.complete(ingestMessages(fresh, schema, resolveSkill(skills, 'ingest'), this.store.index(), fresh.vision));
-      this.assertOperation();
       const feedback = this.store.listDrafts().filter(draft => draft.sourceId === fresh.id && draft.status === 'rejected').flatMap(draft => draft.feedback).slice(-5);
-      task.progress = '生成页面提案';
-      const baseline = this.store.listPages();
-      const context = compileContext(fresh, ingested, baseline);
-      const compiled = await this.complete(compileMessages(fresh, ingested, context, schema, resolveSkill(skills, 'compile'), feedback));
-      this.assertOperation();
-      const payload = parseJsonResponse(compiled);
+      const baseline = this.store.listPages(), proposals = new Map<string, WikiDraft['pages'][number]>(), summaries: string[] = [], contradictions: string[] = [];
+      const material = fresh.text + (fresh.vision ? '\n\n# 图片理解（模型生成，不能充当原文引文）\n' + fresh.vision : '');
+      let segment = 0;
+      for (const part of materialSegments(material)) {
+        this.assertOperation(); segment++;
+        const view = { ...fresh, title: fresh.title + ` · 素材片段 ${segment}`, text: part.text, vision: '' };
+        task.progress = `抽取片段 ${segment} · ${part.end}/${material.length} 字`;
+        const ingested = await this.complete(ingestMessages(view, schema, resolveSkill(skills, 'ingest'), this.store.index(), ''));
+        this.assertOperation();
+        const context = compileContext(view, ingested, baseline);
+        task.progress = `编译片段 ${segment} · ${part.end}/${material.length} 字`;
+        const compiled = await this.complete(compileMessages(view, ingested, context, schema, resolveSkill(skills, 'compile'), feedback));
+        this.assertOperation();
+        const payload = parseJsonResponse(compiled);
+        if (typeof payload.summary === 'string') summaries.push(payload.summary);
+        if (Array.isArray(payload.contradictions)) contradictions.push(...payload.contradictions.filter((value): value is string => typeof value === 'string'));
+        for (const page of draftPages(partitionProposalPages(payload.pages), baseline, fresh.id, fresh.text)) {
+          if (page.action === 'update' && !context.some(item => item.slug === page.slug)) page.action = 'skip';
+          const previous = proposals.get(page.slug);
+          if (!previous) { proposals.set(page.slug, page); continue; }
+          const combined = previous.body.includes(page.body) ? previous.body : page.body.includes(previous.body) ? page.body : previous.body + `\n\n---\n\n## 素材片段 ${segment}\n\n` + page.body;
+          if (Buffer.byteLength(combined) <= 48 * 1024) {
+            previous.body = combined; previous.evidence = [...previous.evidence, ...page.evidence].filter((item, index, all) => all.findIndex(other => other.sourceId === item.sourceId && other.quote === item.quote) === index);
+            previous.tags = [...new Set([...previous.tags, ...page.tags])];
+          } else {
+            let suffix = segment, slug = slugify(page.slug.slice(0, 55) + '-segment-' + suffix);
+            while (proposals.has(slug) || baseline.some(item => item.slug === slug)) slug = slugify(page.slug.slice(0, 55) + '-segment-' + ++suffix);
+            proposals.set(slug, { ...page, slug, title: page.title + `（片段 ${segment}）`, previous: null, action: 'create' });
+          }
+        }
+        this.persistTasks();
+      }
       const draft: WikiDraft = {
-        id: randomUUID(), sourceId: fresh.id, sourceTitle: fresh.title, createdAt: now(),
-        model: this.model().model, summary: typeof payload.summary === 'string' ? truncate(payload.summary, 400) : '编译完成',
-        pages: draftPages(payload.pages, baseline, fresh.id, fresh.text).map(page => ({ ...page,
-          action: page.action === 'update' && !context.some(item => item.slug === page.slug) ? 'skip' as const : page.action,
-        })),
-        sourceHash: inputHash,
-        contradictions: Array.isArray(payload.contradictions) ? payload.contradictions.filter((value): value is string => typeof value === 'string').slice(0, 20).map(value => truncate(value, 300)) : [],
-        feedback: [], status: 'pending',
+        id: randomUUID(), sourceId: fresh.id, sourceTitle: fresh.title, createdAt: now(), model: this.model().model,
+        summary: truncate(summaries.join('；'), 400) || '编译完成', pages: [...proposals.values()], sourceHash: inputHash,
+        contradictions, feedback: [], status: 'pending', coverage: { characters: material.length, segments: segment, complete: true },
       };
       if (!draft.pages.length) throw new Error('模型没有生成任何可用页面，可在 Skill 中调整编译要求后重试');
       await withWriteLock(() => {
@@ -638,7 +646,7 @@ export class WikiService {
         this.store.appendLog('compile', fresh.title, [
           `素材 ID：${fresh.id}`, `提案：${draft.id}`, `页面：${draft.pages.length} 个`,
           ...(draft.contradictions.length ? [`发现 ${draft.contradictions.length} 处矛盾`] : []),
-          typeof payload.log === 'string' ? truncate(payload.log, 200) : '',
+          `完整处理 ${segment} 个片段、${material.length} 字符`,
         ]);
       });
       this.failedSources.delete(source.id);
@@ -654,18 +662,22 @@ export class WikiService {
       if (!source.text.trim()) throw new Error('纯图片素材需要先配置视觉模型');
       return;
     }
-    const images = source.images.map(name => this.store.imageData(name)).filter((value): value is { mime: string; base64: string } => !!value);
-    if (images.length !== source.images.length) throw new Error('素材图片附件缺失，请检查原始文件后重试');
-    if (task) task.progress = '理解图片';
-    const description = await this.complete([
-      { role: 'system', content: '你是图片理解助手。提取图片中的文字、图表结构、关键数据与结论，输出简洁中文 Markdown。不要臆测图中不存在的信息。' },
-      { role: 'user', content: `请描述这些来自「${source.title}」的图片，供后续笔记编译使用。` },
-    ], 'vision', images);
+    const descriptions: string[] = [];
+    for (const [index, name] of source.images.entries()) {
+      this.assertOperation(); const image = this.store.imageData(name);
+      if (!image) throw new Error('素材图片附件缺失，请检查原始文件后重试');
+      if (task) task.progress = `理解图片 ${index + 1}/${source.images.length}`;
+      descriptions.push(`## 图片 ${index + 1}\n` + await this.complete([
+        { role: 'system', content: '你是图片理解助手。提取图片中的文字、图表结构、关键数据与结论，输出中文 Markdown。不要臆测图中不存在的信息。' },
+        { role: 'user', content: `请描述来自「${source.title}」的第 ${index + 1} 张图片，供后续笔记编译使用。` },
+      ], 'vision', [image]));
+    }
+    const description = descriptions.join('\n\n');
     await withWriteLock(() => {
       const fresh = this.store.getSource(source.id);
       this.assertOperation();
       if (!fresh || this.store.sourceHash(fresh) !== this.store.sourceHash(source)) throw new Error('素材图片已变化，请重新编译');
-      fresh.vision = truncate(description, 8000);
+      fresh.vision = description;
       fresh.hash = this.store.sourceHash(fresh);
       this.store.saveSource(fresh);
       // Keep the caller's object in sync so this compile actually uses the

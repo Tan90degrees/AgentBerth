@@ -44,7 +44,7 @@ export interface WikiSource {
   compiled: boolean;
   hash: string;
   createdAt: string;
-  document?: { name: string; asset: string; pages: number; ranges: { page: number; start: number; end: number }[] };
+  document?: { name: string; asset: string; hash?: string; pages: number; ranges: { page: number; start: number; end: number }[] };
 }
 
 export interface WikiSkill {
@@ -86,11 +86,12 @@ export interface WikiDraft {
   feedback: string[];
   status: 'pending' | 'approved' | 'rejected';
   resolvedAt?: string;
+  coverage?: { characters: number; segments: number; complete: boolean };
 }
 
 export interface WikiTask {
   id: string;
-  kind: 'compile' | 'ask' | 'lint' | 'vision' | 'archive';
+  kind: 'compile' | 'ask' | 'lint' | 'vision' | 'archive' | 'capture';
   label: string;
   status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
   progress: string;

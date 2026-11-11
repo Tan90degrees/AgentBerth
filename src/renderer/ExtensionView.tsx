@@ -40,15 +40,23 @@ function HtmlExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:Extensi
   useLayoutEffect(()=>{let pending=0,alive=true,draftFlush:Promise<void>|undefined;const draftWrites=new Map<string,Record<string,unknown>>(),draftFailures=new Map<string,string>();
   // Keep the latest snapshot in the host, so closing/reloading an iframe does
   // not discard writes queued behind an earlier save in that iframe.
+  const saveDraft=async(params:Record<string,unknown>)=>{
+    const call=(command:string,value:Record<string,unknown>)=>window.berth.extensions({action:'call',id:plugin.manifest.id,command,params:value});
+    const bytes=new TextEncoder().encode(JSON.stringify(params.fields??{}));
+    if(params.discard===true||bytes.length<40000){await call('save_editor_draft',params);return;}
+    const upload=await call('draft_upload_start',{key:params.key}) as unknown as {id:string};
+    try{for(let offset=0;offset<bytes.length;offset+=36*1024){const part=bytes.subarray(offset,offset+36*1024);await call('draft_upload_chunk',{id:upload.id,base64:btoa(Array.from(part,byte=>String.fromCharCode(byte)).join('')),done:offset+36*1024>=bytes.length});}}
+    catch(error){await call('cancel_transfer',{id:upload.id}).catch(()=>{});throw error;}
+  };
   const flushDrafts=():Promise<void>=>{
     if(draftFlush)return draftFlush;
-    draftFlush=(async()=>{while(draftWrites.size){const [key,params]=draftWrites.entries().next().value!;draftWrites.delete(key);try{await window.berth.extensions({action:'call',id:plugin.manifest.id,command:'save_editor_draft',params});draftFailures.delete(key);if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-draft-saved',key},'*');}catch(error){draftFailures.set(key,String(error));onError('草稿保存失败：'+String(error));}}})().finally(()=>{draftFlush=undefined;});
+    draftFlush=(async()=>{while(draftWrites.size){const [key,params]=draftWrites.entries().next().value!;draftWrites.delete(key);try{await saveDraft(params);draftFailures.delete(key);if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-draft-saved',key},'*');}catch(error){draftFailures.set(key,String(error));onError('草稿保存失败：'+String(error));}}})().finally(()=>{draftFlush=undefined;});
     return draftFlush;
   };
   const theme=pluginTheme;const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
     if(!alive||event.source!==frame.current?.contentWindow)return;
     if(event.data?.kind==='agentberth-plugin-save-draft'&&plugin.manifest.id==='notes-wiki'){
-      const params=event.data.params;try{if(!params||typeof params.key!=='string'||JSON.stringify(params).length>240000||draftWrites.size>=100&&!draftWrites.has(params.key))return;}catch{return;}
+      const params=event.data.params;try{if(!params||typeof params.key!=='string'||draftWrites.size>=100&&!draftWrites.has(params.key))return;}catch{return;}
       draftWrites.set(params.key,params);void flushDrafts();return;
     }
     if(event.data?.kind==='agentberth-plugin-flush-drafts'&&plugin.manifest.id==='notes-wiki'&&typeof event.data.id==='string'&&event.data.id.length<=80){

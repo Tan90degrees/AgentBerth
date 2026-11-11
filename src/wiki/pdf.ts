@@ -3,7 +3,6 @@ import path from 'node:path';
 export interface PdfExtractResult { text: string; pages: number; ranges?: { page: number; start: number; end: number }[]; }
 export type PdfTextExtractor = (bytes: Uint8Array) => Promise<PdfExtractResult>;
 
-const MAX_CHARS = 200_000;
 
 /** The pdf.js legacy build is a CommonJS bundle that works inside the Node
  * daemon. It is loaded lazily so plugin startup never pays for it (and a
@@ -64,7 +63,6 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
       if (body.trim()) {
         const start = total + (chunks.length ? 2 : 0);
         total += body.length + (chunks.length ? 2 : 0);
-        if (total > MAX_CHARS) throw new Error('PDF 文本超过 200000 字符上限，请拆分后导入');
         chunks.push(body);
         ranges.push({ page: index, start, end: total });
       }

@@ -27,14 +27,14 @@ export async function matchesProject(cwd: unknown, projectPath: string): Promise
   catch { return false; }
 }
 
-export async function readHistory(file: string, agent: Agent, projectPath: string): Promise<History> {
+export async function readHistory(file: string, agent: Agent, projectPath: string, options: { full?: boolean } = {}): Promise<History> {
   if (!['codex', 'claude', 'opencode'].includes(agent)) throw new Error('当前 Agent 不支持导入原生对话记录');
   const canonical = await realpath(file);
   const extension = agent === 'opencode' ? '.json' : '.jsonl';
   if (path.extname(canonical).toLowerCase() !== extension) throw new Error(`请选择 ${extension} 对话记录`);
   const info = await stat(canonical);
-  if (!info.isFile() || info.size > 16 * 1024 * 1024) throw new Error('对话文件须小于 16 MiB');
-  if (agent === 'opencode') return readOpenCode(canonical, projectPath);
+  if (!info.isFile() || !options.full && info.size > 16 * 1024 * 1024) throw new Error('对话文件须小于 16 MiB');
+  if (agent === 'opencode') return readOpenCode(canonical, projectPath, options);
   const messages: HistoryMessage[] = [];
   const events: HistoryMessage[] = [];
   const warnings: string[] = [];
@@ -46,14 +46,14 @@ export async function readHistory(file: string, agent: Agent, projectPath: strin
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   const add = (target: HistoryMessage[], role: unknown, text: string, timestamp: unknown) => {
     if (!['user', 'assistant'].includes(String(role)) || !text.trim()) return;
-    const bounded = text.slice(0, 32768);
+    const bounded = options.full ? text : text.slice(0, 32768);
     target.push({ role: role as HistoryMessage['role'], text: bounded, timestamp: typeof timestamp === 'string' ? timestamp : null });
-    if (target.length > 1000) target.shift();
+    if (!options.full && target.length > 1000) target.shift();
   };
   try {
     for await (const line of lines) {
       if (!line.trim()) continue;
-      if (line.length > 1024 * 1024) { malformed++; continue; }
+      if (!options.full && line.length > 1024 * 1024) { malformed++; continue; }
       let item: Json;
       try { item = JSON.parse(line); } catch { malformed++; continue; }
       if (!item || typeof item !== 'object') { malformed++; continue; }
@@ -81,21 +81,21 @@ export async function readHistory(file: string, agent: Agent, projectPath: strin
   const bounded: HistoryMessage[] = [];
   for (let index = selected.length - 1; index >= 0; index--) {
     const message = selected[index];
-    if (chars + message.text.length > 512 * 1024) { warnings.push('仅显示最近 512 KiB 对话文本'); break; }
+    if (!options.full && chars + message.text.length > 512 * 1024) { warnings.push('仅显示最近 512 KiB 对话文本'); break; }
     chars += message.text.length;
     bounded.unshift(message);
   }
   if (malformed) warnings.push(`跳过 ${malformed} 行不完整或过大的记录`);
-  warnings.push('只读导入最近最多 1000 条用户和助手文本；不改写 Agent 原生记录');
+  warnings.push(options.full ? '已读取完整用户和助手文本；不改写 Agent 原生记录' : '只读导入最近最多 1000 条用户和助手文本；不改写 Agent 原生记录');
   return { messages: bounded, nativeSessionId: sessionId, path: canonical, warnings };
 }
 
-async function readOpenCode(canonical: string, projectPath: string): Promise<History> {
+async function readOpenCode(canonical: string, projectPath: string, options: { full?: boolean }): Promise<History> {
   const chunks: Buffer[] = [];
   let bytes = 0;
-  for await (const chunk of createReadStream(canonical, { end: 16 * 1024 * 1024 })) {
+  for await (const chunk of createReadStream(canonical, options.full ? {} : { end: 16 * 1024 * 1024 })) {
     bytes += chunk.length;
-    if (bytes > 16 * 1024 * 1024) throw new Error('对话文件须小于 16 MiB');
+    if (!options.full && bytes > 16 * 1024 * 1024) throw new Error('对话文件须小于 16 MiB');
     chunks.push(chunk);
   }
   const buffer = Buffer.concat(chunks);
@@ -103,23 +103,24 @@ async function readOpenCode(canonical: string, projectPath: string): Promise<His
   const text = (buffer[0] === 0xff && buffer[1] === 0xfe ? buffer.toString('utf16le') : buffer.toString('utf8')).replace(/^\uFEFF/, '');
   let data: Json;
   try { data = JSON.parse(text); } catch { throw new Error('OpenCode 记录不是有效 JSON，请使用 opencode export 导出会话'); }
-  return parseOpenCodeHistory(data, projectPath, canonical);
+  return parseOpenCodeHistory(data, projectPath, canonical, options);
 }
 
-export async function parseOpenCodeHistory(data: Json, projectPath: string, canonical: string | null): Promise<History> {
+export async function parseOpenCodeHistory(data: Json, projectPath: string, canonical: string | null, options: { full?: boolean } = {}): Promise<History> {
   const nativeSessionId = data?.info?.id;
   if (typeof nativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(nativeSessionId)) throw new Error('记录缺少有效的原生会话 ID');
   if (!await matchesProject(data?.info?.directory ?? data?.info?.location?.directory, projectPath)) throw new Error('对话记录的工作目录与当前项目不一致');
   if (!Array.isArray(data.messages)) throw new Error('OpenCode 记录缺少 messages，请使用 opencode export 导出会话');
   const messages: HistoryMessage[] = [];
   let chars = 0;
-  const warnings = ['只读导入最近最多 1000 条用户和助手文本；不改写 Agent 原生记录'];
-  for (const message of data.messages.slice(-1000).reverse()) {
+  const warnings = [options.full ? '已读取完整用户和助手文本；不改写 Agent 原生记录' : '只读导入最近最多 1000 条用户和助手文本；不改写 Agent 原生记录'];
+  for (const message of (options.full ? data.messages.slice() : data.messages.slice(-1000)).reverse()) {
     const role = message?.info?.role ?? message?.type;
     if (!['user', 'assistant'].includes(role)) continue;
-    const content = (message?.info ? textContent(message.parts) : role === 'user' ? typeof message.text === 'string' ? message.text : '' : textContent(message.content)).slice(0, 32768);
+    const original = (message?.info ? textContent(message.parts) : role === 'user' ? typeof message.text === 'string' ? message.text : '' : textContent(message.content));
+    const content = options.full ? original : original.slice(0, 32768);
     if (!content.trim()) continue;
-    if (chars + content.length > 512 * 1024) { warnings.push('仅显示最近 512 KiB 对话文本'); break; }
+    if (!options.full && chars + content.length > 512 * 1024) { warnings.push('仅显示最近 512 KiB 对话文本'); break; }
     const created = message.info?.time?.created ?? message.time?.created;
     const timestamp = typeof created === 'number' && Number.isFinite(created) && Math.abs(created) < 8.64e15 ? new Date(created).toISOString() : null;
     messages.unshift({ role, text: content, timestamp }); chars += content.length;

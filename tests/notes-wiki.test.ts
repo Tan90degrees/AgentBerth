@@ -555,7 +555,7 @@ test('workbench sessions can be captured as immutable sources, exactly once', as
     return {};
   };
   const service = new WikiService({ store, config: config(), signal: new AbortController().signal, call });
-  assert.deepEqual(await service.listCaptureSessions(), [{ id: sessionId, title: '检索方案讨论', status: 'completed', agent: 'agent:test', agentName: 'agent:test', kind: 'acp' }]);
+  assert.deepEqual(await service.listCaptureSessions(), [{ id: sessionId, title: '检索方案讨论', status: 'completed', agent: 'agent:test', agentName: 'agent:test', kind: 'acp', projectId: '', projectName: '未命名工作区', projectPath: '', nativeSessionId: null }]);
   const first = await service.captureSession(sessionId);
   assert.equal(first.events, 2);
   assert.equal(first.skipped, false);
@@ -572,7 +572,7 @@ test('workbench sessions can be captured as immutable sources, exactly once', as
   await assert.rejects(offline.captureSession(sessionId), /不可用/);
 });
 
-test('inbox quarantines oversized files and never imports a half-written file', async t => {
+test('inbox fully imports large files and never imports a half-written file', async t => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
   const store = new WikiStore(root);
   const service = new WikiService({ store, config: config({ autoCompile: false }), signal: new AbortController().signal });
@@ -583,8 +583,8 @@ test('inbox quarantines oversized files and never imports a half-written file', 
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
 
   writeFileSync(path.join(inbox.dir, 'big.md'), 'x'.repeat(1024 * 1024 + 1));
-  await pollUntil(() => readdirSync(inbox.failedDir).length > 0, 'oversized file quarantined', 12000);
-  assert.equal(service.listSources().length, 0, 'a deterministic failure never becomes a source');
+  await pollUntil(() => service.listSources().some(item => item.title === 'big'), 'large file imported', 12000);
+  assert.equal(service.listSources().find(item => item.title === 'big')!.text.length, 1024 * 1024 + 1);
 
   const slow = path.join(inbox.dir, 'slow.md');
   writeFileSync(slow, '# 慢速写入\n\n前半段');
@@ -738,15 +738,15 @@ test('MCP wiki disclosure and paid model access require separate explicit opt-in
   }
 });
 
-test('inbox quarantines blank and oversized character content without silent truncation', async t => {
+test('inbox quarantines blank content while importing all long text', async t => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'berth-wiki-'));
   const calls: string[] = [];
   const inbox = startInbox({ root, onFile: async name => { calls.push(name); } });
   t.after(() => { inbox.stop(); rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
   writeFileSync(path.join(inbox.dir, 'empty.md'), '   \n');
   writeFileSync(path.join(inbox.dir, 'long.txt'), 'x'.repeat(200_001));
-  await pollUntil(() => readdirSync(inbox.failedDir).length === 2, 'invalid inbox files quarantined');
-  assert.deepEqual(calls, []);
+  await pollUntil(() => readdirSync(inbox.failedDir).length === 1 && calls.includes('long.txt'), 'blank rejected and long text imported');
+  assert.deepEqual(calls, ['long.txt']);
 });
 
 test('transport errors redact the entire API key before truncating details', async () => {
@@ -955,7 +955,7 @@ test('the pdf.js legacy build extracts text from a real minimal PDF', async () =
   assert.ok(result.text.includes('Hello AgentBerth PDF'));
 });
 
-test('PDF text limits include page separators and reject excess instead of saving a partial source', async t => {
+test('PDF text extraction preserves every page beyond the old text ceiling', async t => {
   const pdf = (texts: string[]) => {
     const objects = ['<</Type/Catalog/Pages 2 0 R>>', `<</Type/Pages/Kids[${texts.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}]/Count ${texts.length}>>`, '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>'];
     texts.forEach((text, i) => {
@@ -968,15 +968,16 @@ test('PDF text limits include page separators and reject excess instead of savin
   const exact = await extractPdfText(pdf(['A'.repeat(99999), 'B'.repeat(99999)]));
   assert.equal(exact.text.length, 200000);
   assert.ok(exact.text.endsWith('B'.repeat(99999)), 'the final page remains complete at the limit');
-  await assert.rejects(extractPdfText(pdf(['A'.repeat(100000), 'B'.repeat(99999)])), /200000.*拆分/);
+  assert.equal((await extractPdfText(pdf(['A'.repeat(100000), 'B'.repeat(99999)]))).text.length, 200001);
   const store = new WikiStore(temp(t));
   const controller = new AbortController(); t.after(() => controller.abort());
   const service = new WikiService({ store, config: config(), signal: controller.signal });
-  await assert.rejects(service.ingestPdfFile('long.pdf', pdf(['A'.repeat(110000), 'B'.repeat(110000), 'TAIL-MARKER'])), /200000.*拆分/);
-  assert.equal(store.listSources().length, 0, 'a rejected PDF cannot become an immutable truncated source');
+  await service.ingestPdfFile('long.pdf', pdf(['A'.repeat(110000), 'B'.repeat(110000), 'TAIL-MARKER']));
+  assert.ok(store.listSources()[0].text.endsWith('TAIL-MARKER'));
+  assert.ok(store.listSources()[0].text.length > 220000);
 });
 
-test('concurrent uploads and inbox imports dedupe atomically and preserve one complete source', async t => {
+test('concurrent identical PDF uploads dedupe atomically without losing the original to an equal-text inbox import', async t => {
   const store = new WikiStore(temp(t));
   const controller = new AbortController(); t.after(() => controller.abort());
   const text = '同一个完整 PDF 的内容';
@@ -987,10 +988,12 @@ test('concurrent uploads and inbox imports dedupe atomically and preserve one co
     service.appendPdfChunk(two.uploadId, 'eA==', true),
     service.ingestInboxFile('same.md', text),
   ]);
-  assert.equal(new Set(results.map(result => result!.id)).size, 1);
-  assert.equal(results.filter(result => !result!.skipped).length, 1);
-  assert.equal(store.listSources().length, 1);
-  assert.equal(store.listSources()[0].text, text);
+  assert.equal(results[0]!.id, results[1]!.id);
+  assert.notEqual(results[0]!.id, results[2]!.id);
+  assert.equal(results.filter(result => !result!.skipped).length, 2);
+  assert.equal(store.listSources().length, 2);
+  assert.equal(store.getSource(results[0]!.id)!.text, text);
+  assert.deepEqual([...store.assetBytes(store.getSource(results[0]!.id)!.document!.asset)], [120]);
 });
 
 test('disposing the plugin while PDF extraction runs prevents every import path from persisting its result', async t => {

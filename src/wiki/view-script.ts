@@ -82,14 +82,16 @@ export const notesWikiScript = String.raw`
       return '<div class="evidence-item"><div class="row" style="justify-content:space-between"><strong>'+esc(e.title||'素材')+'</strong>'+button('openSource','定位原文','',' data-id="'+esc(e.sourceId)+'" data-quote="'+esc(e.quote)+'"')+'</div><blockquote>'+esc(e.context||e.quote)+'</blockquote><small>引文：'+esc(e.quote)+'</small></div>';
     }).join('')+'</details>';
   }
-  function captureCard(){
-    var sessions=state.sessions||[];
-    var options=sessions.length?sessions.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.agentName||'会话')+' · '+esc(s.title)+' · '+(s.kind==='acp'?'ACP 对话':'导入历史')+'</option>'}).join(''):'<option value="">（暂无会话，或工作台状态暂不可用）</option>';
-    return card('自动采集',
-      '<p class="muted">把 <code>.md / .txt / .pdf</code> 文件放进插件目录的 <code>raw/inbox/</code>，会自动成为不可变素材；相同内容只导入一次，处理后归档到 <code>imported/</code>。ACP 对话与已导入历史的自定义 Agent 会话都可沉淀。</p>'+
-      '<label>选择要沉淀的 Agent 会话<select data-field="session">'+options+'</select></label>'+
-      '<div class="row" style="margin-top:8px">'+button('captureSession','存入素材','primary')+button('refreshSessions','刷新会话')+'</div><p id="captureStatus" class="muted"></p>');
+  function captureOptions(query){
+    query=(query||'').toLocaleLowerCase();var groups=new Map();
+    (state.sessions||[]).filter(function(s){return !query||[s.projectName,s.projectPath,s.title,s.id,s.nativeSessionId,s.agentName].join(' ').toLocaleLowerCase().includes(query)}).forEach(function(s){var key=s.projectId||s.projectName||'',group=groups.get(key);if(!group){group={label:(s.projectName||'未命名工作区')+(s.projectPath?' · '+s.projectPath:''),items:[]};groups.set(key,group)}group.items.push(s)});
+    return Array.from(groups.values()).map(function(group){return '<optgroup label="'+esc(group.label)+'">'+group.items.map(function(s){return '<option value="'+esc(s.id)+'">'+esc(s.title)+' · 会话 ID：'+esc(s.id)+(s.nativeSessionId?' · 原生 ID：'+esc(s.nativeSessionId):'')+' · '+esc(s.agentName||'Agent')+'</option>'}).join('')+'</optgroup>'}).join('')||'<option value="">（没有匹配的会话）</option>';
   }
+  function showCaptureSelection(){var select=field('session'),box=$('captureSelection');if(!select||!box)return;var session=(state.sessions||[]).find(function(s){return s.id===select.value});box.textContent=session?'工作区：'+session.projectName+'\n目录：'+session.projectPath+'\n会话：'+session.title+'\n会话 ID：'+session.id+'\n原生会话 ID：'+(session.nativeSessionId||'未关联'):''}
+  function captureCard(){return card('导入完整会话',
+    '<p class="muted">按工作区选择会话，全量导入已有记录，单条正文不截断。素材完整保存在本机，模型按片段渐进读取。</p><label>搜索工作区、会话名称或 ID<input id="captureQuery" placeholder="工作区 / 会话名称 / ID"></label>'+
+    '<label>工作区 → 会话名称 · 会话 ID<select data-field="session">'+captureOptions('')+'</select></label><pre id="captureSelection" class="muted" style="white-space:pre-wrap"></pre>'+
+    '<div class="row">'+button('captureSession','全量导入会话','primary')+button('refreshSessions','刷新会话')+'</div><p id="captureStatus" class="muted"></p><p class="muted">也可将 PDF、Markdown、文本放入 raw/inbox/ 自动导入。</p>');}
   // A Markdown field with a live preview toggle. Preview is rendered in place
   // (no card re-render) so the text being typed is never lost.
   function mdEditor(labelText,field,rows,value,max){
@@ -186,13 +188,12 @@ export const notesWikiScript = String.raw`
   function renderSource(){
     renderSourceList();var host=$('sourceView');
     if(state.newSource){
-      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文（最多约 3 万字）<textarea data-field="text" rows="14" maxlength="30000" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片（可选，自动压缩后逐张上传）<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>PDF 文档（可选，分片上传后自动提取文本）<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><p class="muted">保存后会保留原始素材；修改内容请新建一份，避免改变已有出处。</p><div class="row">'+button('saveSource','保存文字 / 图片并编译','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
+      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文（完整保存，模型分片读取）<textarea data-field="text" rows="14" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片（可选，自动压缩后逐张上传）<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>PDF 文档（可选，分片上传后自动提取文本）<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><p class="muted">保存后会保留原始素材；修改内容请新建一份，避免改变已有出处。</p><div class="row">'+button('saveSource','保存文字 / 图片并编译','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
       var input=field('images',host);
-      if(input)input.onchange=function(){var files=Array.prototype.slice.call(input.files||[]).slice(0,4),box=$('imagePreview');box.innerHTML='';files.forEach(function(file){compressImage(file,function(image){var img=document.createElement('img');img.src='data:'+image.mime+';base64,'+image.base64;img.className='img-preview';box.appendChild(img)})})};
+      if(input)input.onchange=function(){var box=$('imagePreview');box.innerHTML='';Array.from(input.files||[]).forEach(function(file){var image=document.createElement('img'),url=URL.createObjectURL(file);ux.urls.push(url);image.src=url;image.className='img-preview';image.alt=file.name;box.appendChild(image)})};
       var pdfInput=field('pdf',host);
       if(pdfInput)pdfInput.onchange=function(){
         var file=(pdfInput.files||[])[0];if(!file)return;
-        if(file.size>20*1024*1024){err('PDF 超过 20 MiB 上限，请拆分后导入');return}
         pdfInput.disabled=true;
         uploadPdf(file,function(value){var box=$('pdfProgress');if(box)box.textContent=value});
       };
@@ -406,22 +407,18 @@ export const notesWikiScript = String.raw`
     }
     if(action==='saveSource'){
       var sourceSnapshot=captureDraft($('sourceView'),'source:new');
-      var files=Array.prototype.slice.call((field('images')||{}).files||[]).slice(0,4);
+      var files=Array.prototype.slice.call((field('images')||{}).files||[]);
       var title=val('title'),text=val('text');
       if(!text.trim()&&!files.length){err('请填写正文或选择图片');return}
       var progress=function(value){var box=$('sourceProgress');if(box)box.textContent=value};
       progress('正在保存素材…');
       var savedSource=null;node.disabled=true;
-      call('add_source',{title:title,text:text,staging:files.length>0}).then(function(source){
+      saveCompleteSource(title,text,files.length>0).then(function(source){
         savedSource=source;
         var chain=Promise.resolve();
         files.forEach(function(file){
           chain=chain.then(function(){
-            return new Promise(function(resolve,reject){
-              compressImage(file,function(image){
-                call('add_image',{sourceId:source.id,mime:image.mime,base64:image.base64}).then(resolve,reject);
-              },reject);
-            });
+            return uploadOriginalImage(file,source.id);
           });
         });
         return chain.then(function(){return call('finalize_source',{id:source.id})}).then(function(){

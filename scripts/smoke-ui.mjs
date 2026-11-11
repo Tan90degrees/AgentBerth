@@ -1,3 +1,4 @@
+import {openNotifications} from './smoke-navigation.mjs';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile} from 'node:fs/promises';
 import path from 'node:path';
@@ -61,13 +62,13 @@ try{
   await until(()=>app.evaluate(()=>!!globalThis.uiFaults.release));await select(shell.id);
   await tabs.getByRole('tab',{name:'运行记录',exact:true}).click();await row.locator('.run-item').click();
   await page.getByRole('button',{name:'返回列表',exact:true}).waitFor();await app.evaluate(()=>globalThis.uiFaults.release());
-  const deletionToast=page.locator('.success-toast').filter({hasText:'已删除'});await deletionToast.waitFor();
+  const deletionToast=page.locator('.notification-item').filter({hasText:'已删除'}).first();await deletionToast.waitFor();
   assert.equal(await page.getByRole('button',{name:'返回列表',exact:true}).isVisible(),true,'Late deletion closed another session output');
-  await deletionToast.getByRole('button',{name:'关闭成功提示',exact:true}).click();
+  await deletionToast.getByRole('button',{name:'关闭提示',exact:true}).click();
   await tabs.getByRole('tab',{name:'终端',exact:true}).click();
-  // Success toasts stay available to keyboard users, then expire after focus leaves.
+  // New notifications collapse after five seconds without deleting history.
   await page.locator(`.project-branch[data-project-id="${project.id}"]>.project-row`).click({button:'right'});await page.getByRole('menuitem',{name:'复制项目路径',exact:true}).click();
-  const toast=page.locator('.success-toast');await toast.waitFor();await toast.getByRole('button',{name:'关闭成功提示',exact:true}).focus();await page.mouse.move(600,600);await page.waitForTimeout(4200);assert.equal(await toast.isVisible(),true);await page.locator('.quick-link').focus();await toast.waitFor({state:'hidden',timeout:6000});
+  const panel=page.locator('.notification-panel');await panel.waitFor();const box=await panel.boundingBox();assert.ok(box.y<200&&box.x>300,'Notifications belong in the top right');await page.screenshot({path:'test-results/notification-center.png'});await page.waitForTimeout(5200);assert.equal(await panel.isVisible(),false);await openNotifications(page);assert.ok((await panel.innerText()).includes('已复制'));await page.getByRole('button',{name:'收起通知中心',exact:true}).click();
   // ACP first load, refresh failures, queued events and stale responses.
   const program=await app.evaluate(()=>process.execPath),agent=await rpc('createAgent',{name:'UI ACP',command:program,acp:{executable:program,args:[path.resolve('tests/fixtures/acp-agent.cjs'),root,'--slow-init'],env:{ELECTRON_RUN_AS_NODE:'1'}}});
   const session=await rpc('createSession',{projectId:project.id,title:'UI ACP conversation',agent:agent.id});

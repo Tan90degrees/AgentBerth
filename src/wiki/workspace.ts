@@ -18,7 +18,7 @@ export class WikiWorkspace {
   private readonly cache = new Map<string, { stamp: string; value: unknown }>();
   constructor(readonly store: WikiStore) {}
   private folder(name: string): string { const dir = path.join(this.store.root, name); mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; }
-  private json<T>(file: string, fallback: T): T { try { const info = statSync(file), stamp = `${info.mtimeMs}:${info.ctimeMs}:${info.size}:${info.ino}`, cached = this.cache.get(file); if (cached?.stamp === stamp) return structuredClone(cached.value) as T; const value = JSON.parse(readFileSync(file, 'utf8')); if (this.cache.size >= 2000) this.cache.delete(this.cache.keys().next().value!); this.cache.set(file, { stamp, value }); return structuredClone(value) as T; } catch { return fallback; } }
+  private json<T>(file: string, fallback: T): T { try { const info = statSync(file), stamp = `${info.mtimeMs}:${info.ctimeMs}:${info.size}:${info.ino}`, cached = this.cache.get(file); if (cached?.stamp === stamp) return structuredClone(cached.value) as T; const value = JSON.parse(readFileSync(file, 'utf8')); if (this.cache.size >= 2000) this.cache.delete(this.cache.keys().next().value!); if (info.size <= 1024 * 1024) this.cache.set(file, { stamp, value }); return structuredClone(value) as T; } catch { return fallback; } }
   private write(file: string, value: string | Uint8Array): void {
     this.cache.delete(file);
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -27,12 +27,13 @@ export class WikiWorkspace {
     if (/^(?:wiki\/|raw\/|skills\/|drafts\/|meta\.json$)/.test(path.relative(this.store.root, file).replaceAll('\\', '/'))) this.store.invalidate();
   }
   private entries<T>(dir: string): T[] { return readdirSync(this.folder(dir)).filter(name => name.endsWith('.json')).flatMap(name => { const item = this.json<T | null>(path.join(this.folder(dir), name), null); return item ? [item] : []; }); }
+  editorDraft(key: string): EditorDraft | null { return this.json(path.join(this.folder('editor-drafts'), createHash('sha256').update(key).digest('hex') + '.json'), null); }
   editorDrafts(): EditorDraft[] { return this.entries<EditorDraft>('editor-drafts').sort((a, b) => b.at.localeCompare(a.at)); }
   saveEditorDraft(key: string, fields: Record<string, string> | null): void {
     if (!/^(?:page:|source:|skill:|review:|schema$|question$)/.test(key) || key.length > 150) throw new Error('草稿标识无效');
     const file = path.join(this.folder('editor-drafts'), createHash('sha256').update(key).digest('hex') + '.json');
     if (fields === null) { rmSync(file, { force: true }); return; }
-    if (Object.keys(fields).length > 20 || JSON.stringify(fields).length > 220000 || Object.entries(fields).some(([name, value]) => /key|password|token|secret/i.test(name) || typeof value !== 'string')) throw new Error('草稿字段无效或过长');
+    if (Object.keys(fields).length > 20 || Object.entries(fields).some(([name, value]) => /key|password|token|secret/i.test(name) || typeof value !== 'string')) throw new Error('草稿字段无效或过长');
     if (!existsSync(file) && this.editorDrafts().length >= 100) throw new Error('已有 100 份未保存草稿，请先处理旧草稿');
     this.write(file, JSON.stringify({ key, fields, at: new Date().toISOString() }));
   }
@@ -104,7 +105,7 @@ export class WikiWorkspace {
     let size = 0, count = 0;
     const files = unzipSync(bytes, { filter: file => {
       if (file.name === 'wiki-backup.json') { if (file.originalSize > 16384) throw new Error('备份清单过大'); return true; }
-      if (++count > 10000 || (size += file.originalSize) > 256 * 1024 * 1024 || file.originalSize > 24 * 1024 * 1024) throw new Error('备份展开后过大');
+      if (++count > 10000 || (size += file.originalSize) > 256 * 1024 * 1024) throw new Error('备份展开后过大');
       if (file.name !== 'wiki-backup.json' && !safePath(file.name)) throw new Error('备份包含不允许的路径：' + file.name);
       return true;
     } });

@@ -64,7 +64,7 @@ export function mount(ctx:Context,server:DaemonServer){
       case 'nativeHistories': return host.store.nativeHistories(request.params.sessionId, request.params);
       case 'discoverNativeHistories': return host.discoverHistories(request.params.sessionId, request.params);
       case 'nativeHistory': return host.previewHistory(request.params.sessionId, request.params.nativeSessionId, request.params.refresh);
-      case 'history': return host.store.history(request.params.sessionId);
+      case 'history': return request.params.full ? host.fullHistory(request.params.sessionId) : host.store.history(request.params.sessionId);
       case 'importHistory': return host.importHistory(request.params.sessionId, request.params.path);
       case 'refreshHistory': {
         const session = host.store.session(request.params.sessionId);

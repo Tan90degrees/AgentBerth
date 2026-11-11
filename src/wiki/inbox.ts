@@ -6,8 +6,6 @@ const IMPORTABLE = /\.(md|markdown|txt|json|pdf)$/i;
 const isPdf = (name: string) => /\.pdf$/i.test(name);
 /** Text files stay small; PDFs are allowed more room because text extraction
  * shrinks them by an order of magnitude. */
-const MAX_BYTES = 1024 * 1024;
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const DEBOUNCE_MS = 400;
 /** A file must stop changing for this long before it is considered complete. */
 const SETTLE_MS = 700;
@@ -100,7 +98,6 @@ export function startInbox(options: InboxOptions): InboxHandle {
           if (checks <= MAX_SETTLE_CHECKS) { rescan = true; continue; }
           throw new PermanentInboxError('文件长时间未写完');
         }
-        if (info.size > (isPdf(name) ? MAX_PDF_BYTES : MAX_BYTES)) throw new PermanentInboxError(isPdf(name) ? '文件超过 20 MiB 上限' : '文件超过 1 MiB 上限');
         settling.delete(name);
         const buffer = readFileSync(file);
         let text: string;
@@ -113,7 +110,6 @@ export function startInbox(options: InboxOptions): InboxHandle {
           throw new PermanentInboxError(String(error instanceof Error ? error.message : error).slice(0, 200));
         }
         if (!text.trim()) throw new PermanentInboxError('文件内容为空');
-        if (text.length > 200_000) throw new PermanentInboxError('素材超过 200000 字符上限，请拆分后导入');
         if (!isPdf(name) || !options.onPdf) await options.onFile(name, text);
         if (stopped) return;
         const after = statSync(file);

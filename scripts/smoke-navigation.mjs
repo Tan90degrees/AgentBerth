@@ -24,3 +24,8 @@ export async function openRightSidebar(page,panel){
   }
   await tabs.getByRole('tab',{name:panel,exact:true}).click();
 }
+
+export async function selectProjectForSessions(page,button=page.locator('.projects .project-item')){
+  await button.click();const toggle=button.locator('..').locator('.project-toggle');if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
+}
+export async function openNotifications(page){const button=page.getByRole('button',{name:/^通知中心/});if(await button.getAttribute('aria-expanded')!=='true')await button.click();await page.locator('.notification-panel').waitFor();}

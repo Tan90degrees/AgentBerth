@@ -150,7 +150,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
       totalCharacters: source.text.length,
       document: source.document ? { ...source.document, ranges: source.document.ranges.slice(0, 30) } : undefined,
       vision: byteTruncate(source.vision, 20 * 1024),
-      images: source.images.slice(0, 40),
+      images: source.images.slice(0, 6), imageCount: source.images.length,
     } : null;
   });
   add('add_source', '新增原始素材（不可变）', schema({ title: field('string'), text: field('string'), staging: field('boolean') }, ['text']), params => service.addSource({ title: text(params, 'title'), text: text(params, 'text'), staging: bool(params, 'staging') }));
@@ -162,6 +162,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   // uploaded as base64 chunks and parsed (text extraction) on the last one.
   add('pdf_upload_start', '开始一次 PDF 分片上传', schema({ title: field('string') }), params => service.beginPdfUpload(text(params, 'title')));
   add('pdf_upload_chunk', '追加 PDF 分片（base64 ≤ 48 KiB），done=true 时完成解析导入', schema({ uploadId: field('string'), base64: field('string'), done: field('boolean') }, ['uploadId', 'base64']), params => service.appendPdfChunk(text(params, 'uploadId'), text(params, 'base64'), bool(params, 'done')));
+  add('pdf_upload_finish', '后台解析完整 PDF', schema({ uploadId: field('string') }, ['uploadId']), params => service.finishPdfUpload(text(params, 'uploadId')));
   add('pdf_upload_cancel', '取消 PDF 上传', schema({ uploadId: field('string') }, ['uploadId']), params => ({ cancelled: service.cancelPdfUpload(text(params, 'uploadId')) }));
 
   // Automatic capture: watch raw/inbox and import finished workbench sessions.
@@ -171,7 +172,8 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     failedDir: inbox?.failedDir ?? path.join(api.dataDirectory, 'raw', 'inbox', 'failed'),
     pending: inbox?.pending ?? [], archived: inbox?.archived ?? 0, watching: !!inbox,
   }));
-  add('list_capture_sessions', '列出可沉淀为素材的工作台会话（ACP 对话与已导入历史的自定义 Agent 会话）', schema({}), () => service.listCaptureSessions());
+  add('list_capture_sessions', '列出可沉淀为素材的工作台会话（ACP 对话与已导入历史的自定义 Agent 会话）', schema(paging), async params => pageSlice(await service.listCaptureSessions(), params));
+  add('capture_session_start', '后台全量导入会话', schema({ sessionId: field('string') }, ['sessionId']), params => service.beginCaptureSession(text(params, 'sessionId')));
   add('capture_session', '把一次 Agent 会话沉淀成不可变素材', schema({ sessionId: field('string') }, ['sessionId']), params => service.captureSession(text(params, 'sessionId')));
 
   // Skills (CRUD over Markdown workflow templates)

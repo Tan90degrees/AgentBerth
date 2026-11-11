@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -211,6 +212,31 @@ try {
   await until(async () => (await frame.locator('#pageView').innerText()).includes('原始出处'), 'page provenance rendered');
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-window-pages.png' });
   step('view tabs render live daemon data');
+  step('capture selector exposes workspace and session identity');
+  const captureProject = await rpc('createProject', { name: '知识库会话工作区', path: folder });
+  const agentProgram = await application.evaluate(() => process.execPath);
+  const captureAgent = await rpc('createAgent', { name: 'Wiki capture fixture', command: agentProgram, acp: { executable: agentProgram, args: [path.resolve('tests/fixtures/acp-agent.cjs'), folder], env: { ELECTRON_RUN_AS_NODE: '1' } } });
+  const captureSession = await rpc('createSession', { projectId: captureProject.id, title: 'UI 会话导入验证', agent: captureAgent.id });
+  await rpc('start', { sessionId: captureSession.id, cols: 80, rows: 24 });
+  await until(async () => (await rpc('acpSnapshot', { sessionId: captureSession.id, limit: 1 })).phase === 'ready', 'capture ACP connected');
+  await rpc('acpSend', { sessionId: captureSession.id, requestId: randomUUID(), text: 'Wiki 全量会话导入验证' });
+  await until(async () => (await rpc('acpSnapshot', { sessionId: captureSession.id, limit: 1 })).phase === 'ready', 'capture conversation finished');
+  await frame.locator('.tabs [data-tab="sources"]').click();
+  await frame.locator('[data-action="showCapture"]').click();
+  await frame.locator('[data-action="refreshSessions"]').click();
+  await until(async () => await frame.locator('[data-field="session"] option[value="' + captureSession.id + '"]').count() > 0, 'capture session listed');
+  await frame.locator('#captureQuery').fill(captureSession.id);
+  await frame.locator('[data-field="session"]').selectOption(captureSession.id);
+  const selection = await frame.locator('#captureSelection').innerText();
+  for (const value of ['知识库会话工作区', 'UI 会话导入验证', captureSession.id]) assert.ok(selection.includes(value), value);
+  await frame.locator('[data-action="captureSession"]').click();
+  await until(async () => (await call('list_sources')).some(source => source.title.includes('UI 会话导入验证')), 'background full conversation import completed');
+  const capturedSource = (await call('list_sources')).find(source => source.title.includes('UI 会话导入验证'));
+  assert.ok((await call('get_source', { id: capturedSource.id })).text.includes('Wiki 全量会话导入验证'));
+  await frame.locator('.tabs [data-tab="wiki"]').click();
+  await frame.locator('#pageList [data-action="openPage"][data-slug="向量检索"]').click();
+  await until(async () => (await frame.locator('#pageView').innerText()).includes('原始出处'), 'return to selected page');
+
 
   // Activity bar: icons carry text labels, and re-clicking the selected icon
   // toggles the sidebar (the second click collapses, the third restores).

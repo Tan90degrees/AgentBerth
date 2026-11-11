@@ -15,6 +15,7 @@ const historyResult = z.object({
   messages: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().max(32768), timestamp: z.string().max(100).nullable().default(null) }).strict()).max(1000),
   warnings: z.array(z.string().max(1000)).max(20).default([]),
 }).strict();
+const fullHistoryResult = historyResult.extend({ messages: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string(), timestamp: z.string().max(100).nullable().default(null) }).strict()) });
 const resumeResult = z.object({ version: z.literal(1), command: z.string().max(4096).refine(value => !!value.trim() && !/[\r\n\x00]/.test(value)) }).strict();
 const listResult = z.object({
   version: z.literal(1), items: z.array(z.object({ cwd: z.string().max(4096), nativeSessionId: nativeSessionIdSchema, title: z.string().min(1).max(200), updatedAt: z.string().max(100).refine(value => Number.isFinite(Date.parse(value))).nullable().default(null), path: z.string().max(4096).nullable().default(null) }).strict()).max(50),
@@ -26,18 +27,18 @@ export class AgentPlugins {
   private closing = false;
   constructor(private timeout = 10000) {}
 
-  private call(agent: AgentDefinition, method: 'history' | 'resume' | 'describe' | 'list', session: Session | null, projectPath: string, file: string | null, pagination?: HistoryQuery): Promise<unknown> {
+  private call(agent: AgentDefinition, method: 'history' | 'resume' | 'describe' | 'list', session: Session | null, projectPath: string, file: string | null, pagination?: HistoryQuery, full = false): Promise<unknown> {
     if (this.closing) return Promise.reject(new Error('后台正在退出'));
     if (!agent.plugin || (method !== 'describe' && !agent.plugin[method])) return Promise.reject(new Error('此 Agent 未启用相应插件能力'));
     if (!path.isAbsolute(agent.plugin.executable)) return Promise.reject(new Error('插件程序须使用完整路径'));
     if (this.active.size >= 4) return Promise.reject(new Error('插件正在处理其他请求，请稍后重试'));
     const controller = new AbortController();
-    const request = method === 'describe' ? { version: 1, method, agent: { id: agent.id, name: agent.name } } : { version: 1, method, agent: { id: agent.id, name: agent.name }, projectPath, session: { id: session!.id, title: session!.title, command: session!.command, nativeSessionId: session!.nativeSessionId }, path: file, ...(method === 'list' ? { pagination: { cursor: pagination!.cursor, limit: pagination!.limit, query: pagination!.query } } : {}) };
-    const task = this.run(agent.plugin, request, projectPath, controller.signal).finally(() => this.active.delete(controller));
+    const request = method === 'describe' ? { version: 1, method, agent: { id: agent.id, name: agent.name } } : { version: 1, method, agent: { id: agent.id, name: agent.name }, projectPath, session: { id: session!.id, title: session!.title, command: session!.command, nativeSessionId: session!.nativeSessionId }, path: file, ...(full && method === 'history' ? { full: true } : {}), ...(method === 'list' ? { pagination: { cursor: pagination!.cursor, limit: pagination!.limit, query: pagination!.query } } : {}) };
+    const task = this.run(agent.plugin, request, projectPath, controller.signal, full).finally(() => this.active.delete(controller));
     this.active.set(controller, task);
     return task;
   }
-  private run(plugin: NonNullable<AgentDefinition['plugin']>, request: unknown, cwd: string, signal: AbortSignal): Promise<unknown> {
+  private run(plugin: NonNullable<AgentDefinition['plugin']>, request: unknown, cwd: string, signal: AbortSignal, full = false): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const node = plugin.runtime === 'node';
       const child = spawn(node ? process.execPath : plugin.executable, node ? [plugin.executable, ...plugin.args] : plugin.args, { cwd, env: node ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -69,9 +70,9 @@ export class AgentPlugins {
       };
       const abort = () => fail('插件请求已取消，后台正在退出');
       signal.addEventListener('abort', abort, { once: true });
-      const timer = setTimeout(() => fail('插件请求超时（10 秒），请检查插件程序'), this.timeout);
-      child.stdout.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) fail('插件输出超过 2 MiB'); else output.push(chunk); });
-      child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString('utf8')).slice(-4096); bytes += chunk.length; if (bytes > 2 * 1024 * 1024) fail('插件输出超过 2 MiB'); });
+      const timer = setTimeout(() => fail('插件请求超时，请检查插件程序'), full ? Math.max(this.timeout,120000) : this.timeout);
+      child.stdout.on('data', (chunk: Buffer) => { bytes += chunk.length; if (!full && bytes > 2 * 1024 * 1024) fail('插件输出超过 2 MiB'); else output.push(chunk); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString('utf8')).slice(-4096); bytes += chunk.length; if (!full && bytes > 2 * 1024 * 1024) fail('插件输出超过 2 MiB'); });
       child.on('error', error => { failure ??= new Error(`无法启动插件：${error.message}`); });
       child.stdin.on('error', () => { /* Early exit is reported by close below. */ });
       child.on('close', code => {
@@ -116,20 +117,20 @@ export class AgentPlugins {
     }
     return { items: result.items.map(({ cwd: _cwd, ...item }) => item), nextCursor: result.nextCursor, ...(result.total === undefined ? {} : { total: result.total }), warnings: result.warnings };
   }
-  async history(agent: AgentDefinition, session: Session, projectPath: string, file: string | null): Promise<History> {
+  async history(agent: AgentDefinition, session: Session, projectPath: string, file: string | null, full = false): Promise<History> {
     let canonical: string | null = null;
-    if (file) { canonical = await realpath(file); const info = await stat(canonical); if (!info.isFile() || info.size > 16 * 1024 * 1024) throw new Error('对话文件须小于 16 MiB'); }
-    const parsed = historyResult.safeParse(await this.call(agent, 'history', session, projectPath, canonical));
+    if (file) { canonical = await realpath(file); const info = await stat(canonical); if (!info.isFile() || !full && info.size > 16 * 1024 * 1024) throw new Error('对话文件须小于 16 MiB'); }
+    const parsed = (full ? fullHistoryResult : historyResult).safeParse(await this.call(agent, 'history', session, projectPath, canonical, undefined, full));
     if (!parsed.success) throw new Error('插件历史返回格式无效，请检查 version、cwd、会话 ID 与 messages');
     if (!await matchesProject(parsed.data.cwd, projectPath)) throw new Error('插件对话记录的工作目录与当前项目不一致');
     if (session.nativeSessionId && parsed.data.nativeSessionId !== session.nativeSessionId && !file) throw new Error('插件返回的会话 ID 与已关联会话不一致');
     // The selected file is authoritative; a plugin cannot replace it with another file.
-    if (!canonical && parsed.data.path) { canonical = await realpath(parsed.data.path); const info = await stat(canonical); if (!info.isFile() || info.size > 16 * 1024 * 1024) throw new Error('插件对话文件须小于 16 MiB'); }
+    if (!canonical && parsed.data.path) { canonical = await realpath(parsed.data.path); const info = await stat(canonical); if (!info.isFile() || !full && info.size > 16 * 1024 * 1024) throw new Error('插件对话文件须小于 16 MiB'); }
     let chars = 0;
     const messages: History['messages'] = [];
     const warnings = [...parsed.data.warnings];
     for (const message of [...parsed.data.messages].reverse()) {
-      if (chars + message.text.length > 512 * 1024) { warnings.push('仅显示最近 512 KiB 对话文本'); break; }
+      if (!full && chars + message.text.length > 512 * 1024) { warnings.push('仅显示最近 512 KiB 对话文本'); break; }
       messages.unshift(message); chars += message.text.length;
     }
     return { messages, warnings, path: canonical, nativeSessionId: parsed.data.nativeSessionId };

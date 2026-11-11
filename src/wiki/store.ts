@@ -36,7 +36,7 @@ export class WikiStore {
     if (hit?.stamp === stamp) return structuredClone(hit.value) as T;
     const value = read();
     if (this.cache.size >= 2000) this.cache.delete(this.cache.keys().next().value!);
-    this.cache.set(file, { stamp, value });
+    if (info.size <= 1024 * 1024) this.cache.set(file, { stamp, value });
     return structuredClone(value);
   }
   private readonly wikiDir: string;
@@ -118,15 +118,15 @@ export class WikiStore {
   }
   hideSource(id: string): void { rmSync(this.file(this.rawDir, id, '.json'), { force: true }); this.invalidate(); }
   addDocument(bytes: Uint8Array): string {
-    if (bytes.length > 20 * 1024 * 1024) throw new Error('PDF 超过 20 MiB');
     const name = randomUUID() + '.pdf'; writeFileSync(path.join(this.assetDir, name), bytes, { mode: 0o600 }); return name;
   }
+  assetFile(name: string): string { return this.file(this.assetDir, name, ''); }
   assetBytes(name: string): Uint8Array { return new Uint8Array(readFileSync(this.file(this.assetDir, name, ''))); }
   addImage(mime: string, base64: string): string {
     const ext = IMAGE_TYPES[mime];
     if (!ext) throw new Error('图片仅支持 PNG / JPEG / WebP / GIF');
     const buffer = Buffer.from(String(base64 ?? ''), 'base64');
-    if (!buffer.length || buffer.length > 8 * 1024 * 1024) throw new Error('单张图片不能超过 8 MiB');
+    if (!buffer.length) throw new Error('图片为空');
     const name = randomUUID() + '.' + ext;
     writeFileSync(path.join(this.assetDir, name), buffer, { mode: 0o600 });
     return name;
@@ -135,11 +135,12 @@ export class WikiStore {
     const ext = path.extname(name).slice(1);
     const mime = Object.keys(IMAGE_TYPES).find(key => IMAGE_TYPES[key] === ext);
     const file = this.file(this.assetDir, name, '');
-    if (!mime || !existsSync(file) || statSync(file).size > 8 * 1024 * 1024) return null;
+    if (!mime || !existsSync(file)) return null;
     return { mime, base64: readFileSync(file).toString('base64') };
   }
-  sourceHash(source: Pick<WikiSource, 'title' | 'text' | 'images' | 'vision'>): string {
-    return createHash('sha256').update(JSON.stringify([source.text, source.images])).digest('hex').slice(0, 32);
+  sourceHash(source: Pick<WikiSource, 'title' | 'text' | 'images' | 'vision'> & { document?: { hash?: string } }): string {
+    const identity: (string | string[])[] = [source.text, source.images]; if (source.document?.hash) identity.push(source.document.hash);
+    return createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 32);
   }
 
   // ---- Wiki pages -------------------------------------------------------

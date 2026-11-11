@@ -22,6 +22,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   const open = () => {
     const dom = new JSDOM('<!doctype html><body>' + notesWikiView, { runScripts: 'outside-only', url: 'http://wiki.test' });
     (dom.window as unknown as { agentberth: unknown }).agentberth = { call: async (name: string, params: Record<string, unknown> = {}) => { const handler = commands.get(name); if (!handler) throw new Error('Unknown command ' + name); return handler(params); } };
+    Object.assign(dom.window, { TextEncoder, TextDecoder });
     dom.window.Element.prototype.scrollIntoView = () => {};
     const script = notesWikiView.slice(notesWikiView.indexOf('<script>') + 8, notesWikiView.lastIndexOf('</script>'));
     dom.window.eval(script); views.push(dom); return dom;
@@ -228,6 +229,33 @@ test('saving a source clears its recovery draft even when model compilation is u
   await until(() => !service.workspace.editorDrafts().some(draft => draft.key === 'source:new'), 'saved draft cleared');
   click(dom, '#newSource');
   assert.equal(dom.window.document.querySelector<HTMLTextAreaElement>('#sourceView [data-field="text"]')!.value, '', 'the next source starts empty');
+});
+
+test('manual material entry uploads the entire large Unicode text through bounded transport chunks', async t => {
+  const { commands, service, open } = setup(t), append = commands.get('source_text_chunk')!; let chunks = 0;
+  commands.set('source_text_chunk', params => { chunks++; assert.ok(Buffer.from(String(params.base64), 'base64').length <= 36 * 1024); return append(params); });
+  const dom = open(); click(dom, '.tabs [data-tab="sources"]'); click(dom, '#newSource');
+  const text = '第一行\n' + '中'.repeat(240000) + '\n完整末尾';
+  input(dom, '#sourceView [data-field="title"]', '完整长素材'); input(dom, '#sourceView [data-field="text"]', text);
+  assert.equal(dom.window.document.querySelector<HTMLTextAreaElement>('#sourceView [data-field="text"]')!.hasAttribute('maxlength'), false);
+  click(dom, '[data-action="saveSource"]');
+  await until(() => service.listSources().length > 0, 'large material saved');
+  assert.equal(service.listSources()[0].text, text); assert.ok(chunks > 10);
+});
+
+test('capture selector includes every session and exposes workspace, title and full IDs', async t => {
+  const { commands, open } = setup(t);
+  const sessions = Array.from({ length: 63 }, (_, index) => ({ id: 'session-' + index, title: '会话名称 ' + index, projectId: index < 30 ? 'workspace-a' : 'workspace-b', projectName: index < 30 ? '研发工作区' : '测试工作区', projectPath: '/example/' + (index < 30 ? 'a' : 'b'), nativeSessionId: 'native-' + index, agentName: 'Agent', kind: 'history', status: 'idle' }));
+  commands.set('list_capture_sessions', params => sessions.slice(Number(params.offset ?? 0), Number(params.offset ?? 0) + Number(params.limit ?? 50)));
+  const dom = open(); await until(() => dom.window.document.querySelector('#pageList')!.textContent!.includes('还没有页面'), 'initial data loaded');
+  click(dom, '.tabs [data-tab="sources"]'); click(dom, '[data-action="showCapture"]');
+  await until(() => dom.window.document.querySelectorAll('[data-field="session"] option').length === 63, 'all session pages loaded');
+  assert.equal(dom.window.document.querySelectorAll('[data-field="session"] option').length, 63);
+  assert.equal(dom.window.document.querySelectorAll('[data-field="session"] optgroup').length, 2);
+  input(dom, '#captureQuery', 'native-62');
+  assert.equal(dom.window.document.querySelectorAll('[data-field="session"] option').length, 1);
+  const detail = dom.window.document.querySelector('#captureSelection')!.textContent!;
+  for (const value of ['测试工作区', '会话名称 62', 'session-62', 'native-62']) assert.ok(detail.includes(value), value);
 });
 
 test('body search and question history paginate beyond their previous sidebar limits', async t => {
