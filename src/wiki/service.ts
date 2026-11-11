@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { WikiTransfers } from './transfers';
-import { materialSegments, partitionProposalPages } from './material';
+import { materialSegments, materialWindow, partitionProposalPages } from './material';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -780,13 +780,14 @@ export class WikiService {
     }));
   }
   /** Full page plus resolved provenance. Read-only, safe to expose over MCP. */
-  readForAgent(slug: string) {
+  readForAgent(slug: string, offset = 0, limit = 12000) {
     const page = this.store.getPage(slug);
     if (!page) return null;
     const inbound = this.store.listPages().filter(other => other.slug !== slug && extractLinks(other.body).includes(slug)).map(other => other.slug);
+    const { text: body, ...cursor } = materialWindow(page.body, offset, limit);
     return {
       slug: page.slug, title: page.title, summary: page.summary, kind: page.kind, updatedAt: page.updatedAt,
-      body: byteTruncate(page.body, 60 * 1024), backlinks: inbound.slice(0, 100),
+      body, ...cursor, backlinks: inbound.slice(0, 100),
       sources: page.sources, excerpts: resolveExcerpts(page, this.store.listSources(), 6),
     };
   }

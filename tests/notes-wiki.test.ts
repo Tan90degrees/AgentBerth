@@ -518,6 +518,30 @@ test('MCP exposes only read-only wiki commands and tolerates the injected agentI
   }
   assert.equal(seen, 1200);
 
+  // Agents can discover every source, then follow bounded cursors through the
+  // complete original instead of silently receiving the first 60 KiB.
+  const fullMaterial = '中文素材😀'.repeat(16000) + '完整读取尾标';
+  for (let i = 0; i < 104; i++) evidenceStore.saveSource({ id: 'progressive-' + i, title: '材料 ' + i,
+    text: i ? '短素材' : fullMaterial, images: [], vision: '', compiled: false, hash: '', createdAt: '' });
+  const discovered = new Set<string>();
+  for (let offset = 0;;) {
+    const batch = await byName.get('wiki_sources')!.handler({ offset, limit: 17 }) as { items: { id: string }[]; next: number; hasMore: boolean; total: number };
+    assert.equal(batch.total, 105); batch.items.forEach(item => discovered.add(item.id));
+    if (!batch.hasMore) break;
+    assert.ok(batch.next > offset); offset = batch.next;
+  }
+  assert.equal(discovered.size, 105);
+  let original = '';
+  for (let offset = 0;;) {
+    const window = await byName.get('wiki_source')!.handler({ id: 'progressive-0', offset }) as { text: string; next: number; hasMore: boolean; total: number };
+    assert.equal(window.total, fullMaterial.length); assert.ok(Buffer.byteLength(window.text) <= 48000); original += window.text;
+    if (!window.hasMore) break;
+    assert.ok(window.next > offset); offset = window.next;
+  }
+  assert.equal(original, fullMaterial);
+  const located = await byName.get('wiki_source')!.handler({ id: 'progressive-0', quote: '完整读取尾标' }) as { text: string };
+  assert.ok(located.text.includes('完整读取尾标'));
+
 });
 
 test('inbox watcher imports dropped files once and archives them', async t => {

@@ -6,6 +6,7 @@ import type { ServiceOptions } from './service';
 import { WikiService } from './service';
 import { WikiStore } from './store';
 import { registerWorkspaceCommands } from './commands-ux';
+import { materialWindow } from './material';
 import type { WikiConfig } from './types';
 
 type Params = Record<string, unknown>;
@@ -250,21 +251,24 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('test_connection', '测试模型连通性', schema({}), () => service.testConnection());
 
   // ---- MCP tools: read-only surface for workbench Agents -----------------
-  add('wiki_index', 'MCP：读取 index.md 导航索引与页面总数，查询知识库时先用它定位页面',
-    mcpSchema({}), () => ({ index: byteTruncate(service.indexText(), 32 * 1024), pages: service.listPages().length }), true);
+  const windowFields = { offset: field('integer', { minimum: 0 }), limit: field('integer', { minimum: 2, maximum: 12000 }) };
+  add('wiki_index', 'MCP：分页读取导航索引；hasMore 时用 next 作为 offset 继续读取',
+    mcpSchema(windowFields), params => { const { text: index, ...cursor } = materialWindow(service.indexText(), number(params, 'offset'), number(params, 'limit', 12000)); return { index, ...cursor, pages: service.listPages().length }; }, true);
   add('wiki_search', 'MCP：按关键词检索 wiki 页面，返回摘要与命中片段；再用 wiki_read 读取全文',
     mcpSchema({ query: field('string', { maxLength: 500 }), limit: field('integer', { minimum: 1, maximum: 20 }) }, ['query']),
     params => service.searchSnippets(text(params, 'query'), Math.max(1, Math.min(20, number(params, 'limit', 8) || 8))), true);
-  add('wiki_read', 'MCP：读取单页全文、反向链接与可验证的原始素材出处',
-    mcpSchema({ slug: field('string') }, ['slug']), params => service.readForAgent(text(params, 'slug')), true);
-  add('wiki_sources', 'MCP：列出不可变的原始素材清单',
-    mcpSchema({}), () => service.listSources().slice(0, 100).map(source => ({
-      id: source.id, title: source.title, createdAt: source.createdAt, compiled: source.compiled, characters: source.text.length,
-    })), true);
-  add('wiki_source', 'MCP：读取一份原始素材全文（可用 quote 定位证据片段）',
-    mcpSchema({ id: field('string') }, ['id']), params => {
+  add('wiki_read', 'MCP：分页读取页面、反向链接与出处；hasMore 时用 next 作为 offset 继续',
+    mcpSchema({ slug: field('string'), ...windowFields }, ['slug']), params => service.readForAgent(text(params, 'slug'), number(params, 'offset'), number(params, 'limit', 12000)), true);
+  add('wiki_sources', 'MCP：分页列出全部原始素材；hasMore 时用 next 作为 offset 继续',
+    mcpSchema(paging), params => { const sources = service.listSources(), offset = Math.max(0, number(params, 'offset')), items = pageSlice(sources, params).map(source => ({
+      id: source.id, title: source.title, createdAt: source.createdAt, compiled: source.compiled, characters: source.text.length, images: source.images.length,
+    })), next = offset + items.length; return { items, offset, next, total: sources.length, hasMore: next < sources.length }; }, true);
+  add('wiki_source', 'MCP：按需读取完整原始素材，quote 可定位；hasMore 时用 next 作为 offset 继续。section=vision 可读取图片理解',
+    mcpSchema({ id: field('string'), ...windowFields, quote: field('string'), section: field('string', { enum: ['text', 'vision'] }) }, ['id']), params => {
       const source = service.getSource(text(params, 'id'));
-      return source ? { id: source.id, title: source.title, createdAt: source.createdAt, text: byteTruncate(source.text, 60 * 1024) } : null;
+      if (!source) return null;
+      const section = params.section === 'vision' ? 'vision' : 'text', content = source[section], quote = text(params, 'quote'), found = quote ? content.indexOf(quote) : -1;
+      return { id: source.id, title: source.title, createdAt: source.createdAt, section, images: source.images.length, ...materialWindow(content, found >= 0 ? Math.max(0, found - 150) : number(params, 'offset'), number(params, 'limit', 12000)) };
     }, true);
   add('wiki_status', 'MCP：读取知识库规模与模型配置状态',
     mcpSchema({}), () => {
