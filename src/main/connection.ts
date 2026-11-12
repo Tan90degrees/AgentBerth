@@ -1,5 +1,5 @@
 import {ACP_MAX_STARTUP_TIMEOUT_MS} from '../shared/acp';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -134,7 +134,7 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   const runtime = runtimeFile(directory);
   if (runtime) {
     let candidate: DaemonConnection | null = null;
-    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!([44,45,46,47,48,49,50,51,52,53,54,55,56,57].includes(state.apiVersion)&&API_VERSION===58))throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
+    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!([44,45,46,47,48,49,50,51,52,53,54,55,56,57,58].includes(state.apiVersion)&&API_VERSION===59))throw new Error('运行中的后台版本与当前架构不同；请完全退出旧版并清除旧数据目录后重新启动。'); return candidate; }
     catch (error) {
       candidate?.close();
       if(String(error).includes('运行中的后台版本与当前架构不同'))throw error;
@@ -148,6 +148,11 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   });
   let spawnError: Error | null = null;
   child.once('error', error => { spawnError = error; });
+  child.once('exit',(code,signal)=>{
+    // Exit codes distinguish a JS exception from native ConPTY termination.
+    // PID tags keep a late exit from being attributed to a replacement daemon.
+    try {const current=runtimeFile(directory);if(!current||current.pid===child.pid)writeFileSync(path.join(directory,'daemon-exit.json'),JSON.stringify({pid:child.pid,code,signal,time:new Date().toISOString()}),{mode:0o600});}catch{}
+  });
   child.unref();
   // The spawned daemon writes its own startup error before exiting; match its
   // PID to prevent a stale error from a previous launch masking the real cause.

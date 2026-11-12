@@ -29,6 +29,7 @@ import { NativeDiscovery, unambiguousNewHistory, type NativeCandidate } from './
 import { RunLog } from './logs';
 import { readHistory } from './history';
 import { terminateTree } from './processes';
+import { protectWindowsPty } from './windows-pty';
 import { trackMouseEncoding } from '../shared/terminal-modes';
 import { RemoteTerminal, sshHosts, type TerminalProcess } from './remote';
 import { RemoteActivity, remoteKeys } from './remote-activity';
@@ -54,7 +55,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 interface LiveTerminal {
   run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal | SshTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
-  seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean;
+  seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean; failure?: string;
   log: RunLog | null;
   output: string[]; outputBytes: number; outputTimer: NodeJS.Timeout | null; finishing: Promise<void> | null;
 }
@@ -421,7 +422,7 @@ export class DaemonServer {
 
   private terminal(sessionId: string, runId?: string): LiveTerminal {
     const live = this.live.get(sessionId);
-    if (!live || live.closed) throw new RemoteOperationError('SESSION_NOT_OPEN','终端已结束，请重新启动',{sessionId});
+    if (!live || live.closed || live.failure) throw new RemoteOperationError('SESSION_NOT_OPEN',live?.failure??'终端已结束，请重新启动',{sessionId});
     if (runId && live.run.id !== runId) throw new RemoteOperationError('STALE_RUN','终端运行实例已变化，请重新连接',{sessionId,runId});
     return live;
   }
@@ -722,6 +723,16 @@ export class DaemonServer {
     const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
     this.live.set(sessionId, live);
+    const ptyFailure=(error:unknown)=>{
+      if(live.closed||live.stopping||live.failure)return;
+      live.failure='终端通道失败：'+String(error);
+      this.logError(live.failure);
+      // End only this run through the existing owned-process cleanup. Never
+      // continue accepting input or silently replay it after a broken pipe.
+      void this.stop(sessionId).catch(error=>this.logError(error));
+    };
+    try {if(!remote)protectWindowsPty(child,ptyFailure);}
+    catch(error){live.failure='终端通道初始化失败：'+String(error);await this.stop(sessionId);throw error;}
     if (remote && remoteOwner === 'agent') {
       // Allow the resumed MCP to reclaim its exact connection while SSH is
       // authenticating; never overwrite a client that has already reclaimed it.
@@ -877,7 +888,7 @@ export class DaemonServer {
         try { live.pty.kill(); } catch (error) { this.logError(error); }
       }
       const screen = await this.screen(live, !!live.run.recordOutput);
-      this.store.finish(live.run.id, live.stopping ? 'stopped' : 'exited', exitCode, null, screen.snapshot, screen.seq, screen.cols, screen.rows);
+      this.store.finish(live.run.id, live.failure ? 'failed' : live.stopping ? 'stopped' : 'exited', exitCode, live.failure??null, screen.snapshot, screen.seq, screen.cols, screen.rows);
       if (this.live.get(sessionId) === live) this.live.delete(sessionId);
       live.terminal.dispose();
       this.changed();
