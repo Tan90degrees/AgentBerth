@@ -79,12 +79,22 @@ test('capture panel shows actual inbox state and preserves recoverable session e
   assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /正在监听.*待处理 1.*已归档 2.*失败 1/s);
   assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /invalid PDF/);
   assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /素材仍会保存/);
+  const pathInput = dom.window.document.querySelector<HTMLInputElement>('#inboxPath')!;
+  pathInput.focus(); pathInput.setSelectionRange(0, 12);
   click(dom, '[data-action="scanInbox"]'); await until(() => scans === 1, 'manual scan invoked'); await settle();
+  assert.equal(dom.window.document.querySelector('#inboxPath'), pathInput, 'unchanged polling must preserve the directory input');
+  assert.equal(pathInput.selectionEnd, 12, 'copy selection survives status refresh');
   fail = true; click(dom, '[data-action="refreshSessions"]');
   await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('session backend unavailable'), 'failure visible rather than empty list');
   assert.equal(dom.window.document.querySelectorAll('[data-field="session"] option').length, 1, 'last usable sessions retained');
   fail = false; click(dom, '[data-action="refreshSessions"]');
   await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('可选择 1 个会话'), 'retry recovered');
+  const inboxStatus = commands.get('inbox_status')!;
+  commands.set('inbox_status', () => { throw new Error('inbox offline'); });
+  click(dom, '[data-action="refreshCollection"]');
+  await until(() => dom.window.document.querySelector('#inboxPanel [role="alert"]')?.textContent?.includes('inbox offline'), 'inbox error visible');
+  commands.set('inbox_status', inboxStatus); click(dom, '[data-action="refreshCollection"]');
+  await until(() => dom.window.document.querySelector('#inboxPath'), 'unchanged inbox state renders again after recovery');
 });
 
 test('typing during a slow page save preserves the next draft and advances only its own conflict baseline', async t => {
