@@ -61,6 +61,12 @@ test('mixed import mode and compilation choice survive form draft recovery',asyn
   for(const name of ['compileImported','separateImported'])assert.equal(reopened.window.document.querySelector<HTMLInputElement>('[data-field="'+name+'"]')!.checked,true,name+' restored');
 });
 
+test('a configured model does not turn on compilation when automatic compilation is disabled',async t=>{
+  const {open,commands,service}=setup(t);commands.set('status',()=>({...service.status(),ready:true}));const dom=open();
+  await until(()=>dom.window.document.querySelector<HTMLElement>('#setupGuide')?.hidden,'configured model shown');click(dom,'[data-tab="sources"]');click(dom,'#newSource');
+  assert.equal(dom.window.document.querySelector<HTMLInputElement>('[data-field="compileImported"]')!.checked,false,'model readiness must not override the user automation preference');
+});
+
 test('a failed component keeps the group staged and retries only missing files in the same source',async t=>{
   const {open,store,commands}=setup(t),dom=open(),original=commands.get('material_upload_chunk')!;let fail=true,calls=0;
   commands.set('material_upload_chunk',params=>{calls++;if(fail&&calls===2){fail=false;throw new Error('temporary write failure');}return original(params);});

@@ -358,6 +358,7 @@ try {
   await frame.locator('#newSource').click();
   await frame.locator('#sourceView [data-field="title"]').fill('纯图片窗口素材');
   await frame.locator('#sourceView [data-field="images"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
+  await frame.locator('#sourceView [data-field="compileImported"]').check();
   await frame.locator('#sourceView [data-action="saveSource"]').click();
   await until(async () => (await call('list_sources')).some(source => source.title === '纯图片窗口素材' && source.images === 1 && source.compiled), 'image-only source saved and compiled');
   await until(async () => await frame.locator('.tabs [data-tab="review"]').evaluate(node => node.classList.contains('active')), 'image compile task completed in the view');
