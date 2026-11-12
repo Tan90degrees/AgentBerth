@@ -1,10 +1,16 @@
 import { mkdirSync, openSync, readFileSync, rmSync, writeFileSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { DaemonServer } from './server';
+import { RunLog } from './logs';
 
 const dataDirectory = process.argv[2];
 if (!dataDirectory || !path.isAbsolute(dataDirectory)) throw new Error('An absolute data directory is required');
 mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+// Monitor for evidence without suppressing unexpected fatal exceptions or
+// continuing a potentially inconsistent daemon. Never log environment/input.
+process.on('uncaughtExceptionMonitor',(error,origin)=>{
+  try {new RunLog(dataDirectory,'daemon').append(`${new Date().toISOString()} ${origin}: ${error.stack??String(error)}\n`);}catch{}
+});
 const lock = path.join(dataDirectory, 'daemon.lock');
 const startupError = path.join(dataDirectory, 'daemon-startup-error.json');
 function reportStartupError(error: unknown, descriptor?: number): never {
