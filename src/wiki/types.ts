@@ -35,6 +35,8 @@ export interface WikiPage {
 }
 
 export interface WikiSource {
+  /** Ordered, immutable components of one mixed import. Text offsets address text verbatim. */
+  parts?: { id: string; name: string; kind: 'text' | 'image' | 'pdf'; hash: string; start: number; end: number; asset?: string; pages?: number; ranges?: { page: number; start: number; end: number }[] }[];
   /** Explicit proposal deletion pauses paid auto-compilation until manual compile. */
   autoCompilePaused?: boolean;
   id: string;

@@ -121,6 +121,7 @@ export class WikiStore {
     const name = randomUUID() + '.pdf'; writeFileSync(path.join(this.assetDir, name), bytes, { mode: 0o600 }); return name;
   }
   assetFile(name: string): string { return this.file(this.assetDir, name, ''); }
+  removeAsset(name: string): void { rmSync(this.assetFile(name), { force: true }); }
   assetBytes(name: string): Uint8Array { return new Uint8Array(readFileSync(this.file(this.assetDir, name, ''))); }
   addImage(mime: string, base64: string): string {
     const ext = IMAGE_TYPES[mime];
@@ -140,6 +141,7 @@ export class WikiStore {
   }
   sourceHash(source: Pick<WikiSource, 'title' | 'text' | 'images' | 'vision'> & { document?: { hash?: string } }): string {
     const identity: (string | string[])[] = [source.text, source.images]; if (source.document?.hash) identity.push(source.document.hash);
+    const parts=(source as WikiSource).parts;if(parts?.length)identity.push(parts.map(part=>[part.id,part.name,part.hash].join(':')));
     return createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 32);
   }
 

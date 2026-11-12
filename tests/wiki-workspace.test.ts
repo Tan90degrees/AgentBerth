@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { zipSync, unzipSync } from 'fflate';
 import { WikiStore } from '../src/wiki/store';
 import { WikiService } from '../src/wiki/service';
@@ -22,6 +23,66 @@ function fixture(t: { after: (fn: () => void) => void }, extra: Partial<Construc
 }
 function page(slug: string, body: string): WikiPage { const p: WikiPage = { slug, title: slug, summary: '', kind: 'note', body, sources: [], evidence: [], tags: [], humanEdited: true, hash: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; p.hash = pageHash(p); return p; }
 async function finished(service: WikiService, id: string): Promise<WikiTask> { for (let i = 0; i < 1000; i++) { const task = service.taskStatus(id)!; if (!['queued', 'running'].includes(task.status)) return task; await new Promise(resolve => setTimeout(resolve, 5)); } throw new Error('task did not complete'); }
+
+test('mixed text, Markdown and named images compile together once with full context and retry idempotency', async t => {
+  const requests: string[] = [];
+  const fetchImpl: typeof fetch = async (_url,init) => { const body=JSON.parse(String(init?.body));const prompt=JSON.stringify(body.messages);requests.push(prompt);const value=prompt.includes('图片理解助手')?'图中关系：入口连接数据库':JSON.stringify({ summary:'整组总结',concepts:[],claims:[],contradictions:[],pages:[{slug:'mixed',title:'mixed',kind:'note',summary:'统一资料',body:'文章、补充说明与结构图共同表明入口连接数据库',sources:[],tags:[]}] });return new Response(JSON.stringify({choices:[{message:{content:value}}]})); };
+  const {service,store,workspace}=fixture(t,{config:{...config,autoCompile:true,visionModel:'vision'},fetchImpl});
+  const source=await service.addSource({title:'完整混合资料',text:'用户补充：查看架构图。',staging:true});
+  const md='# 文章\n\n![架构](images/design.png)\n\n'+'全文不能截断。'.repeat(3000)+'结尾证据。',id=randomUUID();
+  await service.appendSourcePart(source.id,id,'article.md','text/markdown',new TextEncoder().encode(md));
+  await service.appendSourcePart(source.id,randomUUID(),'notes.txt','text/plain',new TextEncoder().encode('补充记录：入口和数据库之间有队列。'));
+  await service.appendSourcePart(source.id,randomUUID(),'images/design.png','image/png',new Uint8Array([1,2,3]));
+  assert.equal((await service.appendSourcePart(source.id,id,'article.md','text/markdown',new TextEncoder().encode(md))).skipped,true);
+  await assert.rejects(service.appendSourcePart(source.id,id,'article.md','text/plain',new TextEncoder().encode('changed')),/内容已变化/);
+  service.tick();assert.equal(requests.length,0,'part uploads cannot trigger premature model work');
+  assert.throws(()=>service.compile(source.id),/整组保存/);
+  await service.finalizeSource(source.id);const task=await finished(service,service.compile(source.id,true));assert.equal(task.status,'done',task.error);
+  assert.equal(store.listSources().length,1);assert.equal(store.listDrafts().length,1);assert.equal(store.listPages().length,0);
+  const saved=store.getSource(source.id)!;assert.ok(saved.text.includes(md));assert.equal(saved.parts!.length,3);assert.equal(saved.images.length,1);
+  const vision=requests.find(value=>value.includes('图片理解助手'))!;assert.ok(vision.includes('images/design.png'));assert.ok(vision.includes('![架构]'));
+  assert.ok(requests.some(value=>value.includes('结尾证据')));assert.ok(requests.some(value=>value.includes('补充记录')));assert.ok(requests.some(value=>value.includes('图中关系')));
+  const count=requests.length;assert.equal(service.compile(source.id,true),task.id);assert.equal(requests.length,count,'ambiguous submit retries reuse the existing proposal');
+  await assert.rejects(service.appendSourcePart(source.id,randomUUID(),'late.txt','text/plain',new TextEncoder().encode('late')),/不能修改/);
+  const archive=workspace.backup(),other=fixture(t);other.workspace.importBackup(archive,false);assert.deepEqual(other.store.getSource(source.id)!.parts,saved.parts);
+});
+
+test('mixed PDFs preserve every original, shared offsets and purge/restore ownership', async t => {
+  const {service,store,workspace}=fixture(t,{pdfExtract:async bytes=>({text:'page '+bytes[0],pages:1,ranges:[{page:1,start:0,end:6}]})});
+  const source=await service.addSource({title:'two PDFs and prose',text:'preamble',staging:true});
+  for(const name of ['one','two']){const partId=randomUUID(),upload=service.beginPdfUpload(name,source.id,partId);await service.appendPdfChunk(upload.uploadId,Buffer.from([name==='one'?1:2]).toString('base64'),false);const task=await finished(service,service.finishPdfUpload(upload.uploadId));assert.equal(task.status,'done',task.error);}
+  await service.finalizeSource(source.id,false);service.tick();const saved=store.getSource(source.id)!;
+  assert.equal(saved.parts!.length,2);assert.equal(saved.autoCompilePaused,true);assert.ok(saved.text.includes('preamble'));assert.ok(saved.text.includes('page 1'));assert.ok(saved.text.includes('page 2'));
+  for(const part of saved.parts!){assert.equal(saved.text.slice(part.start,part.end),'page '+(part.name==='one.pdf'?1:2));assert.equal(part.ranges![0].start,part.start);assert.equal(store.assetBytes(part.asset!)[0],part.name==='one.pdf'?1:2);}
+  const trash=workspace.deleteSource(source.id);workspace.restoreTrash(trash.id);const second=workspace.deleteSource(source.id);assert.equal(workspace.purgeTrash(second.id).assetsRemoved,2);
+  for(const part of saved.parts!)assert.equal(existsSync(store.assetFile(part.asset!)),false);
+});
+
+test('JSON repair is bounded and failed repairs preserve original material without publishing', async t => {
+  let calls=0;
+  const {service,store}=fixture(t,{config:{...config,autoCompile:true},fetchImpl:async (_url,init)=>{calls++;const messages=JSON.parse(String(init?.body)).messages,repair=messages.some((item:{content:unknown})=>String(item.content).includes('JSON 格式修复器'));return new Response(JSON.stringify({choices:[{message:{content:repair?'{still invalid}':String(messages[0].content).includes('素材摄入')?'{}':'{"pages":[]} {"pages":[]}'} }]}));}});
+  const source=await service.addSource({title:'original',text:'complete evidence'});const task=await finished(service,service.compile(source.id));
+  assert.equal(task.status,'failed');assert.match(task.error!,/已尝试一次格式修复/);assert.equal(calls,3,'one ingest, one compile and exactly one format repair');
+  assert.equal(store.getSource(source.id)!.text,'complete evidence');assert.equal(store.getSource(source.id)!.compiled,false);assert.equal(store.listDrafts().length,0);assert.equal(store.listPages().length,0);
+  service.tick();assert.equal(calls,3,'failed format repair pauses automatic paid retries');assert.equal(store.getSource(source.id)!.autoCompilePaused,true);assert.equal(task.manualRetry,true);
+});
+
+test('one format repair recovers malformed model keys and retains the complete proposal',async t=>{
+  let repairs=0;
+  const result={summary:'修复后的完整提案',contradictions:[],pages:[{slug:'repaired',title:'repaired',kind:'note',body:'完整正文与尾部证据。',summary:'完整',sources:[],tags:[]}]};
+  const {service,store}=fixture(t,{fetchImpl:async (_url,init)=>{const messages=JSON.parse(String(init?.body)).messages,repair=messages.some((message:{content:unknown})=>String(message.content).includes('JSON 格式修复器'));if(repair)repairs++;const content=repair?JSON.stringify(result):String(messages[0].content).includes('素材摄入')?'{}':'{pages: [{body: "完整正文与尾部证据。"}]}';return new Response(JSON.stringify({choices:[{message:{content}}]}));}});
+  const source=await service.addSource({title:'repair',text:'完整正文与尾部证据。'}),task=await finished(service,service.compile(source.id));
+  assert.equal(task.status,'done',task.error);assert.equal(repairs,1);assert.equal(store.listDrafts().length,1);assert.equal(store.listDrafts()[0].pages[0].body,result.pages[0].body);assert.equal(store.listPages().length,0);
+});
+
+test('Agents cannot read a partially uploaded mixed group before it is sealed',async t=>{
+  const {root,controller}=fixture(t),commands=new Map<string,(params:Record<string,unknown>)=>unknown>();
+  apply({berth:{dataDirectory:root,signal:controller.signal,interval(){},call:async()=>({sessions:[]}),command(d:{name:string},handler:(params:Record<string,unknown>)=>unknown){commands.set(d.name,handler);}},effect(){}} as never,{...config,allowAgentAccess:true});
+  const source=await commands.get('add_source')!({title:'in progress',text:'first component',staging:true}) as {id:string};
+  const listing=await commands.get('wiki_sources')!({}) as {items:{id:string}[]};assert.ok(!listing.items.some(item=>item.id===source.id));
+  await assert.rejects(async()=>commands.get('wiki_source')!({id:source.id}),/完成整组保存/);
+  await commands.get('finalize_source')!({id:source.id,autoCompile:false});const ready=await commands.get('wiki_source')!({id:source.id}) as {text:string};assert.equal(ready.text,'first component');
+});
 
 test('purging trash removes only selected records and unreferenced image/PDF assets', async t => {
   const { service, store, workspace } = fixture(t);

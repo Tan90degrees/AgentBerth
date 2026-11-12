@@ -43,10 +43,11 @@ export class WikiWorkspace {
     if(id!==undefined&&!/^[a-f0-9-]{36}$/.test(id))throw new Error('回收记录无效');
     const all=this.trash(),selected=all.filter(item=>id===undefined||item.id===id);
     if(id!==undefined&&!selected.length)throw new Error('回收记录不存在');
-    const assets=new Set(selected.flatMap(item=>item.source?[...item.source.images,...(item.source.document?[item.source.document.asset]:[])]:[]));
+    const assets=new Set(selected.flatMap(item=>item.source?[...item.source.images,...(item.source.document?[item.source.document.asset]:[]),...(item.source.parts??[]).flatMap(part=>part.asset?[part.asset]:[])]:[]));
     const retained=new Set<string>();
     for(const source of [...this.store.listSources(),...all.filter(item=>!selected.includes(item)).flatMap(item=>item.source?[item.source]:[])]){
       source.images.forEach(name=>retained.add(name));if(source.document)retained.add(source.document.asset);
+      for(const part of source.parts??[])if(part.asset)retained.add(part.asset);
     }
     // Pages, review bodies and historical versions may still embed an asset.
     const texts=[...this.store.listPages().map(page=>page.body),...all.filter(item=>!selected.includes(item)).flatMap(item=>item.page?[item.page.body]:[]),...this.store.listDrafts().flatMap(draft=>draft.pages.flatMap(page=>[page.body,page.previous??''])),...this.editorDrafts().flatMap(draft=>Object.values(draft.fields))];
@@ -145,6 +146,8 @@ export class WikiWorkspace {
         if (!object) throw new Error('备份数据无效：' + name);
         if (name.startsWith('raw/') && (item.id !== name.slice(4, -5) || typeof item.text !== 'string' || typeof item.title !== 'string' || typeof item.createdAt !== 'string' || !Array.isArray(item.images) || item.images.some((image: unknown) => typeof image !== 'string' || !/^[a-z0-9-]+\.(?:png|jpg|jpeg|webp|gif)$/.test(image)))) throw new Error('备份素材无效：' + name);
         if (item.document && (typeof item.document.asset !== 'string' || !/^[a-f0-9-]+\.pdf$/.test(item.document.asset) || !Array.isArray(item.document.ranges))) throw new Error('备份 PDF 元数据无效');
+        const source=item.source??item;
+        if(source.parts!==undefined&&(!Array.isArray(source.parts)||typeof source.text!=='string'||source.parts.some((part:NonNullable<WikiSource['parts']>[number])=>!part||typeof part.id!=='string'||typeof part.name!=='string'||!['text','image','pdf'].includes(part.kind)||typeof part.hash!=='string'||!Number.isSafeInteger(part.start)||!Number.isSafeInteger(part.end)||part.start<0||part.end<part.start||part.end>source.text.length||(part.asset!==undefined&&!/^[a-f0-9-]+\.(?:png|jpe?g|webp|gif|pdf)$/.test(part.asset)))))throw new Error('备份混合素材元数据无效');
         if (name.startsWith('answers/') && !validAnswer(item)) throw new Error('备份问答无效');
         if (name === 'meta.json' && (!Array.isArray(item.answers) || !item.answers.every(validAnswer))) throw new Error('备份索引无效');
         if (name === 'tasks.json' && (!Array.isArray(item) || item.some((task: { id?: string; kind?: string; status?: string }) => !task || typeof task.id !== 'string' || typeof task.kind !== 'string' || typeof (task as { label?: string }).label !== 'string' || typeof (task as { startedAt?: string }).startedAt !== 'string' || !['queued', 'running', 'done', 'failed', 'cancelled'].includes(task.status ?? '')))) throw new Error('备份任务记录无效');

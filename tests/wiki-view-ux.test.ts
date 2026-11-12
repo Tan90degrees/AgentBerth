@@ -33,6 +33,42 @@ function setup(t: { after: (fn: () => void) => void }) {
 function click(dom: JSDOM, selector: string) { const node = dom.window.document.querySelector<HTMLElement>(selector); assert.ok(node, selector); node.click(); }
 function input(dom: JSDOM, selector: string, value: string) { const node = dom.window.document.querySelector<HTMLInputElement>(selector)!; assert.ok(node, selector); node.value = value; node.dispatchEvent(new dom.window.Event('input', { bubbles: true })); }
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+function chooseMaterials(dom:JSDOM,files:{name:string;text:string;type?:string}[]){const input=dom.window.document.querySelector<HTMLInputElement>('[data-field="pdf"]')!;Object.defineProperty(input,'files',{configurable:true,value:files.map(file=>{const bytes=new TextEncoder().encode(file.text);return {name:file.name,size:bytes.length,type:file.type??'text/plain',slice:(start:number,end:number)=>({arrayBuffer:async()=>bytes.slice(start,end).buffer})};})});input.dispatchEvent(new dom.window.Event('change',{bubbles:true}));}
+
+test('default import combines pasted text, Markdown, text and an image into one complete source',async t=>{
+  const {open,store,service}=setup(t),dom=open();click(dom,'[data-tab="sources"]');click(dom,'#newSource');input(dom,'[data-field="title"]','同一份资料');input(dom,'[data-field="text"]','补充说明：图中的连接代表依赖。');
+  chooseMaterials(dom,[{name:'article.md',text:'# 文档\n![架构](diagram.png)'},{name:'notes.txt',text:'补充记录完整保留。'},{name:'diagram.png',text:'original image bytes',type:'image/png'}]);
+  assert.equal(store.listSources().length,0,'selecting a bundle must not upload it');click(dom,'[data-action="saveSource"]');
+  await until(()=>store.listSources().length===1&&!store.listSources()[0].staging,'whole bundle sealed');
+  const source=store.listSources()[0];assert.equal(source.title,'同一份资料');for(const text of ['补充说明','# 文档','![架构](diagram.png)','补充记录完整保留。'])assert.ok(source.text.includes(text),text);
+  assert.equal(source.parts!.length,3);assert.equal(source.images.length,1);assert.equal(new TextDecoder().decode(store.assetBytes(source.images[0])),'original image bytes');assert.equal(source.autoCompilePaused,true);
+  assert.equal(service.workspace.editorDrafts().length,0,'saved form is acknowledged only after all components finish');
+});
+
+test('separate-file import is explicit and preserves independent material identities',async t=>{
+  const {open,store}=setup(t),dom=open();click(dom,'[data-tab="sources"]');click(dom,'#newSource');
+  const mode=dom.window.document.querySelector<HTMLInputElement>('[data-field="separateImported"]')!;assert.equal(mode.checked,false);mode.checked=true;mode.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  chooseMaterials(dom,[{name:'one.md',text:'first topic'},{name:'two.txt',text:'second topic'}]);click(dom,'[data-action="startImport"]');
+  await until(()=>store.listSources().length===2&&store.listSources().every(source=>!source.staging),'two explicit separate sources');
+  assert.deepEqual(store.listSources().map(source=>source.title).sort(),['one','two']);assert.ok(store.listSources().every(source=>source.parts?.length===1));
+});
+
+test('mixed import mode and compilation choice survive form draft recovery',async t=>{
+  const {open,service}=setup(t),dom=open();click(dom,'[data-tab="sources"]');click(dom,'#newSource');
+  for(const name of ['compileImported','separateImported']){const node=dom.window.document.querySelector<HTMLInputElement>('[data-field="'+name+'"]')!;node.checked=true;node.dispatchEvent(new dom.window.Event('change',{bubbles:true}));}
+  input(dom,'[data-field="text"]','recover this group');await until(()=>service.workspace.editorDrafts().some(draft=>draft.key==='source:new'&&draft.fields.text==='recover this group'),'source draft saved before reopen');const reopened=open();await until(()=>reopened.window.document.querySelector('[data-action="restoreEditorDraft"][data-key="source:new"]'),'source draft exists');click(reopened,'[data-action="restoreEditorDraft"][data-key="source:new"]');
+  await until(()=>reopened.window.document.querySelector<HTMLTextAreaElement>('[data-field="text"]')?.value==='recover this group','draft form restored');
+  for(const name of ['compileImported','separateImported'])assert.equal(reopened.window.document.querySelector<HTMLInputElement>('[data-field="'+name+'"]')!.checked,true,name+' restored');
+});
+
+test('a failed component keeps the group staged and retries only missing files in the same source',async t=>{
+  const {open,store,commands}=setup(t),dom=open(),original=commands.get('material_upload_chunk')!;let fail=true,calls=0;
+  commands.set('material_upload_chunk',params=>{calls++;if(fail&&calls===2){fail=false;throw new Error('temporary write failure');}return original(params);});
+  click(dom,'[data-tab="sources"]');click(dom,'#newSource');chooseMaterials(dom,[{name:'one.md',text:'first'},{name:'two.txt',text:'second'},{name:'diagram.png',text:'image bytes',type:'image/png'}]);click(dom,'[data-action="startImport"]');
+  await until(()=>dom.window.document.querySelector('#retryImportGroup'),'group failure shown');const source=store.listSources()[0];assert.equal(source.staging,true);assert.equal(source.parts!.length,2);assert.equal(store.listDrafts().length,0);assert.equal(source.images.length,1);
+  click(dom,'[data-action="retryImports"]');await until(()=>store.listSources().length===1&&!store.listSources()[0].staging,'same group completed');
+  const saved=store.listSources()[0];assert.equal(saved.id,source.id);assert.equal(saved.parts!.length,3);assert.equal(saved.images.length,1);assert.equal(calls,4,'successful files were not uploaded again');
+});
 
 test('trash permanent deletion and emptying require confirmation and update the visible list', async t => {
   const { service, commands, open } = setup(t);

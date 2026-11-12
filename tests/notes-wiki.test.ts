@@ -99,6 +99,31 @@ test('parseJsonResponse tolerates fences and prose; skills use SKILL.md format',
   assert.equal(resolveSkill([{ ...skill, name: 'wiki-query', kind: 'query', body: '覆盖' }], 'query').body, '覆盖');
 });
 
+test('model JSON handles prose after an object, embedded braces, literal newlines and trailing commas without losing fields', () => {
+  assert.deepEqual(parseJsonResponse('{"pages":[1]} 额外说明。'),{pages:[1]});
+  assert.deepEqual(parseJsonResponse('<think>{"reason":"hidden"}</think>\n```json\n{"body":"正文 } { 与 \\\"引号\\\"", "tags":["一",],}\n```\n完成。'),{body:'正文 } { 与 "引号"',tags:['一']});
+  assert.deepEqual(parseJsonResponse('{"body":"首行\n第二行\t内容"}'),{body:'首行\n第二行\t内容'});
+  assert.deepEqual(parseJsonResponse('{"body":"<think>这段是原文，不可删除</think>"}'),{body:'<think>这段是原文，不可删除</think>'});
+  assert.throws(()=>parseJsonResponse('{"pages":[1]} {"pages":[2]}'),/多个 JSON/);
+  assert.throws(()=>parseJsonResponse('{"pages":[1]} {bad:2}'),/多个 JSON/);
+  assert.throws(()=>parseJsonResponse('{"pages":[1]} {"body":"unfinished'),/不完整/);
+  assert.throws(()=>parseJsonResponse('{unquoted:"value"}'),/格式无效/);
+  assert.throws(()=>parseJsonResponse('{"body":"incomplete'),/不完整/);
+  assert.throws(()=>parseJsonResponse('[{"pages":[]}]'),/不是 JSON 对象/);
+});
+
+test('chat decodes complete SSE/NDJSON proxies and reports malformed transport and truncation clearly', async () => {
+  const call=(body:string,type='text/event-stream')=>chat({baseURL:'http://localhost:1234/v1',apiKey:'',authRequired:false,model:'local',messages:[],fetchImpl:async()=>new Response(body,{headers:{'content-type':type}})});
+  const one=JSON.stringify({choices:[{delta:{content:'{"pages":'}}]}),two=JSON.stringify({choices:[{delta:{content:'[]}'},finish_reason:'stop'}]});
+  assert.equal(await call('data: '+one+'\n\ndata: '+two+'\n\ndata: [DONE]\n\n'),'{"pages":[]}');
+  assert.equal(await call(one+'\n'+two+'\n','application/x-ndjson'),'{"pages":[]}');
+  await assert.rejects(call('data: '+one+'\n\n'),/未完整结束/);
+  await assert.rejects(call('data: {bad}\n\ndata: [DONE]\n\n'),/流式 JSON/);
+  await assert.rejects(call('{"choices":[]} extra','application/json'),/接口未返回合法 JSON/);
+  await assert.rejects(call(JSON.stringify({choices:[{message:{content:'incomplete'},finish_reason:'length'}]}),'application/json'),/被截断/);
+  await assert.rejects(call('data: '+JSON.stringify({choices:[{delta:{content:'partial'},finish_reason:'length'}]})+'\n\n'),/被截断/);
+});
+
 test('draftPages snapshots existing pages and protects hand edits', () => {
   const existing = page('向量检索', '# 旧正文', { humanEdited: false });
   const manual = page('手改页', '# 我写的', { humanEdited: true });
@@ -133,7 +158,7 @@ test('OpenAI-compatible client builds URLs, multimodal parts and friendly errors
   const calls: Record<string, unknown>[] = [];
   const fake = (async (_url: string, init: RequestInit) => {
     calls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-    return { ok: true, json: async () => ({ choices: [{ message: { content: '可用' } }] }) } as Response;
+    return new Response(JSON.stringify({ choices: [{ message: { content: '可用' } }] }));
   }) as unknown as typeof fetch;
   const reply = await chat({ baseURL: 'https://x.test/v1', apiKey: 'sk-1', model: 'm', messages: [{ role: 'user', content: 'ping' }], fetchImpl: fake });
   assert.equal(reply, '可用');
@@ -202,7 +227,7 @@ function modelFetch(state: MockState): typeof fetch {
     else if (joined.includes('体检（Lint）')) content = JSON.stringify({ contradictions: [], orphans: [], missing: [], stale: [], suggestions: ['补充混合检索页面'] });
     else if (joined.includes('答案归档')) content = JSON.stringify({ title: '问答归档', kind: 'note', summary: '归档', tags: [], body: '# 问答归档\n\n见 [[向量检索]]。' });
     else content = '图片中有折线图，横轴是召回率。';
-    return { ok: true, json: async () => ({ choices: [{ message: { content } }] }) } as Response;
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
   }) as unknown as typeof fetch;
 }
 async function waitFor(service: WikiService, id: string): Promise<{ status: string; result?: unknown; error?: string }> {

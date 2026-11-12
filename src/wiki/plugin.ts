@@ -152,16 +152,17 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
       document: source.document ? { ...source.document, ranges: source.document.ranges.slice(0, 30) } : undefined,
       vision: byteTruncate(source.vision, 20 * 1024),
       images: source.images.slice(0, 6), imageCount: source.images.length,
+      parts:undefined,partCount:source.parts?.length??0,imageLabels:Object.fromEntries(source.images.slice(0,6).map(name=>[name,byteTruncate(source.parts?.find(part=>part.asset===name)?.name??name,600)])),
     } : null;
   });
   add('add_source', '新增原始素材（不可变）', schema({ title: field('string'), text: field('string'), staging: field('boolean') }, ['text']), params => service.addSource({ title: text(params, 'title'), text: text(params, 'text'), staging: bool(params, 'staging') }));
   add('add_image', '为素材追加一张压缩后的图片', schema({ sourceId: field('string'), mime: field('string'), base64: field('string') }, ['sourceId', 'mime', 'base64']), params => service.addImage(text(params, 'sourceId'), text(params, 'mime'), text(params, 'base64')));
-  add('finalize_source', '完成素材图片上传', schema({ id: field('string') }, ['id']), params => service.finalizeSource(text(params, 'id')));
+  add('finalize_source', '完成整组素材上传', schema({ id: field('string'),autoCompile:field('boolean') }, ['id']), params => service.finalizeSource(text(params, 'id'),typeof params.autoCompile==='boolean'?params.autoCompile:undefined).then(source=>({id:source.id,title:source.title,staging:source.staging})));
   add('delete_source', '删除原始素材', schema({ id: field('string') }, ['id']), params => service.deleteSource(text(params, 'id')).then(() => true));
 
   // PDF import: the bridge caps a command's params at 64 KiB, so the file is
   // uploaded as base64 chunks and parsed (text extraction) on the last one.
-  add('pdf_upload_start', '开始一次 PDF 分片上传', schema({ title: field('string') }), params => service.beginPdfUpload(text(params, 'title')));
+  add('pdf_upload_start', '开始一次 PDF 分片上传', schema({ title: field('string'),sourceId:field('string'),partId:field('string') }), params => service.beginPdfUpload(text(params, 'title'),text(params,'sourceId')||undefined,text(params,'partId')||undefined));
   add('pdf_upload_chunk', '追加 PDF 分片（base64 ≤ 48 KiB），done=true 时完成解析导入', schema({ uploadId: field('string'), base64: field('string'), done: field('boolean') }, ['uploadId', 'base64']), params => service.appendPdfChunk(text(params, 'uploadId'), text(params, 'base64'), bool(params, 'done')));
   add('pdf_upload_finish', '后台解析完整 PDF', schema({ uploadId: field('string') }, ['uploadId']), params => service.finishPdfUpload(text(params, 'uploadId')));
   add('pdf_upload_cancel', '取消 PDF 上传', schema({ uploadId: field('string') }, ['uploadId']), params => ({ cancelled: service.cancelPdfUpload(text(params, 'uploadId')) }));
@@ -200,7 +201,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('export_skill', '导出 SKILL.md（可交给外部 Agent）', schema({ name: field('string') }, ['name']), params => service.exportSkill(text(params, 'name')));
 
   // Compile → draft → review
-  add('compile', '把素材编译成待审阅提案', schema({ sourceId: field('string') }), params => service.compile(text(params, 'sourceId') || undefined));
+  add('compile', '把素材编译成待审阅提案', schema({ sourceId: field('string'),reuse:field('boolean') }), params => service.compile(text(params, 'sourceId') || undefined,bool(params,'reuse')));
   add('list_drafts', '列出编译提案', schema({ ...paging, status: field('string', { enum: ['pending', 'approved', 'rejected'] }) }), params => pageSlice(service.listDrafts(typeof params.status === 'string' ? params.status as 'pending' | 'approved' | 'rejected' : undefined), { ...params, limit: Math.min(10, number(params, 'limit', 10)) }).map(draft => ({ id: draft.id, sourceId: draft.sourceId, sourceTitle: byteTruncate(draft.sourceTitle, 300), createdAt: draft.createdAt, status: draft.status, model: byteTruncate(draft.model, 80), summary: byteTruncate(draft.summary, 600), pages: draft.pages.slice(0, 20).map(page => ({ action: page.action })), contradictions: [], feedback: [] })));
   add('get_draft', '读取单个提案（页摘要）', schema({ id: field('string') }, ['id']), params => {
     const draft = service.getDraft(text(params, 'id'));
@@ -264,13 +265,14 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('wiki_read', 'MCP：分页读取页面、反向链接与出处；hasMore 时用 next 作为 offset 继续',
     mcpSchema({ slug: field('string'), ...windowFields }, ['slug']), params => service.readForAgent(text(params, 'slug'), number(params, 'offset'), number(params, 'limit', 12000)), true);
   add('wiki_sources', 'MCP：分页列出全部原始素材；hasMore 时用 next 作为 offset 继续',
-    mcpSchema(paging), params => { const sources = service.listSources(), offset = Math.max(0, number(params, 'offset')), items = pageSlice(sources, params).map(source => ({
+    mcpSchema(paging), params => { const sources = service.listSources().filter(source=>!source.staging), offset = Math.max(0, number(params, 'offset')), items = pageSlice(sources, params).map(source => ({
       id: source.id, title: source.title, createdAt: source.createdAt, compiled: source.compiled, characters: source.text.length, images: source.images.length,
     })), next = offset + items.length; return { items, offset, next, total: sources.length, hasMore: next < sources.length }; }, true);
   add('wiki_source', 'MCP：按需读取完整原始素材；首次可用 quote 定位，继续时 offset 优先。hasMore 时用 next 继续。section=vision 可读取图片理解',
     mcpSchema({ id: field('string'), ...windowFields, quote: field('string'), section: field('string', { enum: ['text', 'vision'] }) }, ['id']), params => {
       const source = service.getSource(text(params, 'id'));
       if (!source) return null;
+      if(source.staging)throw new Error('素材仍在上传 / 导入，请完成整组保存后再读取');
       const section = params.section === 'vision' ? 'vision' : 'text', content = source[section], quote = text(params, 'quote'), found = quote ? content.indexOf(quote) : -1;
       const offset = typeof params.offset === 'number' ? params.offset : found >= 0 ? Math.max(0, found - 150) : 0;
       return { id: source.id, title: source.title, createdAt: source.createdAt, section, images: source.images.length, ...materialWindow(content, offset, number(params, 'limit', 12000)) };
