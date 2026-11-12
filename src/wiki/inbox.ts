@@ -4,8 +4,6 @@ import path from 'node:path';
 
 const IMPORTABLE = /\.(md|markdown|txt|json|pdf)$/i;
 const isPdf = (name: string) => /\.pdf$/i.test(name);
-/** Text files stay small; PDFs are allowed more room because text extraction
- * shrinks them by an order of magnitude. */
 const DEBOUNCE_MS = 400;
 /** A file must stop changing for this long before it is considered complete. */
 const SETTLE_MS = 700;
@@ -32,6 +30,9 @@ export interface InboxHandle {
   readonly failedDir: string;
   readonly pending: string[];
   readonly archived: number;
+  readonly failed: string[];
+  readonly errors: { name: string; message: string }[];
+  readonly scanning: boolean;
   scan(): Promise<void>;
   stop(): void;
 }
@@ -49,6 +50,8 @@ export function startInbox(options: InboxOptions): InboxHandle {
   const attempts = new Map<string, number>();
   const settling = new Map<string, number>();
   const observed = new Map<string, { signature: string; at: number }>();
+  const errors: {name:string;message:string}[]=[];
+  let scanning=false;
   let busy: Promise<unknown> = Promise.resolve();
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
@@ -81,6 +84,8 @@ export function startInbox(options: InboxOptions): InboxHandle {
 
   async function processScan(): Promise<void> {
     if (stopped) return;
+    scanning=true;
+    try {
     let rescan = false;
     for (const name of list()) {
       const file = path.join(dir, name);
@@ -128,10 +133,12 @@ export function startInbox(options: InboxOptions): InboxHandle {
           quarantine(file, name, failedDir);
           if (!readdirSync(dir).includes(name)) { failedAt.delete(name); attempts.delete(name); observed.delete(name); }
         }
+        errors.push({name,message:String(error instanceof Error?error.message:error).slice(0,400)});if(errors.length>20)errors.shift();
         try { options.onError?.(name, error); } catch { /* Reporting must not break retries. */ }
       }
     }
     if (rescan) schedule();
+    } finally {scanning=false;}
   }
 
   function scan(): Promise<void> {
@@ -149,6 +156,9 @@ export function startInbox(options: InboxOptions): InboxHandle {
     dir, importedDir, failedDir,
     get pending() { return list(); },
     get archived() { try { return readdirSync(importedDir).length; } catch { return 0; } },
+    get failed() {try{return readdirSync(failedDir,{withFileTypes:true}).filter(file=>file.isFile()&&IMPORTABLE.test(file.name)).map(file=>file.name);}catch{return [];}},
+    get errors() {return errors.map(item=>({...item}));},
+    get scanning() {return scanning;},
     scan,
     stop() {
       stopped = true;

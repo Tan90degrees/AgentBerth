@@ -33,11 +33,37 @@ export class WikiWorkspace {
     if (!/^(?:page:|source:|skill:|review:|schema$|question$)/.test(key) || key.length > 150) throw new Error('草稿标识无效');
     const file = path.join(this.folder('editor-drafts'), createHash('sha256').update(key).digest('hex') + '.json');
     if (fields === null) { rmSync(file, { force: true }); return; }
+    if(key.startsWith('review:')&&!this.store.getDraft(key.split(':')[1]))return; // Late save after explicit record deletion.
     if (Object.keys(fields).length > 20 || Object.entries(fields).some(([name, value]) => /key|password|token|secret/i.test(name) || typeof value !== 'string')) throw new Error('草稿字段无效或过长');
     if (!existsSync(file) && this.editorDrafts().length >= 100) throw new Error('已有 100 份未保存草稿，请先处理旧草稿');
     this.write(file, JSON.stringify({ key, fields, at: new Date().toISOString() }));
   }
   trash(): TrashEntry[] { return this.entries<TrashEntry>('trash').sort((a, b) => b.at.localeCompare(a.at)); }
+  purgeTrash(id?: string): { deleted: number; assetsRemoved: number; retainedAssets: number; failedAssets: string[]; failedAssetCount: number } {
+    if(id!==undefined&&!/^[a-f0-9-]{36}$/.test(id))throw new Error('回收记录无效');
+    const all=this.trash(),selected=all.filter(item=>id===undefined||item.id===id);
+    if(id!==undefined&&!selected.length)throw new Error('回收记录不存在');
+    const assets=new Set(selected.flatMap(item=>item.source?[...item.source.images,...(item.source.document?[item.source.document.asset]:[]),...(item.source.parts??[]).flatMap(part=>part.asset?[part.asset]:[])]:[]));
+    const retained=new Set<string>();
+    for(const source of [...this.store.listSources(),...all.filter(item=>!selected.includes(item)).flatMap(item=>item.source?[item.source]:[])]){
+      source.images.forEach(name=>retained.add(name));if(source.document)retained.add(source.document.asset);
+      for(const part of source.parts??[])if(part.asset)retained.add(part.asset);
+    }
+    // Pages, review bodies and historical versions may still embed an asset.
+    const texts=[...this.store.listPages().map(page=>page.body),...all.filter(item=>!selected.includes(item)).flatMap(item=>item.page?[item.page.body]:[]),...this.store.listDrafts().flatMap(draft=>draft.pages.flatMap(page=>[page.body,page.previous??''])),...this.editorDrafts().flatMap(draft=>Object.values(draft.fields))];
+    const history=path.join(this.store.root,'history');
+    if(existsSync(history))for(const file of readdirSync(history,{withFileTypes:true}))if(file.isFile()&&file.name.endsWith('.md'))texts.push(readFileSync(path.join(history,file.name),'utf8'));
+    for(const body of texts)for(const name of body.match(/[a-zA-Z0-9-]+\.(?:png|jpe?g|webp|gif|pdf)\b/g)??[])retained.add(name);
+    // Remove the records before best-effort attachment cleanup: a locked asset
+    // must not leave a restorable record whose other assets were already erased.
+    for(const entry of selected)rmSync(path.join(this.folder('trash'),entry.id+'.json'));
+    let assetsRemoved=0,retainedAssets=0;const failedAssets:string[]=[];
+    for(const name of assets){if(retained.has(name)){retainedAssets++;continue;}try{const file=this.store.assetFile(name);if(existsSync(file)){rmSync(file);assetsRemoved++;}}catch{failedAssets.push(name);}}
+    this.store.invalidate();return {deleted:selected.length,assetsRemoved,retainedAssets,failedAssets:failedAssets.slice(0,20),failedAssetCount:failedAssets.length};
+  }
+  deleteReviewEditors(id: string): void {
+    for(const draft of this.editorDrafts())if(draft.key==='review:'+id||draft.key.startsWith('review:'+id+':'))this.saveEditorDraft(draft.key,null);
+  }
   deletePage(slug: string): TrashEntry {
     const page = this.store.getPage(slug); if (!page) throw new Error('页面不存在');
     const entry: TrashEntry = { id: randomUUID(), kind: 'page', title: page.title, at: new Date().toISOString(), page };
@@ -120,6 +146,8 @@ export class WikiWorkspace {
         if (!object) throw new Error('备份数据无效：' + name);
         if (name.startsWith('raw/') && (item.id !== name.slice(4, -5) || typeof item.text !== 'string' || typeof item.title !== 'string' || typeof item.createdAt !== 'string' || !Array.isArray(item.images) || item.images.some((image: unknown) => typeof image !== 'string' || !/^[a-z0-9-]+\.(?:png|jpg|jpeg|webp|gif)$/.test(image)))) throw new Error('备份素材无效：' + name);
         if (item.document && (typeof item.document.asset !== 'string' || !/^[a-f0-9-]+\.pdf$/.test(item.document.asset) || !Array.isArray(item.document.ranges))) throw new Error('备份 PDF 元数据无效');
+        const source=item.source??item;
+        if(source.parts!==undefined&&(!Array.isArray(source.parts)||typeof source.text!=='string'||source.parts.some((part:NonNullable<WikiSource['parts']>[number])=>!part||typeof part.id!=='string'||typeof part.name!=='string'||!['text','image','pdf'].includes(part.kind)||typeof part.hash!=='string'||!Number.isSafeInteger(part.start)||!Number.isSafeInteger(part.end)||part.start<0||part.end<part.start||part.end>source.text.length||(part.asset!==undefined&&!/^[a-f0-9-]+\.(?:png|jpe?g|webp|gif|pdf)$/.test(part.asset)))))throw new Error('备份混合素材元数据无效');
         if (name.startsWith('answers/') && !validAnswer(item)) throw new Error('备份问答无效');
         if (name === 'meta.json' && (!Array.isArray(item.answers) || !item.answers.every(validAnswer))) throw new Error('备份索引无效');
         if (name === 'tasks.json' && (!Array.isArray(item) || item.some((task: { id?: string; kind?: string; status?: string }) => !task || typeof task.id !== 'string' || typeof task.kind !== 'string' || typeof (task as { label?: string }).label !== 'string' || typeof (task as { startedAt?: string }).startedAt !== 'string' || !['queued', 'running', 'done', 'failed', 'cancelled'].includes(task.status ?? '')))) throw new Error('备份任务记录无效');

@@ -33,6 +33,111 @@ function setup(t: { after: (fn: () => void) => void }) {
 function click(dom: JSDOM, selector: string) { const node = dom.window.document.querySelector<HTMLElement>(selector); assert.ok(node, selector); node.click(); }
 function input(dom: JSDOM, selector: string, value: string) { const node = dom.window.document.querySelector<HTMLInputElement>(selector)!; assert.ok(node, selector); node.value = value; node.dispatchEvent(new dom.window.Event('input', { bubbles: true })); }
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+function chooseMaterials(dom:JSDOM,files:{name:string;text:string;type?:string}[]){const input=dom.window.document.querySelector<HTMLInputElement>('[data-field="pdf"]')!;Object.defineProperty(input,'files',{configurable:true,value:files.map(file=>{const bytes=new TextEncoder().encode(file.text);return {name:file.name,size:bytes.length,type:file.type??'text/plain',slice:(start:number,end:number)=>({arrayBuffer:async()=>bytes.slice(start,end).buffer})};})});input.dispatchEvent(new dom.window.Event('change',{bubbles:true}));}
+
+test('default import combines pasted text, Markdown, text and an image into one complete source',async t=>{
+  const {open,store,service}=setup(t),dom=open();click(dom,'[data-tab="sources"]');click(dom,'#newSource');input(dom,'[data-field="title"]','同一份资料');input(dom,'[data-field="text"]','补充说明：图中的连接代表依赖。');
+  chooseMaterials(dom,[{name:'article.md',text:'# 文档\n![架构](diagram.png)'},{name:'notes.txt',text:'补充记录完整保留。'},{name:'diagram.png',text:'original image bytes',type:'image/png'}]);
+  assert.equal(store.listSources().length,0,'selecting a bundle must not upload it');click(dom,'[data-action="saveSource"]');
+  await until(()=>store.listSources().length===1&&!store.listSources()[0].staging,'whole bundle sealed');
+  const source=store.listSources()[0];assert.equal(source.title,'同一份资料');for(const text of ['补充说明','# 文档','![架构](diagram.png)','补充记录完整保留。'])assert.ok(source.text.includes(text),text);
+  assert.equal(source.parts!.length,3);assert.equal(source.images.length,1);assert.equal(new TextDecoder().decode(store.assetBytes(source.images[0])),'original image bytes');assert.equal(source.autoCompilePaused,true);
+  assert.equal(service.workspace.editorDrafts().length,0,'saved form is acknowledged only after all components finish');
+});
+
+test('separate-file import is explicit and preserves independent material identities',async t=>{
+  const {open,store}=setup(t),dom=open();click(dom,'[data-tab="sources"]');click(dom,'#newSource');
+  const mode=dom.window.document.querySelector<HTMLInputElement>('[data-field="separateImported"]')!;assert.equal(mode.checked,false);mode.checked=true;mode.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  chooseMaterials(dom,[{name:'one.md',text:'first topic'},{name:'two.txt',text:'second topic'}]);click(dom,'[data-action="startImport"]');
+  await until(()=>store.listSources().length===2&&store.listSources().every(source=>!source.staging),'two explicit separate sources');
+  assert.deepEqual(store.listSources().map(source=>source.title).sort(),['one','two']);assert.ok(store.listSources().every(source=>source.parts?.length===1));
+});
+
+test('mixed import mode and compilation choice survive form draft recovery',async t=>{
+  const {open,service}=setup(t),dom=open();click(dom,'[data-tab="sources"]');click(dom,'#newSource');
+  for(const name of ['compileImported','separateImported']){const node=dom.window.document.querySelector<HTMLInputElement>('[data-field="'+name+'"]')!;node.checked=true;node.dispatchEvent(new dom.window.Event('change',{bubbles:true}));}
+  input(dom,'[data-field="text"]','recover this group');await until(()=>service.workspace.editorDrafts().some(draft=>draft.key==='source:new'&&draft.fields.text==='recover this group'),'source draft saved before reopen');const reopened=open();await until(()=>reopened.window.document.querySelector('[data-action="restoreEditorDraft"][data-key="source:new"]'),'source draft exists');click(reopened,'[data-action="restoreEditorDraft"][data-key="source:new"]');
+  await until(()=>reopened.window.document.querySelector<HTMLTextAreaElement>('[data-field="text"]')?.value==='recover this group','draft form restored');
+  for(const name of ['compileImported','separateImported'])assert.equal(reopened.window.document.querySelector<HTMLInputElement>('[data-field="'+name+'"]')!.checked,true,name+' restored');
+});
+
+test('a configured model does not turn on compilation when automatic compilation is disabled',async t=>{
+  const {open,commands,service}=setup(t);commands.set('status',()=>({...service.status(),ready:true}));const dom=open();
+  await until(()=>dom.window.document.querySelector<HTMLElement>('#setupGuide')?.hidden,'configured model shown');click(dom,'[data-tab="sources"]');click(dom,'#newSource');
+  assert.equal(dom.window.document.querySelector<HTMLInputElement>('[data-field="compileImported"]')!.checked,false,'model readiness must not override the user automation preference');
+});
+
+test('a failed component keeps the group staged and retries only missing files in the same source',async t=>{
+  const {open,store,commands}=setup(t),dom=open(),original=commands.get('material_upload_chunk')!;let fail=true,calls=0;
+  commands.set('material_upload_chunk',params=>{calls++;if(fail&&calls===2){fail=false;throw new Error('temporary write failure');}return original(params);});
+  click(dom,'[data-tab="sources"]');click(dom,'#newSource');chooseMaterials(dom,[{name:'one.md',text:'first'},{name:'two.txt',text:'second'},{name:'diagram.png',text:'image bytes',type:'image/png'}]);click(dom,'[data-action="startImport"]');
+  await until(()=>dom.window.document.querySelector('#retryImportGroup'),'group failure shown');const source=store.listSources()[0];assert.equal(source.staging,true);assert.equal(source.parts!.length,2);assert.equal(store.listDrafts().length,0);assert.equal(source.images.length,1);
+  click(dom,'[data-action="retryImports"]');await until(()=>store.listSources().length===1&&!store.listSources()[0].staging,'same group completed');
+  const saved=store.listSources()[0];assert.equal(saved.id,source.id);assert.equal(saved.parts!.length,3);assert.equal(saved.images.length,1);assert.equal(calls,4,'successful files were not uploaded again');
+});
+
+test('trash permanent deletion and emptying require confirmation and update the visible list', async t => {
+  const { service, commands, open } = setup(t);
+  for (const slug of ['one', 'two']) { await service.savePage({ slug, title: slug, body: slug }); await service.deletePage(slug); }
+  const trash = () => commands.get('trash')!({}) as Promise<unknown[]>;
+  const dom = open(); click(dom, '[data-tab="trash"]');
+  await until(() => dom.window.document.querySelectorAll('[data-action="purgeTrash"]').length === 2, 'trash loaded');
+  click(dom, '[data-action="purgeTrash"]'); await until(() => dom.window.document.querySelector('[role="dialog"]'), 'permanent delete decision');
+  assert.equal((await trash()).length, 2); click(dom, '[data-action="dialogCancel"]'); await settle();
+  assert.equal((await trash()).length, 2);
+  click(dom, '[data-action="purgeTrash"]'); await until(() => dom.window.document.querySelector('[data-action="dialogAccept"]'), 'second decision'); click(dom, '[data-action="dialogAccept"]');
+  await until(() => dom.window.document.querySelectorAll('[data-action="purgeTrash"]').length === 1, 'single item removed');
+  click(dom, '[data-action="clearTrash"]'); await until(() => dom.window.document.querySelector('[data-action="dialogAccept"]'), 'empty trash decision');
+  assert.equal((await trash()).length, 1); click(dom, '[data-action="dialogAccept"]');
+  await until(() => dom.window.document.querySelector('#trashView')!.textContent?.includes('回收站为空'), 'trash now empty');
+  assert.equal((await trash()).length, 0);
+});
+
+test('review record deletion discards review editors without deleting its published page or source', async t => {
+  const { service, store, open } = setup(t);
+  const source = await service.addSource({ title: 'review source', text: 'original body' });
+  await service.savePage({ slug: 'published', body: 'published body' });
+  const draft: WikiDraft = { id: 'delete-review', sourceId: source.id, sourceTitle: 'review source', createdAt: new Date().toISOString(), status: 'pending', model: 'local', summary: '', pages: [], contradictions: [], feedback: [] };
+  store.saveDraft(draft); const dom = open(); click(dom, '[data-tab="review"]');
+  await until(() => dom.window.document.querySelector('[data-action="openDraft"]'), 'review list'); click(dom, '[data-action="openDraft"]');
+  await until(() => dom.window.document.querySelector('[data-action="deleteDraft"]'), 'review opened');
+  input(dom, '#draftView [data-field="feedback"]', 'last unsaved review');
+  await until(() => service.workspace.editorDrafts().some(item => item.key === 'review:delete-review'), 'review editor persisted');
+  click(dom, '[data-action="deleteDraft"]'); await until(() => dom.window.document.querySelector('[role="dialog"]'), 'review delete decision');
+  click(dom, '[data-action="dialogCancel"]'); await settle(); assert.ok(store.getDraft(draft.id));
+  click(dom, '[data-action="deleteDraft"]'); await until(() => dom.window.document.querySelector('[data-action="dialogAccept"]'), 'delete confirmed'); click(dom, '[data-action="dialogAccept"]');
+  await until(() => !store.getDraft(draft.id) && !dom.window.document.querySelector('[data-action="openDraft"]'), 'record and list removed');
+  assert.equal(service.workspace.editorDrafts().length, 0); assert.equal(store.getPage('published')!.body, 'published body'); assert.equal(store.getSource(source.id)!.text, 'original body');
+});
+
+test('capture panel shows actual inbox state and preserves recoverable session errors', async t => {
+  const { commands, open } = setup(t); let fail = false, scans = 0;
+  const rows = [{ id: 'capture-1', title: 'complete conversation', projectName: 'workspace', projectPath: '/example/workspace', kind: 'acp' }];
+  commands.set('list_capture_sessions', () => { if (fail) throw new Error('session backend unavailable'); return rows; });
+  commands.set('inbox_status', () => ({ dir: '/example/wiki/raw/inbox', importedDir: '/example/wiki/raw/inbox/imported', failedDir: '/example/wiki/raw/inbox/failed', watching: true, pending: ['next.md'], archived: 2, failed: ['bad.pdf'], failedCount: 1, errors: [{ name: 'bad.pdf', message: 'invalid PDF' }], autoCompile: true, modelReady: false }));
+  commands.set('scan_inbox', () => { scans++; return {}; });
+  const dom = open(); click(dom, '[data-tab="sources"]'); click(dom, '[data-action="showCapture"]');
+  await until(() => dom.window.document.querySelector<HTMLInputElement>('#inboxPath')?.value === '/example/wiki/raw/inbox', 'real inbox path shown');
+  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /正在监听.*待处理 1.*已归档 2.*失败 1/s);
+  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /invalid PDF/);
+  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /素材仍会保存/);
+  const pathInput = dom.window.document.querySelector<HTMLInputElement>('#inboxPath')!;
+  pathInput.focus(); pathInput.setSelectionRange(0, 12);
+  click(dom, '[data-action="scanInbox"]'); await until(() => scans === 1, 'manual scan invoked'); await settle();
+  assert.equal(dom.window.document.querySelector('#inboxPath'), pathInput, 'unchanged polling must preserve the directory input');
+  assert.equal(pathInput.selectionEnd, 12, 'copy selection survives status refresh');
+  fail = true; click(dom, '[data-action="refreshSessions"]');
+  await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('session backend unavailable'), 'failure visible rather than empty list');
+  assert.equal(dom.window.document.querySelectorAll('[data-field="session"] option').length, 1, 'last usable sessions retained');
+  fail = false; click(dom, '[data-action="refreshSessions"]');
+  await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('可选择 1 个会话'), 'retry recovered');
+  const inboxStatus = commands.get('inbox_status')!;
+  commands.set('inbox_status', () => { throw new Error('inbox offline'); });
+  click(dom, '[data-action="refreshCollection"]');
+  await until(() => dom.window.document.querySelector('#inboxPanel [role="alert"]')?.textContent?.includes('inbox offline'), 'inbox error visible');
+  commands.set('inbox_status', inboxStatus); click(dom, '[data-action="refreshCollection"]');
+  await until(() => dom.window.document.querySelector('#inboxPath'), 'unchanged inbox state renders again after recovery');
+});
 
 test('typing during a slow page save preserves the next draft and advances only its own conflict baseline', async t => {
   const { service, store, commands, open } = setup(t);

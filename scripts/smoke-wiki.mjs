@@ -26,6 +26,7 @@ const model = createServer(async (request, response) => {
   else if (joined.includes('查询（Query）')) content = '要点：召回后需要重排序 [[向量检索]]，依据见 [[重排序]]。';
   else if (joined.includes('体检（Lint）')) content = JSON.stringify({ contradictions: [], orphans: [], missing: [], stale: [], suggestions: ['补充混合检索页面'] });
   else content = '可用';
+  if(joined.includes('编译（Compile）')&&joined.includes('混合资料窗口验证'))content+='\n提案已整理完成。';
   response.writeHead(200, { 'content-type': 'application/json' });
   response.end(JSON.stringify({ choices: [{ message: { content } }] }));
 });
@@ -119,7 +120,7 @@ try {
   const tools = new Map(plugin.commands.map(command => [command.name, command]));
   for (const name of ['wiki_index', 'wiki_search', 'wiki_read', 'wiki_sources', 'wiki_source', 'wiki_status', 'wiki_ask', 'wiki_task'])
     assert.equal(tools.get(name)?.mcp, true, name + ' is exposed as an MCP tool');
-  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key'])
+  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key', 'delete_draft', 'purge_trash', 'clear_trash', 'scan_inbox'])
     assert.equal(tools.get(name)?.mcp, false, name + ' stays behind human review');
   const hits = await call('wiki_search', { query: '向量检索', agentId: 'smoke-agent' });
   assert.ok(hits.some(item => item.slug === '向量检索'), 'MCP search tolerates the injected agentId');
@@ -236,6 +237,16 @@ try {
   await until(async () => (await call('list_sources')).some(source => source.title.includes('UI 会话导入验证')), 'background full conversation import completed');
   const capturedSource = (await call('list_sources')).find(source => source.title.includes('UI 会话导入验证'));
   assert.ok((await call('get_source', { id: capturedSource.id })).text.includes('Wiki 全量会话导入验证'));
+  const inboxInfo = await call('inbox_status');
+  assert.equal(inboxInfo.watching, true);
+  await until(async () => await frame.locator('#inboxPath').count() > 0, 'collection status panel');
+  assert.equal(await frame.locator('#inboxPath').inputValue(), inboxInfo.dir);
+  await writeFile(path.join(inboxInfo.dir, 'window-collected.md'), 'Real watcher imported the entire window fixture.');
+  await frame.locator('[data-action="scanInbox"]').click();
+  await until(async () => (await call('list_sources')).some(item => item.title === 'window-collected'), 'real plugin inbox watcher saved source');
+  const collected = (await call('list_sources')).find(item => item.title === 'window-collected');
+  assert.equal((await call('get_source', { id: collected.id })).text, 'Real watcher imported the entire window fixture.');
+  step('capture and actual inbox directory import work from the window');
   await frame.locator('.tabs [data-tab="wiki"]').click();
   await frame.locator('#pageList [data-action="openPage"][data-slug="向量检索"]').click();
   await until(async () => (await frame.locator('#pageView').innerText()).includes('原始出处'), 'return to selected page');
@@ -347,6 +358,7 @@ try {
   await frame.locator('#newSource').click();
   await frame.locator('#sourceView [data-field="title"]').fill('纯图片窗口素材');
   await frame.locator('#sourceView [data-field="images"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
+  await frame.locator('#sourceView [data-field="compileImported"]').check();
   await frame.locator('#sourceView [data-action="saveSource"]').click();
   await until(async () => (await call('list_sources')).some(source => source.title === '纯图片窗口素材' && source.images === 1 && source.compiled), 'image-only source saved and compiled');
   await until(async () => await frame.locator('.tabs [data-tab="review"]').evaluate(node => node.classList.contains('active')), 'image compile task completed in the view');
@@ -363,6 +375,34 @@ try {
   await until(async () => await frame.locator('.tabs [data-tab="review"]').evaluate(node => node.classList.contains('active')), 'iframe PDF compile task completed in the view');
   assert.ok((await call('get_source', { id: (await call('list_sources')).find(item => item.title === 'window-upload').id })).text.includes('Hello AgentBerth IFR'), 'iframe upload extracted its own text');
   step('the iframe PDF input uploads, extracts and compiles');
+  step('mixed Markdown, text, image and supplemental prose remain one review unit');
+  const mixedSourceCount=(await call('list_sources')).length,mixedDraftCount=(await call('list_drafts')).length;
+  await frame.locator('.tabs [data-tab="sources"]').click();
+  await frame.locator('#newSource').click();
+  await frame.locator('#sourceView [data-field="title"]').fill('混合资料窗口验证');
+  await frame.locator('#sourceView [data-field="text"]').fill('补充说明：图中的箭头表示依赖方向。');
+  await frame.locator('#sourceView [data-field="pdf"]').setInputFiles([
+    {name:'article.md',mimeType:'text/markdown',buffer:Buffer.from('# 混合文档\n\n![结构](diagram.png)\n\n原文结尾证据。')},
+    {name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('同组补充记录，不能单独变成另一个提案。')},
+    {name:'diagram.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=','base64')},
+  ]);
+  assert.equal(await frame.locator('[data-field="separateImported"]').isChecked(),false);
+  await frame.locator('[data-field="compileImported"]').check();
+  await frame.locator('[data-action="saveSource"]').click();
+  await until(async()=> (await call('list_sources')).some(source=>source.title==='混合资料窗口验证'&&source.compiled),'mixed source compiled');
+  assert.equal((await call('list_sources')).length,mixedSourceCount+1,'one mixed source');
+  assert.equal((await call('list_drafts')).length,mixedDraftCount+1,'one review proposal for the whole bundle');
+  const mixedSource=(await call('list_sources')).find(source=>source.title==='混合资料窗口验证');
+  const mixed=await call('get_source',{id:mixedSource.id});
+  assert.equal(mixed.partCount,3);assert.equal(mixed.imageCount,1);
+  for(const value of ['补充说明','![结构](diagram.png)','原文结尾证据','同组补充记录'])assert.ok(mixed.text.includes(value),value);
+  assert.ok(requests.some(request=>request.includes('图片理解助手')&&request.includes('diagram.png')));
+  await until(async()=> await frame.locator('.tabs [data-tab="review"]').evaluate(node=>node.classList.contains('active')),'mixed proposal opened');
+  await frame.locator('.tabs [data-tab="sources"]').click();
+  await until(async()=>await frame.locator('#sourceList [data-id="'+mixedSource.id+'"]').count()>0,'mixed source listed');
+  await frame.locator('#sourceList [data-id="'+mixedSource.id+'"]').click();
+  await until(async()=> (await frame.locator('#mixedParts').innerText()).includes('diagram.png'),'mixed components visible');
+  await page.screenshot({animations:'disabled',path:'test-results/wiki-window-mixed.png'});
   await frame.locator('.tabs [data-tab="ask"]').click();
   await frame.locator('#question').fill('向量检索：窗口里直接提问可以吗？');
   await frame.locator('#ask').click();
@@ -384,6 +424,16 @@ try {
 
 
   await until(async () => (await call('status')).tasks.every(task => !['queued', 'running'].includes(task.status)), 'background tasks drained before backup');
+  await frame.locator('.tabs [data-tab="review"]').click();
+  await until(async () => await frame.locator('#draftList [data-id="' + draftId + '"]').count() > 0, 'approved review record listed');
+  await frame.locator('#draftList [data-id="' + draftId + '"]').click();
+  await until(async () => await frame.locator('[data-action="deleteDraft"]').count() > 0, 'review deletion available');
+  await frame.locator('[data-action="deleteDraft"]').click();
+  assert.ok(await call('get_draft', { id: draftId }), 'review still present before confirmation');
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => !(await call('get_draft', { id: draftId })), 'review record deleted');
+  assert.ok(await call('get_page', { slug: '向量检索' })); assert.ok(await call('get_source', { id: source.id }));
+  step('review deletion preserves published pages and original source');
   await call('save_page', { slug: 'window-trash', title: '窗口回收站验证', body: '恢复后仍然完整的正文' });
   await frame.locator('.tabs [data-tab="wiki"]').click();
   await until(async () => await frame.locator('#pageList [data-slug="window-trash"]').count() > 0, 'new page appears');
@@ -398,6 +448,18 @@ try {
   await frame.locator('#trashView .card', { hasText: '窗口回收站验证' }).locator('[data-action="restoreTrash"]').click();
   await until(async () => (await call('get_page', { slug: 'window-trash' }))?.page.body.includes('恢复后仍然完整'), 'trash restores the actual content');
   step('confirmed deletion and recovery work in the real window');
+  for (const slug of ['purge-one', 'purge-two']) { await call('save_page', { slug, body: 'discarded page' }); await call('delete_page', { slug }); }
+  await frame.locator('.tabs [data-tab="trash"]').click();
+  await until(async () => await frame.locator('[data-action="purgeTrash"]').count() === 2, 'permanent deletion actions');
+  await frame.locator('[data-action="purgeTrash"]').first().click();
+  assert.equal((await call('trash')).length, 2);
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => await frame.locator('[data-action="purgeTrash"]').count() === 1, 'one record purged');
+  await frame.locator('[data-action="clearTrash"]').click();
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => (await call('trash')).length === 0, 'trash emptied');
+  assert.ok(await call('get_page', { slug: 'window-trash' }), 'restored page survives purge');
+  step('permanent deletion and empty trash work in the real window');
   await frame.locator('.tabs [data-tab="settings"]').click();
   await until(async () => await frame.locator('#backupControls').count() > 0, 'backup controls');
   const backupPath = path.join(folder, 'wiki-backup.zip');
