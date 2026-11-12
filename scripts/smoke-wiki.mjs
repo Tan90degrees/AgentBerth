@@ -119,7 +119,7 @@ try {
   const tools = new Map(plugin.commands.map(command => [command.name, command]));
   for (const name of ['wiki_index', 'wiki_search', 'wiki_read', 'wiki_sources', 'wiki_source', 'wiki_status', 'wiki_ask', 'wiki_task'])
     assert.equal(tools.get(name)?.mcp, true, name + ' is exposed as an MCP tool');
-  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key'])
+  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key', 'delete_draft', 'purge_trash', 'clear_trash', 'scan_inbox'])
     assert.equal(tools.get(name)?.mcp, false, name + ' stays behind human review');
   const hits = await call('wiki_search', { query: '向量检索', agentId: 'smoke-agent' });
   assert.ok(hits.some(item => item.slug === '向量检索'), 'MCP search tolerates the injected agentId');
@@ -236,6 +236,16 @@ try {
   await until(async () => (await call('list_sources')).some(source => source.title.includes('UI 会话导入验证')), 'background full conversation import completed');
   const capturedSource = (await call('list_sources')).find(source => source.title.includes('UI 会话导入验证'));
   assert.ok((await call('get_source', { id: capturedSource.id })).text.includes('Wiki 全量会话导入验证'));
+  const inboxInfo = await call('inbox_status');
+  assert.equal(inboxInfo.watching, true);
+  await until(async () => await frame.locator('#inboxPath').count() > 0, 'collection status panel');
+  assert.equal(await frame.locator('#inboxPath').inputValue(), inboxInfo.dir);
+  await writeFile(path.join(inboxInfo.dir, 'window-collected.md'), 'Real watcher imported the entire window fixture.');
+  await frame.locator('[data-action="scanInbox"]').click();
+  await until(async () => (await call('list_sources')).some(item => item.title === 'window-collected'), 'real plugin inbox watcher saved source');
+  const collected = (await call('list_sources')).find(item => item.title === 'window-collected');
+  assert.equal((await call('get_source', { id: collected.id })).text, 'Real watcher imported the entire window fixture.');
+  step('capture and actual inbox directory import work from the window');
   await frame.locator('.tabs [data-tab="wiki"]').click();
   await frame.locator('#pageList [data-action="openPage"][data-slug="向量检索"]').click();
   await until(async () => (await frame.locator('#pageView').innerText()).includes('原始出处'), 'return to selected page');
@@ -384,6 +394,16 @@ try {
 
 
   await until(async () => (await call('status')).tasks.every(task => !['queued', 'running'].includes(task.status)), 'background tasks drained before backup');
+  await frame.locator('.tabs [data-tab="review"]').click();
+  await until(async () => await frame.locator('#draftList [data-id="' + draftId + '"]').count() > 0, 'approved review record listed');
+  await frame.locator('#draftList [data-id="' + draftId + '"]').click();
+  await until(async () => await frame.locator('[data-action="deleteDraft"]').count() > 0, 'review deletion available');
+  await frame.locator('[data-action="deleteDraft"]').click();
+  assert.ok(await call('get_draft', { id: draftId }), 'review still present before confirmation');
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => !(await call('get_draft', { id: draftId })), 'review record deleted');
+  assert.ok(await call('get_page', { slug: '向量检索' })); assert.ok(await call('get_source', { id: source.id }));
+  step('review deletion preserves published pages and original source');
   await call('save_page', { slug: 'window-trash', title: '窗口回收站验证', body: '恢复后仍然完整的正文' });
   await frame.locator('.tabs [data-tab="wiki"]').click();
   await until(async () => await frame.locator('#pageList [data-slug="window-trash"]').count() > 0, 'new page appears');
@@ -398,6 +418,18 @@ try {
   await frame.locator('#trashView .card', { hasText: '窗口回收站验证' }).locator('[data-action="restoreTrash"]').click();
   await until(async () => (await call('get_page', { slug: 'window-trash' }))?.page.body.includes('恢复后仍然完整'), 'trash restores the actual content');
   step('confirmed deletion and recovery work in the real window');
+  for (const slug of ['purge-one', 'purge-two']) { await call('save_page', { slug, body: 'discarded page' }); await call('delete_page', { slug }); }
+  await frame.locator('.tabs [data-tab="trash"]').click();
+  await until(async () => await frame.locator('[data-action="purgeTrash"]').count() === 2, 'permanent deletion actions');
+  await frame.locator('[data-action="purgeTrash"]').first().click();
+  assert.equal((await call('trash')).length, 2);
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => await frame.locator('[data-action="purgeTrash"]').count() === 1, 'one record purged');
+  await frame.locator('[data-action="clearTrash"]').click();
+  await frame.locator('[data-action="dialogAccept"]').click();
+  await until(async () => (await call('trash')).length === 0, 'trash emptied');
+  assert.ok(await call('get_page', { slug: 'window-trash' }), 'restored page survives purge');
+  step('permanent deletion and empty trash work in the real window');
   await frame.locator('.tabs [data-tab="settings"]').click();
   await until(async () => await frame.locator('#backupControls').count() > 0, 'backup controls');
   const backupPath = path.join(folder, 'wiki-backup.zip');

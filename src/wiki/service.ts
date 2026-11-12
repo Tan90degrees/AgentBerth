@@ -214,6 +214,7 @@ export class WikiService {
         this.taskControllers.delete(task.id);
         task.finishedAt = now(); this.persistTasks();
         for (const [sourceId, id] of this.compiling) if (id === task.id) this.compiling.delete(sourceId);
+        if(task.retry?.action==='compile'&&task.status!=='cancelled')this.tick();
         try { this.publish?.(); } catch { /* A view notification cannot stop the queue. */ }
       }
     } finally { this.draining = false; }
@@ -228,7 +229,7 @@ export class WikiService {
     if (this.signal.aborted) return;
     if (this.config.autoCompile && !this.queued('compile')) {
       const pending = this.store.listSources().find(source =>
-        !source.staging && !source.compiled && !this.pausedSources.has(source.id) && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
+        !source.staging && !source.compiled && !source.autoCompilePaused && !this.pausedSources.has(source.id) && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
       if (pending && this.modelReady()) void this.compile(pending.id);
     }
     const interval = Math.max(0, this.config.lintMinutes) * 60_000;
@@ -450,6 +451,7 @@ export class WikiService {
     if (!count) throw new Error('该会话暂无可导入的记录，请先关联原生会话或导入对话历史');
     const text = `# ${title}\n\n工作区：${project?.name ?? session.projectId ?? '未知'}\n工作区目录：${project?.path ?? ''}\n会话名称：${session.title ?? ''}\n会话 ID：${sessionId}\n原生会话 ID：${session.nativeSessionId ?? ''}\n\n> 采集自工作台会话 ${sessionId}。完整导入 ${count} 条记录，不截断单条正文。导入开始之后新增的记录可在下一次导入中更新。\n\n${entries.join('\n\n')}`;
     const result = await this.importText(title, text, `工作台会话 ${sessionId}`, { guard: () => this.assertOperation() });
+    this.tick();
     return { ...result, events: count };
   }
   async deleteSource(id: string): Promise<void> {
@@ -596,6 +598,18 @@ export class WikiService {
   }
 
   // ---- Compile → draft → review ----------------------------------------
+  async deleteDraft(id: string): Promise<void> {
+    await withWriteLock(()=>{
+      this.assertOperation();
+      const draft=this.store.getDraft(id);if(!draft)throw new Error('审阅记录不存在');
+      const active=[...this.tasks.values()].some(task=>['queued','running'].includes(task.status)&&((task.retry?.action==='review'&&task.retry.params.id===id)||(draft.sourceId&&task.retry?.action==='compile'&&task.retry.params.sourceId===draft.sourceId)));
+      if(active)throw new Error('此提案正在编译或审阅，请先完成或取消对应任务');
+      const source=draft.sourceId?this.store.getSource(draft.sourceId):null;
+      if(source&&!source.compiled){source.autoCompilePaused=true;this.store.saveSource(source);}
+      this.store.deleteDraft(id);this.workspace.deleteReviewEditors(id);
+      this.store.appendLog('edit','删除审阅记录',[`提案：${id}`,'已发布页面与原始素材保留']);
+    });
+  }
   compile(sourceId?: string): string {
     const source = sourceId ? this.store.getSource(sourceId) : this.store.listSources().find(item => !item.compiled);
     if (!source) throw new Error(sourceId ? '素材不存在' : '没有待编译的素材');
@@ -607,6 +621,7 @@ export class WikiService {
     const id = this.enqueue('compile', `编译「${source.title}」`, async task => {
       const fresh = this.store.getSource(source.id);
       if (!fresh) throw new Error('素材已被删除');
+      if(fresh.autoCompilePaused)await withWriteLock(()=>{const current=this.store.getSource(source.id);if(!current)throw new Error('素材已被删除');delete current.autoCompilePaused;this.store.saveSource(current);delete fresh.autoCompilePaused;});
       const inputHash = this.store.sourceHash(fresh);
       await this.describeImages(fresh, task);
       const schema = this.schema(), skills = this.allSkills();

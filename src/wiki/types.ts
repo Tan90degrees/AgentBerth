@@ -35,6 +35,8 @@ export interface WikiPage {
 }
 
 export interface WikiSource {
+  /** Explicit proposal deletion pauses paid auto-compilation until manual compile. */
+  autoCompilePaused?: boolean;
   id: string;
   title: string;
   text: string;

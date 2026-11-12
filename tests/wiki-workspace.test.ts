@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { zipSync, unzipSync } from 'fflate';
@@ -22,6 +22,98 @@ function fixture(t: { after: (fn: () => void) => void }, extra: Partial<Construc
 }
 function page(slug: string, body: string): WikiPage { const p: WikiPage = { slug, title: slug, summary: '', kind: 'note', body, sources: [], evidence: [], tags: [], humanEdited: true, hash: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; p.hash = pageHash(p); return p; }
 async function finished(service: WikiService, id: string): Promise<WikiTask> { for (let i = 0; i < 1000; i++) { const task = service.taskStatus(id)!; if (!['queued', 'running'].includes(task.status)) return task; await new Promise(resolve => setTimeout(resolve, 5)); } throw new Error('task did not complete'); }
+
+test('purging trash removes only selected records and unreferenced image/PDF assets', async t => {
+  const { service, store, workspace } = fixture(t);
+  const source = await service.addSource({ title: 'disposable', text: 'complete raw', images: [{ mime: 'image/png', base64: 'eA==' }] });
+  const pdf = store.addDocument(new TextEncoder().encode('original PDF'));
+  source.document = { name: 'original.pdf', asset: pdf, pages: 1, ranges: [] }; store.saveSource(source);
+  const shared = await service.addSource({ title: 'live', text: 'another source' }); shared.images = [...source.images]; store.saveSource(shared);
+  store.savePage(page('recoverable', 'page kept in trash'));
+  const other = workspace.deletePage('recoverable'), removed = workspace.deleteSource(source.id);
+  assert.throws(() => workspace.purgeTrash('../raw'), /无效/);
+  const result = workspace.purgeTrash(removed.id);
+  assert.deepEqual(result, { deleted: 1, assetsRemoved: 1, retainedAssets: 1, failedAssets: [], failedAssetCount: 0 });
+  assert.equal(existsSync(store.assetFile(pdf)), false); assert.ok(existsSync(store.assetFile(shared.images[0])));
+  assert.deepEqual(workspace.trash().map(item => item.id), [other.id]);
+  assert.throws(() => workspace.restoreTrash(removed.id), /不存在/);
+  workspace.restoreTrash(other.id); assert.equal(store.getPage('recoverable')!.body, 'page kept in trash');
+  workspace.deleteSource(shared.id); assert.equal(workspace.purgeTrash().assetsRemoved, 1);
+  assert.equal(workspace.trash().length, 0); assert.equal(workspace.purgeTrash().deleted, 0);
+});
+
+test('purging keeps attachments referenced by other trash, pages, review editors and history', async t => {
+  const { service, store, workspace, root } = fixture(t);
+  const source = await service.addSource({ title: 'images', text: 'raw', images: Array.from({ length: 6 }, () => ({ mime: 'image/png', base64: 'eA==' })) });
+  const [live, trash, history, editor, shared, unused] = source.images;
+  store.savePage(page('live', `![live](${live})`));
+  store.savePage(page('trashed-page', `![trash](${trash})`)); workspace.deletePage('trashed-page');
+  writeFileSync(path.join(root, 'history', 'old.1.md'), `![old](${history})`);
+  workspace.saveEditorDraft('page:new', { body: `![unsaved](${editor})` });
+  const other = await service.addSource({ title: 'other trash', text: 'raw two' }); other.images = [shared]; store.saveSource(other); workspace.deleteSource(other.id);
+  const entry = workspace.deleteSource(source.id), backup = workspace.backup();
+  const result = workspace.purgeTrash(entry.id);
+  assert.equal(result.retainedAssets, 5); assert.equal(result.assetsRemoved, 1);
+  for (const asset of [live, trash, history, editor, shared]) assert.ok(existsSync(store.assetFile(asset)), asset);
+  assert.equal(existsSync(store.assetFile(unused)), false);
+  assert.ok(unzipSync(backup)['raw/assets/' + unused], 'existing backup keeps its snapshot');
+});
+
+test('attachment cleanup failures are reported without leaving half-restorable trash records', async t => {
+  const { service, store, workspace } = fixture(t);
+  const source = await service.addSource({ title: 'cleanup failure', text: 'source', images: [{ mime: 'image/png', base64: 'eA==' }, { mime: 'image/png', base64: 'eA==' }] });
+  const blocked = store.assetFile(source.images[0]); rmSync(blocked); mkdirSync(blocked);
+  const entry = workspace.deleteSource(source.id), result = workspace.purgeTrash(entry.id);
+  assert.equal(result.deleted, 1); assert.equal(result.assetsRemoved, 1); assert.equal(result.failedAssetCount, 1); assert.deepEqual(result.failedAssets, [source.images[0]]);
+  assert.equal(workspace.trash().length, 0); assert.ok(existsSync(blocked)); assert.equal(existsSync(store.assetFile(source.images[1])), false);
+});
+
+test('deleting review records clears only their editors and preserves published pages and raw material', async t => {
+  const { service, store, workspace } = fixture(t);
+  const source = await service.addSource({ title: 'original', text: 'original complete source' });
+  store.savePage(page('published', 'already published'));
+  const draft: WikiDraft = { id: 'record', sourceId: source.id, sourceTitle: source.title, createdAt: new Date().toISOString(), status: 'pending', model: 'local', summary: 'proposal', pages: [], contradictions: [], feedback: [] };
+  store.saveDraft(draft); workspace.saveEditorDraft('review:record', { feedback: 'unsaved feedback' });
+  workspace.saveEditorDraft('review:record:page', { body: 'unsaved edit' }); workspace.saveEditorDraft('page:new', { body: 'other editor' });
+  assert.equal(service.status().pendingDrafts, 1);
+  await service.deleteDraft(draft.id);
+  assert.equal(store.getDraft(draft.id), null); assert.equal(service.status().pendingDrafts, 0);
+  assert.deepEqual(workspace.editorDrafts().map(item => item.key), ['page:new']);
+  workspace.saveEditorDraft('review:record:page', { body: 'late autosave' }); assert.equal(workspace.editorDrafts().length, 1);
+  assert.equal(store.getPage('published')!.body, 'already published'); assert.equal(store.getSource(source.id)!.text, source.text);
+  assert.equal(store.getSource(source.id)!.autoCompilePaused, true);
+  await assert.rejects(service.deleteDraft(draft.id), /不存在/);
+  for (const status of ['approved', 'rejected'] as const) { store.saveDraft({ ...draft, id: status, status }); await service.deleteDraft(status); assert.equal(store.getDraft(status), null); }
+});
+
+test('deleted review stays paused across restart and manual compile resumes the complete source', async t => {
+  let requests = 0;
+  const fetchImpl: typeof fetch = async () => { requests++; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: 'compiled', concepts: [], claims: [], contradictions: [], pages: [{ slug: 'compiled', title: 'compiled', kind: 'note', summary: 'summary', body: 'compiled full source', sources: [], tags: [] }] }) } }] })); };
+  const { service, store } = fixture(t, { config: { ...config, autoCompile: true }, fetchImpl });
+  const source = await service.addSource({ title: 'pause me', text: 'complete source text' });
+  store.saveDraft({ id: 'rejected', sourceId: source.id, sourceTitle: source.title, createdAt: new Date().toISOString(), status: 'rejected', model: 'local', summary: '', pages: [], contradictions: [], feedback: [] });
+  await service.deleteDraft('rejected'); service.tick(); assert.equal(requests, 0);
+  const controller = new AbortController(); t.after(() => controller.abort());
+  const reopened = new WikiService({ store: new WikiStore(store.root), config: { ...config, autoCompile: true }, signal: controller.signal, fetchImpl });
+  reopened.tick(); assert.equal(requests, 0);
+  const task = await finished(reopened, reopened.compile(source.id)); assert.equal(task.status, 'done', task.error); assert.ok(requests > 0);
+  assert.equal(store.getSource(source.id)!.autoCompilePaused, undefined); assert.equal(store.listDrafts().length, 1);
+});
+
+test('review deletion refuses an active compile and automatic compilation drains all queued sources', async t => {
+  let release!: (response: Response) => void, requests = 0;
+  const response = () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: 'compiled', concepts: [], claims: [], contradictions: [], pages: [{ slug: 'compiled', title: 'compiled', kind: 'note', summary: 'summary', body: 'compiled full source', sources: [], tags: [] }] }) } }] }));
+  const { service, store } = fixture(t, { config: { ...config, autoCompile: true }, fetchImpl: async () => { if (++requests === 1) return new Promise(resolve => { release = resolve; }); return response(); } });
+  const one = await service.addSource({ title: 'one', text: 'first full source' });
+  const two = await service.addSource({ title: 'two', text: 'second full source' });
+  store.saveDraft({ id: 'busy', sourceId: one.id, sourceTitle: one.title, createdAt: new Date().toISOString(), status: 'pending', model: 'local', summary: '', pages: [], contradictions: [], feedback: [] });
+  const id = service.compile(one.id);
+  await assert.rejects(service.deleteDraft('busy'), /正在编译或审阅/); assert.ok(store.getDraft('busy'));
+  release(response()); const task = await finished(service, id); assert.equal(task.status, 'done', task.error);
+  for (let i = 0; i < 300 && !store.getSource(two.id)?.compiled; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(store.getSource(two.id)!.compiled, true, 'next source starts without a one-minute poll');
+  const count = requests; service.tick(); assert.equal(requests, count, 'compiled sources are not replayed');
+});
 
 test('editor drafts survive reopen, clear explicitly and exclude credential fields', t => {
   const { store, workspace } = fixture(t);
@@ -64,7 +156,7 @@ test('restoring workspace state waits for cancelled requests and incomplete PDF 
 
 test('interrupted compile history stays paused after restore and restart until explicitly retried', async t => {
   let calls = 0;
-  const fetchImpl: typeof fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: 'compiled', concepts: [], claims: [], contradictions: [], pages: [] }) } }] })); };
+  const fetchImpl: typeof fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: 'compiled', concepts: [], claims: [], contradictions: [], pages: [{ slug: 'compiled', title: 'compiled', kind: 'note', summary: 'summary', body: 'compiled full source', sources: [], tags: [] }] }) } }] })); };
   const { store, service, workspace } = fixture(t, { config: { ...config, autoCompile: true }, fetchImpl });
   const source = await service.addSource({ title: 'interrupted', text: 'source awaiting manual retry' });
   workspace.saveTasks([{ id: 'interrupted', kind: 'compile', status: 'running', progress: 'running', label: 'Interrupted compile', startedAt: new Date().toISOString(), retry: { action: 'compile', params: { sourceId: source.id } } }]);

@@ -246,7 +246,7 @@ export const notesWikiScript = String.raw`
       var contradictions=draft.contradictions.length?'<div class="card"><h3>发现的矛盾</h3><ul>'+draft.contradictions.map(function(c){return '<li>'+esc(c)+'</li>'}).join('')+'</ul></div>':'';
       var feedback=draft.feedback.length?'<p class="muted">历史反馈：'+esc(draft.feedback.join('；'))+'</p>':'';
       var actions=draft.status==='pending'?'<div class="row">'+button('approveDraft','批准并发布（'+draft.pages.filter(function(p){return p.selected!==false&&p.action!=='skip'}).length+' 页）','primary')+button('rejectDraft','拒绝','danger')+'</div><label>拒绝反馈（会注入下次编译）<textarea data-field="feedback" rows="2" maxlength="500" placeholder="例如：概述太笼统，需要具体例子"></textarea></label>':'<p class="muted">此提案已处理。</p>';
-      host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(draft.sourceTitle)+'</h2><p class="muted">'+esc(draft.summary)+' · 模型 '+esc(draft.model)+' · '+esc(date(draft.createdAt))+'</p></div><span class="badge">'+esc(draft.status)+'</span></div>'+feedback+actions+'</div>'+contradictions+card('页面提案',pages)+'<div id="draftDiff"></div>';
+      host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(draft.sourceTitle)+'</h2><p class="muted">'+esc(draft.summary)+' · 模型 '+esc(draft.model)+' · '+esc(date(draft.createdAt))+'</p></div><span class="badge">'+esc(draft.status)+'</span></div>'+feedback+actions+'<div class="row">'+button('deleteDraft','删除审阅记录','danger',' data-id="'+esc(draft.id)+'"')+'</div></div>'+contradictions+card('页面提案',pages)+'<div id="draftDiff"></div>';
       if(state.draftSlug)loadDraftPage(draft.id,state.draftSlug);
     }).catch(err);
   }

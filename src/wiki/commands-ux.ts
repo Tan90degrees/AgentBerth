@@ -42,6 +42,9 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   cmd('retry_task', '重试失败或已取消的任务', id, ['id'], p => service.retryTask(str(p, 'id')));
   cmd('trash', '回收站', page, [], p => slice(workspace.trash(), p).map(({ id, kind, title, at }) => ({ id, kind, title, at })));
   cmd('restore_trash', '恢复已删除页面或素材', { ...id, asCopy: field('boolean') }, ['id'], p => write(() => { const item = workspace.restoreTrash(str(p, 'id'), p.asCopy === true); store.saveIndex(buildIndex(store.listPages())); return { kind: item.kind, slug: item.page?.slug, sourceId: item.source?.id }; }));
+  cmd('purge_trash','永久删除回收记录及未引用附件',id,['id'],p=>write(()=>workspace.purgeTrash(str(p,'id'))));
+  cmd('clear_trash','清空回收站及未引用附件',{},[],()=>write(()=>workspace.purgeTrash()));
+  cmd('delete_draft','删除审阅记录，保留页面和素材',id,['id'],p=>service.deleteDraft(str(p,'id')).then(()=>true));
   cmd('delete_impact', '删除前查看引用影响', { kind: field('string'), ...id }, ['kind', 'id'], p => ({ pages: service.listPages().filter(item => p.kind === 'source' ? item.sources.includes(str(p, 'id')) || item.evidence.some(e => e.sourceId === p.id) : extractLinks(item.body).includes(str(p, 'id'))).map(item => item.title).slice(0, 100) }));
   cmd('edit_draft_page', '逐页选择、修改和合并提案', { ...id, slug: field('string'), selected: field('boolean'), body: field('string'), merge: field('boolean') }, ['id', 'slug', 'selected'], p => service.editDraftPage(str(p, 'id'), str(p, 'slug'), p.selected === true, typeof p.body === 'string' ? p.body : undefined, p.merge === true).then(() => true));
   cmd('draft_page_text', '读取提案的可编辑正文', { ...id, slug: field('string') }, ['id', 'slug'], p => { const draft = service.getDraft(str(p, 'id')), item = draft?.pages.find(item => item.slug === p.slug); return item ? { body: item.body, selected: item.selected !== false, merge: !!item.allowHumanMerge, action: item.action, editable: draft?.status === 'pending' } : null; });

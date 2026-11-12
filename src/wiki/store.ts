@@ -219,7 +219,7 @@ export class WikiStore {
   }
   getDraft(id: string): WikiDraft | null { return this.readJson<WikiDraft | null>(this.file(this.draftDir, id, '.json'), null); }
   saveDraft(draft: WikiDraft): void { this.writeJson(this.file(this.draftDir, draft.id, '.json'), draft); }
-  deleteDraft(id: string): void { rmSync(this.file(this.draftDir, id, '.json'), { force: true }); }
+  deleteDraft(id: string): void { rmSync(this.file(this.draftDir, id, '.json'), { force: true }); this.invalidate(); }
 }
 
 /** Public entry point used by the service; keeps disk writes ordered. */

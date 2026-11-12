@@ -167,12 +167,16 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('pdf_upload_cancel', '取消 PDF 上传', schema({ uploadId: field('string') }, ['uploadId']), params => ({ cancelled: service.cancelPdfUpload(text(params, 'uploadId')) }));
 
   // Automatic capture: watch raw/inbox and import finished workbench sessions.
-  add('inbox_status', '查看自动采集目录与待处理文件', schema({}), () => ({
+  const inboxStatus=()=>({
     dir: inbox?.dir ?? path.join(api.dataDirectory, 'raw', 'inbox'),
     importedDir: inbox?.importedDir ?? path.join(api.dataDirectory, 'raw', 'inbox', 'imported'),
     failedDir: inbox?.failedDir ?? path.join(api.dataDirectory, 'raw', 'inbox', 'failed'),
-    pending: inbox?.pending ?? [], archived: inbox?.archived ?? 0, watching: !!inbox,
-  }));
+    pending: (inbox?.pending ?? []).slice(0,50), pendingCount:inbox?.pending.length??0, archived: inbox?.archived ?? 0, watching: !!inbox,
+    failed:(inbox?.failed??[]).slice(0,50),failedCount:inbox?.failed.length??0,errors:inbox?.errors??[],scanning:inbox?.scanning??false,
+    autoCompile:options.config.autoCompile,modelReady:service.status().ready,
+  });
+  add('inbox_status', '查看自动采集目录与待处理文件', schema({}), inboxStatus);
+  add('scan_inbox','立即扫描自动采集目录',schema({}),()=>{if(!inbox)throw new Error('自动采集尚未启动，请重新加载知识库插件');void inbox.scan().catch(error=>store.appendLog('ingest','扫描失败',[String(error)]));return inboxStatus();});
   add('list_capture_sessions', '列出可沉淀为素材的工作台会话（ACP 对话与已导入历史的自定义 Agent 会话）', schema(paging), async params => pageSlice(await service.listCaptureSessions(), params));
   add('capture_session_start', '后台全量导入会话', schema({ sessionId: field('string') }, ['sessionId']), params => service.beginCaptureSession(text(params, 'sessionId')));
   add('capture_session', '把一次 Agent 会话沉淀成不可变素材', schema({ sessionId: field('string') }, ['sessionId']), params => service.captureSession(text(params, 'sessionId')));
@@ -311,8 +315,8 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
     inbox = startInbox({
       root: api.dataDirectory,
       parse: (name, bytes) => service.extractPdfText(name, new Uint8Array(bytes)),
-      onPdf: async (name, bytes) => { await service.ingestPdfFile(name, new Uint8Array(bytes)); },
-      onFile: async (name, value) => { await service.ingestInboxFile(name, value); },
+      onPdf: async (name, bytes) => { await service.ingestPdfFile(name, new Uint8Array(bytes)); service.tick(); },
+      onFile: async (name, value) => { await service.ingestInboxFile(name, value); service.tick(); },
       onError: (name, error) => store.appendLog('ingest', '自动采集失败', [
         `文件：${path.basename(name)}`, String(error instanceof Error ? error.message : error).slice(0, 200),
       ]),

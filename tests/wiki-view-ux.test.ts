@@ -34,6 +34,59 @@ function click(dom: JSDOM, selector: string) { const node = dom.window.document.
 function input(dom: JSDOM, selector: string, value: string) { const node = dom.window.document.querySelector<HTMLInputElement>(selector)!; assert.ok(node, selector); node.value = value; node.dispatchEvent(new dom.window.Event('input', { bubbles: true })); }
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 
+test('trash permanent deletion and emptying require confirmation and update the visible list', async t => {
+  const { service, commands, open } = setup(t);
+  for (const slug of ['one', 'two']) { await service.savePage({ slug, title: slug, body: slug }); await service.deletePage(slug); }
+  const trash = () => commands.get('trash')!({}) as Promise<unknown[]>;
+  const dom = open(); click(dom, '[data-tab="trash"]');
+  await until(() => dom.window.document.querySelectorAll('[data-action="purgeTrash"]').length === 2, 'trash loaded');
+  click(dom, '[data-action="purgeTrash"]'); await until(() => dom.window.document.querySelector('[role="dialog"]'), 'permanent delete decision');
+  assert.equal((await trash()).length, 2); click(dom, '[data-action="dialogCancel"]'); await settle();
+  assert.equal((await trash()).length, 2);
+  click(dom, '[data-action="purgeTrash"]'); await until(() => dom.window.document.querySelector('[data-action="dialogAccept"]'), 'second decision'); click(dom, '[data-action="dialogAccept"]');
+  await until(() => dom.window.document.querySelectorAll('[data-action="purgeTrash"]').length === 1, 'single item removed');
+  click(dom, '[data-action="clearTrash"]'); await until(() => dom.window.document.querySelector('[data-action="dialogAccept"]'), 'empty trash decision');
+  assert.equal((await trash()).length, 1); click(dom, '[data-action="dialogAccept"]');
+  await until(() => dom.window.document.querySelector('#trashView')!.textContent?.includes('回收站为空'), 'trash now empty');
+  assert.equal((await trash()).length, 0);
+});
+
+test('review record deletion discards review editors without deleting its published page or source', async t => {
+  const { service, store, open } = setup(t);
+  const source = await service.addSource({ title: 'review source', text: 'original body' });
+  await service.savePage({ slug: 'published', body: 'published body' });
+  const draft: WikiDraft = { id: 'delete-review', sourceId: source.id, sourceTitle: 'review source', createdAt: new Date().toISOString(), status: 'pending', model: 'local', summary: '', pages: [], contradictions: [], feedback: [] };
+  store.saveDraft(draft); const dom = open(); click(dom, '[data-tab="review"]');
+  await until(() => dom.window.document.querySelector('[data-action="openDraft"]'), 'review list'); click(dom, '[data-action="openDraft"]');
+  await until(() => dom.window.document.querySelector('[data-action="deleteDraft"]'), 'review opened');
+  input(dom, '#draftView [data-field="feedback"]', 'last unsaved review');
+  await until(() => service.workspace.editorDrafts().some(item => item.key === 'review:delete-review'), 'review editor persisted');
+  click(dom, '[data-action="deleteDraft"]'); await until(() => dom.window.document.querySelector('[role="dialog"]'), 'review delete decision');
+  click(dom, '[data-action="dialogCancel"]'); await settle(); assert.ok(store.getDraft(draft.id));
+  click(dom, '[data-action="deleteDraft"]'); await until(() => dom.window.document.querySelector('[data-action="dialogAccept"]'), 'delete confirmed'); click(dom, '[data-action="dialogAccept"]');
+  await until(() => !store.getDraft(draft.id) && !dom.window.document.querySelector('[data-action="openDraft"]'), 'record and list removed');
+  assert.equal(service.workspace.editorDrafts().length, 0); assert.equal(store.getPage('published')!.body, 'published body'); assert.equal(store.getSource(source.id)!.text, 'original body');
+});
+
+test('capture panel shows actual inbox state and preserves recoverable session errors', async t => {
+  const { commands, open } = setup(t); let fail = false, scans = 0;
+  const rows = [{ id: 'capture-1', title: 'complete conversation', projectName: 'workspace', projectPath: '/example/workspace', kind: 'acp' }];
+  commands.set('list_capture_sessions', () => { if (fail) throw new Error('session backend unavailable'); return rows; });
+  commands.set('inbox_status', () => ({ dir: '/example/wiki/raw/inbox', importedDir: '/example/wiki/raw/inbox/imported', failedDir: '/example/wiki/raw/inbox/failed', watching: true, pending: ['next.md'], archived: 2, failed: ['bad.pdf'], failedCount: 1, errors: [{ name: 'bad.pdf', message: 'invalid PDF' }], autoCompile: true, modelReady: false }));
+  commands.set('scan_inbox', () => { scans++; return {}; });
+  const dom = open(); click(dom, '[data-tab="sources"]'); click(dom, '[data-action="showCapture"]');
+  await until(() => dom.window.document.querySelector<HTMLInputElement>('#inboxPath')?.value === '/example/wiki/raw/inbox', 'real inbox path shown');
+  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /正在监听.*待处理 1.*已归档 2.*失败 1/s);
+  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /invalid PDF/);
+  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /素材仍会保存/);
+  click(dom, '[data-action="scanInbox"]'); await until(() => scans === 1, 'manual scan invoked'); await settle();
+  fail = true; click(dom, '[data-action="refreshSessions"]');
+  await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('session backend unavailable'), 'failure visible rather than empty list');
+  assert.equal(dom.window.document.querySelectorAll('[data-field="session"] option').length, 1, 'last usable sessions retained');
+  fail = false; click(dom, '[data-action="refreshSessions"]');
+  await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('可选择 1 个会话'), 'retry recovered');
+});
+
 test('typing during a slow page save preserves the next draft and advances only its own conflict baseline', async t => {
   const { service, store, commands, open } = setup(t);
   await service.savePage({ slug: 'notes', title: 'notes', body: 'original' });
