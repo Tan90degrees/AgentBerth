@@ -53,13 +53,14 @@ try{
     const snapshot=await themeSnapshot();assert.equal(snapshot.cols,themeGrid.cols);assert.equal(snapshot.rows,themeGrid.rows);assert.equal(Number(snapshot.snapshot.match(/COLOR_REPLIES_(\d+)/)?.[1]),++colorReplies,'Each theme change gets exactly one daemon-owned color reply');
     const current=(await rpc('state')).sessions.find(value=>value.id===themeSession.id).latestRun;assert.equal(current.id,themeRun.id);assert.equal(current.pid,themeRun.pid);
   }
-  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('berth:plugin-settings',{detail:{pluginId:'appearance',isAgent:false}})));
+  await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('navigation',{name:'设置分类',exact:true}).getByRole('button',{name:'外观',exact:true}).click();
   await page.getByRole('radio',{name:'跟随系统',exact:true}).click();
   for(const [theme,bg] of [['light','ffff/ffff/ffff'],['dark','2121/2121/2121']]){
     await page.emulateMedia({colorScheme:theme});await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);
     await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_'+theme.toUpperCase())&&value.snapshot.includes('BG_'+bg)&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
   }
-  await page.getByRole('radio',{name:'深色',exact:true}).click();await page.emulateMedia({colorScheme:'light'});assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');await page.keyboard.press('Escape');await page.emulateMedia({colorScheme:null});
+  await page.getByRole('radio',{name:'深色',exact:true}).click();await page.emulateMedia({colorScheme:'light'});assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();await page.emulateMedia({colorScheme:null});
   await select(shell.id);await page.getByRole('button',{name:'切换为浅色模式',exact:true}).click();
   await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_LIGHT')&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
   await select(themeSession.id);await page.screenshot({path:'test-results/tui-theme-light.png',animations:'disabled'});
