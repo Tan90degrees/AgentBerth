@@ -1,3 +1,4 @@
+import { prepareConptyRuntime } from './conpty-runtime.mjs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -36,6 +37,7 @@ async function setup() {
   const rebuildScript = path.join(path.dirname(require.resolve('@electron/rebuild')), 'cli.js');
   try {
     await run(rebuildScript, ['-f', '-o', 'node-pty', '-v', installation.version], env);
+    prepareConptyRuntime();
   } catch (error) {
     throw new Error(`node-pty 编译失败：${error.message}。Windows 请检查 Python 3、Visual Studio C++ Build Tools 与 Electron headers 网络访问；详见 README.md。`);
   }

@@ -76,7 +76,7 @@ function setupFixture(t) {
   mkdirSync(path.join(project, 'scripts'), { recursive: true });
   mkdirSync(directory, { recursive: true });
   mkdirSync(path.join(rebuild, 'lib'), { recursive: true });
-  for (const name of ['setup.mjs', 'electron-runtime.mjs']) {
+  for (const name of ['setup.mjs', 'electron-runtime.mjs', 'conpty-runtime.mjs']) {
     copyFileSync(new URL(`../scripts/${name}`, import.meta.url), path.join(project, 'scripts', name));
   }
   writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ version: installation.version }));
@@ -97,6 +97,11 @@ function setupFixture(t) {
     assert.deepEqual(process.argv.slice(2), ['-f', '-o', 'node-pty', '-v', '44.7.0']);
     require('node:fs').appendFileSync(process.env.SETUP_TRACE, 'rebuild\\n');
   `);
+  const ptyDirectory=path.join(project,'node_modules/node-pty');
+  const runtime=path.join(ptyDirectory,'third_party/conpty/1.23.251008001/win10-'+process.arch);
+  mkdirSync(runtime,{recursive:true});
+  writeFileSync(path.join(ptyDirectory,'package.json'),'{}');
+  for(const name of ['conpty.dll','OpenConsole.exe'])writeFileSync(path.join(runtime,name),'fixture-'+name);
   const trace = path.join(project, 'trace.txt');
   const run = fail => {
     const env = { ...process.env, SETUP_TRACE: trace, SETUP_FAIL: fail ? '1' : '0' };
@@ -104,7 +109,7 @@ function setupFixture(t) {
     delete env.ELECTRON_RUN_AS_NODE;
     return spawnSync(process.execPath, [path.join(project, 'scripts/setup.mjs')], { cwd: project, env, encoding: 'utf8', timeout: 10000 });
   };
-  return { directory, trace, run };
+  return { directory, trace, run, ptyDirectory };
 }
 
 test('setup stops after installer failure, preserves dependencies and shows Windows recovery commands', t => {
@@ -119,10 +124,11 @@ test('setup stops after installer failure, preserves dependencies and shows Wind
 });
 
 test('setup installs before rebuilding for pinned ABI and skips the installer on subsequent runs', t => {
-  const { trace, run } = setupFixture(t);
+  const { trace, run, ptyDirectory } = setupFixture(t);
   const first = run(false);
   assert.equal(first.status, 0, first.stderr);
   assert.equal(readFileSync(trace, 'utf8'), 'install\nrebuild\n');
+  if(process.platform==='win32')for(const name of ['conpty.dll','OpenConsole.exe'])assert.equal(readFileSync(path.join(ptyDirectory,'build/Release/conpty',name),'utf8'),'fixture-'+name);
   const second = run(false);
   assert.equal(second.status, 0, second.stderr);
   assert.equal(readFileSync(trace, 'utf8'), 'install\nrebuild\nrebuild\n');
@@ -137,7 +143,8 @@ function nativeProbeFixture(t) {
     const Module = require('node:module'), load = Module._load;
     Module._load = function(name, ...args) {
       if (name !== 'node-pty') return load.call(this, name, ...args);
-      return { spawn() {
+      return { spawn(file,args,options) {
+        require('node:assert/strict').equal(options.useConptyDll,process.platform==='win32');
         // Model a native worker that remains live after onExit, even after kill.
         setInterval(() => {}, 1000);
         return {
