@@ -17,7 +17,7 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:scripts && node scripts/test.mjs",
-    "test:scripts": "node --test tests/setup.test.mjs tests/release.test.mjs tests/installer.test.mjs",
+    "test:scripts": "node --test tests/setup.test.mjs tests/conpty-runtime.test.mjs tests/release.test.mjs tests/installer.test.mjs",
     "test:desktop": "npm run build && node scripts/test-desktop.mjs",
     "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "check": "npm run typecheck && npm test && npm run build",
