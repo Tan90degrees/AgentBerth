@@ -259,6 +259,10 @@ test('Schema editing continues to autosave after a successful manual save', asyn
   await until(() => dom.window.document.querySelector<HTMLTextAreaElement>('#settingsView [data-field="schema"]')?.value, 'Schema loaded');
   input(dom, '#settingsView [data-field="schema"]', 'saved Schema'); click(dom, '[data-action="saveSchema"]');
   await until(() => (dom.window as unknown as { __wikiNotices: string[] }).__wikiNotices.some(message => message.includes('知识库约定已保存')), 'save acknowledged');
+  const resultActions = dom.window.document.querySelector<HTMLElement>('#uxNotice')!;
+  assert.equal(resultActions.hidden, true);
+  assert.equal(resultActions.textContent, '', 'message-only feedback stays in host notifications');
+  assert.equal(dom.window.getComputedStyle(resultActions).display, 'none', 'hidden result controls must not leave a visible toolbar');
   assert.equal(service.workspace.editorDrafts().some(draft => draft.key === 'schema'), false);
   input(dom, '#settingsView [data-field="schema"]', 'the next unsaved change');
   await until(() => service.workspace.editorDrafts().find(draft => draft.key === 'schema')?.fields.schema === 'the next unsaved change', 'autosave remains attached after save');
