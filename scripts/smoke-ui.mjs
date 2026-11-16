@@ -38,7 +38,7 @@ try{
   // The fixture TUI paints explicit RGB from OSC replies; changing CSS alone
   // cannot pass. Keep the same process, grid and draft while it is detached too.
   const quote=value=>"'"+value.replaceAll("'",process.platform==='win32'?"''":"'\\''")+"'";
-  const themeSession=await rpc('createSession',{projectId:project.id,title:'Theme TUI',agent:'custom',command:(process.platform==='win32'?'& ':'')+quote(process.execPath)+' '+quote(path.resolve('tests/fixtures/theme-tui.cjs'))});
+  const themeSession=await rpc('createSession',{projectId:project.id,title:'Theme TUI',agent:'custom',command:(process.platform==='win32'?'& ':'')+quote(process.execPath)+' '+quote(path.resolve('tests/fixtures/theme-tui.cjs'))+' '+quote(path.join(folder,'theme-tui-trace.jsonl'))});
   const themeRun=await rpc('start',{sessionId:themeSession.id,cols:90,rows:24});await select(themeSession.id);
   const themeSnapshot=()=>rpc('attach',{sessionId:themeSession.id});
   await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_')&&value.snapshot.includes('BG_')));
@@ -64,7 +64,7 @@ try{
   await select(shell.id);await page.getByRole('button',{name:'切换为浅色模式',exact:true}).click();
   await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_LIGHT')&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
   await select(themeSession.id);await page.screenshot({path:'test-results/tui-theme-light.png',animations:'disabled'});
-  await rpc('input',{sessionId:themeSession.id,runId:themeRun.id,data:'\x03'});await until(()=>rpc('state').then(state=>state.sessions.find(s=>s.id===themeSession.id).latestRun.status!=='running'));
+  await rpc('input',{sessionId:themeSession.id,runId:themeRun.id,data:'\x03'});await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_DONE')));await rpc('stop',{sessionId:themeSession.id});
   await select(shell.id);await page.getByRole('button',{name:'切换为深色模式',exact:true}).click();
   // Recovery feedback belongs to the shared center; state snapshots must not
   // duplicate it or restart the PTY. Timer collapse is tested in a real window.
@@ -127,7 +127,7 @@ try{
   await select(session.id);await until(()=>composer.isEnabled());assert.equal(await composer.inputValue(),'unsent draft');
   await page.screenshot({path:'test-results/ui-recovery-dark.png',animations:'disabled'});await page.evaluate(()=>document.documentElement.dataset.theme='light');await page.screenshot({path:'test-results/ui-recovery-light.png',animations:'disabled'});
   assert.deepEqual(errors,[]);
-}catch(error){failure=error;if(app)await app.firstWindow().then(page=>page.screenshot({path:'test-results/ui-smoke-failure.png'})).catch(()=>{});}
+}catch(error){failure=error;console.error('Theme fixture protocol trace:',await readFile(path.join(folder,'theme-tui-trace.jsonl'),'utf8').catch(()=>'(fixture not started)'));if(app)await app.firstWindow().then(page=>page.screenshot({path:'test-results/ui-smoke-failure.png'})).catch(()=>{});}
 finally{try{await cleanupSmoke(app,daemonPid,folder);}catch(error){failure??=error;}}
 if(failure)throw failure;
 console.log('UI usability smoke passed: keyboard focus, paused notices, offline output, ACP read recovery, draft retention and stale response isolation');

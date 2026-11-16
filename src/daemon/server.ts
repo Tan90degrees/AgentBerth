@@ -718,7 +718,7 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, session.service ? serviceShell(selected.file,selected.args,command).args : selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
+      } else child = this.spawnPty(selected.file, session.service ? serviceShell(selected.file,selected.args,command).args : selected.args, { cwd, cols, rows, name: 'xterm-256color', useConptyDll: process.platform==='win32', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
     }
     catch (error) {
       terminal.dispose();
