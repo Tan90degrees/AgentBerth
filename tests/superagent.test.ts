@@ -1,4 +1,7 @@
 import {test} from 'node:test';
+import {DatabaseSync} from 'node:sqlite';
+import {JSDOM} from 'jsdom';
+import {superagentView} from '../src/superagent/view';
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -20,13 +23,14 @@ async function fixture(t:any){
   const git=async(...args:string[])=>execute('git',['-c','core.autocrlf=false','-c','commit.gpgsign=false','-C',root,...args],{windowsHide:true});
   await git('init','--initial-branch=main');await git('config','user.name','Superagent fixture');await git('config','user.email','fixture@example.invalid');await writeFile(path.join(root,'base.txt'),'base');await git('add','.');await git('commit','-m','initial');
   const data=path.join(dir,'data'),server=new DaemonServer(data),connection=await DaemonConnection.open(await server.listen(),()=>{});
-  t.after(async()=>{connection.close();await server.close();await rm(dir,{recursive:true,force:true,maxRetries:8,retryDelay:150});});
+  let disposed=false;const close=async()=>{if(disposed)return;connection.close();await server.close();disposed=true;};
+  t.after(async()=>{await close();await rm(dir,{recursive:true,force:true,maxRetries:8,retryDelay:150});});
   const project=await connection.rpc<any>('createProject',{name:'Superagent project',path:root}),agent=await connection.rpc<any>('createAgent',{name:'Superagent fixture ACP',command:process.execPath,acp:{executable:process.execPath,args:[path.resolve('tests/fixtures/acp-agent.cjs'),path.join(dir,'fixture-agent')],env:{ELECTRON_RUN_AS_NODE:'1'}}});
   const extension=(request:any)=>connection.rpc<any>('extensions',{request}),call=(command:string,params:Record<string,unknown>={})=>extension({action:'call',id:'superagent',command,params});
   const create=(extra:any={})=>call('create',{projectId:project.id,coordinatorId:agent.id,executorId:agent.id,title:'Test task',objective:'Create result and validate it',isolated:true,...extra});
   const task=async(id:string)=>(await call('get',{id})).task;
   const worker=async(id:string)=>{const value=await task(id);return connection.rpc<AcpSnapshot>('acpSnapshot',{sessionId:value.workerSession}).catch(error=>{if(String(error).includes('会话不存在'))return {permissions:[],phase:'disconnected'} as unknown as AcpSnapshot;throw error;});};
-  return {dir,root,data,server,connection,project,agent,extension,call,create,task,worker,git};
+  return {dir,root,data,server,connection,project,agent,extension,call,create,task,worker,git,close};
 }
 test('Superagent isolates ACP workers/worktrees, enforces concurrency, requests human review and leaves unrelated work running',async t=>{
   const f=await fixture(t);await f.extension({action:'configure',id:'superagent',config:{maxConcurrent:1}});
@@ -108,7 +112,7 @@ test('Superagent applies separate role models, publishes task states and restore
 test('an unavailable selected model interrupts before a prompt instead of silently using another model',async t=>{
   const f=await fixture(t),created=await f.create({coordinatorModel:'removed-model'});const task=await until(()=>f.task(created.id),value=>value.phase==='interrupted');assert.match(task.error,/未提供已选择的模型/);
   const records=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(records.filter(record=>record.method==='prompt').length,0);
-  await f.call('action',{id:task.id,action:'complete'});assert.equal((await f.connection.rpc<State>('state')).agentActivities?.find(activity=>activity.taskId===task.id)?.status,'completed','Confirming a task must override a previous execution error in the companion');
+  await assert.rejects(f.call('action',{id:task.id,action:'complete'}),/中断任务请重新协调或取消/);await f.call('action',{id:task.id,action:'finish'});assert.equal((await f.task(task.id)).endedWithoutReview,true);assert.equal((await f.connection.rpc<State>('state')).agentActivities?.find(activity=>activity.taskId===task.id)?.status,'completed','Explicitly ending an unreviewed task must clear a previous companion error');
 });
 
 test('coordinator reports accept surrounding prose, fences and quoted braces without inventing decisions',()=>{
@@ -281,4 +285,46 @@ test('pipeline plugin fields and keyword filters validate, survive reload and fa
   await f.extension({action:'reload',id:'superagent'});const state=await f.call('state');assert.deepEqual(state.pipelines.find((p:any)=>p.id===first.id).inputs[0].config,{requiredText:'fix',minLength:3,allowMessages:true,textField:'text'});assert.deepEqual(state.pipelines.find((p:any)=>p.id===first.id).filter.includeKeywords,['bug']);
   assert.equal((await emit('config-b','different')).duplicate,true);assert.equal((await f.call('tasks')).total,4);
   await f.extension({action:'disable',id:'example.superagent.source.local'});await save('Disabled saved config',{requiredText:'saved'},{pipelineId:second.id,enabled:false});await f.extension({action:'enable',id:'example.superagent.source.local'});await f.call('pipeline_action',{pipelineId:second.id,action:'enable'});assert.equal((await emit('config-d','saved')).ticketIds.length,1);
+});
+
+
+test('full shutdown quiesces Superagent before ACP, allows draining and restores only an explicit interruption',{timeout:45000},async t=>{
+  const f=await fixture(t),created=await f.create();await until(()=>f.worker(created.id),value=>value.permissions.length===1);const before=await f.task(created.id);
+  await Promise.all([f.connection.rpc('shutdown',{restoreOnOpen:true}),f.connection.rpc('shutdown',{restoreOnOpen:true})]);
+  await f.connection.rpc('stop',{sessionId:before.workerSession});await assert.rejects(f.connection.rpc('start',{sessionId:before.workerSession,cols:80,rows:24}),/后台正在退出/);
+  assert.ok((await f.connection.rpc<State>('state')).sessions.every(session=>session.latestRun?.status!=='running'));
+  await f.close();const log=await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8');
+  const restarted=new DaemonServer(f.data),connection=await DaemonConnection.open(await restarted.listen(),()=>{});
+  try{const get=()=>connection.rpc<any>('extensions',{request:{action:'call',id:'superagent',command:'get',params:{id:created.id}}});const recovered=(await get()).task;await connection.rpc('restoreWorkspace',{});await until(()=>connection.rpc<State>('state'),value=>value.recovery?.status==='completed');assert.ok((await connection.rpc<State>('state')).sessions.every(session=>session.owner?.taskId!==created.id||session.latestRun?.status!=='running'));
+  assert.equal(recovered.phase,'interrupted');assert.equal(recovered.waitingFor,undefined);assert.ok(!recovered.cleanupPending);assert.doesNotMatch(recovered.error,/后台正在退出|连接清理尚未完成/);
+  await new Promise(resolve=>setTimeout(resolve,1200));assert.equal(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8'),log,'reopen never resends work');}finally{connection.close();await restarted.close();}
+});
+
+test('completion keeps review state on cleanup failure and cancellation exposes a retryable cleanup',{timeout:45000},async t=>{
+  const f=await fixture(t),created=await f.create();const permission=await until(()=>f.worker(created.id),value=>value.permissions.length===1),working=await f.task(created.id);
+  await f.connection.rpc('acpPermission',{sessionId:working.workerSession,permissionId:permission.permissions[0].id,optionId:'allow'});await until(()=>f.task(created.id),value=>value.phase==='needs_attention'&&value.waitingFor==='review');
+  const routes=(f.server as any).coreRoutes as Map<string,(request:any,client:any)=>Promise<unknown>>,stop=routes.get('stop')!;let failing=true;
+  routes.set('stop',async(request,client)=>{if(failing&&request.params.sessionId===working.workerSession)throw new Error('FIXTURE_STOP_FAILED');return stop(request,client);});
+  await assert.rejects(f.call('action',{id:created.id,action:'complete'}),/FIXTURE_STOP_FAILED/);let value=await f.task(created.id);assert.equal(value.phase,'needs_attention');assert.equal(value.cleanupPending,true);
+  const log=await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8');failing=false;await f.call('action',{id:created.id,action:'cleanup'});assert.equal((await f.task(created.id)).cleanupPending,false);assert.equal(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8'),log);
+  await f.call('action',{id:created.id,action:'complete'});assert.equal((await f.task(created.id)).phase,'completed');
+  const next=await f.create();await until(()=>f.worker(next.id),value=>value.permissions.length===1);const owner=await f.task(next.id);routes.set('stop',async(request,client)=>{if(failing&&request.params.sessionId===owner.workerSession)throw new Error('FIXTURE_STOP_FAILED');return stop(request,client);});failing=true;
+  await assert.rejects(f.call('action',{id:next.id,action:'cancel'}),/FIXTURE_STOP_FAILED/);value=await f.task(next.id);assert.equal(value.phase,'cancelled');assert.equal(value.cleanupPending,true);failing=false;await f.call('action',{id:next.id,action:'cleanup'});assert.equal((await f.task(next.id)).cleanupPending,false);
+});
+
+test('an old interrupted review shows recovery actions instead of accepting an unknown result',{timeout:45000},async t=>{
+  const f=await fixture(t),created=await f.create();const permission=await until(()=>f.worker(created.id),value=>value.permissions.length===1),working=await f.task(created.id);
+  await f.connection.rpc('acpPermission',{sessionId:working.workerSession,permissionId:permission.permissions[0].id,optionId:'allow'});await until(()=>f.task(created.id),value=>value.waitingFor==='review');
+  const db=new DatabaseSync(path.join(f.data,'extensions/data/superagent/superagent.sqlite'));const task=await f.task(created.id);db.prepare('UPDATE tickets SET value=? WHERE id=?').run(JSON.stringify({...task,phase:'interrupted',error:'后台正在退出；连接清理尚未完成'}),created.id);db.close();await f.extension({action:'reload',id:'superagent'});assert.equal((await f.task(created.id)).cleanupPending,true);
+  await assert.rejects(f.call('action',{id:created.id,action:'complete'}),/中断任务请重新协调或取消/);
+  const dom=new JSDOM('<!doctype html><body>'+superagentView,{runScripts:'outside-only',pretendToBeVisual:true,url:'http://superagent.test'});
+  try{
+    Object.assign(dom.window,{TextEncoder,TextDecoder,agentberth:{ready:async()=>{},call:f.call,notify(){},openSession(){}}});dom.window.HTMLElement.prototype.scrollIntoView=function(){};
+    dom.window.eval(dom.window.document.querySelector('script')!.textContent!);
+    const document=dom.window.document;await until(async()=>document.querySelector('[data-ticket-id="'+created.id+'"]'),Boolean);(document.querySelector('[data-ticket-id="'+created.id+'"]') as HTMLElement).click();
+    await until(async()=>document.getElementById('taskTitle')?.textContent,Boolean);
+    const complete=document.querySelector<HTMLButtonElement>('[data-action="complete"]')!,retry=document.querySelector<HTMLButtonElement>('#resumeInterrupted')!,cleanup=document.querySelector<HTMLButtonElement>('#retryCleanup')!;
+    assert.equal(complete.hidden,true);assert.equal(retry.hidden,false);assert.equal(retry.disabled,true);assert.equal(cleanup.hidden,false);
+    const draft=document.querySelector<HTMLTextAreaElement>('#followup')!;draft.value='UNSENT_RECOVERY_DRAFT';draft.dispatchEvent(new dom.window.Event('input',{bubbles:true}));const log=await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8');cleanup.click();await until(async()=>!(await f.task(created.id)).cleanupPending,Boolean);await until(async()=>!retry.disabled,Boolean);assert.equal(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8'),log);assert.equal((await f.task(created.id)).phase,'interrupted');assert.equal(complete.hidden,true);assert.equal(draft.value,'UNSENT_RECOVERY_DRAFT','cleanup must retain the unsent draft');
+  }finally{dom.window.close();}
 });

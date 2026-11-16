@@ -66,8 +66,8 @@
 
 | 文件 | 使用方式 |
 |---|---|
-| `AgentBerth-0.18.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `AgentBerth-0.18.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `AgentBerth-0.21.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.21.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
@@ -97,7 +97,7 @@ npm run dev
 
 `npm run dev` 会先检查本机 Electron 二进制是否完整，再编译桌面与后台代码，启动 Vite 和 Electron。缺少二进制时立即提示 `npm run setup`，不会在加载入口时隐式下载。页面修改自动更新；main、preload、daemon 修改后需要重新启动相关进程。后台使用 Electron 自带的 Node 运行时，与原生模块 ABI 保持一致，不依赖用户另装的 Node 来运行打包应用。
 
-应用关闭按钮默认隐藏到托盘，任务继续运行。托盘「退出 AgentBerth（停止终端，下次恢复）」先清理所有终端及其子进程，再结束 daemon 和应用。退出前保存运行会话名单，下次打开自动重新启动这些会话，手动停止的会话保持停止。Codex / Claude Code / OpenCode 和配置了恢复能力的插件优先使用最终保存的原生会话 ID 续接；普通终端重新打开，SSH 重新连接并保留原控制权。只执行保存的启动/恢复命令，不重放终端历史输入；旧远端任务仍需确认状态。恢复失败会单独提示，其余会话继续恢复；运行记录保留。完整退出后原进程与内存状态不会原样存活。此功能需要后台 API 40。
+应用关闭按钮默认隐藏到托盘，任务继续运行。托盘「退出 AgentBerth（停止终端，下次恢复）」先清理所有终端及其子进程，再结束 daemon 和应用。退出前保存运行会话名单，下次打开自动重新启动这些会话，手动停止的会话保持停止。Codex / Claude Code / OpenCode 和配置了恢复能力的插件优先使用最终保存的原生会话 ID 续接；普通终端重新打开，SSH 重新连接并保留原控制权。只执行保存的启动/恢复命令，不重放终端历史输入；旧远端任务仍需确认状态。恢复进度、完成与失败统一进入右上角「通知与告警」，其余会话继续恢复；运行记录保留。完整退出后原进程与内存状态不会原样存活。此功能需要后台 API 40。
 
 ### Electron 下载失败
 
@@ -231,7 +231,7 @@ OpenCode 会话在项目目录中执行 `opencode export <sessionID> > session.j
 
 项目目录树、Git 忽略灰显、代码及 Markdown 预览见 [文件浏览与预览](docs/files.md)。
 
-当前版本范围与已知限制见 [v0.9.0 功能说明](docs/releases/v0.9.0.md) 和 [v0.9.1 安装修复](docs/releases/v0.9.1.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
+当前版本范围、升级方式与已知限制见 [v0.21.0 发行说明](docs/releases/v0.21.0.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
 
 ## 验证与打包
 

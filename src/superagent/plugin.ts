@@ -22,7 +22,7 @@ export interface Ticket {
   coordinatorSession:string;workerSession:string;planTurn:string;workerTurn:string;
   pipelineId?:string;pipelineName?:string;workspaceMode?:'pipeline';
   worktreePath?:string;assignment?:string;summary?:string;question?:string;error?:string;stage?:'coordinator'|'worker';
-  deletedAt?:string;rejected?:boolean;questions?:TaskQuestion[];activeInputId?:string;
+  deletedAt?:string;rejected?:boolean;cleanupPending?:boolean;endedWithoutReview?:boolean;questions?:TaskQuestion[];activeInputId?:string;
   attempt:number;lastInput?:string;attention?:boolean;waitingFor?:'answer'|'permission'|'review'|'format';continuing?:boolean;lastQuestion?:string;lastAction?:{id:string;action:string;text:string};
   source?:{id:string;threadId:string;eventId:string;actorId:string;policyVersion:string;pipelineId?:string;pipelineName?:string};
 }
@@ -81,21 +81,31 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   const activity=(ticket:Ticket)=>{
     ownership(ticket);
     const waiting=ticket.phase==='needs_attention'?taskWait(ticket):ticket.attention?'permission':null;
-    const label=ticket.phase==='completed'?'任务已完成':ticket.phase==='cancelled'?'任务已取消':ticket.phase==='interrupted'?'任务已中断，等待确认':waiting==='permission'?'等待会话授权':waiting==='answer'?'等待你的回答':waiting==='format'?'协调结果需要确认':waiting==='review'?(ticket.stage==='worker'?'等待验收':'等待批准'):ticket.phase==='planning'?'协调中':ticket.phase==='working'?'执行中':'任务排队中';
+    const label=ticket.phase==='completed'?(ticket.endedWithoutReview?'任务已结束，结果未验收':'任务已完成'):ticket.phase==='cancelled'?'任务已取消':ticket.phase==='interrupted'?'任务已中断，等待确认':waiting==='permission'?'等待会话授权':waiting==='answer'?'等待你的回答':waiting==='format'?'协调结果需要确认':waiting==='review'?(ticket.stage==='worker'?'等待验收':'等待批准'):ticket.phase==='planning'?'协调中':ticket.phase==='working'?'执行中':'任务排队中';
     api.activity({id:ticket.id,title:('Superagent · '+ticket.title).slice(0,100),projectId:ticket.projectId,kind:'superagent',targetSessionId:ticket.stage==='worker'?ticket.workerSession:ticket.coordinatorSession,managedSessionIds:[ticket.coordinatorSession,ticket.workerSession],status:ticket.phase==='completed'?'completed':ticket.phase==='cancelled'?'idle':ticket.phase==='interrupted'?'unknown':waiting?'waiting':ticket.error?'error':['planning','working'].includes(ticket.phase)?'working':'idle',label,updatedAt:Date.parse(ticket.updatedAt)});
   };
   const change=(key:string,patch:Partial<Ticket>,reason:string)=>{if(closed)return;const ticket={...get(key),...patch};save(ticket);audit(key,'transition',reason);activity(ticket);return ticket;};
   for(const input of db.prepare("SELECT value FROM task_inputs WHERE json_extract(value,'$.state')='dispatching'").all()){const value=JSON.parse(String(input.value)) as TaskInput;saveInput({...value,state:'unknown'});}
-  for(const ticket of all())if(['planning','working'].includes(ticket.phase)||ticket.activeInputId&&ticket.phase==='queued')change(ticket.id,{phase:'interrupted',attention:true,error:'宿主曾退出或插件重新加载，结果需确认；不会自动重新发送任务。'},'恢复检查点：等待显式重试');
+  for(const ticket of all())if(['planning','working'].includes(ticket.phase)||ticket.activeInputId&&ticket.phase==='queued')change(ticket.id,{phase:'interrupted',attention:true,waitingFor:undefined,questions:undefined,question:'',error:'宿主曾退出或插件重新加载，结果需确认；不会自动重新发送任务。'},'恢复检查点：等待显式重试');
+  // Upgrade old interruption records without treating a stale review as a result.
+  for(const ticket of all())if(ticket.phase==='interrupted'&&(ticket.waitingFor||ticket.question||ticket.questions||ticket.cleanupPending===undefined&&ticket.error?.includes('连接清理尚未完成')))change(ticket.id,{waitingFor:undefined,question:'',questions:undefined,...(ticket.cleanupPending===undefined&&ticket.error?.includes('连接清理尚未完成')?{cleanupPending:true}:{})},'恢复中断状态，保留显式清理与重试入口');
   for(const ticket of all())activity(ticket);
   const host=<T=any>(method:string,params:Record<string,unknown>={})=>{if(closed||api.signal.aborted)throw new Error('Superagent 已停止');return api.call(method,params) as Promise<T>;};
   const validate=async(p:any)=>{const state=await host<State>('state');if(!state.projects.some(project=>project.id===p.projectId&&!project.remoteWorkspace))throw new Error('请选择本机项目');for(const key of ['coordinatorId','executorId'])if(!state.agents?.some(agent=>agent.id===p[key]&&agent.acp))throw new Error('协调和执行 Agent 均须为已配置的 ACP 接入');return state;};
-  const stopSessions=async(ticket:Ticket)=>{await Promise.all([ticket.coordinatorSession,ticket.workerSession].map(sessionId=>api.call('stop',{sessionId}).catch(error=>{if(!String(error).includes('会话不存在'))throw error;})));};
+  const stopSessions=async(ticket:Ticket)=>{
+    const results=await Promise.allSettled([...new Set([ticket.coordinatorSession,ticket.workerSession])].map(sessionId=>api.call('stop',{sessionId}).catch(error=>{if(!String(error).includes('会话不存在'))throw error;})));
+    const failed=results.filter((value):value is PromiseRejectedResult=>value.status==='rejected');
+    if(failed.length)throw new Error(failed.map(value=>String(value.reason)).join('；'));
+  };
+  const cleanup=async(ticket:Ticket)=>{
+    try{await stopSessions(ticket);if(get(ticket.id).cleanupPending)change(ticket.id,{cleanupPending:false,error:undefined},'内部会话清理完成');}
+    catch(error){change(ticket.id,{cleanupPending:true,error:'内部会话停止未完成：'+String(error)},'保留任务，等待重试停止');throw error;}
+  };
   const interrupt=async(ticket:Ticket,error:unknown,reason:string)=>{
     if(ticket.activeInputId){const input=inputs(ticket.id).find(input=>input.id===ticket.activeInputId);if(input?.state==='dispatching')saveInput({...input,state:'unknown'});}
-    let detail=String(error);
-    try{await stopSessions(ticket);}catch(cleanup){detail+='；连接清理尚未完成，请从会话重试停止：'+String(cleanup);}
-    if(!closed){const current=get(ticket.id);if(current.attempt===ticket.attempt&&['planning','working'].includes(current.phase))change(ticket.id,{phase:'interrupted',attention:true,error:detail.slice(0,4000)},reason);}
+    let detail=String(error),cleanupPending=false;
+    try{await stopSessions(ticket);}catch(cleanup){cleanupPending=true;detail+='；内部会话停止未完成：'+String(cleanup);}
+    if(!closed){const current=get(ticket.id);if(current.attempt===ticket.attempt&&['planning','working'].includes(current.phase))change(ticket.id,{phase:'interrupted',attention:true,waitingFor:undefined,questions:undefined,question:'',cleanupPending,error:detail.slice(0,4000)},reason);}
   };
   const guard=async(ticket:Ticket,phase:Phase)=>{
     const current=closed?null:get(ticket.id);
@@ -243,7 +253,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     if(closed||ticking)return;
     ticking=(async()=>{
       for(const [pipeline,jobId]of workspaceJobs){try{const job=await host<CopyJob>('isolatedWorkspace',{action:'job',jobId});finishWorkspaceJob(job);}catch{workspaceJobs.delete(pipeline);}}
-      for(const ticket of all())if(ticket.phase==='needs_attention'&&ticket.approved&&pendingInput(ticket.id))queueNext(ticket);
+      for(const ticket of all())if(ticket.phase==='needs_attention'&&ticket.approved&&!acting.has(ticket.id)&&pendingInput(ticket.id))queueNext(ticket);
       const tickets=all().reverse(),active=tickets.filter(ticket=>['planning','working'].includes(ticket.phase));
       for(const ticket of active){if(closed)return;try{await advance(ticket);}catch(error){if(!closed)await interrupt(ticket,error,'处理结果失败；等待显式重试');}}
       let occupied=all().filter(ticket=>['planning','working'].includes(ticket.phase)).length;
@@ -367,16 +377,23 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     let ticket=get(String(p.id));const action=String(p.action),text=String(p.text??'').trim(),requestId=typeof p.requestId==='string'?p.requestId:undefined;
     if(requestId&&ticket.lastAction?.id===requestId){if(ticket.lastAction.action!==action||ticket.lastAction.text!==text)throw new Error('操作 ID 已用于其他指令');return {id:ticket.id,duplicate:true};}
     if(acting.has(ticket.id))throw new Error('此任务的操作正在提交，请稍候');acting.add(ticket.id);try{
+    if(action==='cleanup'){await cleanup(ticket);return {id:ticket.id};}
     if(['completed','cancelled'].includes(ticket.phase))throw new Error('任务已结束，不能再次调度');
-    if(action==='cancel'){for(const input of inputs(ticket.id))if(['queued','dispatching'].includes(input.state))saveInput({...input,state:input.state==='queued'?'withdrawn':'unknown'});change(ticket.id,{phase:'cancelled',attention:false},'用户取消任务，保留工作区与会话记录');await stopSessions(ticket);return {id:ticket.id};}
-    if(action==='complete'){if(inputs(ticket.id).some(input=>['queued','dispatching'].includes(input.state)))throw new Error('还有待发送指令，请先处理或撤回');if(['planning','working'].includes(ticket.phase))throw new Error('请先等待执行结果或取消运行');change(ticket.id,{phase:'completed',attention:false},'用户确认交付');await stopSessions(ticket);return {id:ticket.id};}
+    if(action==='cancel'){for(const input of inputs(ticket.id))if(['queued','dispatching'].includes(input.state))saveInput({...input,state:input.state==='queued'?'withdrawn':'unknown'});change(ticket.id,{phase:'cancelled',attention:false,waitingFor:undefined},'用户取消任务，保留工作区与会话记录');await cleanup(ticket);return {id:ticket.id};}
+    if(action==='finish'){
+      if(!['interrupted','needs_attention'].includes(ticket.phase))throw new Error('请先等待执行停止或取消运行');
+      await cleanup(ticket);const current=get(ticket.id);if(current.attempt!==ticket.attempt||!['interrupted','needs_attention'].includes(current.phase))throw new Error('任务状态已变化，请重新核对');
+      for(const input of inputs(ticket.id))if(['queued','dispatching'].includes(input.state))saveInput({...input,state:input.state==='queued'?'withdrawn':'unknown'});
+      change(ticket.id,{phase:'completed',endedWithoutReview:true,attention:false,waitingFor:undefined,cleanupPending:false,error:undefined},'用户确认结束任务，结果未验收；未发送指令已撤回');return {id:ticket.id};
+    }
+    if(action==='complete'){if(inputs(ticket.id).some(input=>['queued','dispatching'].includes(input.state)))throw new Error('还有待发送指令，请先处理或撤回');if(ticket.phase!=='needs_attention'||ticket.stage!=='worker'||taskWait(ticket)!=='review')throw new Error('只有已交付、等待验收的结果可以确认完成；中断任务请重新协调或取消');await cleanup(ticket);const current=get(ticket.id);if(current.phase!=='needs_attention'||current.attempt!==ticket.attempt||inputs(ticket.id).some(input=>['queued','dispatching'].includes(input.state)))throw new Error('任务已有新状态或待发送指令，请核对后再确认完成');change(ticket.id,{phase:'completed',attention:false,waitingFor:undefined,cleanupPending:false,error:undefined},'用户确认交付');return {id:ticket.id};}
     if(action==='approve'&&!ticket.approved){if(ticket.workspaceMode==='pipeline'&&p.projectId&&p.projectId!==ticket.projectId)throw new Error('管道任务不能更换项目；请在目标管道创建任务');const updated={...ticket,projectId:String(p.projectId??ticket.projectId),coordinatorId:String(p.coordinatorId??ticket.coordinatorId),executorId:String(p.executorId??ticket.executorId)};await validate(updated);const changed=updated.projectId!==ticket.projectId||updated.coordinatorId!==ticket.coordinatorId||updated.executorId!==ticket.executorId;change(ticket.id,{projectId:updated.projectId,coordinatorId:updated.coordinatorId,executorId:updated.executorId,coordinatorModel:updated.coordinatorId===ticket.coordinatorId?ticket.coordinatorModel:undefined,executorModel:updated.executorId===ticket.executorId?ticket.executorModel:undefined,...(changed?{coordinatorSession:randomUUID(),workerSession:randomUUID()}:{}),approved:true,rejected:false,phase:'queued',attention:false,question:''},'用户批准请求，开始处理');return {id:ticket.id};}
     if(action==='reject'&&!ticket.approved){change(ticket.id,{phase:'cancelled',rejected:true,attention:false,question:''},'用户拒绝来源请求，未启动 Agent，未发送渠道回复');return {id:ticket.id};}
     if(action==='continue'){
       if(pendingInput(ticket.id))throw new Error('已有待发送指令，请等待处理或撤回后继续');
       if(ticket.phase!=='needs_attention'||!ticket.approved)throw new Error('请在任务等待回答或验收时继续；中断任务请显式重试');
       if(!text)throw new Error('请填写回答或下一步指令');
-      await stopSessions(ticket);await validate(ticket);
+      await cleanup(ticket);await validate(ticket);
       message(ticket.id,{role:'user',text});
       // Continue the same role/native conversation. The fresh request ID sends
       // only the new instruction; the prior turn is never replayed.
@@ -384,7 +401,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     }
     if(action==='retry'){
       if(['planning','working'].includes(ticket.phase))throw new Error('任务仍在运行，请先取消或等待交接');
-      await stopSessions(ticket);await validate(ticket);
+      await cleanup(ticket);await validate(ticket);
       // A retry is a new explicit instruction. Preserve earlier turns and IDs
       // in their original sessions; no old prompt is silently replayed.
       ticket=change(ticket.id,{phase:'queued',stage:'coordinator',activeInputId:undefined,continuing:false,question:'',questions:undefined,waitingFor:undefined,approved:true,attention:false,error:undefined,lastInput:typeof p.text==='string'?p.text:undefined,attempt:ticket.attempt+1,coordinatorSession:randomUUID(),workerSession:randomUUID(),planTurn:randomUUID(),workerTurn:randomUUID()},'用户明确要求继续，创建新的执行尝试')!;return {id:ticket.id};
@@ -392,7 +409,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     throw new Error('当前任务不支持此操作');
     }finally{acting.delete(ticket.id);}
   };
-  api.command({mcp:false,name:'action',description:'Answer and continue the current task stage, or explicitly approve, cancel, restart coordination or accept a task. Retry never happens automatically after a disconnect.',inputSchema:{...object,properties:{id,action:{type:'string',enum:['approve','reject','cancel','continue','retry','complete']},text:{type:'string',maxLength:12000},requestId:id,projectId:id,coordinatorId:id,executorId:id},required:['id','action']}},taskAction);
+  api.command({mcp:false,name:'action',description:'Answer and continue the current task stage, or explicitly approve, cancel, restart coordination or accept a task. Retry never happens automatically after a disconnect.',inputSchema:{...object,properties:{id,action:{type:'string',enum:['approve','reject','cancel','continue','retry','complete','cleanup','finish']},text:{type:'string',maxLength:12000},requestId:id,projectId:id,coordinatorId:id,executorId:id},required:['id','action']}},taskAction);
   api.command({mcp:false,name:'bulk_tasks',description:'Preview or explicitly approve, reject or delete up to 50 selected tasks. Each task returns its own result; one failure never hides others.',inputSchema:{...object,properties:{ids:{type:'array',items:id,minItems:1,maxItems:50,uniqueItems:true},action:{type:'string',enum:['approve','reject','delete']},preview:{type:'boolean'},cancelRunning:{type:'boolean'}},required:['ids','action']}},async p=>{
     const state=await host<State>('state'),items:{id:string;title:string;status:'eligible'|'success'|'skipped'|'error';running:boolean;reason?:string}[]=[];
     for(const key of p.ids as string[]){
@@ -414,7 +431,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     closed=true;const owned=all(),active=owned.filter(ticket=>['planning','working'].includes(ticket.phase));
     // Persist interruption before stopping anything; restart never replays a
     // half-acknowledged turn, and no worktree or journal is deleted.
-    for(const ticket of active){ticket.phase='interrupted';ticket.attention=true;ticket.error='插件已停止，请确认结果后选择继续';db.prepare('UPDATE tickets SET value=? WHERE id=?').run(JSON.stringify(ticket),ticket.id);}
-    await Promise.allSettled(owned.map(stopSessions));if(ticking)await ticking.catch(()=>{});db.close();
+    for(const ticket of active){ticket.phase='interrupted';ticket.attention=true;ticket.waitingFor=undefined;ticket.questions=undefined;ticket.question='';ticket.error='任务因后台退出或插件停用而中断，执行结果待核对';db.prepare('UPDATE tickets SET value=? WHERE id=?').run(JSON.stringify(ticket),ticket.id);}
+    const results=await Promise.allSettled(owned.map(stopSessions));for(let i=0;i<results.length;i++){const result=results[i];if(result.status==='rejected'){const task=get(owned[i].id);task.cleanupPending=true;task.error='内部会话停止未完成：'+String(result.reason);db.prepare('UPDATE tickets SET value=? WHERE id=?').run(JSON.stringify(task),task.id);}}if(ticking)await ticking.catch(()=>{});db.close();
   });
 }
