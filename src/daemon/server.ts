@@ -65,6 +65,7 @@ interface LiveTerminal {
 export interface Client { id: string; disposing: boolean; subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
+  private stoppingAll:Promise<void>|null=null;
   private appearance:ResolvedAppearance='dark';
   private extensions:ExtensionRuntime;
   private coreContext=new Context();
@@ -368,6 +369,8 @@ export class DaemonServer {
   private checkpointWorkspace(): void {
     const entries = new Map(this.recoveryPending);
     for (const session of this.store.state().sessions) {
+      // Task-owned ACP sessions recover through the task's explicit actions.
+      if(session.owner?.kind==='superagent'){entries.delete(session.id);continue;}
       const live = this.live.get(session.id);
       if ((!live && !this.starting.has(session.id)&&!this.acp.active(session.id)) || live?.closed || live?.stopping || this.agentOwners.get(session.id)?.disposing) continue;
       entries.set(session.id, {sessionId:session.id,runId:session.latestRun?.id ?? null,cols:live?.terminal.cols ?? 100,rows:live?.terminal.rows ?? 30,
@@ -393,7 +396,7 @@ export class DaemonServer {
         let title = entry.sessionId;
         try {
           const session = this.store.state().sessions.find(value => value.id === entry.sessionId);
-          if (!session || this.live.has(entry.sessionId) || this.starting.has(entry.sessionId)) { report.skipped++; continue; }
+          if (!session || session.owner?.kind==='superagent' || this.live.has(entry.sessionId) || this.starting.has(entry.sessionId)) { report.skipped++; continue; }
           title = session.title;
           if ((session.latestRun?.id ?? null) !== entry.runId || this.recoveryConfiguration(session) !== entry.configuration) { report.skipped++; continue; }
           if (session.remote?.connectionId && entry.remoteOwner === 'agent' && !this.store.sshConnection(session.remote.connectionId).allowAgent) throw new Error('服务器已关闭 Agent 授权，请检查 SSH 设置后手动连接');
@@ -490,7 +493,7 @@ export class DaemonServer {
     if(connected)remote.activity.assertAgent(client);else remote.activity.assertManage(client);
   }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
-    if (this.closing) throw new Error('后台正在退出');
+    if (this.closing&&!['state','stop','shutdown'].includes(request.method)) throw new Error('后台正在退出，请重试退出或停止仍在清理的会话');
     if(request.method==='extensions'){
       const p=request.params.request;
       if(p.action==='list')return this.extensions.snapshot();
@@ -966,15 +969,23 @@ export class DaemonServer {
   private logError(error: unknown): void {
     try { const log = new RunLog(this.dataDirectory, 'daemon'); log.append(`${new Date().toISOString()} ${String(error)}\n`); } catch { /* Disk failure must not throw from PTY callbacks. */ }
   }
-  private async stopAll(restoreOnOpen = false): Promise<void> {
+  private stopAll(restoreOnOpen = false): Promise<void> {
+    if(this.stoppingAll)return this.stoppingAll;
     this.closing = true;
-    try {
+    this.stoppingAll=this.drainAll(restoreOnOpen).catch(error=>{this.stoppingAll=null;this.changed();throw error;});
+    return this.stoppingAll;
+  }
+  private async drainAll(restoreOnOpen:boolean):Promise<void>{
       if (restoreOnOpen) this.checkpointWorkspace();
+      // Quiesce schedulers before waiting on any slow resource shutdown.
+      await this.extensions.close();
+      await this.copies.close();
       // Drain in-flight SSH startup before closing the local channels.
       const startupDeadline = Date.now() + 45000;
       while (this.starting.size && Date.now() < startupDeadline) await new Promise(resolve => setTimeout(resolve, 25));
       if (this.starting.size) throw new Error('远端连接尚未完成，请稍后再次退出；后台保留以便确认清理');
       if (this.recovering) await this.recovering;
+      // Shutdown still admits stop/state so plugin disposers can drain.
       await this.resources.close();
       await this.acp.close();
       await this.transfers.close();
@@ -986,16 +997,14 @@ export class DaemonServer {
       const deadline = Date.now() + 5000;
       while (this.live.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
       if (this.live.size) throw new Error('部分终端尚未停止，请重试退出；后台已保留以便继续清理');
-    } catch (error) { this.closing = false;this.changed(); throw error; }
   }
   async close(): Promise<void> {
-    this.closing=true;await this.copies.close();
+    this.closing=true;
     if (this.nativeTimer) clearTimeout(this.nativeTimer);
     this.nativeTimer = null;
     if(this.mcpStatsTimer)clearTimeout(this.mcpStatsTimer);this.mcpStatsTimer=null;
     await this.stopAll();
     if(this.pruneTimer)clearInterval(this.pruneTimer);this.pruneTimer=null;
-    await this.extensions.close();
     await new Promise<void>(resolve => {
       // Keep the shutdown reply and close frame ordered on the wire. Immediate
       // terminate() can reset a socket before its peer reads the final reply.
