@@ -49,7 +49,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
   };
   const activeAgents=agents.filter(agent=>agent.id!=='custom');
   return <section className="settings-page settings-workbench" aria-label="应用设置">
-    <header className="settings-toolbar"><div className="settings-title"><h1>核心设置</h1><span>终端、外观与资源设置</span></div>
+    <header className="settings-toolbar"><div className="settings-title"><h1>核心设置</h1></div>
       <div className="settings-search"><svg aria-hidden="true" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input ref={search} aria-label="搜索设置" placeholder="搜索主题、Agent、SSH、终端、文件预览…" value={query} onChange={event => { setQuery(event.target.value); setCategory('all'); content.current?.scrollTo(0, 0); }} onKeyDown={event => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery(''); } }} />{query ? <button className="icon-button" aria-label="清除设置搜索" onClick={() => { setQuery(''); search.current?.focus(); }}>×</button> : <kbd>Ctrl+F</kbd>}</div>
     </header>
     <div className="settings-layout">
@@ -63,10 +63,10 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
       })}</nav>
       <div className="settings-results" ref={content}>
         <div className="settings-result-heading"><h2>{query ? `搜索结果${category !== 'all' ? ' · ' + settingsCategories.find(value => value.id === category)?.label : ''}` : settingsCategories.find(value => value.id === category)?.label}</h2><span role="status">{visible.size} 项</span></div>
-        {!connected && <p className="settings-notice" role="status">后台未连接，连接成功后才能保存终端、Agent 和 SSH 设置。</p>}
-        {conflict && <p className="draft-notice" role="status">后台设置已更新，草稿已保留。保存将应用此处的值；取消修改可加载后台设置。</p>}
+        {!connected && <p className="settings-notice" role="status">后台未连接</p>}
+        {conflict && <p className="draft-notice" role="status">后台设置已更新 · 当前修改未保存</p>}
         {error && <div className="form-error" role="alert">{error.replace(/^Error: /, '')}</div>}
-        {!visible.size && <div className="settings-no-results"><h3>没有匹配的设置</h3><p>试试“主题”“Agent”“SSH”“终端”或“文件预览”。</p><button type="button" className="subtle" onClick={() => { setQuery(''); setCategory('all'); search.current?.focus(); }}>查看全部设置</button></div>}
+        {!visible.size && <div className="settings-no-results"><h3>没有匹配的设置</h3><button type="button" className="subtle" onClick={() => { setQuery(''); setCategory('all'); search.current?.focus(); }}>查看全部设置</button></div>}
         <form id="workspace-settings-form" className="settings-values" ref={form} noValidate onSubmit={async event => {
           event.preventDefault();
           const invalid = Array.from(form.current?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea') ?? []).find(element => !element.disabled && !element.checkValidity());
@@ -80,24 +80,24 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           {item('appearance', <AppearanceControls />)}
           {item('ui-font', <><label>界面字号<select aria-label="界面字号" value={String(draft.uiFontScale ?? 1)} disabled={disabled || apiVersion < 55} onChange={event=>change({...draft,uiFontScale:Number(event.target.value)})}>
             <option value="0.85">小 · 85%</option><option value="0.925">较小 · 92%</option><option value="1">标准</option><option value="1.075">较大 · 108%</option><option value="1.15">大 · 115%</option><option value="1.25">特大 · 125%</option>
-          </select></label><p className="form-hint">{apiVersion < 55 ? '界面字号需要更新后台后才能调整；当前后台不支持该设置。' : '整体缩放界面文字，保存后应用；终端字号与文件预览字号独立设置。'}</p></>)}
+          </select></label>{apiVersion < 55 && <span role="status">更新后台后可用</span>}</>)}
           {item('default-agent', <><label>默认 Agent<select aria-label="默认 Agent" value={draft.defaultAgent} disabled={disabled} onChange={event=>change({...draft,defaultAgent:event.target.value as Settings['defaultAgent']})}>
             {!activeAgents.some(agent=>agent.id===draft.defaultAgent)&&draft.defaultAgent!=='shell'&&<option value={draft.defaultAgent}>已停用的 Agent（保留原设置）</option>}
             <option value="shell">普通终端</option>{activeAgents.map(agent=><option key={agent.id} value={agent.id}>{agent.name}</option>)}
-          </select></label><p className="form-hint">Agent 接入能力由工作台提供；Codex、Claude Code、OpenCode 和自定义 Agent 各自通过插件接入。</p></>)}
+          </select></label>{/* Agent 接入能力由工作台提供；Codex、Claude Code、OpenCode 和自定义 Agent 各自通过插件接入。 */}</>)}
           {item('skills', <SkillManager agents={agents} projects={projects} currentProjectId={currentProjectId} />)}
           {item('preview', <PreviewSettings />)}
-          {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event=>change({...draft,maxSshTerminals:Number(event.target.value)})}/></label><p className="form-hint">与本机终端独立计数；降低上限不会停止已有 SSH 会话。</p></>)}
+          {item('ssh-limit', <><label>SSH 会话上限<input aria-label="SSH 会话上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxSshTerminals} disabled={disabled} onChange={event=>change({...draft,maxSshTerminals:Number(event.target.value)})}/></label>{/* 与本机终端独立计数；降低上限不会停止已有 SSH 会话。 */}</>)}
           {item('connections', <SshConnections disabled={!connected} onError={onError} />)}
           {item('mcp', <McpSettings disabled={!connected} metricsSupported={apiVersion>=33} onError={onError} />)}
-          {item('shell', <><TerminalFields value={draft.terminal} platform={platform} disabled={disabled} onError={onError} onChange={terminal => change({ ...draft, terminal: terminal! })} /><p className="form-hint">用于下一次启动，运行中的终端保持不变。单个会话可覆盖默认终端。</p></>)}
-          {item('terminal-font', <><label>终端字号<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label><p className="form-hint">10–24 px。文件预览的字体和字号独立设置。</p></>)}
-          {item('local-limit', <><label>本机终端上限<input aria-label="本机终端上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxActiveTerminals} disabled={disabled} onChange={event => change({ ...draft, maxActiveTerminals: Number(event.target.value) })} /></label><p className="form-hint">启动中和运行中均占名额；降低上限不会停止已有终端。</p></>)}
+          {item('shell', <><TerminalFields value={draft.terminal} platform={platform} disabled={disabled} onError={onError} onChange={terminal => change({ ...draft, terminal: terminal! })} />{/* 用于下一次启动，运行中的终端保持不变。单个会话可覆盖默认终端。 */}</>)}
+          {item('terminal-font', <><label>终端字号（px）<input aria-label="终端字号" type="number" min={10} max={24} required value={draft.fontSize} disabled={disabled} onChange={event => change({ ...draft, fontSize: Number(event.target.value) })} /></label>{/* 10–24 px。文件预览的字体和字号独立设置。 */}</>)}
+          {item('local-limit', <><label>本机终端上限<input aria-label="本机终端上限" type="number" min={1} max={TERMINAL_LIMIT_MAX} required value={draft.maxActiveTerminals} disabled={disabled} onChange={event => change({ ...draft, maxActiveTerminals: Number(event.target.value) })} /></label>{/* 启动中和运行中均占名额；降低上限不会停止已有终端。 */}</>)}
         </form>
-        {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p>{running ? `${running} 个终端正在后台运行。先停止全部终端，再重启后台。` : '重启当前版本后台服务。不会迁移旧版数据，旧版安装必须先清理数据目录。'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>重启后台</button></section>)}
+        {item('backend', <section className="settings-card backend-card"><h2>后台服务</h2><p role="status">{running ? `${running} 个终端运行中` : connected ? '已连接' : '未连接'}</p><button className="subtle" disabled={restartDisabled || running > 0} onClick={onRestart}>重启后台</button></section>)}
         {item('about', <AboutCard connected={connected} apiVersion={apiVersion} running={running} onError={onError} />)}
       </div>
     </div>
-    <footer className="settings-savebar"><div><strong role="status">{saved && !dirty ? '设置已保存' : dirty ? `${pending} 项启动或资源设置未保存` : '设置已同步'}</strong><small>{dirty ? '草稿已保留，切换分类不会丢失。' : '修改后保存以应用设置。'}</small></div><div className="settings-save-actions">{dirty && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false);setSaveState('idle'); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled || JSON.stringify(draft)===JSON.stringify(DEFAULT_SETTINGS)} title="恢复默认终端、Agent 及会话上限；保存后应用" onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button form="workspace-settings-form" className="primary" aria-busy={saveState==='pending'} data-feedback={saveState} disabled={disabled || !dirty}>保存设置</button></div></footer>
+    <footer className="settings-savebar"><div><strong role="status">{saved && !dirty ? '设置已保存' : dirty ? `${pending} 项启动或资源设置未保存` : '设置已同步'}</strong>{/* {dirty ? '草稿已保留，切换分类不会丢失。' : '修改后保存以应用设置。'} */}</div><div className="settings-save-actions">{dirty && <button type="button" className="subtle" disabled={disabled} onClick={() => { onDiscard(); setSaved(false);setSaveState('idle'); }}>取消修改</button>}<button type="button" className="subtle" disabled={disabled || JSON.stringify(draft)===JSON.stringify(DEFAULT_SETTINGS)} title="恢复默认值" onClick={() => change(structuredClone(DEFAULT_SETTINGS))}>恢复默认值</button><button form="workspace-settings-form" className="primary" aria-busy={saveState==='pending'} data-feedback={saveState} disabled={disabled || !dirty}>保存设置</button></div></footer>
   </section>;
 }

@@ -42,10 +42,14 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   cmd('retry_task', '重试失败或已取消的任务', id, ['id'], p => service.retryTask(str(p, 'id')));
   cmd('trash', '回收站', page, [], p => slice(workspace.trash(), p).map(({ id, kind, title, at }) => ({ id, kind, title, at })));
   cmd('restore_trash', '恢复已删除页面或素材', { ...id, asCopy: field('boolean') }, ['id'], p => write(() => { const item = workspace.restoreTrash(str(p, 'id'), p.asCopy === true); store.saveIndex(buildIndex(store.listPages())); return { kind: item.kind, slug: item.page?.slug, sourceId: item.source?.id }; }));
+  cmd('purge_trash','永久删除回收记录及未引用附件',id,['id'],p=>write(()=>workspace.purgeTrash(str(p,'id'))));
+  cmd('clear_trash','清空回收站及未引用附件',{},[],()=>write(()=>workspace.purgeTrash()));
+  cmd('delete_draft','删除审阅记录，保留页面和素材',id,['id'],p=>service.deleteDraft(str(p,'id')).then(()=>true));
   cmd('delete_impact', '删除前查看引用影响', { kind: field('string'), ...id }, ['kind', 'id'], p => ({ pages: service.listPages().filter(item => p.kind === 'source' ? item.sources.includes(str(p, 'id')) || item.evidence.some(e => e.sourceId === p.id) : extractLinks(item.body).includes(str(p, 'id'))).map(item => item.title).slice(0, 100) }));
   cmd('edit_draft_page', '逐页选择、修改和合并提案', { ...id, slug: field('string'), selected: field('boolean'), body: field('string'), merge: field('boolean') }, ['id', 'slug', 'selected'], p => service.editDraftPage(str(p, 'id'), str(p, 'slug'), p.selected === true, typeof p.body === 'string' ? p.body : undefined, p.merge === true).then(() => true));
   cmd('draft_page_text', '读取提案的可编辑正文', { ...id, slug: field('string') }, ['id', 'slug'], p => { const draft = service.getDraft(str(p, 'id')), item = draft?.pages.find(item => item.slug === p.slug); return item ? { body: item.body, selected: item.selected !== false, merge: !!item.allowHumanMerge, action: item.action, editable: draft?.status === 'pending' } : null; });
-  cmd('source_assets', '分页读取全部素材图片', { ...id, ...page }, ['id'], p => { const source = service.getSource(str(p, 'id')); if (!source) throw new Error('素材不存在'); return { names: slice(source.images, { ...p, limit: num(p, 'limit', 6) }), total: source.images.length }; });
+  cmd('source_assets', '分页读取全部素材图片', { ...id, ...page }, ['id'], p => { const source = service.getSource(str(p, 'id')); if (!source) throw new Error('素材不存在'); const names=slice(source.images, { ...p, limit: num(p, 'limit', 6) });return { names, total: source.images.length, labels:Object.fromEntries(names.map(name=>[name,byteTruncate(source.parts?.find(part=>part.asset===name)?.name??name,600)])) }; });
+  cmd('source_parts','分页读取混合素材的组成文件',{...id,...page},['id'],p=>{const source=service.getSource(str(p,'id'));if(!source)throw new Error('素材不存在');return {total:source.parts?.length??0,parts:slice(source.parts??[],p).map(({id,name,kind,asset,start,end,pages})=>({id,name:byteTruncate(name,600),kind,asset,start,end,pages}))};});
   cmd('source_text', '分页读取原始素材全文和 PDF 页码', { ...id, offset: field('integer', { minimum: 0 }), limit: field('integer', { minimum: 1, maximum: 12000 }), quote: field('string'), page: field('integer', { minimum: 1 }) }, ['id'], p => {
     const source = service.getSource(str(p, 'id')); if (!source) throw new Error('素材不存在');
     const quote = str(p, 'quote'), found = quote ? source.text.indexOf(quote) : -1;
@@ -55,8 +59,9 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   });
   cmd('download_source_asset', '查看或下载素材图片和原 PDF', { ...id, name: field('string') }, ['id', 'name'], p => {
     const source = service.getSource(str(p, 'id')), name = str(p, 'name');
-    if (!source || !source.images.includes(name) && source.document?.asset !== name) throw new Error('附件不属于此素材');
-    return transfers.downloadFile(source.document?.asset === name ? source.document.name : name, store.assetFile(name), name.endsWith('.pdf') ? 'application/pdf' : 'image/' + (name.endsWith('.jpg') ? 'jpeg' : name.split('.').pop()));
+    const part=source?.parts?.find(part=>part.asset===name);
+    if (!source || !source.images.includes(name) && source.document?.asset !== name&&!part) throw new Error('附件不属于此素材');
+    return transfers.downloadFile(part?.name??(source.document?.asset === name ? source.document.name : name), store.assetFile(name), name.endsWith('.pdf') ? 'application/pdf' : 'image/' + (name.endsWith('.jpg') ? 'jpeg' : name.split('.').pop()));
   });
   cmd('binary_chunk', '读取下载分片', { ...id, offset: field('integer', { minimum: 0 }) }, ['id', 'offset'], p => transfers.read(str(p, 'id'), num(p, 'offset')));
   cmd('cancel_transfer', '取消文件传输', id, ['id'], p => { uploads.delete(str(p, 'id')); return transfers.cancel(str(p, 'id')); });
@@ -69,18 +74,21 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   const staged = (kind: string, p: Params) => { const result = transfers.start(kind); uploads.set(result.id, { ...p, kind }); return result; };
   cmd('source_text_start', '开始保存完整素材正文', { title: field('string'), staging: field('boolean') }, [], p => staged('source', p));
   cmd('image_upload_start', '上传原始图片', { sourceId: field('string'), mime: field('string') }, ['sourceId', 'mime'], p => staged('image', p));
+  cmd('material_upload_start','上传同组 Markdown、文本或图片部件',{sourceId:field('string'),partId:field('string'),name:field('string'),mime:field('string')},['sourceId','partId','name','mime'],p=>staged('part',p));
+  cmd('discard_empty_source','取消尚未接收内容的临时素材',id,['id'],p=>service.discardEmptySource(str(p,'id')));
   cmd('draft_upload_start', '分片保存完整编辑草稿', { key: field('string') }, ['key'], p => staged('draft', p));
   const finishUpload = async (p: Params) => {
     const id = str(p, 'id'), metadata = uploads.get(id); if (!metadata) throw new Error('上传已过期');
     const bytes = transfers.append(id, str(p, 'base64'), p.done === true); if (!bytes) return null;
     try {
+      if(metadata.kind==='part')return await service.appendSourcePart(str(metadata,'sourceId'),str(metadata,'partId'),str(metadata,'name'),str(metadata,'mime'),bytes);
       if (metadata.kind === 'image') return await service.addImage(str(metadata, 'sourceId'), str(metadata, 'mime'), Buffer.from(bytes).toString('base64'));
       const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       if (metadata.kind === 'draft') return await write(() => { workspace.saveEditorDraft(str(metadata, 'key'), JSON.parse(text)); return true; });
       const source = await service.addSource({ title: str(metadata, 'title'), text, staging: metadata.staging === true }); return { id: source.id, title: source.title, compiled: source.compiled };
     } finally { uploads.delete(id); transfers.cancel(id); }
   };
-  for (const name of ['source_text_chunk', 'image_upload_chunk', 'draft_upload_chunk']) cmd(name, '写入文件分片', { ...id, base64: field('string'), done: field('boolean') }, ['id', 'base64'], finishUpload);
+  for (const name of ['source_text_chunk', 'image_upload_chunk', 'draft_upload_chunk','material_upload_chunk']) cmd(name, '写入文件分片', { ...id, base64: field('string'), done: field('boolean') }, ['id', 'base64'], finishUpload);
   cmd('editor_draft_download', '完整读取编辑草稿', { key: field('string') }, ['key'], p => { const draft = workspace.editorDraft(str(p, 'key')); if (!draft) return null; return transfers.download('draft.json', new TextEncoder().encode(JSON.stringify(draft)), 'application/json'); });
   cmd('export_backup', '导出完整知识库（不含模型密钥）', {}, [], () => write(() => transfers.download('AgentBerth-Wiki-' + new Date().toISOString().slice(0, 10) + '.zip', workspace.backup())));
   cmd('backup_upload_start', '开始导入知识库备份', {}, [], () => transfers.start('backup.zip', 'application/zip', 64 * 1024 * 1024));

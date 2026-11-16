@@ -20,7 +20,7 @@ export function AboutCard({ connected, apiVersion, running, onError }: { connect
     <p className="app-version">AgentBerth · 泊栈 {info ? `v${info.version}` : '正在读取版本…'}</p>
     <p>后台{connected ? '已连接' : '未连接'}{apiVersion < API_VERSION ? ' · 可更新后台' : ''}</p>
     <div className="about-actions"><AsyncButton className="subtle" disabled={!info} onAction={() => action(() => window.berth.copyText(diagnostics(info!, connected, apiVersion, running)), '诊断信息已复制')}>复制诊断信息</AsyncButton><AsyncButton className="subtle" onAction={() => action(() => window.berth.openDataDirectory())}>打开数据目录</AsyncButton><AsyncButton className="subtle" onAction={() => action(() => window.berth.openExternal('https://github.com/Tan90degrees/AgentBerth/blob/main/README.md'))}>使用说明</AsyncButton><AsyncButton className="subtle" onAction={() => action(() => window.berth.openExternal('https://github.com/Tan90degrees/AgentBerth/issues'))}>反馈问题</AsyncButton></div>
-    <p className="form-hint">复制诊断信息可用于反馈问题，仅包含版本、系统和后台状态。</p>
+    {/* 复制诊断信息可用于反馈问题，仅包含版本、系统和后台状态。 */}
     {info && <details className="advanced-options"><summary>运行环境</summary><p>{info.platform} {info.arch} · {info.osRelease} · {info.packaged ? '安装包 / ZIP' : '开发环境'}</p><p>Electron {info.electron} · Node {info.node}</p><p>后台 API {apiVersion} / 应用 API {API_VERSION} · {running} 个运行终端</p></details>}
     {message && <p role="status">{message}</p>}{error && <p role="alert">{error}</p>}
   </section>;

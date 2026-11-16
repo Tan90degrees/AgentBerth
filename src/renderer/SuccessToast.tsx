@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-export interface ToastAction { label: string; onAction: () => void }
+export interface ToastAction { label: string; onAction: () => void; retain?: boolean }
 
 export function SuccessToast({ message, onDismiss, action }: { message: string; onDismiss: () => void; action?: ToastAction }) {
   const [hovered, setHovered] = useState(false), [focused, setFocused] = useState(false);

@@ -32,7 +32,7 @@ export function NotificationCenter({ notices, open: controlledOpen, onOpenChange
       <header><strong>通知与告警</strong><button type="button" onClick={onClear} disabled={!notices.length}>清空</button><button type="button" aria-label="收起通知中心" onClick={() => setOpen(false)}>×</button></header>
       {!notices.length ? <p className="muted">暂无通知</p> : <ol>{notices.slice(-visible).reverse().map(item => <li key={item.id} className={`notification-item ${item.level ?? 'info'}`}>
         <div className="notification-meta"><span>{item.level === 'error' ? '错误' : item.level === 'warning' ? '告警' : '信息'}</span>{item.at && <time dateTime={new Date(item.at).toISOString()}>{new Date(item.at).toLocaleTimeString()}</time>}</div>
-        <p>{item.text}</p><div className="notification-actions">{item.action && <button type="button" onClick={() => { item.action!.onAction(); onDismiss(item.id); }}>{item.action.label}</button>}<button type="button" onClick={() => onCopy(item.text)}>复制</button><button type="button" onClick={() => onDismiss(item.id)} aria-label="关闭提示">移除</button></div>
+        <p>{item.text}</p><div className="notification-actions">{item.action && <button type="button" onClick={() => { item.action!.onAction(); if(!item.action!.retain)onDismiss(item.id); }}>{item.action.label}</button>}<button type="button" onClick={() => onCopy(item.text)}>复制</button><button type="button" onClick={() => onDismiss(item.id)} aria-label="关闭提示">移除</button></div>
       </li>)}</ol>}
       {notices.length > visible && <button type="button" onClick={() => setVisible(value => value + 100)}>加载更早通知（还有 {notices.length - visible} 条）</button>}
     </section>}

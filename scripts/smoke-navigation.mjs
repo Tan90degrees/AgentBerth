@@ -28,4 +28,13 @@ export async function openRightSidebar(page,panel){
 export async function selectProjectForSessions(page,button=page.locator('.projects .project-item')){
   await button.click();const toggle=button.locator('..').locator('.project-toggle');if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
 }
-export async function openNotifications(page){const button=page.getByRole('button',{name:/^通知中心/});if(await button.getAttribute('aria-expanded')!=='true')await button.click();await page.locator('.notification-panel').waitFor();}
+export async function openNotifications(page){
+  const button=page.getByRole('button',{name:/^通知中心/}),panel=page.locator('.notification-panel'),deadline=Date.now()+15000;
+  // A new message can auto-open the panel between reading aria-expanded and
+  // clicking the bell. Re-read after that race instead of waiting on a closed panel.
+  for(;;){
+    if(await button.getAttribute('aria-expanded')!=='true')await button.click();
+    try{await panel.waitFor({state:'visible',timeout:1000});return;}
+    catch(error){if(error.name!=='TimeoutError'||Date.now()>=deadline)throw error;}
+  }
+}

@@ -1061,11 +1061,12 @@ try {
   await page.getByRole('search').getByRole('status').filter({ hasText: '已定位' }).waitFor();
   await page.getByRole('button', { name: '复制选中', exact: true }).click();
   await eventually(async () => await application.evaluate(({ clipboard }) => clipboard.readText()) === 'FLOW_DONE', 'Read-only output copy failed');
-  // Recovery notices never disappear on a timer: changing the terminal height
-  // during search can clear xterm's selection between finding and copying.
-  await page.getByLabel('工作区恢复状态', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '关闭恢复提示', exact: true }).click();
-  await page.getByLabel('工作区恢复状态', { exact: true }).waitFor({ state: 'hidden' });
+  // Recovery history remains accessible without changing terminal geometry.
+  await openNotifications(page);
+  await page.locator('.notification-item').filter({ hasText: '上次会话恢复完成' }).waitFor();
+  assert.equal(await page.locator('.workspace-recovery').count(), 0);
+  await page.getByRole('button', { name: '收起通知中心', exact: true }).click();
+  await page.locator('.notification-panel').waitFor({ state: 'hidden' });
   await page.screenshot({ animations: 'disabled', path: `test-results/${packaged ? 'packaged-output-search' : 'output-search'}.png` });
   await page.getByRole('button', { name: '关闭终端查找', exact: true }).click();
   await assertTerminalGutter(page);
@@ -1175,7 +1176,7 @@ try {
   await page.getByRole('button', { name: '复制 MCP 配置', exact: true }).click();
   await page.waitForFunction(()=>document.querySelector('.mcp-actions button[aria-label="复制 MCP 配置"]')?.dataset.feedback==='success');
   assert.equal(await page.getByRole('button',{name:'复制给 Agent 的说明',exact:true}).count(),0);
-  await page.getByText('无需复制额外提示词',{exact:false}).waitFor();
+  assert.equal(await page.getByText('无需复制额外提示词',{exact:false}).count(),0,'Implementation help must not appear as interface copy');
   const mcpConfiguration = JSON.parse(await application.evaluate(({ clipboard }) => clipboard.readText())).mcpServers.agentberth;
   assert.equal(mcpConfiguration.env.ELECTRON_RUN_AS_NODE, '1');
   assert.ok(path.isAbsolute(mcpConfiguration.command));

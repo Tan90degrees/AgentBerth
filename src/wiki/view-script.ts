@@ -11,7 +11,7 @@ export const notesWikiScript = String.raw`
   // identity. Labels and attributes remain escaped when inserted into HTML.
   var unesc=function(value){return value.replace(/&(amp|lt|gt|quot|#39);/g,function(entity){return {'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&#39;':"'"}[entity]})};
   var pageSlug=${slugify.toString()};
-  var err=function(value){var box=$('error');if(box)box.textContent=String(value&&value.message||value||'')};
+  var err=function(value){var message=String(value&&value.message||value||''),box=$('error'),previous=box&&box.textContent;if(box)box.textContent=message;if(message&&message!==previous&&typeof window.agentberth?.notify==='function')window.agentberth.notify(message,'error')};
   var ok=function(value){return function(result){err('');return result};};
   // All panels stay mounted, so field lookups must be scoped to the visible
   // one: an unscoped querySelector would read a stale form from another tab.
@@ -89,9 +89,9 @@ export const notesWikiScript = String.raw`
   }
   function showCaptureSelection(){var select=field('session'),box=$('captureSelection');if(!select||!box)return;var session=(state.sessions||[]).find(function(s){return s.id===select.value});box.textContent=session?'工作区：'+session.projectName+'\n目录：'+session.projectPath+'\n会话：'+session.title+'\n会话 ID：'+session.id+'\n原生会话 ID：'+(session.nativeSessionId||'未关联'):''}
   function captureCard(){return card('导入完整会话',
-    '<p class="muted">按工作区选择会话，全量导入已有记录，单条正文不截断。素材完整保存在本机，模型按片段渐进读取。</p><label>搜索工作区、会话名称或 ID<input id="captureQuery" placeholder="工作区 / 会话名称 / ID"></label>'+
+    '<label>搜索工作区、会话名称或 ID<input id="captureQuery" placeholder="工作区 / 会话名称 / ID"></label>'+
     '<label>工作区 → 会话名称 · 会话 ID<select data-field="session">'+captureOptions('')+'</select></label><pre id="captureSelection" class="muted" style="white-space:pre-wrap"></pre>'+
-    '<div class="row">'+button('captureSession','全量导入会话','primary')+button('refreshSessions','刷新会话')+'</div><p id="captureStatus" class="muted"></p><p class="muted">也可将 PDF、Markdown、文本放入 raw/inbox/ 自动导入。</p>');}
+    '<div class="row">'+button('captureSession','全量导入会话','primary')+button('refreshSessions','刷新会话')+'</div><p id="captureStatus" class="muted"></p>');}
   // A Markdown field with a live preview toggle. Preview is rendered in place
   // (no card re-render) so the text being typed is never lost.
   function mdEditor(labelText,field,rows,value,max){
@@ -170,7 +170,7 @@ export const notesWikiScript = String.raw`
       var p=result.page;state.editToken=result.editToken;
       if(state.editing&&result.truncated){state.editing=false;err('页面过长，请在本地 Markdown 文件中编辑完整内容');}
       if(state.editing){
-        host.innerHTML=card('编辑「'+p.title+'」','<label>标题<input data-field="title" value="'+esc(p.title)+'"></label><label>摘要<input data-field="summary" value="'+esc(p.summary)+'"></label><label>类型<select data-field="kind">'+Object.keys(kindName).map(function(k){return '<option value="'+k+'"'+(k===p.kind?' selected':'')+'>'+kindName[k]+'</option>'}).join('')+'</select></label>'+mdEditor('正文（Markdown，支持 [[双向链接]]）','body',18,p.body,30000)+'<p class="muted">人工编辑的页面不会被自动编译覆盖。</p><div class="row">'+button('savePage','保存','primary')+button('cancelEdit','取消')+'</div>');
+        host.innerHTML=card('编辑「'+p.title+'」','<label>标题<input data-field="title" value="'+esc(p.title)+'"></label><label>摘要<input data-field="summary" value="'+esc(p.summary)+'"></label><label>类型<select data-field="kind">'+Object.keys(kindName).map(function(k){return '<option value="'+k+'"'+(k===p.kind?' selected':'')+'>'+kindName[k]+'</option>'}).join('')+'</select></label>'+mdEditor('正文（Markdown，支持 [[双向链接]]）','body',18,p.body,30000)+'<div class="row">'+button('savePage','保存','primary')+button('cancelEdit','取消')+'</div>');
         return;
       }
       var meta='<p><span class="badge">'+esc(kindName[p.kind]||p.kind)+'</span>'+(p.humanEdited?'<span class="badge warn">人工编辑</span>':'')+'<span class="badge">'+p.sources.length+' 个来源</span><span class="badge">更新 '+esc(date(p.updatedAt))+'</span></p>';
@@ -188,7 +188,7 @@ export const notesWikiScript = String.raw`
   function renderSource(){
     renderSourceList();var host=$('sourceView');
     if(state.newSource){
-      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文（完整保存，模型分片读取）<textarea data-field="text" rows="14" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片（可选，保留原图逐张上传）<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>PDF 文档（可选，分片上传后自动提取文本）<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><p class="muted">保存后会保留原始素材；修改内容请新建一份，避免改变已有出处。</p><div class="row">'+button('saveSource','保存文字 / 图片并编译','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
+      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文<textarea data-field="text" rows="14" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>文件<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><div class="row">'+button('saveSource','保存整组素材','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
       var input=field('images',host);
       if(input)input.onchange=function(){var box=$('imagePreview');box.innerHTML='';Array.from(input.files||[]).forEach(function(file){var image=document.createElement('img'),url=URL.createObjectURL(file);ux.urls.push(url);image.src=url;image.className='img-preview';image.alt=file.name;box.appendChild(image)})};
       var pdfInput=field('pdf',host);
@@ -239,14 +239,14 @@ export const notesWikiScript = String.raw`
   }
   function renderReview(){
     renderDraftList();var host=$('draftView');
-    if(!state.draft){host.innerHTML=empty('选择一个提案查看逐页 diff，批准后才写入 wiki。');return}
+    if(!state.draft){host.innerHTML=empty('选择提案');return}
     call('get_draft',{id:state.draft}).then(function(draft){
       if(!draft||state.draft!==draft.id||state.tab!=='review')return;
       var pages='<div class="stack">'+draft.pages.map(function(p){return '<div class="row"><button data-action="draftPage" data-slug="'+esc(p.slug)+'" class="grow'+(state.draftSlug===p.slug?' active':'')+'">'+esc(p.title)+' · '+(p.selected===false?'不发布':p.action==='create'?'新建':p.action==='update'?'更新':'人工编辑保护')+'</button><small>'+esc(p.summary||'')+'</small></div>'}).join('')+'</div>';
       var contradictions=draft.contradictions.length?'<div class="card"><h3>发现的矛盾</h3><ul>'+draft.contradictions.map(function(c){return '<li>'+esc(c)+'</li>'}).join('')+'</ul></div>':'';
       var feedback=draft.feedback.length?'<p class="muted">历史反馈：'+esc(draft.feedback.join('；'))+'</p>':'';
       var actions=draft.status==='pending'?'<div class="row">'+button('approveDraft','批准并发布（'+draft.pages.filter(function(p){return p.selected!==false&&p.action!=='skip'}).length+' 页）','primary')+button('rejectDraft','拒绝','danger')+'</div><label>拒绝反馈（会注入下次编译）<textarea data-field="feedback" rows="2" maxlength="500" placeholder="例如：概述太笼统，需要具体例子"></textarea></label>':'<p class="muted">此提案已处理。</p>';
-      host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(draft.sourceTitle)+'</h2><p class="muted">'+esc(draft.summary)+' · 模型 '+esc(draft.model)+' · '+esc(date(draft.createdAt))+'</p></div><span class="badge">'+esc(draft.status)+'</span></div>'+feedback+actions+'</div>'+contradictions+card('页面提案',pages)+'<div id="draftDiff"></div>';
+      host.innerHTML='<div class="card"><div class="row" style="justify-content:space-between"><div><h2>'+esc(draft.sourceTitle)+'</h2><p class="muted">'+esc(draft.summary)+' · 模型 '+esc(draft.model)+' · '+esc(date(draft.createdAt))+'</p></div><span class="badge">'+esc(draft.status)+'</span></div>'+feedback+actions+'<div class="row">'+button('deleteDraft','删除审阅记录','danger',' data-id="'+esc(draft.id)+'"')+'</div></div>'+contradictions+card('页面提案',pages)+'<div id="draftDiff"></div>';
       if(state.draftSlug)loadDraftPage(draft.id,state.draftSlug);
     }).catch(err);
   }
@@ -285,13 +285,13 @@ export const notesWikiScript = String.raw`
         '<label>类型<select data-field="kind">'+['ingest','compile','query','lint','synthesize','custom'].map(function(k){return '<option value="'+k+'"'+(k===kind?' selected':'')+'>'+k+'</option>'}).join('')+'</select></label>'+
         '<label>触发词（逗号分隔）<input data-field="triggers" value="'+esc(triggers)+'"></label>'+
         mdEditor('指令正文（Markdown，将作为模型 system prompt）','body',16,'',30000)+
-        '<p class="muted">同类型的自定义 Skill 会优先于内置版本；用同名保存可覆盖内置指令。</p>'+
+        ''+
         '<div class="row">'+button('saveSkill','保存','primary')+(state.newSkill?'':button('deleteSkill','删除','danger')+button('exportSkill','导出 SKILL.md'))+button('cancelSkill','取消')+'</div><p id="skillStatus" class="muted"></p><div id="skillExport"></div>');
       var body=field('body',host);
       if(body&&!state.newSkill)call('get_skill',{name:state.skill}).then(function(value){if(value&&body.isConnected&&body.closest('[data-draft-key]')?.dataset.dirty!=='true'&&!body.value.trim())body.value=value.body}).catch(err);
       return;
     }
-    host.innerHTML=card('工作流 Skill','<p>每个 Skill 是一个可编辑的 Markdown 指令模板，对应 LLM Wiki 的 Schema 层：摄入、编译、查询、体检、归档。</p><p class="muted">内置 Skill 可编辑覆盖但不能删除；自定义 Skill 可自由增删改查，导出的 SKILL.md 与工作台 Agent 的技能格式兼容。</p><div class="row">'+button('newSkill','新建 Skill','primary')+'</div><details><summary>导入 SKILL.md</summary><label>粘贴内容<textarea data-field="import" rows="8" maxlength="30000" placeholder="粘贴 SKILL.md 全文（含 --- 头部）"></textarea></label>'+button('importSkill','导入','primary')+'</details><div id="skillExport"></div>');
+    host.innerHTML=card('工作流 Skill','<div class="row">'+button('newSkill','新建 Skill','primary')+'</div><details><summary>导入 SKILL.md</summary><label>粘贴内容<textarea data-field="import" rows="8" maxlength="30000" placeholder="粘贴 SKILL.md 全文（含 --- 头部）"></textarea></label>'+button('importSkill','导入','primary')+'</details><div id="skillExport"></div>');
   }
   // ---- Settings
   function renderSettings(){
@@ -300,8 +300,8 @@ export const notesWikiScript = String.raw`
       '<div class="grid2"><div><small>服务地址</small><p>'+esc(s.model.baseURL)+'</p><small>文本模型</small><p>'+esc(s.model.textModel)+'</p></div><div><small>视觉模型</small><p>'+esc(s.model.visionModel||'（未启用）')+'</p><small>API Key</small><p>'+esc(s.model.keyHint)+'</p></div></div>'+
       '<hr><p class="muted">自动编译：'+(s.automation.autoCompile?'开':'关')+' · 发布方式：人工审阅 · 体检间隔：'+(s.automation.lintMinutes||'关闭')+' 分钟 · 上次体检：'+esc(s.lastLint?date(s.lastLint):'尚未运行')+'</p>'+
       '<div class="row">'+button('testConnection','测试连接')+button('openPluginSettings','修改模型配置')+button('runLint','立即体检')+'</div>');
-    var key='<div class="card"><h3>API Key（仅存于本机插件私有文件）</h3><label>密钥<input type="password" data-field="apiKey" placeholder="sk-…" autocomplete="off"></label><div class="row" style="margin-top:8px">'+button('setKey','保存密钥','primary')+button('clearKey','清除')+'</div><p class="muted">不会写入插件配置表单，也不会出现在日志里。</p></div>';
-    var schema='<div class="card"><h3>Schema 约定</h3><p class="muted">定义页面规范、链接风格与编译边界，会随每次模型调用一起发送。</p>'+mdEditor('Schema（Markdown）','schema',12,'',30000)+'<div class="row" style="margin-top:8px">'+button('saveSchema','保存 Schema','primary')+'</div></div>';
+    var key='<div class="card"><h3>API Key（仅存于本机插件私有文件）</h3><label>密钥<input type="password" data-field="apiKey" placeholder="sk-…" autocomplete="off"></label><div class="row" style="margin-top:8px">'+button('setKey','保存密钥','primary')+button('clearKey','清除')+'</div></div>';
+    var schema='<div class="card"><h3>Schema 约定</h3>'+mdEditor('Schema（Markdown）','schema',12,'',30000)+'<div class="row" style="margin-top:8px">'+button('saveSchema','保存 Schema','primary')+'</div></div>';
     var file='';
     if(state.file==='schema'){/* schema editor is always visible */}
     else if(state.file){file='<div class="card"><h3>'+esc(state.file==='log'?'log.md':state.file==='index'?'index.md':'体检结果')+'</h3><pre id="fileContent" style="white-space:pre-wrap;max-height:420px;overflow:auto"></pre></div>'}

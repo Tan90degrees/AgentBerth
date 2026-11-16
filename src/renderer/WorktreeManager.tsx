@@ -152,7 +152,7 @@ function WorktreeCreateDialog({ status, worktrees, disabled, error, onFetch, onC
         </select></label>
         <AsyncButton className="subtle" disabled={locked || !remote} onError={setLocalError} onAction={async () => { setFetching(true); try { await onFetch(remote); } finally { setFetching(false); } }}>获取远端分支</AsyncButton>
       </div>
-      <p className="form-hint">{mode === 'remote' ? '创建本地跟踪分支和独立工作目录。可修改本地分支名称。' : '新工作区使用独立目录；创建成功后会自动选中。'}{status?.remoteBranchesTruncated && ' 远端分支较多，当前显示前 2000 条。'}</p>
+      {status?.remoteBranchesTruncated && <span role="status">远端分支列表已截断</span>}
       <footer><button type="button" className="subtle" disabled={busy || fetching} onClick={onCancel}>取消</button><button type="submit" className="primary" aria-busy={busy} disabled={locked || !branch.trim() || mode === 'remote' && !source}>{busy ? '正在创建…' : '创建 Worktree'}</button></footer>
     </form>
   </Dialog>, document.body);
@@ -212,7 +212,7 @@ export function WorktreeManager({
       <strong>Worktree</strong>
       <button type="button" className="text-button" aria-label="刷新 Worktree" title="刷新 Worktree" disabled={!enabled || data.loading} onClick={() => void data.refresh()}>↻</button>
     </div>
-    {!enabled && <p className="form-hint">更新后台至 API 43 后可使用 Worktree。</p>}
+    {!enabled && <p className="form-hint">更新后台后可用</p>}
     {data.loading && !data.worktrees.length && <p className="form-hint">正在读取 Worktree…</p>}
     {data.error && <p className="form-hint" role="status">{data.error}。请确认项目目录是 Git 仓库。</p>}
     {!!data.worktrees.length && <div className="worktree-list">
@@ -274,7 +274,7 @@ export function WorktreePicker({
         {data.worktrees.filter(item => !item.main).map(item => <option key={item.path} value={item.workingPath}>{item.branch ?? '游离 HEAD'} · {item.workingPath}</option>)}
       </select>
     </label>
-    {!enabled && <p className="form-hint">更新后台至 API 43 后可选择 Worktree。</p>}
+    {!enabled && <p className="form-hint">更新后台后可用</p>}
     {data.error && <p className="form-hint">{data.error}；当前使用主工作区。</p>}
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
     {enabled && data.worktrees.length > 0 && <button type="button" className="subtle" disabled={disabled || creating} onClick={() => setCreating(true)}>新建 Worktree…</button>}

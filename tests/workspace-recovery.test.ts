@@ -57,7 +57,15 @@ test('explicit full quit checkpoints running sessions; reopen resumes final nati
   assert.equal(readFileSync(marker,'utf8').trim(),'USER_INPUT_ONCE');
   phase='ordinary shutdown and empty restart';
   await shutdownDaemon(data);c.close(true);c=await connect();await c.rpc('restoreWorkspace');assert.equal((await completed(c)).recovery!.total,0,'Non-tray shutdown does not queue a restart');
-  } catch(error) { throw new Error(`Workspace recovery failed during ${phase}: ${error instanceof Error ? error.message : String(error)}`,{cause:error}); }
+  } catch(error) {
+    // Detached Windows daemons can exit before RPC delivery. Preserve evidence
+    // before fixture cleanup; never print runtime.json because it contains a token.
+    for(const name of ['daemon-exit.json','daemon.log']) {
+      try {t.diagnostic(name+': '+readFileSync(path.join(data,name),'utf8').slice(-8192));}
+      catch {t.diagnostic(name+': unavailable');}
+    }
+    throw new Error(`Workspace recovery failed during ${phase}: ${error instanceof Error ? error.message : String(error)}`,{cause:error});
+  }
 });
 
 test('restore plan is consumed atomically; native association changes are allowed but launch configuration changes are detected', () => {

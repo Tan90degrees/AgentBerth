@@ -267,17 +267,66 @@ export function lintWiki(pages: WikiPage[], now = Date.now()): WikiLint {
 }
 
 /** Models occasionally wrap JSON in prose or fences. Accept the outermost object. */
-export function parseJsonResponse(text: string): Record<string, unknown> {
-  const raw = String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-  let candidate = raw;
-  if (!candidate.startsWith('{')) {
-    const start = candidate.indexOf('{'), end = candidate.lastIndexOf('}');
-    if (start < 0 || end <= start) throw new Error('模型返回的不是 JSON 对象');
-    candidate = candidate.slice(start, end + 1);
+/** Repair only syntax with an unambiguous meaning; never evaluate model code. */
+function normalizeJsonSyntax(value: string): string {
+  let out = '', quoted = false, escaped = false;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (quoted) {
+      if (escaped) { out += c; escaped = false; }
+      else if (c === '\\') { out += c; escaped = true; }
+      else if (c === '"') { out += c; quoted = false; }
+      else out += c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t' : c;
+    } else if (c === '"') { out += c; quoted = true; }
+    else if (c === ',') {
+      let next = i + 1;
+      while (next < value.length && /\s/.test(value[next])) next++;
+      if (value[next] !== '}' && value[next] !== ']') out += c;
+    } else out += c;
   }
-  const value = JSON.parse(candidate) as unknown;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型返回的不是 JSON 对象');
-  return value as Record<string, unknown>;
+  return out;
+}
+
+export function parseJsonResponse(text: string): Record<string, unknown> {
+  let raw = String(text ?? '').trim();
+  const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+  let direct: unknown, valid = false;
+  try { direct = JSON.parse(raw); valid = true; } catch { /* Scan complete objects below. */ }
+  if (valid) {
+    if (!object(direct)) throw new Error('模型返回的不是 JSON 对象');
+    return direct;
+  }
+  raw = raw.replace(/^(?:<think>[\s\S]*?<\/think>\s*)+/i, '');
+  // Scan complete roots, respecting braces/escaped quotes in Markdown strings.
+  // Multiple roots need repair together: selecting the first would lose data.
+  const candidates: Record<string, unknown>[] = [];
+  let found = 0, start = -1, depth = 0, quoted = false, escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (start < 0) {
+      if (c === '{') { start = i; depth = 1; quoted = false; escaped = false; }
+      continue;
+    }
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') quoted = false;
+      continue;
+    }
+    if (c === '"') quoted = true;
+    else if (c === '{') depth++;
+    else if (c === '}' && !--depth) {
+      found++;
+      try {
+        const value: unknown = JSON.parse(normalizeJsonSyntax(raw.slice(start, i + 1)));
+        if (object(value)) candidates.push(value);
+      } catch { /* A malformed candidate requires model repair. */ }
+      start = -1;
+    }
+  }
+  if (candidates.length === 1 && found === 1 && start < 0) return candidates[0];
+  if (found > 1 || found && start >= 0) throw new Error('模型返回多个 JSON 对象或不完整片段，不能丢弃其中内容；需要修复为一个完整对象');
+  throw new Error(raw.includes('{') ? '模型返回的 JSON 格式无效或不完整' : '模型返回的不是 JSON 对象');
 }
 
 export function truncate(text: string, max: number): string {

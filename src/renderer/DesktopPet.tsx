@@ -132,19 +132,19 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
   const apply = async (change: Partial<PetPreferences>) => {
     setBusy(true); setError(''); try { await save(change); } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
-  return <section className="settings-card pet-settings"><h2>桌宠</h2><p>展示 ACP、Superagent 任务以及 CLI Agent 会话，普通终端与 SSH 不展示。ACP 和 Superagent 直接同步状态，无需安装 hook。按住桌宠图像拖动，右键图像打开会话与设置菜单。</p>
+  return <section className="settings-card pet-settings"><h2>桌宠</h2>{/* 展示 ACP、Superagent 任务以及 CLI Agent 会话，普通终端与 SSH 不展示。ACP 和 Superagent 直接同步状态，无需安装 hook。按住桌宠图像拖动，右键图像打开会话与设置菜单。 */}
     <label className="pet-toggle"><input type="checkbox" checked={preferences.enabled} disabled={busy} onChange={event => void apply({ enabled: event.target.checked })} />显示桌宠</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.alwaysOnTop} disabled={busy} onChange={event => void apply({ alwaysOnTop: event.target.checked })} />保持在其他窗口上方</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.autoSwitch} disabled={busy} onChange={event => void apply({ autoSwitch: event.target.checked })} />等待处理或失败时，自动切换到对应会话</label>
-    <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label><p className="form-hint">支持 50%–200%，也可右键桌宠图像，在“桌宠大小”中调节，自动保存。</p>
+    <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label>{/* 支持 50%–200%，也可右键桌宠图像，在“桌宠大小”中调节，自动保存。 */}
     <h3>形象与动作</h3><label>桌宠形象<select aria-label="桌宠形象" value={preferences.appearance} disabled={busy} onChange={event=>{const appearance=event.target.value as PetAppearance;setBusy(true);setError('');void window.berth.pet({action:'selectAppearance',appearance}).then(setSnapshot).catch(reason=>setError(String(reason))).finally(()=>setBusy(false));}}>{petAppearances.map(appearance=><option key={appearance} value={appearance}>{petAppearanceLabels[appearance]}{appearance==='naiwa'&&!snapshot.availableAppearances?.includes('naiwa')?'（首次下载）':''}</option>)}</select></label>
     {busy&&<p role="status" className="form-hint">正在更新桌宠…</p>}
     <p className="form-hint">奶蛙首次选择时下载完整动作图集，之后可离线使用。素材来源：<AsyncButton className="text-button" onError={setError} onAction={()=>window.berth.openExternal('https://github.com/timerring/codex-pet-naiwa')}>codex-pet-naiwa</AsyncButton>。</p>
     {Object.keys(snapshot.images).length>0&&<label className="pet-toggle"><input type="checkbox" checked={preferences.customImages} disabled={busy} onChange={event=>void apply({customImages:event.target.checked})}/>使用已导入的自定义动作</label>}
-    <p>悬停或聚焦预览动作；导入 GIF 可替换对应状态，恢复默认回到当前形象的动作。</p>
+    {/* 悬停或聚焦预览动作；导入 GIF 可替换对应状态，恢复默认回到当前形象的动作。 */}
     <div className="pet-animation-grid">{petStatuses.map(status => <div className="pet-animation" key={status}><PetImage preview status={status} custom={preferences.customImages?snapshot.images[status]:undefined} revision={String(snapshot.imageVersion) + revision} appearance={preferences.appearance} atlas={atlas}/><strong>{petLabels[status]}</strong><small>{preferences.customImages&&snapshot.images[status]||petAppearanceLabels[preferences.appearance]}</small><div><AsyncButton className="subtle" onError={setError} onAction={async () => { const value = await window.berth.pet<PetSnapshot | null>({ action: 'importImage', status }); if (!value) return 'cancelled'; setSnapshot(value); setRevision(value => value + 1); }}>导入 GIF</AsyncButton><AsyncButton className="text-button" disabled={!snapshot.images[status]} onError={setError} onAction={async () => { setSnapshot(await window.berth.pet({ action: 'resetImage', status })); setRevision(value => value + 1); }}>恢复默认</AsyncButton></div></div>)}</div>
     <p className="form-hint">大肥鱼形象来自 dsh-pet（MIT），动作帧由 dsh-dafeiyu 提供。<AsyncButton className="text-button" onError={setError} onAction={() => window.berth.openExternal('https://github.com/PC2005-cloud/dsh-pet')}>素材来源</AsyncButton></p>
-    <h3>Agent hook 自动配置</h3><p>适配已安装的 Claude Code 和 OpenCode，不安装 Agent、不修改模型与账号。安装后重新启动对应 Agent 会话。</p>
+    <h3>Agent hook 自动配置</h3>{/* 适配已安装的 Claude Code 和 OpenCode，不安装 Agent、不修改模型与账号。安装后重新启动对应 Agent 会话。 */}
     <div className="skill-filters"><label>适配 Agent<select aria-label="桌宠适配 Agent" value={provider} onChange={event => { setProvider(event.target.value as typeof provider); setNotice(''); }}><option value="claude">Claude Code</option><option value="opencode">OpenCode</option></select></label><label>安装范围<select aria-label="桌宠适配范围" value={scope} onChange={event => { setScope(event.target.value); setNotice(''); }}><option value="">用户级 · 所有项目</option>{projects.map(project => <option key={project.id} value={project.id}>项目 · {project.name}</option>)}</select></label></div>
     <AsyncButton className="subtle" disabled={apiVersion < 38} onError={setError} onAction={async () => {
       setError(''); setNotice('');
@@ -153,12 +153,12 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     }}>安装/更新适配</AsyncButton>
     {notice && <p className="form-hint" role="status" aria-label="适配安装结果" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{notice}</p>}
     {apiVersion < 38 && <p className="form-hint">请先在设置中更新空闲后台，再安装适配。</p>}
-    <p className="form-hint">保留已有配置与 hook，有变更时自动备份。OpenCode 自动检测 1.x / 2.x 插件接口。也可以把以下说明复制给 Agent 自行配置；项目和用户范围任选一个即可。</p>
+    {/* 保留已有配置与 hook，有变更时自动备份。OpenCode 自动检测 1.x / 2.x 插件接口。也可以把以下说明复制给 Agent 自行配置；项目和用户范围任选一个即可。 */}
     <ol className="pet-hook-steps"><li>在 AgentBerth 中启动一个 Agent 类型会话。</li><li>点击“复制给 Agent 自动配置”，粘贴给该 Agent 执行。</li><li>配置完成后重新启动该 Agent 会话，检查执行、等待和完成状态。</li></ol>
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const text = await window.berth.pet<string>({ action: 'hookGuide' }); setGuide(text); await window.berth.copyText(text); }}>复制给 Agent 自动配置</AsyncButton>
     <details className="pet-hook-guide"><summary>查看完整自动配置教程</summary><pre>{guide || '正在生成本机配置教程…'}</pre></details>
     <AsyncButton className="subtle" onError={setError} onAction={async () => { const config = await window.berth.pet<string>({ action: 'hookConfig' }); await window.berth.copyText(config); }}>复制 Claude Code hook 配置</AsyncButton>
-    <p className="form-hint">CLI Agent 需配置 hook 才能显示精确状态；ACP 与 Superagent 自动同步状态。</p>
+    {/* CLI Agent 需配置 hook 才能显示精确状态；ACP 与 Superagent 自动同步状态。 */}
     {error && <p className="form-error" role="alert">{error.replace(/^Error: /, '')}</p>}
   </section>;
 }

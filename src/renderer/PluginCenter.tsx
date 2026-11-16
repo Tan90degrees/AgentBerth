@@ -20,7 +20,7 @@ export function PluginCenter({tab,onTabChange,projects,currentProjectId,apiVersi
   return <section className="plugin-center" aria-label="插件中心">
     <header className="plugin-center-heading"><div>
       <span className="eyebrow">EXTENSIONS</span><h1>插件中心</h1>
-      <p>管理扩展、Agent 接入与插件配置。</p>
+      {/* 管理扩展、Agent 接入与插件配置。 */}
     </div><div className="plugin-center-summary" aria-label="插件运行概览">
       <span><strong>{installed}</strong><small>{tab==='agents'?'Agent 接入':'扩展插件'}</small></span><span><strong>{active}</strong><small>已启用</small></span>
     </div></header>
