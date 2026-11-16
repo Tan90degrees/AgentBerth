@@ -6,6 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { StringDecoder } from 'node:string_decoder';
 import * as pty from 'node-pty';
+import { protectWindowsPty } from './windows-pty';
 import { terminateTree } from './processes';
 import type { RemoteConfig, RemoteStatusUpdate } from '../shared/protocol';
 
@@ -187,9 +188,9 @@ export class RemoteTerminal implements TerminalProcess {
     if(generation!==this.generation||this.closed)throw new Error('连接已取消');
     if(!posix&&this.config.directory)throw new Error('此登录 Shell 不支持自动切换目录；请将远端目录留空，登录后切换');
     this.notify({commandTracking:posix?'posix':'none'});
-    const child=pty.spawn(this.executable,sshArguments(this.config.host,posix?shellBootstrap(this.sessionId,this.config.directory):undefined,true),{cols:this.cols,rows:this.rows,name:'xterm-256color',env:{...process.env,TERM:'xterm-256color'}});
+    const child=pty.spawn(this.executable,sshArguments(this.config.host,posix?shellBootstrap(this.sessionId,this.config.directory):undefined,true),{cols:this.cols,rows:this.rows,name:'xterm-256color',useConptyDll:process.platform==='win32',env:{...process.env,TERM:'xterm-256color'}});
     this.viewer=child;
-    let settled=false;
+    let settled=false,terminalError:string|null=null;
     return new Promise<void>((resolve,reject)=>{
       const ready=()=>{if(settled)return;settled=true;clearTimeout(timer);this.notify({connection:'connected',error:null});resolve();};
       this.display=posix?new ManagedOutput(this.sessionId,text=>this.events.emit('data',text),(kind,status,cwd,requestId)=>{if(generation!==this.generation)return;if(!requestId&&kind==='ready')ready();this.marker(kind,status,cwd,requestId);}):null;
@@ -202,10 +203,18 @@ export class RemoteTerminal implements TerminalProcess {
         try{child.kill();}catch{} // Dispose native ConPTY handles as well as the process.
         if(generation!==this.generation||this.closed)return;
         this.display?.end();this.display=null;this.viewer=null;clearTimeout(timer);
-        this.notify({connection:'disconnected',phase:'unknown',error:exitCode===255?'SSH 链路已断开，远端任务结果未知。重新连接会新建 Shell，不会恢复或重放旧任务。':'SSH 会话已结束'});
+        this.notify({connection:'disconnected',phase:'unknown',error:terminalError??(exitCode===255?'SSH 链路已断开，远端任务结果未知。重新连接会新建 Shell，不会恢复或重放旧任务。':'SSH 会话已结束')});
         if(!settled){settled=true;reject(new Error('SSH 登录失败；请先确认系统终端可登录此主机'));}
         else if(exitCode!==255)this.events.emit('exit',{exitCode});
       });
+      const failed=(error:unknown)=>{
+        if(generation!==this.generation||this.closed)return;
+        terminalError='本机 SSH 终端通道失败：'+String(error);
+        this.notify({connection:'disconnected',phase:'unknown',error:terminalError});
+        if(!settled){settled=true;clearTimeout(timer);reject(new Error(terminalError));}
+        try{child.kill();}catch{}
+      };
+      try{protectWindowsPty(child,failed);}catch(error){failed(error);}
     });
   }
   async reconnect():Promise<void> {
