@@ -5,7 +5,7 @@ const pty = require('node-pty');
 let output = '';
 const child = pty.spawn(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
   process.platform === 'win32' ? ['/d', '/c', 'echo AGENTBERTH_NATIVE_READY'] : ['-c', 'printf AGENTBERTH_NATIVE_READY'],
-  { cols: 80, rows: 24, cwd: process.cwd(), env: process.env });
+  { useConptyDll: process.platform==='win32', cols: 80, rows: 24, cwd: process.cwd(), env: process.env });
 const timer = setTimeout(() => {
   try { child.kill(); } finally { console.error('Native PTY probe timed out'); process.exit(1); }
 }, 10000);

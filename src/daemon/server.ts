@@ -1,3 +1,5 @@
+import { terminalAppearance } from './terminal-appearance';
+import type { ResolvedAppearance } from '../shared/appearance';
 import { mountHarness } from '../plugins/deepseek-harness';
 import { serviceShell } from './paths';
 import { randomUUID } from 'node:crypto';
@@ -54,6 +56,7 @@ import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 interface LiveTerminal {
+  colors:ReturnType<typeof terminalAppearance>|null;
   run: Run; pty: TerminalProcess; remote?: { transport: RemoteTerminal | SshTerminal; activity: RemoteActivity }; terminal: Terminal; serialize: SerializeAddon; mouseEncoding: () => string;
   seq: number; committedSeq: number; queuedBytes: number; stopping: boolean; closed: boolean; failure?: string;
   log: RunLog | null;
@@ -62,6 +65,7 @@ interface LiveTerminal {
 export interface Client { id: string; disposing: boolean; subscriptions: Set<string>; activity: Map<string, string>; pending: number; abort: AbortController }
 
 export class DaemonServer {
+  private appearance:ResolvedAppearance='dark';
   private extensions:ExtensionRuntime;
   private coreContext=new Context();
   private coreRoutes=new Map<string,(request:Request,client:Client)=>Promise<unknown>>();
@@ -123,7 +127,7 @@ export class DaemonServer {
         }
         if(ids.some(id=>id.startsWith('agent.'))&&this.historyBusy.size)throw new Error('会话历史正在读取，请完成后再停用接入插件');
       },
-      call:async(method,params)=>{const caller=this.extensionCaller.getStore();if(!caller&&/^(remote|ssh|mcp)/i.test(method))throw new Error('SSH 操作必须由明确的调用会话发起');const request=requestSchema.parse({id:randomUUID(),method,params});return this.dispatch(request,caller??{id:'extension',disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort:new AbortController()});},
+      call:async(method,params)=>{if(method==='terminalAppearance')throw new Error('主题仅可由桌面外观设置修改');const caller=this.extensionCaller.getStore();if(!caller&&/^(remote|ssh|mcp)/i.test(method))throw new Error('SSH 操作必须由明确的调用会话发起');const request=requestSchema.parse({id:randomUUID(),method,params});return this.dispatch(request,caller??{id:'extension',disposing:false,subscriptions:new Set(),activity:new Map(),pending:0,abort:new AbortController()});},
       validateAgent:(pluginId,agent)=>{const sourceId='ext.'+createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex').slice(0,32);if(this.store.agents().some(value=>value.sourceId!==sourceId&&value.name.toLocaleLowerCase()===agent.definition.name.toLocaleLowerCase()))throw new Error('Agent 名称已被其他接入使用：'+agent.definition.name);},
       manageSessions:(pluginId,value)=>this.store.manageSessions(pluginId,value),
       agentsChanged:values=>{
@@ -498,6 +502,7 @@ export class DaemonServer {
     const coreHandler=this.coreRoutes.get(request.method);if(coreHandler)return coreHandler(request,client);
     switch (request.method) {
       case 'state': return this.snapshot();
+      case 'terminalAppearance': return this.setTerminalAppearance(request.params.appearance);
       case 'shutdown':
         await this.stopAll(request.params.restoreOnOpen);
         return null;
@@ -713,15 +718,14 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, session.service ? serviceShell(selected.file,selected.args,command).args : selected.args, { cwd, cols, rows, name: 'xterm-256color', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
+      } else child = this.spawnPty(selected.file, session.service ? serviceShell(selected.file,selected.args,command).args : selected.args, { cwd, cols, rows, name: 'xterm-256color', useConptyDll: process.platform==='win32', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
     }
     catch (error) {
       terminal.dispose();
       this.store.finish(run.id, 'failed', null, String(error), '', 0, cols, rows); this.changed(); throw error;
     }
     this.store.setPid(run.id, child.pid);
-    const live: LiveTerminal = { run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
-    if (remote) terminal.onData(data => { try { remote.transport.write(data); } catch { /* Reconnect redraw will negotiate again. */ } });
+    const live: LiveTerminal = { colors:null, run: this.store.run(run.id), pty: child, remote, terminal, serialize, mouseEncoding, seq: 0, committedSeq: 0, queuedBytes: 0, stopping: false, closed: false, finishing: null, log: run.recordOutput ? new RunLog(this.logs, run.id) : null, output: [], outputBytes: 0, outputTimer: null };
     this.live.set(sessionId, live);
     const ptyFailure=(error:unknown)=>{
       if(live.closed||live.stopping||live.failure)return;
@@ -731,6 +735,9 @@ export class DaemonServer {
       // continue accepting input or silently replay it after a broken pipe.
       void this.stop(sessionId).catch(error=>this.logError(error));
     };
+    const reply=(data:string)=>{if(live.closed||live.stopping)return;try{child.write(data);}catch(error){if(!remote)ptyFailure(error);}};
+    live.colors=terminalAppearance(terminal,this.appearance,reply);
+    terminal.onData(reply);
     try {if(!remote)protectWindowsPty(child,ptyFailure);}
     catch(error){live.failure='终端通道初始化失败：'+String(error);await this.stop(sessionId);throw error;}
     if (remote && remoteOwner === 'agent') {
@@ -834,10 +841,19 @@ export class DaemonServer {
     }
   }
 
+  private async setTerminalAppearance(appearance:ResolvedAppearance):Promise<null>{
+    this.appearance=appearance;
+    await Promise.all([...this.live.values()].filter(live=>!live.closed&&!live.stopping).map(live=>{
+      this.flushOutput(live);
+      return new Promise<void>(resolve=>live.terminal.write('',()=>{if(!live.closed&&!live.stopping)live.colors?.update(appearance);resolve();}));
+    }));
+    return null;
+  }
+
   private async screen(live: LiveTerminal, serialize = true): Promise<{ snapshot: string; seq: number; cols: number; rows: number }> {
     this.flushOutput(live);
     // This callback follows all prior writes. seq and the screen describe the same point in time.
-    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: serialize ? (live.serialize.serialize({ scrollback: 200 }) + live.mouseEncoding()) : '', seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
+    return new Promise(resolve => live.terminal.write('', () => resolve({ snapshot: serialize ? (live.serialize.serialize({ scrollback: 200 }) + live.mouseEncoding() + (live.colors?.snapshot()??'')) : '', seq: live.committedSeq, cols: live.terminal.cols, rows: live.terminal.rows })));
   }
   private flushOutput(live: LiveTerminal): void {
     if (live.outputTimer) clearTimeout(live.outputTimer);
@@ -855,7 +871,7 @@ export class DaemonServer {
   private async attach(sessionId: string): Promise<Attachment> {
     const session = this.store.session(sessionId);
     const live = this.live.get(sessionId);
-    if (live) return { run: this.store.run(live.run.id), ...await this.screen(live) };
+    if (live) return { terminalReplies:true, run: this.store.run(live.run.id), ...await this.screen(live) };
     if (session.latestRun) return { run: session.latestRun, ...this.store.savedScreen(session.latestRun.id) };
     return { run: null, snapshot: '', seq: 0, cols: 100, rows: 30 };
   }

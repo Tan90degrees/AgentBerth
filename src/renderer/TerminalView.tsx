@@ -76,6 +76,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
     let ready = false;
     let runId: string | null = null;
     let running = false;
+    let daemonReplies=remoteSession;
     const unbind = bind(terminal, () => ready && running && !!runId && allowedInput.current);
     let seq = 0;
     let pending: TerminalEvent[] = [];
@@ -99,7 +100,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
     });
     let inputChain = Promise.resolve(), inputGeneration = 0;
     const sendInput = (data: string, binary = false) => {
-      if (remoteSession && !binary && isTerminalReply(data)) return; // The daemon headless terminal owns query responses, including with no UI.
+      if (daemonReplies && !binary && isTerminalReply(data)) return; // The daemon headless terminal owns query responses, including with no UI.
       if (!allowedInput.current || !ready || !running || !runId) return;
       const targetRun = runId, generation = inputGeneration;
       for (const chunk of inputChunks(data)) {
@@ -146,6 +147,7 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
     });
     void window.berth.rpc<Attachment>('attach', { sessionId }).then(attachment => {
       if (disposed) return;
+      daemonReplies=remoteSession||attachment.terminalReplies===true;
       runId = attachment.run?.id ?? null;
       running = attachment.run?.status === 'running';
       seq = attachment.seq;

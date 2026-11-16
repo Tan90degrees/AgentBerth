@@ -35,6 +35,37 @@ try{
   const activity=page.locator('.activity-bar');const sessionButton=activity.getByRole('button',{name:'会话',exact:true});await sessionButton.focus();await page.keyboard.press('Enter');assert.equal(await sessionButton.getAttribute('aria-pressed'),'true');
   await rpc('input',{sessionId:shell.id,runId:run.id,data:'echo '+ 'Z'.repeat(300)+'UI_COPY_READY\r'});await until(()=>rpc('attach',{sessionId:shell.id}).then(value=>value.snapshot.includes('UI_COPY_READY')));
   const unchanged=(await rpc('state')).sessions.find(value=>value.id===shell.id).latestRun;assert.equal(unchanged.id,run.id);assert.equal(unchanged.pid,run.pid);
+  // The fixture TUI paints explicit RGB from OSC replies; changing CSS alone
+  // cannot pass. Keep the same process, grid and draft while it is detached too.
+  const quote=value=>"'"+value.replaceAll("'",process.platform==='win32'?"''":"'\\''")+"'";
+  const themeSession=await rpc('createSession',{projectId:project.id,title:'Theme TUI',agent:'custom',command:(process.platform==='win32'?'& ':'')+quote(process.execPath)+' '+quote(path.resolve('tests/fixtures/theme-tui.cjs'))+' '+quote(path.join(folder,'theme-tui-trace.jsonl'))});
+  const themeRun=await rpc('start',{sessionId:themeSession.id,cols:90,rows:24});await select(themeSession.id);
+  const themeSnapshot=()=>rpc('attach',{sessionId:themeSession.id});
+  await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_')&&value.snapshot.includes('BG_')));
+  await rpc('input',{sessionId:themeSession.id,runId:themeRun.id,data:'KEEP_THEME_DRAFT'});
+  await page.evaluate(()=>{window.themeTui=document.querySelector('.terminal-mount .xterm');});
+  await until(()=>app.evaluate((_,id)=>globalThis.uiFaults.calls.some(call=>call.method==='resize'&&call.params.sessionId===id),themeSession.id));
+  const themeGrid=await themeSnapshot();let colorReplies=Number(themeGrid.snapshot.match(/COLOR_REPLIES_(\d+)/)?.[1]);assert.equal(colorReplies,1);
+  for(const [theme,label,bg] of [['light','浅色','ffff/ffff/ffff'],['dark','深色','2121/2121/2121']]){
+    const toggle=page.getByRole('button',{name:'切换为'+label+'模式',exact:true});if(await toggle.count())await toggle.click();
+    await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_'+theme.toUpperCase())&&value.snapshot.includes('BG_'+bg)&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
+    assert.equal(await page.evaluate(()=>window.themeTui===document.querySelector('.terminal-mount .xterm')),true,'Theme changes must preserve the TUI renderer');
+    const snapshot=await themeSnapshot();assert.equal(snapshot.cols,themeGrid.cols);assert.equal(snapshot.rows,themeGrid.rows);assert.equal(Number(snapshot.snapshot.match(/COLOR_REPLIES_(\d+)/)?.[1]),++colorReplies,'Each theme change gets exactly one daemon-owned color reply');
+    const current=(await rpc('state')).sessions.find(value=>value.id===themeSession.id).latestRun;assert.equal(current.id,themeRun.id);assert.equal(current.pid,themeRun.pid);
+  }
+  await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('navigation',{name:'设置分类',exact:true}).getByRole('button',{name:'外观',exact:true}).click();
+  await page.getByRole('radio',{name:'跟随系统',exact:true}).click();
+  for(const [theme,bg] of [['light','ffff/ffff/ffff'],['dark','2121/2121/2121']]){
+    await page.emulateMedia({colorScheme:theme});await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);
+    await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_'+theme.toUpperCase())&&value.snapshot.includes('BG_'+bg)&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
+  }
+  await page.getByRole('radio',{name:'深色',exact:true}).click();await page.emulateMedia({colorScheme:'light'});assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');await page.locator('.activity-bar').getByRole('button',{name:'会话',exact:true}).click();await page.emulateMedia({colorScheme:null});
+  await select(shell.id);await page.getByRole('button',{name:'切换为浅色模式',exact:true}).click();
+  await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_LIGHT')&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
+  await select(themeSession.id);await page.screenshot({path:'test-results/tui-theme-light.png',animations:'disabled'});
+  await rpc('input',{sessionId:themeSession.id,runId:themeRun.id,data:'\x03'});await until(()=>themeSnapshot().then(value=>value.snapshot.includes('THEME_TUI_DONE')));await rpc('stop',{sessionId:themeSession.id});
+  await select(shell.id);await page.getByRole('button',{name:'切换为深色模式',exact:true}).click();
   // Recovery feedback belongs to the shared center; state snapshots must not
   // duplicate it or restart the PTY. Timer collapse is tested in a real window.
   const recovered=await rpc('state'),recovery={id:'ui-recovery-fixture',status:'completed',total:6,restored:6,resumed:4,skipped:0,errors:[]};
@@ -96,7 +127,7 @@ try{
   await select(session.id);await until(()=>composer.isEnabled());assert.equal(await composer.inputValue(),'unsent draft');
   await page.screenshot({path:'test-results/ui-recovery-dark.png',animations:'disabled'});await page.evaluate(()=>document.documentElement.dataset.theme='light');await page.screenshot({path:'test-results/ui-recovery-light.png',animations:'disabled'});
   assert.deepEqual(errors,[]);
-}catch(error){failure=error;if(app)await app.firstWindow().then(page=>page.screenshot({path:'test-results/ui-smoke-failure.png'})).catch(()=>{});}
+}catch(error){failure=error;console.error('Theme fixture protocol trace:',await readFile(path.join(folder,'theme-tui-trace.jsonl'),'utf8').catch(()=>'(fixture not started)'));if(app)await app.firstWindow().then(page=>page.screenshot({path:'test-results/ui-smoke-failure.png'})).catch(()=>{});}
 finally{try{await cleanupSmoke(app,daemonPid,folder);}catch(error){failure??=error;}}
 if(failure)throw failure;
 console.log('UI usability smoke passed: keyboard focus, paused notices, offline output, ACP read recovery, draft retention and stale response isolation');

@@ -9,7 +9,7 @@ const subscribe=(listener:()=>void)=>{listeners.add(listener);return()=>{listene
 function apply(){
   resolved=resolveAppearance(preference,media?.matches??false);
   document.documentElement.dataset.theme=resolved;document.documentElement.style.colorScheme=resolved;
-  void window.berth?.setAppearance?.(preference).catch(()=>{});
+  void window.berth?.setAppearance?.(preference,resolved).catch(()=>{});
   for(const listener of listeners)listener();
 }
 export function initializeAppearance(){

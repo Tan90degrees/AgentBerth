@@ -141,6 +141,10 @@ try {
   launchArgs.push('--user-data-dir=' + path.join(folder, 'profile'));
   const env = { ...process.env, AGENTBERTH_DATA_DIR: path.join(folder, 'data') };
   delete env.ELECTRON_RUN_AS_NODE;
+  // Own the readiness prompt: ConPTY 1.23 may clip a long temporary cwd
+  // while CMD enters ReadConsole in the narrow pane left by the Git tests.
+  // Keep real command/output and all later resize/quit assertions unchanged.
+  if(process.platform==='win32'){for(const key of Object.keys(env))if(key.toLowerCase()==='prompt')delete env[key];env.PROMPT='BERTH$G';}
   step(`launch ${packaged ? executablePath : 'development application'}`);
   application = await electron.launch({ executablePath, args: launchArgs, env, timeout: 20000 });
   application.on('console', message => console.log(`Main: ${message.text()}`));

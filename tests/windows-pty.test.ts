@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn,spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -68,6 +70,27 @@ test('closing a Windows PTY before its first data releases native resources with
 async function until<T>(read:()=>Promise<T>,accept:(value:T)=>boolean):Promise<T>{
   const deadline=Date.now()+15000;while(true){const value=await read();if(accept(value))return value;assert.ok(Date.now()<deadline,'PTY state did not settle');await new Promise(resolve=>setTimeout(resolve,25));}
 }
+
+test('DLL output workers drain on natural exit and on quiet early stop',()=>{
+  for(const early of [false,true]){
+    const f=fixture(),events:string[]=[];
+    Object.assign((f.pty as any)._agent,{_useConptyDll:true,_conoutSocketWorker:{dispose(){events.push('drain');}},kill(){events.push('kill');}});
+    (f.pty as any)._isReady=!early;protectWindowsPty(f.pty,()=>assert.fail('unexpected failure'),'win32');
+    if(early){f.pty.kill();assert.deepEqual(events,['kill','drain']);}
+    f.exits.emit('exit',{exitCode:0});assert.equal(events.at(-1),'drain');
+    assert.equal(f.output.listenerCount('error'),1,'late pipe errors remain contained');
+  }
+});
+
+test('a real bundled ConPTY releases its output worker and final output without forcing the host to exit',{skip:process.platform!=='win32',timeout:30000},async()=>{
+  const nativePath=createRequire(path.join(process.cwd(),'package.json')).resolve('node-pty');
+  for(const quiet of [false,true]){
+    const script=`const assert=require('node:assert/strict');const native=require(${JSON.stringify(nativePath)});const protect=${protectWindowsPty.toString()};const child=native.spawn('cmd.exe',['/d','/c',${JSON.stringify(quiet?'pause >nul':'echo CONPTY_FINAL_OUTPUT')}],{cols:80,rows:24,useConptyDll:true,env:process.env});let output='';protect(child,error=>{throw error});child.onData(data=>output+=data);child.onExit(()=>{${quiet?'':"assert.ok(output.includes('CONPTY_FINAL_OUTPUT'));"}console.log('CONPTY_WORKER_CLOSED');});${quiet?'child.kill();':''}`;
+    const child=spawn(process.execPath,['-e',script],{env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},stdio:['ignore','pipe','pipe']});let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);
+    try {await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('ConPTY host remained live after terminal exit: '+output+errors)),10000);child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',code=>{clearTimeout(timer);code===0?resolve():reject(new Error('ConPTY host failed: '+code+' '+errors));});});assert.match(output,/CONPTY_WORKER_CLOSED/);}
+    finally {if(child.exitCode===null)spawnSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});}
+  }
+});
 
 test('a real Windows ConPTY pipe failure stops only its run, retains its error and keeps the daemon usable',{skip:process.platform!=='win32',timeout:45000},async t=>{
   const folder=await mkdtemp(path.join(os.tmpdir(),'berth-conpty-fault-')),children:native.IPty[]=[];
