@@ -31,9 +31,9 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
     if(plugin&&canConfigure(plugin)){openConfig(plugin);onOpenHandled?.();}
   },[openId,current?.revision]);
   const saveConfig=async()=>{if(!configured)return;setBusy(configured.manifest.id);onError('');try{const next=await window.berth.extensions({action:'configure',id:configured.manifest.id,config:draft});setCurrent(next);setEditing(null);setMessage('插件配置已保存，即时生效');}catch(error){setConfigError(String(error));}finally{setBusy('');}};
-  if(!current)return <p>插件后台未连接。请检查后台服务。</p>;
+  if(!current)return <p>插件后台未连接</p>;
   return <section className="extension-manager" aria-label="插件管理">
-    <header><div><h2>{mode==='agents'?'Agent 接入':'扩展插件'}</h2><p>{mode==='agents'?'管理 Agent 接入与 Skills。':'安装、配置和管理扩展。'}</p></div><div className="extension-actions"><button type="button" className="extension-button primary" disabled={!!busy} onClick={()=>void perform('$install',()=>window.berth.installExtension(false))}>{mode==='agents'?'安装 Agent 插件':'安装扩展插件'}</button><button type="button" className="extension-button subtle" disabled={!!busy} onClick={()=>void perform('$develop',()=>window.berth.installExtension(true))}>加载开发目录</button></div></header>
+    <header><div><h2>{mode==='agents'?'Agent 接入':'扩展插件'}</h2>{/* {mode==='agents'?'管理 Agent 接入与 Skills。':'安装、配置和管理扩展。'} */}</div><div className="extension-actions"><button type="button" className="extension-button primary" disabled={!!busy} onClick={()=>void perform('$install',()=>window.berth.installExtension(false))}>{mode==='agents'?'安装 Agent 插件':'安装扩展插件'}</button><button type="button" className="extension-button subtle" disabled={!!busy} onClick={()=>void perform('$develop',()=>window.berth.installExtension(true))}>加载开发目录</button></div></header>
     <p className="form-hint">插件可运行本机代码，请安装可信来源。</p>
     <div className="extension-utilities"><input aria-label="搜索插件" placeholder={mode==='agents'?'搜索 Agent 名称或插件 ID':'搜索扩展功能或插件 ID'} value={query} onChange={event=>setQuery(event.target.value)}/></div>
     {message&&<p role="status">{message}</p>}
@@ -48,12 +48,12 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
       {plugin.desktopError&&<p className="form-error" role="alert">桌面入口启动失败：{plugin.desktopError}。修复后重新加载插件。</p>}
       </li>;
     })}</ul>
-    {!plugins.length&&<p className="form-hint">{mode==='agents'?'尚无 Agent 接入插件。可安装内置 CLI 对应的接入，或导入自定义 Agent 插件。':'尚无扩展插件。可安装插件包或加载开发目录。'}</p>}
+    {!plugins.length&&<p className="form-hint">{mode==='agents'?'暂无 Agent 接入插件':'暂无扩展插件'}</p>}
     {configured&&<Dialog key={configured.manifest.id} title={'配置插件 · '+configured.manifest.name} busy={!!busy} dirty={dirty} error={configError} returnFocus={opener.current} onClose={()=>setEditing(null)}>
       <div className="extension-config-dialog">
         {configured.manifest.id==='pet'&&<PluginSettingsPanel projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion}/>}
         {configured.manifest.id!=='deepseek-harness'&&<details className="plugin-development"><summary>开发文档与工具</summary>
-          {['superagent','superagent.custom'].includes(configured.manifest.id)?<SourceDevelopmentGuide/>:<p className="form-hint">插件开发规范、示例与类型定义。</p>}
+          {['superagent','superagent.custom'].includes(configured.manifest.id)?<SourceDevelopmentGuide/>:null /* 插件开发规范、示例与类型定义。 */}
           {!['superagent','superagent.custom'].includes(configured.manifest.id)&&<button type="button" className="extension-button subtle" disabled={!!busy} aria-busy={busy==='$kit'} onClick={()=>void exportKit()}>导出插件开发套件并复制指令</button>}
           {message&&<p role="status">{message}</p>}
         </details>}

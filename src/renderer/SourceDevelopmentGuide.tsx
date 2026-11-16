@@ -5,7 +5,7 @@ export function SourceDevelopmentGuide(){
   const [guide,setGuide]=useState(''),[error,setError]=useState(''),[message,setMessage]=useState('');
   useEffect(()=>{let alive=true;void window.berth.pluginDevelopmentPrompt(undefined,'superagent-source').then(value=>{if(alive)setGuide(value);}).catch(error=>{if(alive)setError(String(error));});return()=>{alive=false;};},[]);
   return <section aria-label="Superagent 信息源开发指南">
-    <p className="form-hint">接入规范、示例与验收说明。</p>
+    {/* 接入规范、示例与验收说明。 */}
     <textarea className="source-development-guide" aria-label="信息源开发指南内容" readOnly value={guide||'正在加载开发指南…'}/>
     {error&&<p role="alert" className="form-error">{error}</p>}
     {message&&<p role="status">{message}</p>}

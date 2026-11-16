@@ -21,7 +21,8 @@ function setup(t: { after: (fn: () => void) => void }) {
   apply({ berth: { dataDirectory: root, signal: controller.signal, interval() {}, call: async () => ({ sessions: [] }), command(d: { name: string }, handler: (p: Record<string, unknown>) => unknown) { commands.set(d.name, handler); } }, effect() {} } as never, config);
   const open = () => {
     const dom = new JSDOM('<!doctype html><body>' + notesWikiView, { runScripts: 'outside-only', url: 'http://wiki.test' });
-    (dom.window as unknown as { agentberth: unknown }).agentberth = { call: async (name: string, params: Record<string, unknown> = {}) => { const handler = commands.get(name); if (!handler) throw new Error('Unknown command ' + name); return handler(params); } };
+    (dom.window as unknown as { __wikiNotices: string[] }).__wikiNotices = [];
+    (dom.window as unknown as { agentberth: unknown }).agentberth = { notify: (message: string) => (dom.window as unknown as { __wikiNotices: string[] }).__wikiNotices.push(message), call: async (name: string, params: Record<string, unknown> = {}) => { const handler = commands.get(name); if (!handler) throw new Error('Unknown command ' + name); return handler(params); } };
     Object.assign(dom.window, { TextEncoder, TextDecoder });
     dom.window.Element.prototype.scrollIntoView = () => {};
     const script = notesWikiView.slice(notesWikiView.indexOf('<script>') + 8, notesWikiView.lastIndexOf('</script>'));
@@ -120,7 +121,7 @@ test('capture panel shows actual inbox state and preserves recoverable session e
   await until(() => dom.window.document.querySelector<HTMLInputElement>('#inboxPath')?.value === '/example/wiki/raw/inbox', 'real inbox path shown');
   assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /正在监听.*待处理 1.*已归档 2.*失败 1/s);
   assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /invalid PDF/);
-  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /素材仍会保存/);
+  assert.match(dom.window.document.querySelector('#inboxPanel')!.textContent!, /模型未配置/);
   const pathInput = dom.window.document.querySelector<HTMLInputElement>('#inboxPath')!;
   pathInput.focus(); pathInput.setSelectionRange(0, 12);
   click(dom, '[data-action="scanInbox"]'); await until(() => scans === 1, 'manual scan invoked'); await settle();
@@ -130,7 +131,7 @@ test('capture panel shows actual inbox state and preserves recoverable session e
   await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('session backend unavailable'), 'failure visible rather than empty list');
   assert.equal(dom.window.document.querySelectorAll('[data-field="session"] option').length, 1, 'last usable sessions retained');
   fail = false; click(dom, '[data-action="refreshSessions"]');
-  await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('可选择 1 个会话'), 'retry recovered');
+  await until(() => dom.window.document.querySelector('#captureStatus')!.textContent?.includes('1 个会话'), 'retry recovered');
   const inboxStatus = commands.get('inbox_status')!;
   commands.set('inbox_status', () => { throw new Error('inbox offline'); });
   click(dom, '[data-action="refreshCollection"]');
@@ -257,7 +258,7 @@ test('Schema editing continues to autosave after a successful manual save', asyn
   click(dom, '.tabs [data-tab="settings"]');
   await until(() => dom.window.document.querySelector<HTMLTextAreaElement>('#settingsView [data-field="schema"]')?.value, 'Schema loaded');
   input(dom, '#settingsView [data-field="schema"]', 'saved Schema'); click(dom, '[data-action="saveSchema"]');
-  await until(() => dom.window.document.querySelector('#uxNotice')!.textContent?.includes('知识库约定已保存'), 'save acknowledged');
+  await until(() => (dom.window as unknown as { __wikiNotices: string[] }).__wikiNotices.some(message => message.includes('知识库约定已保存')), 'save acknowledged');
   assert.equal(service.workspace.editorDrafts().some(draft => draft.key === 'schema'), false);
   input(dom, '#settingsView [data-field="schema"]', 'the next unsaved change');
   await until(() => service.workspace.editorDrafts().find(draft => draft.key === 'schema')?.fields.schema === 'the next unsaved change', 'autosave remains attached after save');
@@ -278,7 +279,7 @@ test('full snapshot restore flushes pending drafts and never resurrects pre-rest
   click(dom, '[data-action="restoreBackup"][data-name="' + original + '"]');
   await until(() => dom.window.document.querySelector('[data-action="dialogAccept"]'), 'restore confirmation'); click(dom, '[data-action="dialogAccept"]');
   await settle(); assert.equal(restores, 0, 'restore waits for pending draft writes');
-  release(); await until(() => dom.window.document.querySelector('#uxNotice')!.textContent?.includes('完整快照已恢复'), 'snapshot restored');
+  release(); await until(() => (dom.window as unknown as { __wikiNotices: string[] }).__wikiNotices.some(message => message.includes('完整快照已恢复')), 'snapshot restored');
   assert.equal(service.workspace.editorDrafts().length, 0);
   click(dom, '.tabs [data-tab="wiki"]'); click(dom, '.tabs [data-tab="tasks"]'); await settle();
   assert.equal(service.workspace.editorDrafts().length, 0, 'old mounted editors cannot write the removed draft back');
@@ -352,7 +353,7 @@ test('capture selector includes every session and exposes workspace, title and f
   const { commands, open } = setup(t);
   const sessions = Array.from({ length: 63 }, (_, index) => ({ id: 'session-' + index, title: '会话名称 ' + index, projectId: index < 30 ? 'workspace-a' : 'workspace-b', projectName: index < 30 ? '研发工作区' : '测试工作区', projectPath: '/example/' + (index < 30 ? 'a' : 'b'), nativeSessionId: 'native-' + index, agentName: 'Agent', kind: 'history', status: 'idle' }));
   commands.set('list_capture_sessions', params => sessions.slice(Number(params.offset ?? 0), Number(params.offset ?? 0) + Number(params.limit ?? 50)));
-  const dom = open(); await until(() => dom.window.document.querySelector('#pageList')!.textContent!.includes('还没有页面'), 'initial data loaded');
+  const dom = open(); await until(() => dom.window.document.querySelector('#pageList')!.textContent!.includes('暂无页面'), 'initial data loaded');
   click(dom, '.tabs [data-tab="sources"]'); click(dom, '[data-action="showCapture"]');
   await until(() => dom.window.document.querySelectorAll('[data-field="session"] option').length === 63, 'all session pages loaded');
   assert.equal(dom.window.document.querySelectorAll('[data-field="session"] option').length, 63);
@@ -418,5 +419,26 @@ test('a protected page can be explicitly reviewed, merged and published with vis
   await until(() => store.getDraft('ui-review')!.pages[0].allowHumanMerge, 'review saved');
   click(dom, '[data-action="approveDraft"]');
   await until(() => store.getPage('reviewed')!.body === 'approved merged text', 'published');
-  await until(() => dom.window.document.querySelector('#uxNotice')!.textContent!.includes('发布 1 页，跳过 0 页'), 'publish result visible');
+  await until(() => (dom.window as unknown as { __wikiNotices: string[] }).__wikiNotices.some(message => message.includes('发布 1 页，跳过 0 页')), 'publish result visible');
+});
+
+
+test('Wiki results notify the host once and retain only a result action in the content area', async t => {
+  const { service, commands, open } = setup(t);
+  const source = await service.addSource({ title: '完整会话', text: 'the complete original conversation' });
+  commands.set('capture_session_start', () => 'notification-capture');
+  commands.set('list_capture_sessions', () => [{ id: 'session-one', title: '完整会话', projectName: '项目', projectPath: '/project', kind: 'acp' }]);
+  commands.set('task', () => ({ id: 'notification-capture', status: 'done', kind: 'capture', result: { id: source.id, events: 12, skipped: false } }));
+  const dom = open(); await until(() => dom.window.document.querySelector('#sourceList')?.textContent?.includes('完整会话'), 'initial source list loaded');
+  click(dom, '[data-tab="sources"]'); click(dom, '[data-action="showCapture"]');
+  await until(() => dom.window.document.querySelector('[data-field="session"] option[value="session-one"]'), 'capture session loaded');
+  input(dom, '[data-field="session"]', 'session-one'); click(dom, '[data-action="captureSession"]');
+  await until(() => dom.window.document.querySelector('#uxNotice [data-action="openSource"]'), 'capture result action');
+  const notices = (dom.window as unknown as { __wikiNotices: string[] }).__wikiNotices;
+  assert.equal(notices.filter(message => message.includes('任务已完成') || message.includes('条记录')).length, 1, 'completion is sent once through the host bridge');
+  const toolbar = dom.window.document.querySelector<HTMLElement>('#uxNotice')!;
+  assert.equal(toolbar.getAttribute('role'), 'toolbar');
+  assert.equal(toolbar.textContent, '查看素材', 'no separate message banner remains');
+  click(dom, '#uxNotice [data-action="openSource"]');
+  await until(() => dom.window.document.querySelector('#sourceText')?.textContent?.includes('the complete original conversation'), 'result action opens original material');
 });

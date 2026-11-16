@@ -35,6 +35,19 @@ try{
   const activity=page.locator('.activity-bar');const sessionButton=activity.getByRole('button',{name:'会话',exact:true});await sessionButton.focus();await page.keyboard.press('Enter');assert.equal(await sessionButton.getAttribute('aria-pressed'),'true');
   await rpc('input',{sessionId:shell.id,runId:run.id,data:'echo '+ 'Z'.repeat(300)+'UI_COPY_READY\r'});await until(()=>rpc('attach',{sessionId:shell.id}).then(value=>value.snapshot.includes('UI_COPY_READY')));
   const unchanged=(await rpc('state')).sessions.find(value=>value.id===shell.id).latestRun;assert.equal(unchanged.id,run.id);assert.equal(unchanged.pid,run.pid);
+  // Recovery feedback belongs to the shared center; state snapshots must not
+  // duplicate it or restart the PTY. Timer collapse is tested in a real window.
+  const recovered=await rpc('state'),recovery={id:'ui-recovery-fixture',status:'completed',total:6,restored:6,resumed:4,skipped:0,errors:[]};
+  const emitRecovery=()=>app.evaluate(({BrowserWindow},data)=>{for(const window of BrowserWindow.getAllWindows())window.webContents.send('berth:event',{event:'state',data});},{...recovered,recovery});
+  await emitRecovery();await page.locator('.notification-panel').waitFor();
+  const recoveryItems=page.locator('.notification-item').filter({hasText:'上次会话恢复完成 · 已重新打开 6/6 · 续接 Agent 对话 4'});
+  await until(()=>recoveryItems.count().then(count=>count===1));await emitRecovery();
+  assert.equal(await recoveryItems.count(),1);assert.equal(await page.locator('.workspace-recovery').count(),0);
+  await page.locator('.notification-panel').waitFor({state:'hidden',timeout:7000});
+  await emitRecovery();assert.equal(await page.locator('.notification-panel').count(),0,'Repeated snapshots must not reopen recovery feedback');
+  await openNotifications(page);assert.equal(await recoveryItems.count(),1);await page.getByRole('button',{name:'收起通知中心',exact:true}).click();
+  const recoveredRun=(await rpc('state')).sessions.find(value=>value.id===shell.id).latestRun;
+  assert.equal(recoveredRun.id,run.id);assert.equal(recoveredRun.pid,run.pid);
   // Recover read-only run/output failures without restarting the command.
   await faults({fail:{runs:1}});await tabs.getByRole('tab',{name:'运行记录',exact:true}).click();await page.locator('.runs-load-error').waitFor();await page.locator('.runs-load-error').getByRole('button',{name:'重试',exact:true}).click();
   const row=page.locator('.run-row').filter({hasText:run.id.slice(0,8)});await row.waitFor();await faults({fail:{output:1}});await row.locator('.run-item').click();await page.getByRole('heading',{name:'无法读取本次输出',exact:true}).waitFor();

@@ -141,7 +141,7 @@ export function QuickSwitcher({ state, canCreate, hasProject, onSelect, onClose,
     <div className="switch-results" id="switch-results" role="listbox" aria-label="切换结果">{results.map((entry, offset) => <Fragment key={entry.target.id}>
       {entry.group && <div className="switch-group" role="presentation">{entry.group}</div>}
       <button type="button" role="option" aria-selected={selected === offset} id={`switch-result-${offset}`} className={`switch-result ${selected === offset ? 'selected' : ''}`} onMouseEnter={() => setIndex(offset)} onClick={() => select(entry.target)} title={entry.target.detail}>{!groupedView && <span className="switch-kind">{entry.target.kind === 'project' ? '项目' : entry.target.kind === 'session' ? '会话' : '操作'}</span>}<span><strong><Highlight text={entry.target.label} query={query} /></strong><small>{entry.target.detail}</small></span></button>
-    </Fragment>)}{!results.length && <div className="switch-empty"><p>没有匹配结果，试试项目名称、目录或 Agent。</p>{query && <button type="button" className="text-button" onClick={() => { setQuery(''); setIndex(0); }}>清除搜索</button>}</div>}</div>
+    </Fragment>)}{!results.length && <div className="switch-empty"><p>没有匹配结果</p>{query && <button type="button" className="text-button" onClick={() => { setQuery(''); setIndex(0); }}>清除搜索</button>}</div>}</div>
     <footer className="switch-help"><span>↑ ↓ 选择 · Home/End 首尾 · Enter 打开 · Esc 关闭</span><span>{total > RESULT_LIMIT ? `显示前 ${RESULT_LIMIT} / ${total} 个结果` : `${total} 个结果`}</span></footer>
   </Dialog>;
 }

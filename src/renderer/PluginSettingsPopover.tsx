@@ -62,12 +62,12 @@ export function PluginSettingsPopover({ request, snapshot, projects, currentProj
     {plugin.manifest.id === 'pet'
       ? <div className="plugin-settings-form"><PluginSettingsPanel projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion} /></div>
       : <form className="plugin-settings-form" onSubmit={event => { event.preventDefault(); void save(); }}>
-          {plugin.manifest.id === 'notes-wiki' && <><label>API Key（可留空保留现有密钥）<input type="password" autoComplete="off" value={apiKey} disabled={busy} onChange={e => setApiKey(e.target.value)} /></label><label><input type="checkbox" checked={clearKey} disabled={busy} onChange={e => setClearKey(e.target.checked)} /> 清除已保存的密钥</label><p className="form-hint">地址、模型和鉴权方式在这里一起设置。无鉴权本地服务可关闭「服务需要 API Key」。</p></>}
+          {plugin.manifest.id === 'notes-wiki' && <><label>API Key<input type="password" autoComplete="off" placeholder="保持已保存的密钥" value={apiKey} disabled={busy} onChange={e => setApiKey(e.target.value)} /></label><label><input type="checkbox" checked={clearKey} disabled={busy} onChange={e => setClearKey(e.target.checked)} /> 清除已保存的密钥</label>{/* 地址、模型和鉴权方式在这里一起设置。无鉴权本地服务可关闭「服务需要 API Key」。 */}</>}
           <ExtensionConfigFields plugin={plugin} draft={draft} setDraft={setDraft} busy={busy} />
-          <p className="form-hint">保存后会重新载入插件视图，请先保存正在编辑的内容。</p>
+          {/* 保存后会重新载入插件视图，请先保存正在编辑的内容。 */}
           {plugin.manifest.id === 'notes-wiki' && <button type="button" disabled={busy || dirty || !!apiKey || clearKey} onClick={() => {setBusy(true);setLocalError('');void window.berth.extensions({action:'call',id:plugin.manifest.id,command:'test_connection',params:{}}).then(() => setLocalError('连接成功'),e => setLocalError(String(e))).finally(() => setBusy(false));}}>测试已保存的连接</button>}
           <footer>
-            <span role="status">{saved && !dirty ? '已保存，即时生效' : dirty ? '有未保存的修改' : '修改后保存即可生效'}</span>
+            <span role="status">{saved && !dirty ? '已保存，即时生效' : dirty ? '有未保存的修改' : '已同步'}</span>
             <div className="plugin-settings-actions">
               <button type="button" className="subtle" disabled={busy} onClick={() => closeRequest.current()}>关闭</button>
               {(dirty || !!apiKey || clearKey) && <button type="submit" className="primary" disabled={busy}>保存配置</button>}

@@ -48,6 +48,6 @@ export function WebExtensionView({plugin,viewId,onError,suspended=false}:{plugin
     </header>
     {status?.error&&<div className="launch-error" role="alert">{status.error}</div>}
     {logs&&<pre className="plugin-web-log" aria-label="Web 启动日志">{status?.log||'暂无日志'}</pre>}
-    <div className="plugin-web-host" ref={host}>{status?.state!=='running'&&<div className="empty-page"><h2>{status?.state==='starting'?'正在启动 '+plugin.manifest.name:plugin.manifest.name}</h2><p>{status?.state==='starting'?'首次运行可能需要下载软件包，可展开启动日志查看进度。':needsProject?'选择项目后启动原生 Web 工作台。':'启动后在原生工作台中管理工作区与会话。'}</p></div>}</div>
+    <div className="plugin-web-host" ref={host}>{status?.state!=='running'&&<div className="empty-page"><h2>{status?.state==='starting'?'正在启动 '+plugin.manifest.name:plugin.manifest.name}</h2>{needsProject&&!projectId&&<span role="status">未选择项目</span>}</div>}</div>
   </section>;
 }

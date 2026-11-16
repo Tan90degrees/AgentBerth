@@ -221,7 +221,7 @@ export default memo(function FileBrowser({ project, worktreePath = null, connect
       <div className="file-tree-options"><button aria-pressed={showIgnored} title="Git 忽略的文件和目录以灰色显示" onClick={() => setShowIgnored(previous => { saveStored('berth.showIgnoredFiles', String(!previous)); return !previous; })}>{showIgnored ? '隐藏忽略项' : '显示忽略项'}</button><div><button aria-label="刷新目录树" title="刷新展开的目录和当前文件" disabled={!connected || refreshing} onClick={() => void refresh()}>{refreshing ? '…' : '↻'}</button><button aria-label="收起全部目录" title="收起全部目录" onClick={() => setExpanded(new Set())}>⊟</button></div></div>
       {directories['']?.page?.warning && <p className="file-tree-warning" role="status">{directories[''].page.warning}</p>}
       <nav ref={tree} className="file-tree" aria-label="项目目录树"><ul role="tree" aria-label={project.name} onKeyDown={treeKeys}>{renderDirectory('', 0)}</ul></nav>
-      <p className="file-tree-legend">{connected ? '灰色表示 Git 忽略 · 单击文件预览' : '后台已断开'}</p>
+      <small>{!connected && '后台已断开'}</small>
     </div>, treeHost)}
     {previewHost && createPortal(<section ref={host} className="file-preview-pane" hidden={previewHidden} aria-label="文件预览">
       {!!tabs.length && <div className="preview-tabbar"><div className="preview-tabs" role="tablist" aria-label="打开的文件" onKeyDown={event => {
@@ -239,7 +239,7 @@ export default memo(function FileBrowser({ project, worktreePath = null, connect
         {tab.error && <div className="file-preview-error" role="alert"><p>{tab.error}</p><button disabled={!connected} onClick={() => void openFile(tab.path, '', true, true)}>重试</button></div>}
         {tab.file ? <Suspense fallback={<div className="file-preview-empty">正在准备预览…</div>}><Preview onDiff={onDiff ? staged => onDiff(tab.path, staged, true) : undefined} position={tab.position} file={tab.file} projectId={project.id} markdown={tab.markdown} onMarkdown={value => { updateTab(tab.path, { markdown: value }); saveStored('berth.markdownPreview', value ? 'rendered' : 'source'); }} onNavigate={navigateFile} onRefresh={() => void openFile(tab.path, '', true, true)} onError={error => updateTab(tab.path, { error })} /></Suspense> : !tab.error && <div className="file-preview-empty">正在读取文件…</div>}
       </div>)}
-      {!tabs.length && <div className="file-preview-empty"><EntryIcon directory={false} /><strong>选择文件预览</strong><p>单击文件打开标签，可切换和关闭多个文件。</p></div>}
+      {!tabs.length && <div className="file-preview-empty"><EntryIcon directory={false} /><strong>选择文件预览</strong><small>{!connected && '后台已断开'}</small></div>}
     </section>, previewHost)}
   </>;
 });

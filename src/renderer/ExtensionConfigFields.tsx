@@ -13,6 +13,6 @@ export function ExtensionConfigFields({ plugin, draft, setDraft, busy }: {
       : field.enum
         ? <select disabled={busy} aria-label={plugin.manifest.name + ' ' + field.title} value={String(draft[key] ?? '')} onChange={event => setDraft({ ...draft, [key]: event.target.value })}>{field.enum.map(value => <option key={value} value={value}>{value}</option>)}</select>
         : <input disabled={busy} aria-label={plugin.manifest.name + ' ' + field.title} type={field.type === 'number' ? 'number' : 'text'} min={field.minimum} max={field.maximum} value={draft[key] as string | number ?? ''} onChange={event => setDraft({ ...draft, [key]: field.type === 'number' ? Number(event.target.value) : event.target.value })} />}
-    {field.description && <small>{field.description}</small>}
+    {/* Config descriptions are metadata for documentation; controls expose title, type and choices. */}
   </label>)}</>;
 }

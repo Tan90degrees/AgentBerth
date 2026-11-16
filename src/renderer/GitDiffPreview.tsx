@@ -26,7 +26,7 @@ export default function GitDiffPreview({ request, connected, onChange, onBack }:
       <button onClick={onBack}>返回文件预览</button><button className="icon-button" aria-label="刷新 Git 差异" disabled={!connected || loading} onClick={() => setRevision(value => value + 1)}>↻</button>
     </div>
     <p className="diff-comparison-label">{request.staged ? 'HEAD → 暂存区' : '暂存区 → 工作目录'}{diff?.binary ? ' · 二进制文件已更改' : ''}</p>
-    {(diff?.truncated || parsed.truncated) && <p className="file-preview-notice" role="status">差异较大，仅显示前一部分；完整内容可在终端使用 git diff 查看。</p>}
+    {(diff?.truncated || parsed.truncated) && <p className="file-preview-notice" role="status">差异预览已截断</p>}
     {error ? <div className="file-preview-error" role="alert">{error}<button disabled={!connected} onClick={() => setRevision(value => value + 1)}>重试</button></div> : !diff?.patch ? <div className="file-preview-empty" role="status">{loading ? '正在读取差异…' : !connected ? '后台连接已断开' : diff?.message ?? '没有差异'}</div> : <div className="git-diff-scroll" tabIndex={0} aria-label="文件差异"><div className="diff-lines">{parsed.lines.map((line, index) => <div className={`diff-line diff-${line.kind}`} key={index}><span className="diff-number" aria-hidden="true">{line.oldLine ?? ''}</span><span className="diff-number" aria-hidden="true">{line.newLine ?? ''}</span><span className="diff-sign" aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}</span><span className="diff-text">{line.text || ' '}</span></div>)}</div></div>}
   </section>;
 }
