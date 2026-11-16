@@ -1,3 +1,5 @@
+import type { ResolvedAppearance } from '../shared/appearance';
+import { TerminalAppearanceSync } from './terminal-appearance';
 import { PluginBrowser } from './plugin-browser';
 import { pluginBrowserRequestSchema } from '../shared/extensions';
 import { PetState } from './pet-state';
@@ -30,6 +32,9 @@ import { DesktopExtensions } from '../extensions/desktop';
 
 protocol.registerSchemesAsPrivileged([{scheme:'agentberth-plugin',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 nativeTheme.themeSource = 'dark';
+const terminalAppearanceSync=new TerminalAppearanceSync();
+let terminalColorScheme:ResolvedAppearance='dark',observedNativeScheme:ResolvedAppearance='dark';
+function syncTerminalAppearance(){return connection?.connected?terminalAppearanceSync.sync(connection,terminalColorScheme):Promise.resolve();}
 
 let window: BrowserWindow | null = null;
 let pluginBrowser:PluginBrowser|null=null;
@@ -185,6 +190,7 @@ async function reconnect(): Promise<void> {
   connecting = (async () => {
     connection = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
     await registerSshProvider();
+    await syncTerminalAppearance();
     emit({ event: 'connection', data: { connected: true } });
     emit({ event: 'state', data: await connection.rpc('state') });
   })().finally(() => { connecting = null; });
@@ -394,7 +400,7 @@ ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unkn
 });
 ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string, unknown>) => {
   trusted(event);
-  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['restoreWorkspace','registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
+  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['terminalAppearance','restoreWorkspace','registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;
@@ -408,6 +414,7 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   }
   if(method==='resources'){const resourceParams=request.data.params as {applicationPids:Record<string,number[]>};return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128),applicationPids:resourceParams.applicationPids});}
   if(method==='remoteTransferCancel')return connection!.rpc(method,{...request.data.params,owner:'user'});
+  if(method==='start'||method==='serviceAction')await syncTerminalAppearance();
   return connection!.rpc(method, request.data.params);
 });
 ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {
@@ -416,6 +423,7 @@ ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {
   if (quitting || typeof alias !== 'string' || !alias || alias.length > 100) throw new Error('SSH 连接别名无效');
   if (connecting) await connecting;
   if (!connection) await reconnect();
+  await syncTerminalAppearance();
   return connection!.rpc('remoteOpen', {alias, owner:'user'});
 });
 ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, connectionId: unknown, rawSecret: unknown, remember: unknown) => {
@@ -444,8 +452,8 @@ ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown)
   await connection!.rpc('deleteSshConnection',{connectionId}); sshVault.delete(connectionId);
 });
 ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:appearance',(event,mode:unknown)=>{trusted(event);requireExtension('appearance');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
-nativeTheme.on('updated',()=>{for(const target of [window,sshWindow])target?.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#212121':'#ffffff');});
+ipcMain.handle('berth:appearance',async(event,mode:unknown,resolved:unknown)=>{trusted(event);requireExtension('appearance');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');if(resolved!==undefined&&resolved!=='dark'&&resolved!=='light')throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';terminalColorScheme=mode==='system'?(resolved as ResolvedAppearance|undefined)??(nativeTheme.shouldUseDarkColors?'dark':'light'):mode as ResolvedAppearance;for(const target of [window,sshWindow])target?.setBackgroundColor(terminalColorScheme==='dark'?'#212121':'#ffffff');await syncTerminalAppearance();});
+nativeTheme.on('updated',()=>{const next:ResolvedAppearance=nativeTheme.shouldUseDarkColors?'dark':'light';if(next!==observedNativeScheme){observedNativeScheme=next;terminalColorScheme=next;}for(const target of [window,sshWindow])target?.setBackgroundColor(terminalColorScheme==='dark'?'#212121':'#ffffff');void syncTerminalAppearance().catch(console.error);});
 ipcMain.handle('berth:mcpConfig', (event, provider: unknown = 'claude') => {
   requireExtension('ssh');
   trusted(event); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');
@@ -501,6 +509,7 @@ ipcMain.handle('berth:restart', async event => {
     connection?.close(true); connection = null;
     connection = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
     await registerSshProvider();
+    await syncTerminalAppearance();
     emit({ event: 'connection', data: { connected: true } });
     emit({ event: 'state', data: await connection.rpc('state') });
   })().finally(() => { connecting = null; restarting = false; });

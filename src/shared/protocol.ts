@@ -10,7 +10,7 @@ const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['
 const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
 const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 61;
+export const API_VERSION = 62;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -106,6 +106,7 @@ export const gitDiffSchema = z.object({ projectId: id, worktreePath: z.string().
 export type GitDiffRequest = z.infer<typeof gitDiffSchema>;
 
 export const requestSchema = z.discriminatedUnion('method', [
+  z.object({id,method:z.literal('terminalAppearance'),params:z.object({appearance:z.enum(['light','dark'])}).strict()}),
   z.object({id,method:z.literal('extensions'),params:z.object({request:extensionRequestSchema}).strict()}),
   z.object({ id, method: z.literal('sshConnections'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('saveSshConnection'), params: z.object({ connectionId: id.optional(), config: sshConnectionSchema }).strict() }),
@@ -233,7 +234,7 @@ export interface HistoryMessage { role: 'user' | 'assistant'; text: string; time
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }
 export interface NativeHistoryPage { items: NativeHistoryItem[]; nextCursor: string | null; total?: number; warnings: string[] }
-export interface Attachment { run: Run | null; snapshot: string; seq: number; cols: number; rows: number }
+export interface Attachment { terminalReplies?: boolean; run: Run | null; snapshot: string; seq: number; cols: number; rows: number }
 export type TerminalEvent =
   | { event: 'output'; data: { sessionId: string; runId: string; seq: number; text: string } }
   | { event: 'resize'; data: { sessionId: string; runId: string; seq: number; cols: number; rows: number } };
@@ -278,7 +279,7 @@ export interface DesktopApi {
   chooseSshKey(): Promise<string | null>;
   appInfo(): Promise<AppInfo>;
   mcpConfig(provider?: 'claude' | 'opencode'): Promise<string>;
-  setAppearance(mode: AppearanceMode): Promise<void>;
+  setAppearance(mode: AppearanceMode, resolved?: import('./appearance').ResolvedAppearance): Promise<void>;
   openDataDirectory(): Promise<void>;
   rpc<T = unknown>(method: Method, params?: Record<string, unknown>): Promise<T>;
   onEvent(listener: (event: ServerEvent) => void): () => void;
