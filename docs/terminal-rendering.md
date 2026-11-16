@@ -24,7 +24,7 @@ CI 用软件 WebGL 运行生产代码，验证真实全屏 TUI 的连续块字�
 
 `src/daemon/terminal-appearance.ts` 负责默认颜色和 ANSI 调色板查询、DEC 2031 的订阅/退订与状态查询，以及 `CSI ? 996 n` 的当前主题查询。深浅变化只通知已订阅的程序；切换颜色先等待此前输出完成解析，随后发出 `CSI ? 997 ; 1 n`（深色）或 `CSI ? 997 ; 2 n`（浅色）。查询反映当前 OSC 颜色覆盖，重挂接快照保留这些覆盖；宿主切换主题时与 xterm 一致地重置默认/ANSI 调色板，但不改写 TUI 已输出的显式 RGB 内容。
 
-Windows 使用锁定的 node-pty 自带 ConPTY 运行库（当前 1.23.251008001），以转发系统旧版 ConPTY 可能吞掉的主题查询；`setup` 在 Electron 原生重编译后重新复制 `conpty.dll` 和 `OpenConsole.exe`，避免编译清理删除此前 npm postinstall 的副本；依赖缓存预检实际加载这套运行库。安装包也必须包含两者。升级时同时验证颜色协商、连续缩放与退出清理。
+Windows 使用锁定的 node-pty 自带 ConPTY 运行库（当前 1.23.251008001），以转发系统旧版 ConPTY 可能吞掉的主题查询；`setup` 在 Electron 原生重编译后重新复制 `conpty.dll` 和 `OpenConsole.exe`，避免编译清理删除此前 npm postinstall 的副本；依赖缓存预检实际加载这套运行库。安装包也必须包含两者。DLL 路径的自然退出和静默停止都需释放输出 worker：`windows-pty.ts` 调用 node-pty 自身带排空计时器的清理入口，保留最终输出，避免等待不存在的下一次数据事件。子进程回归要求宿主自然退出。升级时同时验证颜色协商、连续缩放与退出清理。
 
 后台是 API 62 终端协议回复的唯一发送方。`attach` 返回 `terminalReplies` 能力，renderer 据此忽略其本地 xterm 生成的重复回复；旧后台仍沿用原兼容路径。SSH 无论由人还是 Agent 控制都由后台协商，不因此绕过手动输入接管限制。外观 IPC 同时携带用户选择与实际解析的深浅色，跟随系统、不同窗口以及后台重连都同步到同一协议状态；旧后台不接收新命令。
 
