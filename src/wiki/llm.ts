@@ -17,6 +17,8 @@ export interface ChatOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  retries?: number;
+  retryDelayMs?: number;
 }
 
 export function completionUrl(baseURL: string): string {
@@ -96,7 +98,26 @@ function responsePayload(raw: string, contentType: string): ChatPayload {
   return { choices: [{ message: { content: chunks.join('') } }] };
 }
 
-export async function chat(options: ChatOptions): Promise<string> {
+class TransientModelError extends Error {
+  constructor(message:string,readonly delay?:number){super(message);}
+}
+function waitRetry(delay:number,signal?:AbortSignal):Promise<void>{
+  if(signal?.aborted)return Promise.reject(signal.reason);
+  return new Promise((resolve,reject)=>{const abort=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);reject(signal?.reason);};const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},delay);signal?.addEventListener('abort',abort,{once:true});});
+}
+export async function chat(options:ChatOptions):Promise<string>{
+  const retries=options.retries??0;
+  if(!Number.isInteger(retries)||retries<0||retries>8)throw new Error('重试次数必须为 0–8 的整数');
+  for(let attempt=0;;attempt++){
+    options.signal?.throwIfAborted();
+    try{return await chatOnce(options);}catch(error){
+      if(options.signal?.aborted)throw options.signal.reason;
+      if(!(error instanceof TransientModelError)||attempt>=retries)throw error;
+      await waitRetry(error.delay??Math.min(5000,(options.retryDelayMs??500)*2**attempt),options.signal);
+    }
+  }
+}
+async function chatOnce(options: ChatOptions): Promise<string> {
   if (options.authRequired !== false && !options.apiKey.trim()) throw new Error('请先在「设置」中填写 API Key');
   if (!options.model.trim()) throw new Error('请先在「设置」中填写模型名称');
   const url = completionUrl(options.baseURL);
@@ -119,7 +140,13 @@ export async function chat(options: ChatOptions): Promise<string> {
     });
     if (!response.ok) {
       const detail = redact(await response.text().catch(() => ''), options.apiKey).slice(0, 400);
-      throw new Error(`模型请求失败（HTTP ${response.status}）：${detail || '服务未返回错误详情'}`);
+      const message=`模型请求失败（HTTP ${response.status}）：${detail || '服务未返回错误详情'}`;
+      if([408,425,429].includes(response.status)||response.status>=500){
+        const header=response.headers?.get('retry-after'),seconds=header?.trim()?Number(header):NaN;
+        const delay=header?Math.min(30000,Math.max(0,Number.isFinite(seconds)?seconds*1000:Date.parse(header)-Date.now())):NaN;
+        throw new TransientModelError(message,Number.isFinite(delay)?delay:undefined);
+      }
+      throw new Error(message);
     }
     const payload = responsePayload(await response.text(),response.headers.get('content-type')??'');
     if (payload.error?.message) throw new Error('模型服务返回错误：' + redact(payload.error.message, options.apiKey).slice(0, 300));
@@ -128,7 +155,10 @@ export async function chat(options: ChatOptions): Promise<string> {
     if (!text) throw new Error('模型返回了空内容');
     return text;
   } catch (error) {
-    if (controller.signal.aborted && !options.signal?.aborted) throw new Error('模型响应超时，请检查服务地址或稍后重试');
+    if(options.signal?.aborted)throw options.signal.reason;
+    if (controller.signal.aborted) throw new TransientModelError('模型响应超时，请检查服务地址或稍后重试');
+    if(error instanceof TransientModelError)throw error;
+    if(error instanceof TypeError)throw new TransientModelError(redact(error.message,options.apiKey));
     throw new Error(redact(error instanceof Error ? error.message : String(error), options.apiKey));
   } finally {
     clearTimeout(timeout);

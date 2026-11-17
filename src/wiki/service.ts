@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { ModelScheduler,modelInteger } from './model-scheduler';
 import { WikiTransfers } from './transfers';
 import { materialSegments, materialWindow, partitionProposalPages } from './material';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -55,6 +56,9 @@ export class WikiService {
   private readonly tasks = new Map<string, WikiTask>();
   private readonly queue: { id: string; run: (task: WikiTask) => Promise<unknown>; onError?: () => void }[] = [];
   private draining = false;
+  private runningJobs = 0;
+  private readonly scheduler:ModelScheduler;
+  private readonly retries:number;
   private lastTickLint = 0;
   private counts?: { revision: number; at: number; pages: number; sources: number; pendingDrafts: number; skills: number; links: number; orphans: number };
   private readonly compiling = new Map<string, string>();
@@ -65,6 +69,8 @@ export class WikiService {
     this.workspace = new WikiWorkspace(options.store);
     this.loadTaskHistory('后台已重启，请重试');
     this.config = options.config;
+    this.scheduler=new ModelScheduler(modelInteger(options.config.llmConcurrency,1,1,16));
+    this.retries=modelInteger(options.config.llmRetries,0,0,8);
     this.signal = options.signal;
     this.pdfTransfers = new WikiTransfers(this.signal);
     this.fetchImpl = options.fetchImpl;
@@ -83,7 +89,7 @@ export class WikiService {
   }
 
   // ---- Model access -----------------------------------------------------
-  private key(): string { return this.store.credentials().apiKey; }
+  private key(kind:'text'|'vision'='text'): string { const keys=this.store.credentials();return kind==='vision'?(keys.visionApiKey||(this.config.visionBaseURL?.trim()?'':keys.apiKey)):keys.apiKey; }
   private modelReady(): boolean { return !!this.config.textModel.trim() && (this.config.authRequired === false || !!this.key()); }
   private assertOperation(): void { if (this.signal.aborted || this.operationContext.getStore()?.aborted) throw new Error('任务已取消'); }
   private loadTaskHistory(reason: string): void {
@@ -135,16 +141,17 @@ export class WikiService {
   }
   private model(kind: 'text' | 'vision' = 'text') {
     return {
-      baseURL: this.config.baseURL,
-      apiKey: this.key(),
+      baseURL: kind==='vision'&&this.config.visionBaseURL?.trim()?this.config.visionBaseURL.trim():this.config.baseURL,
+      apiKey: this.key(kind),
       model: kind === 'vision' && this.config.visionModel.trim() ? this.config.visionModel : this.config.textModel,
       fetchImpl: this.fetchImpl,
       signal: this.operationContext.getStore() ?? this.signal,
-      authRequired: this.config.authRequired,
+      authRequired: kind==='vision'&&this.config.visionBaseURL?.trim()?this.config.visionAuthRequired:this.config.authRequired,
     };
   }
   private async complete(messages: ChatMessage[], kind: 'text' | 'vision' = 'text', images?: { mime: string; base64: string }[], timeoutMs = 110_000): Promise<string> {
-    return chat({ ...this.model(kind), messages, images, timeoutMs });
+    const model=this.model(kind);
+    return this.scheduler.run(model.signal,()=>chat({ ...model, messages, images, timeoutMs,retries:this.retries }));
   }
   private async completeObject(messages:ChatMessage[],timeoutMs=110_000,repairing?:()=>void,failed?:()=>Promise<void>):Promise<Record<string,unknown>>{
     const reply=await this.complete(messages,'text',undefined,timeoutMs);
@@ -178,6 +185,7 @@ export class WikiService {
       model: {
         baseURL: this.config.baseURL, textModel: this.config.textModel, visionModel: this.config.visionModel,
         keyConfigured: !!this.key(), keyHint: maskedKey(this.key()),
+        visionBaseURL:this.config.visionBaseURL?.trim()||this.config.baseURL,visionKeyConfigured:!!this.key('vision'),visionKeyHint:(!this.config.visionBaseURL?.trim()&&!this.store.credentials().visionApiKey?'沿用文本密钥 · ':'')+maskedKey(this.key('vision')),llmRetries:this.retries,llmConcurrency:this.scheduler.limit,
       },
       automation: { autoCompile: this.config.autoCompile, autoApprove: false, lintMinutes: this.config.lintMinutes },
       lastLint: meta.lastLint,
@@ -201,32 +209,27 @@ export class WikiService {
     void this.drain();
     return task.id;
   }
-  private async drain(): Promise<void> {
-    if (this.draining) return;
-    this.draining = true;
-    try {
-      while (this.queue.length) {
-        const job = this.queue.shift()!;
-        const task = this.tasks.get(job.id)!;
-        if (task.status === 'cancelled') continue;
-        if (this.signal.aborted) { task.status = 'failed'; task.error = '插件已停止'; task.finishedAt = now(); continue; }
-        task.status = 'running'; task.progress = '正在处理'; task.startedAt = now();
-        const controller = new AbortController(); this.taskControllers.set(task.id, controller);
-        const operationSignal = AbortSignal.any([this.signal, controller.signal]); this.persistTasks();
-        try { task.result = await this.operationContext.run(operationSignal, () => job.run(task)); if (operationSignal.aborted) throw new Error('任务已取消'); task.status = 'done'; task.progress = '已完成'; }
-        catch (error) {
-          task.status = controller.signal.aborted ? 'cancelled' : 'failed';
-          task.error = String(error instanceof Error ? error.message : error).slice(0, 500);
-          task.progress = controller.signal.aborted ? '已取消' : '失败';
-          if (!controller.signal.aborted) job.onError?.();
-        }
-        this.taskControllers.delete(task.id);
-        task.finishedAt = now(); this.persistTasks();
-        for (const [sourceId, id] of this.compiling) if (id === task.id) this.compiling.delete(sourceId);
-        if(task.retry?.action==='compile'&&task.status!=='cancelled')this.tick();
-        try { this.publish?.(); } catch { /* A view notification cannot stop the queue. */ }
-      }
-    } finally { this.draining = false; }
+  private drain(): void {
+    while(this.runningJobs<this.scheduler.limit&&this.queue.length){
+      const job=this.queue.shift()!,task=this.tasks.get(job.id)!;
+      if(task.status==='cancelled')continue;
+      if(this.signal.aborted){task.status='failed';task.error='插件已停止';task.finishedAt=now();this.persistTasks();continue;}
+      this.runningJobs++;this.draining=true;
+      void this.runJob(job,task).finally(()=>{this.runningJobs--;this.draining=this.runningJobs>0;this.drain();});
+    }
+  }
+  private async runJob(job:typeof this.queue[number],task:WikiTask):Promise<void>{
+    task.status='running';task.progress='正在处理';task.startedAt=now();
+    const controller=new AbortController();this.taskControllers.set(task.id,controller);
+    const operationSignal=AbortSignal.any([this.signal,controller.signal]);this.persistTasks();
+    try{task.result=await this.operationContext.run(operationSignal,()=>job.run(task));if(operationSignal.aborted)throw new Error('任务已取消');task.status='done';task.progress='已完成';}
+    catch(error){task.status=controller.signal.aborted?'cancelled':'failed';task.error=String(error instanceof Error?error.message:error).slice(0,500);task.progress=controller.signal.aborted?'已取消':'失败';if(!controller.signal.aborted)job.onError?.();}
+    finally{
+      this.taskControllers.delete(task.id);task.finishedAt=now();this.persistTasks();
+      for(const [sourceId,id] of this.compiling)if(id===task.id)this.compiling.delete(sourceId);
+      if(task.retry?.action==='compile'&&task.status!=='cancelled')this.tick();
+      try{this.publish?.();}catch{/* A view notification cannot stop the queue. */}
+    }
   }
   private queued(kind: WikiTask['kind']): boolean {
     return [...this.tasks.values()].some(task => task.kind === kind && ['queued', 'running'].includes(task.status)) || this.queue.some(job => this.tasks.get(job.id)?.kind === kind);
@@ -236,10 +239,10 @@ export class WikiService {
    * its own schedule. Nothing here writes to the wiki without a review. */
   tick(): void {
     if (this.signal.aborted) return;
-    if (this.config.autoCompile && !this.queued('compile')) {
+    while (this.config.autoCompile && this.taskList().filter(task=>task.kind==='compile'&&['queued','running'].includes(task.status)).length<this.scheduler.limit) {
       const pending = this.store.listSources().find(source =>
-        !source.staging && !source.compiled && !source.autoCompilePaused && !this.pausedSources.has(source.id) && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
-      if (pending && this.modelReady()) void this.compile(pending.id);
+        !this.compiling.has(source.id) && !source.staging && !source.compiled && !source.autoCompilePaused && !this.pausedSources.has(source.id) && Date.now() - (this.failedSources.get(source.id) ?? 0) > COMPILE_RETRY_MS);
+      if (pending && this.modelReady()) void this.compile(pending.id);else break;
     }
     const interval = Math.max(0, this.config.lintMinutes) * 60_000;
     if (interval > 0 && this.modelReady() && Date.now() - this.lastTickLint >= interval && !this.queued('lint')) {
@@ -627,18 +630,19 @@ export class WikiService {
   }
 
   // ---- Credentials ------------------------------------------------------
-  async setApiKey(value: string): Promise<string> {
+  async setApiKey(value: string,kind:'text'|'vision'='text'): Promise<string> {
     const key = String(value ?? '').trim();
     if (key.length > 4096) throw new Error('API Key 过长');
-    await withWriteLock(() => this.store.saveCredentials(key));
+    await withWriteLock(() => this.store.saveCredentials(key,kind));
     return maskedKey(key);
   }
-  async clearApiKey(): Promise<void> { await withWriteLock(() => this.store.clearCredentials()); }
-  async testConnection(): Promise<string> {
+  async clearApiKey(kind:'text'|'vision'='text'): Promise<void> { await withWriteLock(() => this.store.clearCredentials(kind)); }
+  async testConnection(kind:'text'|'vision'='text'): Promise<string> {
+    if(kind==='vision'&&!this.config.visionModel.trim())throw new Error('请先配置图片模型');
     const reply = await this.complete([
       { role: 'system', content: '你是连通性测试助手，只回复两个字：可用' },
       { role: 'user', content: '请确认连接' },
-    ], 'text', undefined, 15_000);
+    ], kind, undefined, 15_000);
     return truncate(reply, 100);
   }
 
@@ -738,18 +742,20 @@ export class WikiService {
       if (!source.text.trim()||source.parts?.some(part=>part.kind==='image')) throw new Error('含图片的整组素材需要先配置视觉模型，才能完整理解图片；所有已上传内容均已保留');
       return;
     }
-    const descriptions: string[] = [];
-    for (const [index, name] of source.images.entries()) {
+    const descriptions: string[] = new Array(source.images.length);let nextImage=0;
+    const worker=async()=>{for(;;){const index=nextImage++;if(index>=source.images.length)return;const name=source.images[index];
       this.assertOperation(); const image = this.store.imageData(name);
       if (!image) throw new Error('素材图片附件缺失，请检查原始文件后重试');
       if (task) task.progress = `理解图片 ${index + 1}/${source.images.length}`;
       const original=source.parts?.find(part=>part.asset===name)?.name??name;
       const location=source.text.indexOf(original),context=location>=0?source.text.slice(Math.max(0,location-800),location+1200):'';
-      descriptions.push(`## 图片 ${index + 1} · ${original}（附件 ${name}）\n` + await this.complete([
+      descriptions[index]=`## 图片 ${index + 1} · ${original}（附件 ${name}）\n` + await this.complete([
         { role: 'system', content: '你是图片理解助手。提取图片中的文字、图表结构、关键数据与结论，输出中文 Markdown。不要臆测图中不存在的信息。' },
         { role: 'user', content: `请描述来自「${source.title}」的第 ${index + 1} 张图片，文件名「${original}」。它与同组 Markdown/文本属于同一份资料，请保留文件名以关联文中的图片引用。\n${context?`引用附近原文（仅作上下文）：\n${context}`:''}` },
-      ], 'vision', [image]));
-    }
+      ], 'vision', [image]);
+    }};
+    const workers=await Promise.allSettled(Array.from({length:Math.min(source.images.length,this.scheduler.limit)},()=>worker()));
+    const failed=workers.find((result):result is PromiseRejectedResult=>result.status==='rejected');if(failed)throw failed.reason;
     const description = descriptions.join('\n\n');
     await withWriteLock(() => {
       const fresh = this.store.getSource(source.id);

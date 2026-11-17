@@ -93,9 +93,9 @@ export class WikiStore {
   saveSchema(value: string): void { this.write(path.join(this.root, 'schema.md'), truncate(String(value ?? ''), 20000)); }
 
   // ---- Credentials (never part of the plugin manifest config) -----------
-  credentials(): { apiKey: string } { return this.readJson(path.join(this.root, 'credentials.json'), { apiKey: '' }); }
-  saveCredentials(apiKey: string): void { this.writeJson(path.join(this.root, 'credentials.json'), { apiKey }, 0o600); }
-  clearCredentials(): void { this.revision++; rmSync(path.join(this.root, 'credentials.json'), { force: true }); }
+  credentials(): { apiKey: string; visionApiKey?: string } { return this.readJson(path.join(this.root, 'credentials.json'), { apiKey: '' }); }
+  saveCredentials(apiKey: string,kind:'text'|'vision'='text'): void { this.writeJson(path.join(this.root, 'credentials.json'), { ...this.credentials(),[kind==='vision'?'visionApiKey':'apiKey']:apiKey }, 0o600); }
+  clearCredentials(kind:'text'|'vision'='text'): void { this.saveCredentials('',kind); }
 
   // ---- Sources (immutable raw layer) ------------------------------------
   listSources(): WikiSource[] {

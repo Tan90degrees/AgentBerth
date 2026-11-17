@@ -188,15 +188,7 @@ export const notesWikiScript = String.raw`
   function renderSource(){
     renderSourceList();var host=$('sourceView');
     if(state.newSource){
-      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文<textarea data-field="text" rows="14" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>图片<input type="file" data-field="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple></label><div id="imagePreview" class="row"></div><label>文件<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><div class="row">'+button('saveSource','保存整组素材','primary')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
-      var input=field('images',host);
-      if(input)input.onchange=function(){var box=$('imagePreview');box.innerHTML='';Array.from(input.files||[]).forEach(function(file){var image=document.createElement('img'),url=URL.createObjectURL(file);ux.urls.push(url);image.src=url;image.className='img-preview';image.alt=file.name;box.appendChild(image)})};
-      var pdfInput=field('pdf',host);
-      if(pdfInput)pdfInput.onchange=function(){
-        var file=(pdfInput.files||[])[0];if(!file)return;
-        pdfInput.disabled=true;
-        uploadPdf(file,function(value){var box=$('pdfProgress');if(box)box.textContent=value});
-      };
+      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文<textarea data-field="text" rows="14" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>文件<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><div class="row">'+button('startImport','保存素材','primary')+button('cancelImport','取消导入','ghost',' hidden')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
       return;
     }
     if(!state.source){host.innerHTML=captureCard()+empty('从左侧选择素材，或点 ＋ 新增。');return}
@@ -297,10 +289,10 @@ export const notesWikiScript = String.raw`
   function renderSettings(){
     var host=$('settingsView'),s=state.status;if(!s)return;
     var info=card('模型与自动化',
-      '<div class="grid2"><div><small>服务地址</small><p>'+esc(s.model.baseURL)+'</p><small>文本模型</small><p>'+esc(s.model.textModel)+'</p></div><div><small>视觉模型</small><p>'+esc(s.model.visionModel||'（未启用）')+'</p><small>API Key</small><p>'+esc(s.model.keyHint)+'</p></div></div>'+
-      '<hr><p class="muted">自动编译：'+(s.automation.autoCompile?'开':'关')+' · 发布方式：人工审阅 · 体检间隔：'+(s.automation.lintMinutes||'关闭')+' 分钟 · 上次体检：'+esc(s.lastLint?date(s.lastLint):'尚未运行')+'</p>'+
-      '<div class="row">'+button('testConnection','测试连接')+button('openPluginSettings','修改模型配置')+button('runLint','立即体检')+'</div>');
-    var key='<div class="card"><h3>API Key（仅存于本机插件私有文件）</h3><label>密钥<input type="password" data-field="apiKey" placeholder="sk-…" autocomplete="off"></label><div class="row" style="margin-top:8px">'+button('setKey','保存密钥','primary')+button('clearKey','清除')+'</div></div>';
+      '<div class="grid2"><div><small>文本服务地址</small><p>'+esc(s.model.baseURL)+'</p><small>文本模型</small><p>'+esc(s.model.textModel)+'</p></div><div><small>图片服务地址</small><p>'+esc(s.model.visionBaseURL||s.model.baseURL)+'</p><small>视觉模型</small><p>'+esc(s.model.visionModel||'（未启用）')+'</p></div></div>'+
+      '<p>重试 '+(s.model.llmRetries||0)+' 次 · 最大并发 '+(s.model.llmConcurrency||1)+'</p><hr><p class="muted">自动编译：'+(s.automation.autoCompile?'开':'关')+' · 发布方式：人工审阅 · 体检间隔：'+(s.automation.lintMinutes||'关闭')+' 分钟 · 上次体检：'+esc(s.lastLint?date(s.lastLint):'尚未运行')+'</p>'+
+      '<div class="row">'+button('openPluginSettings','修改模型配置')+button('runLint','立即体检')+'</div>');
+    var key=['text','vision'].map(function(kind){var vision=kind==='vision';return '<div class="card"><h3>'+(vision?'图片模型 API Key':'文本模型 API Key')+'</h3><p>'+esc(vision?s.model.visionKeyHint:s.model.keyHint)+'</p><label>密钥<input type="password" data-field="'+(vision?'visionApiKey':'apiKey')+'" autocomplete="off"></label><div class="row">'+button('setKey',vision?'保存图片密钥':'保存文本密钥','primary',' data-kind="'+kind+'"')+button('clearKey',vision?'清除图片密钥':'清除文本密钥','',' data-kind="'+kind+'"')+button('testConnection',vision?'测试图片连接':'测试文本连接','',' data-kind="'+kind+'"')+'</div></div>'}).join('');
     var schema='<div class="card"><h3>Schema 约定</h3>'+mdEditor('Schema（Markdown）','schema',12,'',30000)+'<div class="row" style="margin-top:8px">'+button('saveSchema','保存 Schema','primary')+'</div></div>';
     var file='';
     if(state.file==='schema'){/* schema editor is always visible */}
@@ -405,38 +397,6 @@ export const notesWikiScript = String.raw`
         return refreshLists();
       });return;
     }
-    if(action==='saveSource'){
-      var sourceSnapshot=captureDraft($('sourceView'),'source:new');
-      var files=Array.prototype.slice.call((field('images')||{}).files||[]);
-      var title=val('title'),text=val('text');
-      if(!text.trim()&&!files.length){err('请填写正文或选择图片');return}
-      var progress=function(value){var box=$('sourceProgress');if(box)box.textContent=value};
-      progress('正在保存素材…');
-      var savedSource=null;node.disabled=true;
-      saveCompleteSource(title,text,files.length>0).then(function(source){
-        savedSource=source;
-        var chain=Promise.resolve();
-        files.forEach(function(file){
-          chain=chain.then(function(){
-            return uploadOriginalImage(file,source.id);
-          });
-        });
-        return chain.then(function(){return call('finalize_source',{id:source.id})}).then(function(){
-          var sourceChanged=acknowledgeDraft(sourceSnapshot);
-          savedSource=null;if(state.newSource&&!sourceChanged){state.newSource=false;state.source=source.id;}
-          progress('素材已保存，正在启动编译…');
-          return call('compile',{sourceId:source.id}).then(function(taskId){
-            if(!sourceChanged&&ux.nav===sourceSnapshot.nav&&state.tab==='sources')renderSource();startTask(taskId,'compile',sourceSnapshot.nav);
-            return refreshLists();
-          });
-        });
-      }).catch(function(error){
-        progress('');err(error);
-        if(savedSource&&files.length)call('delete_source',{id:savedSource.id}).catch(err);
-        if(!state.newSource){if(ux.nav===sourceSnapshot.nav&&state.tab==='sources')renderSource();refreshLists()}
-      }).finally(function(){if(node.isConnected)node.disabled=false});
-      return;
-    }
     if(action==='compileSource'){go(call('finalize_source',{id:id}).then(function(){return call('compile',{sourceId:id})}),function(taskId){startTask(taskId,'compile')});return}
     if(action==='deleteSource'){go(call('delete_source',{id:id}),function(){state.source=null;return refreshLists().then(function(){if(state.tab==='sources')renderSource()})});return}
     if(action==='openDraft'){state.draft=id;state.draftSlug='';renderReview();return}
@@ -462,9 +422,9 @@ export const notesWikiScript = String.raw`
     if(action==='deleteSkill'){go(call('delete_skill',{name:state.skill}),function(){state.skill=null;return refreshLists().then(function(){if(state.tab==='skills')renderSkill()})});return}
     if(action==='exportSkill'){go(call('export_skill',{name:state.skill}),function(value){var box=$('skillExport');if(!box)return;box.innerHTML='<div class="card"><h3>导出：'+esc(state.skill)+'</h3><textarea rows="12" maxlength="30000" readonly></textarea></div>';box.querySelector('textarea').value=value});return}
     if(action==='importSkill'){go(call('import_skill',{text:val('import')}),function(result){state.skill=result.name;return refreshLists().then(function(){if(state.tab==='skills')renderSkill()})});return}
-    if(action==='setKey'){go(call('set_api_key',{value:val('apiKey')}),function(){return refreshStatus().then(function(){if(state.tab==='settings')renderSettings()})});return}
-    if(action==='clearKey'){go(call('clear_api_key'),function(){return refreshStatus().then(function(){if(state.tab==='settings')renderSettings()})});return}
-    if(action==='testConnection'){go(call('test_connection'),function(value){$('error').textContent='连接成功：'+value});return}
+    if(action==='setKey'){go(call('set_api_key',{value:val(node.dataset.kind==='vision'?'visionApiKey':'apiKey'),kind:node.dataset.kind||'text'}),function(){return refreshStatus().then(function(){if(state.tab==='settings')renderSettings()})});return}
+    if(action==='clearKey'){go(call('clear_api_key',{kind:node.dataset.kind||'text'}),function(){return refreshStatus().then(function(){if(state.tab==='settings')renderSettings()})});return}
+    if(action==='testConnection'){go(call('test_connection',{kind:node.dataset.kind||'text'}),function(value){notify((node.dataset.kind==='vision'?'图片':'文本')+'模型连接成功：'+value)});return}
     if(action==='saveSchema'){go(call('save_schema',{value:val('schema')}),function(){$('error').textContent='Schema 已保存'});return}
     if(action==='runLint'){go(call('lint'),function(taskId){startTask(taskId,'lint')});return}
     if(action==='openPluginSettings'){parent.postMessage({kind:'agentberth-plugin-open-settings'},'*');return}

@@ -38,8 +38,9 @@ function chooseMaterials(dom:JSDOM,files:{name:string;text:string;type?:string}[
 
 test('default import combines pasted text, Markdown, text and an image into one complete source',async t=>{
   const {open,store,service}=setup(t),dom=open();click(dom,'[data-tab="sources"]');click(dom,'#newSource');input(dom,'[data-field="title"]','同一份资料');input(dom,'[data-field="text"]','补充说明：图中的连接代表依赖。');
+  assert.equal(dom.window.document.querySelectorAll('#sourceView input[type=file]').length,1);assert.equal(dom.window.document.querySelectorAll('#sourceView [data-action=startImport]').length,1);assert.equal(dom.window.document.querySelector('#sourceView [data-action=saveSource]'),null);
   chooseMaterials(dom,[{name:'article.md',text:'# 文档\n![架构](diagram.png)'},{name:'notes.txt',text:'补充记录完整保留。'},{name:'diagram.png',text:'original image bytes',type:'image/png'}]);
-  assert.equal(store.listSources().length,0,'selecting a bundle must not upload it');click(dom,'[data-action="saveSource"]');
+  assert.equal(store.listSources().length,0,'selecting a bundle must not upload it');click(dom,'[data-action="startImport"]');
   await until(()=>store.listSources().length===1&&!store.listSources()[0].staging,'whole bundle sealed');
   const source=store.listSources()[0];assert.equal(source.title,'同一份资料');for(const text of ['补充说明','# 文档','![架构](diagram.png)','补充记录完整保留。'])assert.ok(source.text.includes(text),text);
   assert.equal(source.parts!.length,3);assert.equal(source.images.length,1);assert.equal(new TextDecoder().decode(store.assetBytes(source.images[0])),'original image bytes');assert.equal(source.autoCompilePaused,true);
@@ -222,7 +223,7 @@ test('a slow source save preserves subsequent edits and never pulls the reader a
   commands.set('finalize_source', params => new Promise(resolve => { finish = async () => { resolve(await finalize(params)); }; }));
   const dom = open(); click(dom, '.tabs [data-tab="sources"]'); click(dom, '#newSource');
   input(dom, '#sourceView [data-field="title"]', 'first source'); input(dom, '#sourceView [data-field="text"]', 'submitted source');
-  click(dom, '[data-action="saveSource"]'); await until(() => finish, 'source save pending');
+  click(dom, '[data-action="startImport"]'); await until(() => finish, 'source save pending');
   input(dom, '#sourceView [data-field="text"]', 'additional source text'); click(dom, '.tabs [data-tab="skills"]');
   await finish(); await settle();
   assert.equal(dom.window.document.querySelector('.panel.active')?.getAttribute('data-panel'), 'skills');
@@ -334,7 +335,7 @@ test('saving a source clears its recovery draft even when model compilation is u
   input(dom, '#sourceView [data-field="title"]', '已保存的素材');
   input(dom, '#sourceView [data-field="text"]', '已经保存的正文不应该再次恢复成未保存草稿。');
   await until(() => service.workspace.editorDrafts().some(draft => draft.key === 'source:new'), 'source draft persisted');
-  click(dom, '#sourceView [data-action="saveSource"]');
+  click(dom, '#sourceView [data-action="startImport"]');
   await until(() => service.listSources().some(source => source.title === '已保存的素材'), 'source saved');
   await until(() => !service.workspace.editorDrafts().some(draft => draft.key === 'source:new'), 'saved draft cleared');
   click(dom, '#newSource');
@@ -348,7 +349,7 @@ test('manual material entry uploads the entire large Unicode text through bounde
   const text = '第一行\n' + '中'.repeat(240000) + '\n完整末尾';
   input(dom, '#sourceView [data-field="title"]', '完整长素材'); input(dom, '#sourceView [data-field="text"]', text);
   assert.equal(dom.window.document.querySelector<HTMLTextAreaElement>('#sourceView [data-field="text"]')!.hasAttribute('maxlength'), false);
-  click(dom, '[data-action="saveSource"]');
+  click(dom, '[data-action="startImport"]');
   await until(() => service.listSources().length > 0, 'large material saved');
   assert.equal(service.listSources()[0].text, text); assert.ok(chunks > 10);
 });
@@ -445,4 +446,13 @@ test('Wiki results notify the host once and retain only a result action in the c
   assert.equal(toolbar.textContent, '查看素材', 'no separate message banner remains');
   click(dom, '#uxNotice [data-action="openSource"]');
   await until(() => dom.window.document.querySelector('#sourceText')?.textContent?.includes('the complete original conversation'), 'result action opens original material');
+});
+
+
+test('image and text key controls persist separately and neither enters editor drafts',async t=>{
+ const {store,service,open}=setup(t),dom=open();await service.setApiKey('text-key-example');click(dom,'[data-tab="settings"]');await until(()=>dom.window.document.querySelector('[data-field="visionApiKey"]'),'image credential control');
+ input(dom,'[data-field="visionApiKey"]','vision-key-example');click(dom,'[data-action="setKey"][data-kind="vision"]');await until(()=>store.credentials().visionApiKey==='vision-key-example','image key saved');assert.equal(store.credentials().apiKey,'text-key-example');
+ await until(()=>!dom.window.document.querySelector<HTMLInputElement>('[data-field="visionApiKey"]')!.value,'secret field cleared after save');
+ assert.ok(!JSON.stringify(service.workspace.editorDrafts()).includes('key-example'));
+ click(dom,'[data-action="clearKey"][data-kind="vision"]');await until(()=>!store.credentials().visionApiKey,'image key cleared');assert.equal(store.credentials().apiKey,'text-key-example');
 });

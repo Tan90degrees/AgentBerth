@@ -11,13 +11,13 @@ import { cleanupSmoke } from './smoke-cleanup.mjs';
 
 const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-wiki-window-'));
 await mkdir('test-results', { recursive: true });
-const requests = [];
+const requests = [],modelRoutes=[];
 const model = createServer(async (request, response) => {
   let body = '';
   for await (const chunk of request) body += chunk;
   const payload = JSON.parse(body || '{}');
   const joined = JSON.stringify(payload.messages ?? []);
-  requests.push(joined);
+  requests.push(joined);modelRoutes.push({url:request.url,model:payload.model,auth:request.headers.authorization});
   let content;
   if (joined.includes('素材摄入')) content = JSON.stringify({ summary: '关于向量检索的素材', concepts: [{ title: '向量检索', kind: 'concept', summary: '用嵌入召回', relevance: 0.9 }], claims: ['召回与精度需要平衡'], contradictions: [] });
   else if (joined.includes('编译（Compile）')) content = JSON.stringify({ summary: '编译出两页', log: '窗口验证编译', contradictions: [], pages: [
@@ -78,13 +78,16 @@ try {
 
   await ext({ action: 'configure', id: 'notes-wiki', config: {
     baseURL: `http://127.0.0.1:${port}/v1`, textModel: 'mock-text', visionModel: 'mock-vision',
+    visionBaseURL:`http://127.0.0.1:${port}/vision/v1`,visionAuthRequired:true,llmRetries:1,llmConcurrency:2,
     autoCompile: false, allowAgentAccess: true, allowAgentQueries: true, lintMinutes: 0, maxContextPages: 8,
   } });
   await call('set_api_key', { value: 'sk-window-test' });
+  await call('set_api_key',{kind:'vision',value:'sk-vision-window-test'});
   const status = await call('status');
   assert.equal(status.ready, true);
   assert.equal(status.model.textModel, 'mock-text');
-  step('model configured against local mock endpoint');
+  assert.equal(status.model.llmRetries,1);assert.equal(status.model.llmConcurrency,2);assert.equal(status.model.visionBaseURL,`http://127.0.0.1:${port}/vision/v1`);
+  step('text and image models configured against independent local mock endpoints');
 
   assert.equal((await call('list_skills')).length, 5);
   await call('save_skill', { name: 'window-skill', description: '窗口验证创建', kind: 'custom', triggers: ['验证'], body: '# 指令\n只回答中文' });
@@ -211,6 +214,7 @@ try {
   await until(async () => (await page.locator('.plugin-settings-popover').count()) > 0, 'plugin settings popover opens in place');
   assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes('笔记 Wiki'), 'popover shows the plugin identity');
   assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes('模型服务地址'), 'popover renders real config fields');
+  for(const label of ['图片模型服务地址','LLM 调用重试次数','LLM 最大并发请求数'])assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes(label),label);
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-plugin-popover.png' });
   await page.locator('.plugin-settings-popover [aria-label="关闭配置面板"]').click();
   await until(async () => (await page.locator('.plugin-settings-popover').count()) === 0, 'popover closed');
@@ -360,13 +364,16 @@ try {
   await clickWiki(frame.locator('#skillView [data-action="cancelSkill"]'));
   await clickWiki(frame.locator('.tabs [data-tab="sources"]'));
   await clickWiki(frame.locator('#newSource'));
+  assert.equal(await frame.locator('#sourceView input[type=file]').count(),1);assert.equal(await frame.locator('#sourceView [data-action="startImport"]').count(),1);assert.equal(await frame.locator('#sourceView [data-action="saveSource"]').count(),0);
   await frame.locator('#sourceView [data-field="title"]').fill('纯图片窗口素材');
-  await frame.locator('#sourceView [data-field="images"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
+  await frame.locator('#sourceView [data-field="pdf"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
   await frame.locator('#sourceView [data-field="compileImported"]').check();
-  await clickWiki(frame.locator('#sourceView [data-action="saveSource"]'));
+  await page.screenshot({animations:'disabled',path:'test-results/wiki-unified-import.png'});
+  await clickWiki(frame.locator('#sourceView [data-action="startImport"]'));
   await until(async () => (await call('list_sources')).some(source => source.title === '纯图片窗口素材' && source.images === 1 && source.compiled), 'image-only source saved and compiled');
   await until(async () => await frame.locator('.tabs [data-tab="review"]').evaluate(node => node.classList.contains('active')), 'image compile task completed in the view');
-  step('image-only source uploads before compilation');
+  assert.ok(modelRoutes.some(row=>row.model==='mock-vision'));assert.ok(modelRoutes.filter(row=>row.model==='mock-vision').every(row=>row.url==='/vision/v1/chat/completions'&&row.auth==='Bearer sk-vision-window-test'));
+  step('unified import uploads images before compilation and uses the independent image endpoint and key');
   await clickWiki(frame.locator('.tabs [data-tab="sources"]'));
   await clickWiki(frame.locator('#newSource'));
   await frame.locator('#sourceView [data-field="pdf"]').setInputFiles({ name: 'window-upload.pdf', mimeType: 'application/pdf', buffer: iframePdf });
@@ -392,7 +399,7 @@ try {
   ]);
   assert.equal(await frame.locator('[data-field="separateImported"]').isChecked(),false);
   await frame.locator('[data-field="compileImported"]').check();
-  await clickWiki(frame.locator('[data-action="saveSource"]'));
+  await clickWiki(frame.locator('[data-action="startImport"]'));
   await until(async()=> (await call('list_sources')).some(source=>source.title==='混合资料窗口验证'&&source.compiled),'mixed source compiled');
   assert.equal((await call('list_sources')).length,mixedSourceCount+1,'one mixed source');
   assert.equal((await call('list_drafts')).length,mixedDraftCount+1,'one review proposal for the whole bundle');
