@@ -214,6 +214,7 @@ try {
   await until(async () => (await page.locator('.plugin-settings-popover').count()) > 0, 'plugin settings popover opens in place');
   assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes('笔记 Wiki'), 'popover shows the plugin identity');
   assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes('模型服务地址'), 'popover renders real config fields');
+  assert.equal(await page.locator('.plugin-settings-popover').getByLabel('文本 API Key',{exact:true}).count(),1);assert.equal(await page.locator('.plugin-settings-popover').getByLabel('图片 API Key',{exact:true}).count(),1);
   for(const label of ['图片模型服务地址','LLM 调用重试次数','LLM 最大并发请求数'])assert.ok((await page.locator('.plugin-settings-popover').innerText()).includes(label),label);
   await page.screenshot({ animations: 'disabled', path: 'test-results/wiki-plugin-popover.png' });
   await page.locator('.plugin-settings-popover [aria-label="关闭配置面板"]').click();
@@ -529,6 +530,11 @@ try {
   assert.equal((await call('get_editor_draft', { key: 'page:new' })).fields.body, '恢复之前最后输入的未保存草稿', 'undo retains the final editor input');
   step('full snapshot rollback removes additions and supports undo');
 
+  await clickWiki(frame.locator('.tabs [data-tab="settings"]'));await clickWiki(frame.locator('#openPluginSettings'));
+  const modelPopover=page.getByRole('dialog',{name:'配置插件 · 笔记 Wiki',exact:true});await modelPopover.getByLabel('图片 API Key',{exact:true}).fill('sk-image-window-ABCD');await modelPopover.getByRole('button',{name:'保存配置',exact:true}).click();
+  await modelPopover.getByRole('status').filter({hasText:'已保存，即时生效'}).waitFor();const savedModels=await call('status');assert.ok(savedModels.model.visionKeyHint.endsWith('ABCD'));assert.ok(savedModels.model.keyHint.endsWith('test'));assert.equal(await modelPopover.getByLabel('图片 API Key',{exact:true}).inputValue(),'');
+  await modelPopover.getByRole('button',{name:'测试图片连接',exact:true}).click();await modelPopover.getByRole('status').filter({hasText:'图片模型连接成功'}).waitFor();await modelPopover.getByRole('button',{name:'关闭配置面板',exact:true}).click();
+  step('model popover saves the image key separately and tests its independent endpoint');
   assert.equal((await frame.locator('#error').innerText()).trim(), '', 'no command errors in the view');
   assert.deepEqual(errors, [], 'no renderer page errors');
   console.log('RESULT OK', JSON.stringify({ pages: (await call('list_pages')).length, requests: requests.length, errors }));

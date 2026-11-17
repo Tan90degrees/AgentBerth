@@ -20,12 +20,13 @@ export function PluginSettingsPopover({ request, snapshot, projects, currentProj
   const [localError, setLocalError] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [clearKey, setClearKey] = useState(false);
+  const [visionKey,setVisionKey]=useState(''),[clearVisionKey,setClearVisionKey]=useState(false),[connectionStatus,setConnectionStatus]=useState('');
   const [confirmClose, setConfirmClose] = useState(false);
   const closeRequest = useRef<() => void>(() => {});
   const panel = useRef<HTMLElement | null>(null);
   // Saving bumps the plugin generation to apply the new config. Resetting the
   // draft here would race with setSaved(true) and hide the "saved" feedback.
-  useEffect(() => { setDraft(plugin ? resolveExtensionConfig(plugin.manifest, plugin.config) : null); setSaved(false); setLocalError(''); }, [plugin?.manifest.id]);
+  useEffect(() => { setDraft(plugin ? resolveExtensionConfig(plugin.manifest, plugin.config) : null); setSaved(false); setLocalError('');setApiKey('');setClearKey(false);setVisionKey('');setClearVisionKey(false);setConnectionStatus(''); }, [plugin?.manifest.id]);
   useEffect(() => {
     if (!draft) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -42,13 +43,17 @@ export function PluginSettingsPopover({ request, snapshot, projects, currentProj
   }, [plugin, onClose]);
   if (!plugin || !draft) return null;
   const dirty = JSON.stringify(draft) !== JSON.stringify(resolveExtensionConfig(plugin.manifest, plugin.config));
-  closeRequest.current = () => { if (busy) return; if (dirty || apiKey || clearKey) setConfirmClose(true); else onClose(); };
+  const separateVision=plugin.manifest.id==='notes-wiki'&&!!plugin.manifest.config?.visionBaseURL;
+  const keyDirty=!!apiKey||clearKey||!!visionKey||clearVisionKey;
+  const unsaved=dirty||keyDirty;
+  closeRequest.current = () => { if (busy) return; if (unsaved) setConfirmClose(true); else onClose(); };
   const save = async () => {
     setBusy(true); onError(''); setLocalError('');
     try {
       if (plugin.manifest.id === 'notes-wiki' && (apiKey || clearKey)) await window.berth.extensions({ action: 'call', id: plugin.manifest.id, command: clearKey ? 'clear_api_key' : 'set_api_key', params: clearKey ? {} : { value: apiKey } });
+      if(separateVision&&(visionKey||clearVisionKey))await window.berth.extensions({action:'call',id:plugin.manifest.id,command:clearVisionKey?'clear_api_key':'set_api_key',params:clearVisionKey?{kind:'vision'}:{kind:'vision',value:visionKey}});
       await window.berth.extensions({ action: 'configure', id: plugin.manifest.id, config: draft });
-      setApiKey(''); setClearKey(false); setSaved(true);
+      setApiKey(''); setClearKey(false);setVisionKey('');setClearVisionKey(false);setConnectionStatus('');setSaved(true);
     } catch (error) { setLocalError(String(error)); onError(String(error)); }
     finally { setBusy(false); }
   };
@@ -62,15 +67,16 @@ export function PluginSettingsPopover({ request, snapshot, projects, currentProj
     {plugin.manifest.id === 'pet'
       ? <div className="plugin-settings-form"><PluginSettingsPanel projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion} /></div>
       : <form className="plugin-settings-form" onSubmit={event => { event.preventDefault(); void save(); }}>
-          {plugin.manifest.id === 'notes-wiki' && <><label>API Key<input type="password" autoComplete="off" placeholder="保持已保存的密钥" value={apiKey} disabled={busy} onChange={e => setApiKey(e.target.value)} /></label><label><input type="checkbox" checked={clearKey} disabled={busy} onChange={e => setClearKey(e.target.checked)} /> 清除已保存的密钥</label>{/* 地址、模型和鉴权方式在这里一起设置。无鉴权本地服务可关闭「服务需要 API Key」。 */}</>}
+          {plugin.manifest.id === 'notes-wiki' && <><label>{separateVision?'文本 API Key':'API Key'}<input type="password" autoComplete="off" placeholder="保持已保存的密钥" value={apiKey} disabled={busy} onChange={e => setApiKey(e.target.value)} /></label><label><input type="checkbox" checked={clearKey} disabled={busy} onChange={e => setClearKey(e.target.checked)} /> {separateVision?'清除文本密钥':'清除已保存的密钥'}</label>{separateVision&&<><label>图片 API Key<input type="password" autoComplete="off" placeholder="保持已保存的图片密钥" value={visionKey} disabled={busy} onChange={event=>setVisionKey(event.target.value)}/></label><label><input type="checkbox" checked={clearVisionKey} disabled={busy} onChange={event=>setClearVisionKey(event.target.checked)}/> 清除图片密钥</label></>}{/* 地址、模型和鉴权方式在这里一起设置。无鉴权本地服务可关闭「服务需要 API Key」。 */}</>}
           <ExtensionConfigFields plugin={plugin} draft={draft} setDraft={setDraft} busy={busy} />
           {/* 保存后会重新载入插件视图，请先保存正在编辑的内容。 */}
-          {plugin.manifest.id === 'notes-wiki' && <button type="button" disabled={busy || dirty || !!apiKey || clearKey} onClick={() => {setBusy(true);setLocalError('');void window.berth.extensions({action:'call',id:plugin.manifest.id,command:'test_connection',params:{}}).then(() => setLocalError('连接成功'),e => setLocalError(String(e))).finally(() => setBusy(false));}}>测试已保存的连接</button>}
+          {plugin.manifest.id==='notes-wiki'&&<div className="plugin-settings-actions">{(separateVision?['text','vision']:['text']).map(kind=><button key={kind} type="button" disabled={busy||unsaved} onClick={()=>{setBusy(true);setLocalError('');setConnectionStatus('');void window.berth.extensions({action:'call',id:plugin.manifest.id,command:'test_connection',params:kind==='vision'?{kind}:{}}).then(()=>setConnectionStatus((kind==='vision'?'图片':'文本')+'模型连接成功'),error=>setLocalError(String(error))).finally(()=>setBusy(false));}}>{kind==='vision'?'测试图片连接':separateVision?'测试文本连接':'测试已保存的连接'}</button>)}</div>}
+          {connectionStatus&&<p role="status">{connectionStatus}</p>}
           <footer>
-            <span role="status">{saved && !dirty ? '已保存，即时生效' : dirty ? '有未保存的修改' : '已同步'}</span>
+            <span role="status">{saved && !unsaved ? '已保存，即时生效' : unsaved ? '有未保存的修改' : '已同步'}</span>
             <div className="plugin-settings-actions">
               <button type="button" className="subtle" disabled={busy} onClick={() => closeRequest.current()}>关闭</button>
-              {(dirty || !!apiKey || clearKey) && <button type="submit" className="primary" disabled={busy}>保存配置</button>}
+              {unsaved && <button type="submit" className="primary" disabled={busy}>保存配置</button>}
             </div>
           </footer>
         </form>}

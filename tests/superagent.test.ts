@@ -370,3 +370,19 @@ test('legacy ended cleanup failures migrate beyond the recent page and survive r
   assert.equal((await f.task(created.id)).phase,'cancelled');assert.equal((await f.task(completedId)).phase,'completed');list=await f.call('tasks',{filter:'attention'});assert.equal(list.total,0);assert.equal(list.counts.attention,0);
   await assert.rejects(f.task(deletedId),/已删除/);assert.equal(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8'),log,'migration and cleanup never request an Agent turn');
 });
+
+
+test('opening active tasks waits for an overlapping inbox refresh instead of showing a false empty form',{timeout:45000},async t=>{
+ const f=await fixture(t),task=await f.create();await until(()=>f.worker(task.id),snapshot=>snapshot.permissions.length===1);
+ let hold=false,release:(()=>void)|undefined;
+ const dom=new JSDOM('<!doctype html><body>'+superagentView,{runScripts:'outside-only',pretendToBeVisual:true,url:'http://superagent.test'});
+ try{
+  Object.assign(dom.window,{TextEncoder,TextDecoder,agentberth:{ready:async()=>{},call:async(command:string,params:Record<string,unknown>={})=>{if(command==='state'&&hold){hold=false;await new Promise<void>(resolve=>release=resolve);}return f.call(command,params);},notify(){},openSession(){}}});dom.window.HTMLElement.prototype.scrollIntoView=function(){};
+  const document=dom.window.document;dom.window.eval(document.querySelector('script')!.textContent!);await until(async()=>document.querySelectorAll('.board-card').length,count=>count===1);
+  (document.querySelector('.board-card-title') as HTMLElement).click();await until(async()=>!(document.getElementById('detail') as HTMLElement).hidden,Boolean);
+  const filter=document.getElementById('taskFilter') as HTMLSelectElement;filter.value='approval';filter.dispatchEvent(new dom.window.Event('change'));await until(async()=>!(document.getElementById('inbox') as HTMLElement).hidden&&!(document.getElementById('inboxEmpty') as HTMLElement).hidden,Boolean);
+  hold=true;const search=document.getElementById('taskSearch') as HTMLInputElement;search.value='';search.dispatchEvent(new dom.window.Event('input'));await until(async()=>release,Boolean);
+  (document.getElementById('showActive') as HTMLElement).click();assert.equal((document.getElementById('create') as HTMLElement).hidden,true);release!();
+  await until(async()=>!(document.getElementById('detail') as HTMLElement).hidden&&document.getElementById('taskTitle')!.textContent==='Test task',Boolean);assert.equal((document.getElementById('detail') as HTMLElement).hidden,false);assert.equal((document.getElementById('create') as HTMLElement).hidden,true);assert.equal(filter.value,'active');
+ }finally{release?.();dom.window.close();}
+});
