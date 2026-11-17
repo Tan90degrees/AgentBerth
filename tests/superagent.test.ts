@@ -386,3 +386,29 @@ test('opening active tasks waits for an overlapping inbox refresh instead of sho
   await until(async()=>!(document.getElementById('detail') as HTMLElement).hidden&&document.getElementById('taskTitle')!.textContent==='Test task',Boolean);assert.equal((document.getElementById('detail') as HTMLElement).hidden,false);assert.equal((document.getElementById('create') as HTMLElement).hidden,true);assert.equal(filter.value,'active');
  }finally{release?.();dom.window.close();}
 });
+
+test('task forms and tool permissions are clickable in place, survive refresh, and never replay the coordinator',{timeout:45000},async t=>{
+  const f=await fixture(t),created=await f.create({objective:'acp-form-questions: ask for scope before implementation'});await until(()=>f.call('get',{id:created.id}),value=>value.interactions?.elicitations.length===1);
+  const dom=new JSDOM('<!doctype html><body>'+superagentView,{runScripts:'outside-only',pretendToBeVisual:true,url:'http://superagent.test'});
+  try{
+    let releaseRead:()=>void=()=>{},reading=false;const gate=new Promise<void>(resolve=>releaseRead=resolve);const call=async(command:string,params:Record<string,unknown>={})=>{if(command==='interaction'&&!reading){reading=true;await gate;}return f.call(command,params);};
+    Object.assign(dom.window,{TextEncoder,TextDecoder,agentberth:{ready:async()=>{},call,notify(){},openSession(){}}});dom.window.HTMLElement.prototype.scrollIntoView=function(){};dom.window.eval(dom.window.document.querySelector('script')!.textContent!);
+    const document=dom.window.document;await until(async()=>document.querySelector('[data-ticket-id="'+created.id+'"]'),Boolean);(document.querySelector('[data-ticket-id="'+created.id+'"]') as HTMLElement).click();await until(async()=>reading,Boolean);document.getElementById('boardButton')!.click();releaseRead();await new Promise(resolve=>setTimeout(resolve,80));(document.querySelector('[data-ticket-id="'+created.id+'"]') as HTMLElement).click();await until(async()=>document.querySelector('#agentInteractions .agent-input-card'),Boolean);
+    const plan=document.querySelector<HTMLDetailsElement>('.execution-event-card[data-status=plan]')!;assert.ok(plan);plan.open=true;plan.dispatchEvent(new dom.window.Event('toggle'));await until(async()=>plan.querySelector('.execution-plan')?.textContent,value=>value?.includes('收集实现范围'));
+    const form=document.querySelector<HTMLFormElement>('#agentInteractions form')!;for(const value of ['incremental','unit','ui'])form.querySelector<HTMLInputElement>('input[value="'+value+'"]')!.click();
+    const note=form.querySelector<HTMLInputElement>('input[aria-label="补充说明"]')!;note.value='KEEP_DRAFT';await new Promise(resolve=>setTimeout(resolve,2200));assert.equal(document.querySelector('#agentInteractions form'),form,'polling must retain the form node, selection and focus');assert.equal(note.value,'KEEP_DRAFT');assert.equal(form.querySelector<HTMLInputElement>('input[value=ui]')!.checked,true);
+    const before=(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));form.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
+    await until(async()=>document.querySelector('.agent-permission-card'),Boolean);const allow=Array.from(document.querySelectorAll<HTMLButtonElement>('.agent-permission-card button')).find(button=>button.textContent==='允许一次')!;allow.click();await until(()=>f.task(created.id),value=>value.phase==='needs_attention'&&value.waitingFor==='review');
+    const after=(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(after.filter(item=>item.method==='prompt'&&item.text.includes('你是 Superagent 的协调者')).length,before.filter(item=>item.method==='prompt'&&item.text.includes('你是 Superagent 的协调者')).length);assert.deepEqual(after.find(item=>item.method==='elicitation-results').outcomes[0].content,{strategy:'incremental',checks:['unit','ui'],count:2,enabled:false,note:'KEEP_DRAFT'});
+    await assert.rejects(f.call('respond',{id:created.id,sessionId:(await f.task(created.id)).coordinatorSession,requestId:'stale',kind:'elicitation',action:'accept',content:{}}),/切换阶段/);
+  }finally{dom.window.close();}
+});
+
+test('finishing the first refresh preserves navigation chosen while the task view was loading',async()=>{
+  const dom=new JSDOM('<!doctype html><body>'+superagentView,{runScripts:'outside-only',pretendToBeVisual:true,url:'http://superagent.test'}),errors:string[]=[];let release:()=>void=()=>{},reading=false;
+  const gate=new Promise<void>(resolve=>release=resolve),counts={all:0,approval:0,active:0,ended:0,attention:0};
+  try{
+    Object.assign(dom.window,{TextEncoder,TextDecoder,agentberth:{ready:async()=>{},call:async(command:string)=>{if(command==='state'){reading=true;await gate;return {projects:[],agents:[],tasks:[],counts,sources:[],pipelines:[]};}if(command==='tasks')return {tasks:[],counts,total:0};throw new Error('Unexpected call: '+command);},notify(message:string){errors.push(message)},openSession(){}}});dom.window.HTMLElement.prototype.scrollIntoView=function(){};dom.window.eval(dom.window.document.querySelector('script')!.textContent!);
+    await until(async()=>reading,Boolean);const document=dom.window.document;assert.equal(document.querySelector<HTMLButtonElement>('#new')!.disabled,true);document.getElementById('sourcesButton')!.click();release();await until(async()=>document.getElementById('pipelineCount')!.textContent,Boolean);await new Promise(resolve=>setTimeout(resolve,30));assert.equal(document.querySelector('main')!.dataset.view,'sources');assert.equal(document.querySelector<HTMLElement>('#sources')!.hidden,false);assert.equal(document.querySelector<HTMLElement>('#board')!.hidden,true);assert.deepEqual(errors,[]);
+  }finally{release();dom.window.close();}
+});

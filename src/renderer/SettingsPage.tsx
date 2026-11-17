@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_SETTINGS, TERMINAL_LIMIT_MAX, type Settings, type AgentDefinition } from '../shared/protocol';
 import { TerminalFields } from './TerminalFields';
 import { AboutCard } from './AboutCard';
-import { AppearanceControls } from './AppearanceControls';
+import { AppearanceControls,UiFontControls } from './AppearanceControls';
 import { PreviewSettings } from './PreviewSettings';
 import { SkillManager } from './SkillManager';
 import { SshConnections } from './SshConnections';
@@ -43,7 +43,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
     if (!entry) return null;
     const field = entry.field, canReset = field && JSON.stringify(draft[field]) !== JSON.stringify(DEFAULT_SETTINGS[field]);
     return <div key={id} className={`settings-entry${modified(entry) ? ' is-dirty' : ''}`} data-setting-id={id} hidden={!visible.has(id)}>
-      <div className="settings-entry-meta"><span>{settingsCategories.find(value => value.id === entry.category)?.label}</span><span className="settings-effect">{field ? modified(entry) ? '未保存' : '保存后应用' : id==='appearance'||id==='preview'?'立即生效':'管理'}</span>{canReset && <button type="button" className="text-button setting-reset" aria-label={`重置${entry.title}`} disabled={disabled} onClick={() => change({ ...draft, [field]: structuredClone(DEFAULT_SETTINGS[field]) })}>重置</button>}</div>
+      <div className="settings-entry-meta"><span>{settingsCategories.find(value => value.id === entry.category)?.label}</span><span className="settings-effect">{field ? modified(entry) ? '未保存' : '保存后应用' : id==='appearance'||id==='ui-font-family'||id==='preview'?'立即生效':'管理'}</span>{canReset && <button type="button" className="text-button setting-reset" aria-label={`重置${entry.title}`} disabled={disabled} onClick={() => change({ ...draft, [field]: structuredClone(DEFAULT_SETTINGS[field]) })}>重置</button>}</div>
       {children}
     </div>;
   };
@@ -78,6 +78,7 @@ export function SettingsPage({ projects, currentProjectId, connected, apiVersion
           setSaveState('pending');try{if(await onSave(draft)){setSaved(true);setSaveState('success');}else setSaveState('error');}catch(reason){setSaveState('error');onError(String(reason));}
         }}>
           {item('appearance', <AppearanceControls />)}
+          {item('ui-font-family', <UiFontControls />)}
           {item('ui-font', <><label>界面字号<select aria-label="界面字号" value={String(draft.uiFontScale ?? 1)} disabled={disabled || apiVersion < 55} onChange={event=>change({...draft,uiFontScale:Number(event.target.value)})}>
             <option value="0.85">小 · 85%</option><option value="0.925">较小 · 92%</option><option value="1">标准</option><option value="1.075">较大 · 108%</option><option value="1.15">大 · 115%</option><option value="1.25">特大 · 125%</option>
           </select></label>{apiVersion < 55 && <span role="status">更新后台后可用</span>}</>)}

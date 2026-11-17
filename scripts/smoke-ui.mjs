@@ -55,6 +55,17 @@ try{
   }
   await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('navigation',{name:'设置分类',exact:true}).getByRole('button',{name:'外观',exact:true}).click();
+  for(const [label,palette,bg] of [['液态玻璃','glass','1111/1c1c/2b2b'],['Claude 风格','claude','2525/2323/1f1f'],['蓝青','ocean','1717/1e1e/2929'],['经典中性','classic','2121/2121/2121']]){
+    await page.getByRole('radio',{name:label,exact:true}).click();await page.waitForFunction(palette=>document.documentElement.dataset.palette===palette,palette);
+    await until(()=>themeSnapshot().then(value=>value.snapshot.includes('BG_'+bg)&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
+    assert.equal((await rpc('state')).sessions.find(value=>value.id===themeSession.id).latestRun.id,themeRun.id);
+    if(palette==='glass'){await openNotifications(page);const popup=page.getByRole('region',{name:'通知与告警',exact:true});await popup.waitFor();assert.equal(await popup.evaluate(node=>{const box=node.getBoundingClientRect();return node.contains(document.elementFromPoint(box.x+box.width/2,box.y+20));}),true,'Glass toolbar must not trap notifications below workspace content');await page.getByRole('button',{name:'收起通知中心',exact:true}).click();}
+    await page.screenshot({path:`test-results/settings-${palette}.png`,animations:'disabled'});
+  }
+  await page.getByLabel('界面字体',{exact:true}).selectOption('custom');await page.getByLabel('自定义界面字体',{exact:true}).fill('Microsoft YaHei');
+  await page.reload();await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('navigation',{name:'设置分类',exact:true}).getByRole('button',{name:'外观',exact:true}).click();
+  assert.equal(await page.getByLabel('界面字体',{exact:true}).inputValue(),'custom');assert.equal(await page.getByLabel('自定义界面字体',{exact:true}).inputValue(),'Microsoft YaHei');assert.equal(await page.locator('html').getAttribute('data-palette'),'classic');
+  await page.getByRole('button',{name:'恢复系统字体',exact:true}).click();
   await page.getByRole('radio',{name:'跟随系统',exact:true}).click();
   for(const [theme,bg] of [['light','ffff/ffff/ffff'],['dark','2121/2121/2121']]){
     await page.emulateMedia({colorScheme:theme});await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);

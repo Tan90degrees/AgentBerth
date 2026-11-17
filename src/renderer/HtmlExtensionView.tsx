@@ -5,7 +5,7 @@ import { pluginNoticeSchema, type ExtensionInfo, type PluginNotice } from '../sh
 // view-document.ts applies them on :root, so bundled plugin CSS can share the
 // main window's type scale, radii, motion and colors.
 const PLUGIN_THEME_TOKENS = [
-  '--color-scheme', '--font-sans', '--font-mono',
+  '--palette', '--color-scheme', '--font-sans', '--font-mono',
   // --fs-* are calc() expressions that reference --ui-font-scale, so the scale
   // itself must travel into the iframe or every one of them becomes invalid.
   '--ui-font-scale',
@@ -15,7 +15,7 @@ const PLUGIN_THEME_TOKENS = [
   '--motion-fast', '--motion-base', '--motion-slow', '--ease-out',
   '--bg', '--sidebar', '--surface', '--surface-muted', '--panel', '--input', '--hover', '--selected',
   '--text', '--text-secondary', '--text-muted', '--border', '--primary', '--primary-hover', '--on-primary',
-  '--focus', '--link', '--success', '--success-soft', '--success-border', '--danger', '--danger-soft', '--danger-border',
+  '--accent', '--accent-soft', '--accent-border', '--focus', '--link', '--success', '--success-soft', '--success-border', '--danger', '--danger-soft', '--danger-border',
   '--warning', '--warning-soft', '--warning-border', '--overlay', '--shadow-color', '--selection', '--scrollbar', '--terminal',
 ];
 function pluginTheme(): Record<string, string> {
