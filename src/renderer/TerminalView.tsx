@@ -10,8 +10,7 @@ import type { Attachment, TerminalEvent, WindowsPty } from '../shared/protocol';
 import { inputChunks, terminalDimensions } from '../shared/desktop';
 import { useTerminalActions } from './TerminalActions';
 import { writeTerminalEvent } from '../shared/terminal-stream';
-import { terminalThemes } from '../shared/appearance';
-import { useAppearance } from './appearance';
+import { useTerminalTheme } from './appearance';
 import { bindTerminalPaths } from './terminal-paths';
 import { ResizeScheduler } from './terminal-resize';
 
@@ -44,8 +43,8 @@ function fitTerminal(terminal: Terminal, fit: FitAddon) {
 export const TerminalView = memo(function TerminalView({ sessionId, remoteSession = false, inputEnabled = true, fontSize = 14, autoFocus = true, binaryMouse = true, windowsPty, orderedResize = true, onError, onOpenPath, onFocusReady }: { sessionId: string; remoteSession?: boolean; inputEnabled?: boolean; onOpenPath?: (path: string) => void; onFocusReady?:()=>void; binaryMouse?: boolean; orderedResize?: boolean; fontSize?: number; autoFocus?: boolean; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const allowedInput = useRef(inputEnabled); allowedInput.current = inputEnabled;
   const host = useRef<HTMLDivElement>(null);
-  const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
-  useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
+  const theme=useTerminalTheme(),palette=useRef(theme),instance=useRef<Terminal|null>(null);palette.current=theme;
+  useEffect(()=>{if(instance.current){instance.current.options.theme=theme;instance.current.refresh(0,instance.current.rows-1);}},[theme]);
   const errorHandler = useRef(onError);
   errorHandler.current = onError;
   const focusReadyHandler=useRef(onFocusReady);focusReadyHandler.current=onFocusReady;
@@ -176,8 +175,8 @@ export const TerminalView = memo(function TerminalView({ sessionId, remoteSessio
 
 export function OutputView({ text, fontSize = 14, windowsPty, onError }: { text: string; fontSize?: number; windowsPty?: WindowsPty; onError: (error: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
-  const appearance=useAppearance(),palette=useRef(terminalThemes[appearance]),instance=useRef<Terminal|null>(null);palette.current=terminalThemes[appearance];
-  useEffect(()=>{if(instance.current){instance.current.options.theme=terminalThemes[appearance];instance.current.refresh(0,instance.current.rows-1);}},[appearance]);
+  const theme=useTerminalTheme(),palette=useRef(theme),instance=useRef<Terminal|null>(null);palette.current=theme;
+  useEffect(()=>{if(instance.current){instance.current.options.theme=theme;instance.current.refresh(0,instance.current.rows-1);}},[theme]);
   const errorHandler = useRef(onError); errorHandler.current = onError;
   const { bind, setReady, controls } = useTerminalActions(onError, true, !!windowsPty);
   useEffect(() => {

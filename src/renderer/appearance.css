@@ -1,4 +1,4 @@
-/* Theme colors, typography scale and motion tokens live in tokens.css. This file only refines components. */
+/* Shared colors live in ui-palettes.ts; typography and motion in tokens.css. */
 .eyebrow { display: none; }
 button { border-radius: 8px; }
 button:hover:not(:disabled) { background: var(--hover); }
@@ -157,3 +157,14 @@ kbd { font-family: inherit; font-size: var(--fs-2xs); line-height: 1.6; padding:
 .quick-link kbd, .welcome-shortcuts-link kbd { background: transparent; color: var(--text-muted); }
 .success-toast button { color: var(--text-secondary); }
 .success-toast .toast-copy { color: var(--text); }
+
+.palette-options { display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;width:100%; }
+.palette-option { display:flex;align-items:center;gap:9px;min-height:56px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);color:var(--text);text-align:left;font-size:var(--fs-sm); }
+.palette-option.selected { border-color:var(--focus);box-shadow:0 0 0 1px var(--focus);background:var(--accent-soft); }
+.palette-option:focus-visible { outline:2px solid var(--focus);outline-offset:3px; }
+.palette-swatch { display:flex;align-items:center;gap:3px;padding:5px;border:1px solid;border-radius:7px;flex-shrink:0; }
+.palette-swatch i { width:10px;height:22px;border-radius:3px; }
+.ui-font-controls { display:grid;gap:12px; }
+.ui-font-controls label { display:grid;gap:6px; }
+.ui-font-controls .text-button { justify-self:start; }
+.ui-font-sample { border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-muted);padding:16px;font-size:var(--fs-lg);overflow-wrap:anywhere; }

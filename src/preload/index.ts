@@ -32,7 +32,7 @@ const api: DesktopApi = {
   saveSshConnection: (config, id, secret = {}, remember = false) => ipcRenderer.invoke('berth:saveSshConnection', config, id, secret, remember),
   deleteSshConnection: id => ipcRenderer.invoke('berth:deleteSshConnection', id),
   chooseSshKey: () => ipcRenderer.invoke('berth:sshKey'),
-  setAppearance: (mode,resolved) => ipcRenderer.invoke('berth:appearance', mode,resolved),
+  setAppearance: (mode,resolved,palette) => ipcRenderer.invoke('berth:appearance', mode,resolved,palette),
   mcpConfig: provider => ipcRenderer.invoke('berth:mcpConfig', provider),
   appInfo: () => ipcRenderer.invoke('berth:appInfo'),
   openDataDirectory: () => ipcRenderer.invoke('berth:dataDirectory'),

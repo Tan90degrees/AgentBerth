@@ -134,7 +134,7 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
   const runtime = runtimeFile(directory);
   if (runtime) {
     let candidate: DaemonConnection | null = null;
-    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!([44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62].includes(state.apiVersion)&&API_VERSION===63))throw new Error('运行中的后台协议与当前版本不兼容；请从托盘完整退出旧版后重新打开，保留原数据目录。'); return candidate; }
+    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!([44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63].includes(state.apiVersion)&&API_VERSION===64))throw new Error('运行中的后台协议与当前版本不兼容；请从托盘完整退出旧版后重新打开，保留原数据目录。'); return candidate; }
     catch (error) {
       candidate?.close();
       if(String(error).includes('运行中的后台版本与当前架构不同'))throw error;
