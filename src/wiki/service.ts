@@ -213,7 +213,7 @@ export class WikiService {
     while(this.runningJobs<this.scheduler.limit&&this.queue.length){
       const job=this.queue.shift()!,task=this.tasks.get(job.id)!;
       if(task.status==='cancelled')continue;
-      if(this.signal.aborted){task.status='failed';task.error='插件已停止';task.finishedAt=now();this.persistTasks();continue;}
+      if(this.signal.aborted){task.status='failed';task.error='插件已停止';task.manualRetry=true;task.finishedAt=now();this.persistTasks();continue;}
       this.runningJobs++;this.draining=true;
       void this.runJob(job,task).finally(()=>{this.runningJobs--;this.draining=this.runningJobs>0;this.drain();});
     }
@@ -223,7 +223,7 @@ export class WikiService {
     const controller=new AbortController();this.taskControllers.set(task.id,controller);
     const operationSignal=AbortSignal.any([this.signal,controller.signal]);this.persistTasks();
     try{task.result=await this.operationContext.run(operationSignal,()=>job.run(task));if(operationSignal.aborted)throw new Error('任务已取消');task.status='done';task.progress='已完成';}
-    catch(error){task.status=controller.signal.aborted?'cancelled':'failed';task.error=String(error instanceof Error?error.message:error).slice(0,500);task.progress=controller.signal.aborted?'已取消':'失败';if(!controller.signal.aborted)job.onError?.();}
+    catch(error){task.status=controller.signal.aborted?'cancelled':'failed';if(operationSignal.aborted){task.manualRetry=true;if(task.retry?.action==='compile')this.pausedSources.add(String(task.retry.params.sourceId));}task.error=String(error instanceof Error?error.message:error).slice(0,500);task.progress=controller.signal.aborted?'已取消':'失败';if(!controller.signal.aborted)job.onError?.();}
     finally{
       this.taskControllers.delete(task.id);task.finishedAt=now();this.persistTasks();
       for(const [sourceId,id] of this.compiling)if(id===task.id)this.compiling.delete(sourceId);

@@ -67,3 +67,12 @@ test('automatic compilation fills configured slots and cancelling sources preven
  await service.addSource({title:'first',text:'first full source'});await service.addSource({title:'second',text:'second full source'});service.tick();await until(()=>calls===2);assert.equal(calls,2);assert.equal(service.taskList().filter(task=>task.status==='running').length,2);
  service.taskList().forEach(task=>service.cancelTask(task.id));await until(()=>{try{service.assertWorkspaceIdle();return true;}catch{return false;}});service.tick();assert.equal(calls,2);assert.ok(service.taskList().every(task=>task.status==='cancelled'));
 });
+
+
+test('stopping the plugin persists interrupted compile as manual retry instead of replaying paid requests',async t=>{
+ let calls=0;const options={...config,autoCompile:true,llmConcurrency:2};
+ const {store,service,controller}=fixture(t,options,async(_url,init)=>{calls++;return new Promise((_resolve,reject)=>init!.signal!.addEventListener('abort',()=>reject(new Error('plugin stopped')),{once:true}));});
+ await service.addSource({title:'pending compile',text:'full retained source'});service.tick();await until(()=>calls===1);controller.abort();await until(()=>service.taskList().every(task=>task.status==='failed'&&task.manualRetry===true));
+ const restarted=new AbortController();t.after(()=>restarted.abort());let replays=0;
+ const reopened=new WikiService({store:new WikiStore(store.root),config:options,signal:restarted.signal,fetchImpl:async()=>{replays++;return response();}});reopened.tick();await new Promise(resolve=>setImmediate(resolve));assert.equal(replays,0);assert.equal(reopened.listSources().length,1);
+});
