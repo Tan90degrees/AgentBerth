@@ -387,3 +387,12 @@ test('task forms and tool permissions are clickable in place, survive refresh, a
     await assert.rejects(f.call('respond',{id:created.id,sessionId:(await f.task(created.id)).coordinatorSession,requestId:'stale',kind:'elicitation',action:'accept',content:{}}),/切换阶段/);
   }finally{dom.window.close();}
 });
+
+test('finishing the first refresh preserves navigation chosen while the task view was loading',async()=>{
+  const dom=new JSDOM('<!doctype html><body>'+superagentView,{runScripts:'outside-only',pretendToBeVisual:true,url:'http://superagent.test'}),errors:string[]=[];let release:()=>void=()=>{},reading=false;
+  const gate=new Promise<void>(resolve=>release=resolve),counts={all:0,approval:0,active:0,ended:0,attention:0};
+  try{
+    Object.assign(dom.window,{TextEncoder,TextDecoder,agentberth:{ready:async()=>{},call:async(command:string)=>{if(command==='state'){reading=true;await gate;return {projects:[],agents:[],tasks:[],counts,sources:[],pipelines:[]};}if(command==='tasks')return {tasks:[],counts,total:0};throw new Error('Unexpected call: '+command);},notify(message:string){errors.push(message)},openSession(){}}});dom.window.HTMLElement.prototype.scrollIntoView=function(){};dom.window.eval(dom.window.document.querySelector('script')!.textContent!);
+    await until(async()=>reading,Boolean);const document=dom.window.document;assert.equal(document.querySelector<HTMLButtonElement>('#new')!.disabled,true);document.getElementById('sourcesButton')!.click();release();await until(async()=>document.getElementById('pipelineCount')!.textContent,Boolean);await new Promise(resolve=>setTimeout(resolve,30));assert.equal(document.querySelector('main')!.dataset.view,'sources');assert.equal(document.querySelector<HTMLElement>('#sources')!.hidden,false);assert.equal(document.querySelector<HTMLElement>('#board')!.hidden,true);assert.deepEqual(errors,[]);
+  }finally{release();dom.window.close();}
+});
