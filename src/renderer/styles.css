@@ -2682,7 +2682,8 @@ textarea:focus-visible {
 /* One context row; tabs below it only navigate the current content. */
 .workbench-header{height:44px;min-height:44px;padding:0 16px;gap:12px;flex-shrink:0}
 .workbench-identity{display:flex;align-items:center;flex:1;gap:8px;min-width:0;overflow:hidden}
-.workbench-identity h1,.workbench-identity h2{margin:0;padding:0 2px 0 0;font-size:13px;line-height:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+/* Reserve ink overhang as well as advance width, including variable and fallback fonts. */
+.workbench-identity h1,.workbench-identity h2{margin:0;padding:0 .4em 0 0;font-size:13px;line-height:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .workbench-identity h1{font-weight:600;max-width:240px;flex:0 1 auto}
 .workbench-identity h2{font-weight:500;flex:0 1 auto;max-width:360px;color:var(--text-secondary)}
 .workbench-separator{color:var(--text-muted);flex-shrink:0}
