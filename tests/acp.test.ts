@@ -34,6 +34,16 @@ test('ACP sends once, streams structured output, switches models and restores th
   await f.connection.rpc('start',{sessionId:f.session.id,resume:true,cols:100,rows:30});const resumed=await f.snapshot();assert.equal(resumed.nativeSessionId,first.nativeSessionId);assert.equal(resumed.events.length,count);assert.ok(!resumed.events.some(event=>event.text.includes('REMOTE_REPLAY')));
   const log=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(log.filter(item=>item.method==='prompt').length,2);assert.equal(log.filter(item=>item.method==='load').length,1);
 });
+
+test('ACP answers structured forms on the original request and keeps concurrent permission separate',async t=>{
+  const f=await fixture(t);await f.send('elicitation-and-permission');const pending=await until(f.snapshot,value=>value.elicitations?.length===1&&value.permissions.length===1),question=pending.elicitations![0],params={sessionId:f.session.id,requestId:question.id,action:'accept'};
+  await assert.rejects(f.connection.rpc('acpElicitation',{...params,content:{strategy:'渐进修改',checks:['unit'],count:2,enabled:false}}),/有效选项/);assert.equal((await f.snapshot()).elicitations?.length,1);
+  await f.connection.rpc('acpElicitation',{...params,content:{strategy:'incremental',checks:['unit','ui'],count:2,enabled:false}});assert.equal((await f.snapshot()).phase,'permission');assert.equal((await f.snapshot()).permissions.length,1);
+  await assert.rejects(f.connection.rpc('acpElicitation',{...params,content:{}}),/已结束/);
+  await f.connection.rpc('acpPermission',{sessionId:f.session.id,permissionId:pending.permissions[0].id,optionId:'reject'});await until(f.snapshot,value=>value.phase==='ready');
+  const records=(await readFile(path.join(f.dir,'agent/calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)),reply=records.find(item=>item.method==='elicitation-results');assert.deepEqual(reply.outcomes[0],{action:'accept',content:{strategy:'incremental',checks:['unit','ui'],count:2,enabled:false}});assert.equal(reply.outcomes[1].outcome.optionId,'reject');assert.equal(records.filter(item=>item.method==='prompt').length,1);
+  await f.send('elicitation');await until(f.snapshot,value=>!!value.elicitations?.length);await f.connection.rpc('acpCancel',{sessionId:f.session.id});await until(f.snapshot,value=>value.phase==='ready');assert.equal((await f.snapshot()).elicitations?.length,0);
+});
 test('ACP relays permissions, rejects foreign options and cancels every pending permission once',async t=>{
   const f=await fixture(t);await f.send('permission');const waiting=await until(f.snapshot,value=>value.permissions.length===1);
   await assert.rejects(f.connection.rpc('acpPermission',{sessionId:f.session.id,permissionId:waiting.permissions[0].id,optionId:'foreign'}),/无效的授权/);

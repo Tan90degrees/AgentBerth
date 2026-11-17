@@ -15,7 +15,7 @@ const PLUGIN_THEME_TOKENS = [
   '--motion-fast', '--motion-base', '--motion-slow', '--ease-out',
   '--bg', '--sidebar', '--surface', '--surface-muted', '--panel', '--input', '--hover', '--selected',
   '--text', '--text-secondary', '--text-muted', '--border', '--primary', '--primary-hover', '--on-primary',
-  '--focus', '--link', '--success', '--success-soft', '--success-border', '--danger', '--danger-soft', '--danger-border',
+  '--accent', '--accent-soft', '--accent-border', '--focus', '--link', '--success', '--success-soft', '--success-border', '--danger', '--danger-soft', '--danger-border',
   '--warning', '--warning-soft', '--warning-border', '--overlay', '--shadow-color', '--selection', '--scrollbar', '--terminal',
 ];
 function pluginTheme(): Record<string, string> {

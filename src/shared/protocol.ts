@@ -10,7 +10,7 @@ const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['
 const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
 const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 62;
+export const API_VERSION = 63;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
@@ -143,6 +143,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({id,method:z.literal('acpSend'),params:z.object({sessionId:id,requestId:id,text:z.string().trim().min(1).max(40000)}).strict()}),
   z.object({id,method:z.literal('acpCancel'),params:z.object({sessionId:id}).strict()}),
   z.object({id,method:z.literal('acpPermission'),params:z.object({sessionId:id,permissionId:z.string().min(1).max(200),optionId:z.string().max(500).nullable()}).strict()}),
+  z.object({id,method:z.literal('acpElicitation'),params:z.object({sessionId:id,requestId:z.string().min(1).max(200),action:z.enum(['accept','decline','cancel']),content:z.record(z.string(),z.union([z.string().max(40000),z.number().finite(),z.boolean(),z.array(z.string().max(40000)).max(200)])).optional()}).strict()}),
   z.object({id,method:z.literal('acpConfigure'),params:z.object({sessionId:id,configId:z.string().min(1).max(200),value:z.string().max(1000)}).strict()}),
   z.object({id,method:z.literal('acpAuthenticate'),params:z.object({sessionId:id,methodId:z.string().min(1).max(500)}).strict()}),
   z.object({id,method:z.literal('acpProbe'),params:acpConfigSchema}),

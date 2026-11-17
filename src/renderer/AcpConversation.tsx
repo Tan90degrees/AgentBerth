@@ -4,6 +4,8 @@ import type { Session, Method } from '../shared/protocol';
 import { AsyncButton } from './AsyncButton';
 import {AcpEventView as Message} from './AcpEventView';
 import {captureHistoryAnchor,restoreHistoryAnchor} from './history-scroll';
+import {AcpElicitationForm} from './AcpElicitation';
+import {agentInputStyle} from '../shared/agent-input-style';
 import {conversationGroups} from '../shared/acp-presentation';
 
 const phases={disconnected:'未连接',connecting:'正在连接',ready:'就绪',running:'正在执行',permission:'等待你的授权',error:'需要处理'};
@@ -20,7 +22,7 @@ export function AcpConversation({session,connected,onOpenFile,task}:{session:Ses
     return()=>{openerGeneration.current++;off();};
   },[session.id,connected,retryNonce]);
   const groups=useMemo(()=>{const referenced=new Set((snapshot?.events??[]).flatMap(event=>Array.isArray(event.data?.content)?(event.data!.content as any[]).filter(item=>item?.type==='terminal').map(item=>item.terminalId):[]));return conversationGroups(snapshot?.events??[]).filter(events=>events[0].kind!=='terminal'||!referenced.has(events[0].data?.terminalId));},[snapshot?.events]);
-  useEffect(()=>{if(bottom.current&&scroll.current){scroll.current.scrollTo({top:scroll.current.scrollHeight,behavior:'instant'});previousTop.current=scroll.current.scrollTop;}},[snapshot?.events,snapshot?.permissions]);
+  useEffect(()=>{if(bottom.current&&scroll.current){scroll.current.scrollTo({top:scroll.current.scrollHeight,behavior:'instant'});previousTop.current=scroll.current.scrollTop;}},[snapshot?.events,snapshot?.permissions,snapshot?.elicitations]);
   useLayoutEffect(()=>{if(prependAnchor.current&&scroll.current){restoreHistoryAnchor(scroll.current,prependAnchor.current);previousTop.current=scroll.current.scrollTop;prependAnchor.current=null;olderRequest.current=null;setLoadingOlder(false);}},[snapshot?.events]);
   async function loadOlder(){
     const before=snapshot?.events[0]?.sequence,box=scroll.current;if(!connected||initialLoading||loadError||!hasOlder||olderRequest.current||!before||!box)return;
@@ -42,7 +44,8 @@ export function AcpConversation({session,connected,onOpenFile,task}:{session:Ses
     catch(error){setError(String(error));}finally{setPending(false);}
   }
   return <section className="acp-conversation" aria-label="ACP 对话" aria-busy={initialLoading}>
-    <header className="acp-toolbar">{snapshot?.phase==='connecting'&&<AsyncButton className="subtle" disabled={!ready} onError={setError} onAction={()=>call('stop')}>取消连接</AsyncButton>}<span className="badge" role="status">ACP · {!connected?'后台未连接':initialLoading?(snapshot?'正在同步…':'读取记录…'):loadError?'记录未同步':snapshot?phases[snapshot.phase]:'记录不可用'}</span>
+    <style>{agentInputStyle}</style>
+    <header className="acp-toolbar">{snapshot?.phase==='connecting'&&<AsyncButton className="subtle" disabled={!ready} onError={setError} onAction={()=>call('stop')}>取消连接</AsyncButton>}<span className="badge" role="status">ACP · {!connected?'后台未连接':initialLoading?(snapshot?'正在同步…':'读取记录…'):loadError?'记录未同步':snapshot?(snapshot.elicitations?.length?'等待你的回答':phases[snapshot.phase]):'记录不可用'}</span>
       {snapshot?.nativeSessionId&&<small title={snapshot.nativeSessionId}>{snapshot.nativeSessionId.slice(0,16)}</small>}
       {snapshot?.modes&&!snapshot.configOptions?.some(option=>option.id==='mode'||option.category==='mode')&&<label>模式<select aria-label="ACP 会话模式" disabled={!ready||snapshot.phase!=='ready'||pending} value={snapshot.modes.currentModeId} onChange={event=>void configure('mode',event.target.value)}>{snapshot.modes.availableModes.map(mode=><option key={mode.id} value={mode.id}>{mode.name}</option>)}</select></label>}
       {snapshot?.configOptions?.map(option=>{const choices=acpOptionChoices(option);return <label key={option.id}>{option.name}<select aria-label={'ACP '+option.name} disabled={!ready||snapshot.phase!=='ready'||pending||!choices.length} value={option.currentValue??''} onChange={event=>void configure(option.id,event.target.value)}>{choices.length?choices.map(item=><option key={item.value} value={item.value}>{item.name}</option>):<option value={option.currentValue??''}>暂无可选项</option>}</select></label>;})}
@@ -59,7 +62,10 @@ export function AcpConversation({session,connected,onOpenFile,task}:{session:Ses
     {(error||snapshot?.error)&&<p role="alert" className="form-error">{error||snapshot?.error}</p>}
     {!task&&(snapshot?.phase==='error'||snapshot?.phase==='disconnected')&&<AsyncButton className="subtle" disabled={!ready} onError={setError} onAction={async()=>{await call('stop');await call('start',{cols:100,rows:30,resume:true});}}>{snapshot?.phase==='disconnected'?'连接 Agent':'重新连接 Agent'}</AsyncButton>}
     {snapshot?.phase==='error'&&snapshot.authMethods?.map(method=><AsyncButton key={method.id} className="subtle" disabled={!ready} onError={setError} onAction={()=>call('acpAuthenticate',{methodId:method.id})}>{'登录：'+method.name}</AsyncButton>)}
+    <div className="acp-interactions" hidden={!snapshot?.elicitations?.length&&!snapshot?.permissions.length}>
+    {snapshot?.elicitations?.map(request=><AcpElicitationForm key={request.id} request={request} sessionId={session.id} disabled={!ready} onError={setError}/>)}
     {snapshot?.permissions.map(permission=><section key={permission.id} className="acp-permission" role="alert" aria-label="Agent 授权请求"><strong>{permission.title}</strong><div>{permission.options.map(option=><AsyncButton key={option.optionId} className={option.kind.startsWith('allow')?'primary':'subtle'} disabled={!ready} onError={setError} onAction={()=>call('acpPermission',{permissionId:permission.id,optionId:option.optionId})}>{option.name}</AsyncButton>)}<AsyncButton className="subtle" disabled={!ready} onError={setError} onAction={()=>call('acpPermission',{permissionId:permission.id,optionId:null})}>取消授权</AsyncButton></div></section>)}
+    </div>
     {task?<section className="acp-task-route" aria-label="Superagent 任务操作"><div><strong>{task.title}</strong><span>{task.label}</span></div><button className="primary" onClick={task.onOpen}>返回任务并回答</button></section>:<form className="acp-composer" onSubmit={event=>{event.preventDefault();void send();}}>{text.startsWith('/')&&!text.includes(' ')&&!!snapshot?.availableCommands?.length&&<div className="acp-command-menu" aria-label="Agent 命令">{snapshot.availableCommands.filter(command=>('/'+command.name).startsWith(text)).slice(0,8).map(command=><button type="button" key={command.name} onClick={()=>setText('/'+command.name+' ')}><strong>/{command.name}</strong><span>{command.description}</span></button>)}</div>}<textarea aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={text} maxLength={40000} disabled={!ready||pending||!['ready','running','permission'].includes(snapshot?.phase??'')} onChange={event=>{setText(event.target.value);if(request.current?.text!==event.target.value.trim())request.current=null;}} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();void send();}}}/><footer>{/* Enter 发送，Shift+Enter 换行；键盘说明见快捷键面板。 */}{sending?<AsyncButton className="subtle" disabled={!ready} onError={setError} onAction={()=>call('acpCancel')}>停止任务</AsyncButton>:<button className="primary" disabled={!ready||!text.trim()||pending||snapshot?.phase!=='ready'}>发送</button>}</footer></form>}
   </section>;
 }
