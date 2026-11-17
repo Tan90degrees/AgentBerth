@@ -2,7 +2,7 @@ import type { Context } from 'cordis';
 import type { DaemonServer, Client } from '../daemon/server';
 import type { Request } from '../shared/protocol';
 import {directory} from '../daemon/paths';
-export const methods=['acpSnapshot','acpSend','acpCancel','acpPermission','acpConfigure','acpAuthenticate','acpProbe','acpOptions','acpTerminal'] as const;
+export const methods=['acpSnapshot','acpSend','acpCancel','acpPermission','acpElicitation','acpConfigure','acpAuthenticate','acpProbe','acpOptions','acpTerminal'] as const;
 export function mount(ctx:Context,server:DaemonServer){
   const host=server.acpCorePort();
   server.registerCoreRoutes(ctx,methods,async(request:Request,_client:Client)=>{
@@ -25,6 +25,7 @@ export function mount(ctx:Context,server:DaemonServer){
       }
       case 'acpCancel':return host.acp.cancel(id);
       case 'acpPermission':return host.acp.permission(id,request.params.permissionId,request.params.optionId);
+      case 'acpElicitation':return host.acp.elicitation(id,request.params.requestId,request.params.action,request.params.content);
       case 'acpConfigure':return host.acp.configure(id,request.params.configId,request.params.value);
       case 'acpAuthenticate':return host.acp.authenticate(id,request.params.methodId);
       default:throw new Error('ACP 接口无效');

@@ -7,7 +7,7 @@ test('core settings search exposes host capabilities but not optional extension 
   const entries=settingsCatalog([{name:'Aider Dev'} as AgentDefinition],40);
   const ids=(query:string)=>filterSettings(entries,query,'all').map(entry=>entry.id);
   assert.deepEqual(ids('PWSH'),['shell']);
-  assert.deepEqual(ids('字体'),['preview','terminal-font']);
+  assert.deepEqual(ids('字体'),['ui-font-family','preview','terminal-font']);
   assert.deepEqual(ids('Aider Dev'),[]);
   assert.deepEqual(ids('桌宠'),[]);
   assert.deepEqual(ids('预览'),['preview']);
@@ -22,9 +22,9 @@ test('core settings search exposes host capabilities but not optional extension 
 });
 test('default workbench settings remain in the core catalog',()=>{
   const entries=settingsCatalog([],40);
-  assert.deepEqual(filterSettings(entries,'','common').map(value=>value.id),['appearance','ui-font','default-agent','skills','preview','shell','terminal-font','local-limit']);
+  assert.deepEqual(filterSettings(entries,'','common').map(value=>value.id),['appearance','ui-font-family','ui-font','default-agent','skills','preview','shell','terminal-font','local-limit']);
   assert.deepEqual(filterSettings(entries,'','terminal').map(value=>value.id),['shell','terminal-font','local-limit']);
-  assert.deepEqual(filterSettings(entries,'','all').map(value=>value.id),['appearance','ui-font','default-agent','skills','preview','ssh-limit','connections','mcp','shell','terminal-font','local-limit','backend','about']);
+  assert.deepEqual(filterSettings(entries,'','all').map(value=>value.id),['appearance','ui-font-family','ui-font','default-agent','skills','preview','ssh-limit','connections','mcp','shell','terminal-font','local-limit','backend','about']);
   assert.equal(new Set(entries.map(value=>value.id)).size,entries.length);
   assert.ok(entries.every(entry=>!['theme','pet','plugins'].includes(entry.id)));
 });

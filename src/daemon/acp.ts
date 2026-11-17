@@ -1,15 +1,18 @@
-import { createHash } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { acpOptionChoices,acpModelOption, type AcpConfig, type AcpEvent, type AcpPermission, type AcpSnapshot,type AcpModels,type AcpTerminal } from '../shared/acp';
 import type { AgentDefinition, Run, Session, ServerEvent } from '../shared/protocol';
 import type { Store } from './store';
 import { AcpTransport, AcpRpcError } from './acp-transport';
 import { AcpClientTools } from './acp-client-tools';
 import type {AgentActivity} from '../shared/pet';
+import {elicitationForm,elicitationError,type AcpElicitation,type ElicitationContent} from '../shared/acp-elicitation';
+import {validateElicitationPatterns} from './elicitation-patterns';
 
 type Metadata=Omit<AcpSnapshot,'events'|'before'|'hasMore'>;
 interface Live {
   session:Session;run:Run;cwd:string;definition:AgentDefinition;transport:AcpTransport|null;tools:AcpClientTools;
   state:Metadata;permissions:Map<string,{value:AcpPermission;resolve:(value:unknown)=>void}>;
+  elicitations:Map<string,{value:AcpElicitation;resolve:(value:unknown)=>void}>;
   stopping:boolean;cancelled:boolean;fingerprint:string;serial:Promise<unknown>;ending?:Promise<void>;
   toolStates:Map<string,{turnId:string|null;data:Record<string,any>}>;
 }
@@ -25,13 +28,14 @@ export class AcpSessions {
     return sessions.filter(session=>!session.remote&&session.latestRun&&ids.has(session.agent)).map(session=>{
       const state=this.live.get(session.id)?.state??this.store.acpState(session.id),phase=state.phase,connected=this.live.has(session.id);
       const status=state.error||phase==='error'?'error':connected&&phase==='permission'?'waiting':connected&&(phase==='running'||phase==='connecting')?'working':state.lastTurnStatus==='completed'?'completed':!connected&&(phase==='running'||phase==='permission'||state.lastTurnStatus==='interrupted')?'unknown':'idle';
-      return {id:session.id,title:session.title,projectId:session.projectId,targetSessionId:session.id,managedSessionIds:[],kind:'acp',status,label:status==='waiting'?'等待你的授权':status==='working'?(phase==='connecting'?'正在连接 ACP':'Agent 正在执行'):status==='completed'?'本轮已完成':status==='error'?'ACP 会话异常':status==='unknown'?'上次任务已中断':'ACP 已就绪',updatedAt:Date.parse(session.latestRun!.startedAt)};
+      return {id:session.id,title:session.title,projectId:session.projectId,targetSessionId:session.id,managedSessionIds:[],kind:'acp',status,label:status==='waiting'?(state.elicitations?.length?'等待你的回答':'等待你的授权'):status==='working'?(phase==='connecting'?'正在连接 ACP':'Agent 正在执行'):status==='completed'?'本轮已完成':status==='error'?'ACP 会话异常':status==='unknown'?'上次任务已中断':'ACP 已就绪',updatedAt:Date.parse(session.latestRun!.startedAt)};
     });
   }
   targets(){return [...this.live.values()].flatMap(value=>value.transport?.pid?[{sessionId:value.session.id,projectId:value.session.projectId,runId:value.run.id,pid:value.transport.pid}]:[]);}
   private publish(value:Live){
     value.state.permissions=[...value.permissions.values()].map(item=>item.value);
-    this.store.saveAcpState(value.session.id,{...value.state,permissions:[],fingerprint:value.fingerprint});
+    value.state.elicitations=[...value.elicitations.values()].map(({value:{schema,...request}})=>request);
+    this.store.saveAcpState(value.session.id,{...value.state,permissions:[],elicitations:[],fingerprint:value.fingerprint});
     this.emit({event:'acp',data:{sessionId:value.session.id,state:{...value.state}}});
     this.changed();
   }
@@ -43,7 +47,7 @@ export class AcpSessions {
   }
   snapshot(id:string,pagination:{before?:number;after?:number;limit?:number}={}):AcpSnapshot{
     const saved=this.store.acpState(id),value=this.live.get(id);
-    const state:Metadata=value?{...value.state,permissions:[...value.permissions.values()].map(p=>p.value)}:{sessionId:id,nativeSessionId:saved.nativeSessionId??null,phase:'disconnected',turnId:null,permissions:[],error:saved.error,agentInfo:saved.agentInfo,capabilities:saved.capabilities,configOptions:saved.configOptions,modes:saved.modes,authMethods:saved.authMethods,availableCommands:saved.availableCommands,lastTurnStatus:saved.lastTurnStatus,...(saved.phase==='running'||saved.phase==='permission'?{error:'上次操作因后台退出而中断；结果未知，不会自动重放'}:{})};
+    const state:Metadata=value?{...value.state,permissions:[...value.permissions.values()].map(p=>p.value),elicitations:[...value.elicitations.values()].map(({value:{schema,...request}})=>request)}:{sessionId:id,nativeSessionId:saved.nativeSessionId??null,phase:'disconnected',turnId:null,permissions:[],elicitations:[],error:saved.error,agentInfo:saved.agentInfo,capabilities:saved.capabilities,configOptions:saved.configOptions,modes:saved.modes,authMethods:saved.authMethods,availableCommands:saved.availableCommands,lastTurnStatus:saved.lastTurnStatus,...(saved.phase==='running'||saved.phase==='permission'?{error:'上次操作因后台退出而中断；结果未知，不会自动重放'}:{})};
     return {...state,...this.store.acpEvents(id,pagination)};
   }
   async start(session:Session,definition:AgentDefinition,cwd:string,cols:number,rows:number):Promise<Run>{
@@ -51,13 +55,13 @@ export class AcpSessions {
     const run=this.store.createRun(session.id,'ACP',cols,rows,definition.acp.executable),saved=this.store.acpState(session.id);
     const {startupTimeoutMs:_,...launchConfig}=definition.acp;
     const fingerprint=createHash('sha256').update(JSON.stringify([definition.id,launchConfig,cwd])).digest('hex');
-    const value:Live={session,run,cwd,definition,transport:null,tools:new AcpClientTools(cwd,view=>this.append(value,'terminal','',{...view})),toolStates:new Map(),permissions:new Map(),stopping:false,cancelled:false,fingerprint,serial:Promise.resolve(),state:{sessionId:session.id,nativeSessionId:saved.fingerprint===fingerprint?saved.nativeSessionId??null:null,phase:'connecting',turnId:null,permissions:[]}};
+    const value:Live={session,run,cwd,definition,transport:null,tools:new AcpClientTools(cwd,view=>this.append(value,'terminal','',{...view})),toolStates:new Map(),permissions:new Map(),elicitations:new Map(),stopping:false,cancelled:false,fingerprint,serial:Promise.resolve(),state:{sessionId:session.id,nativeSessionId:saved.fingerprint===fingerprint?saved.nativeSessionId??null:null,phase:'connecting',turnId:null,permissions:[]}};
     this.live.set(session.id,value);this.publish(value);this.changed();
     try{
       const transport=await AcpTransport.open(definition.acp,cwd,(method,params)=>this.clientRequest(value,method,params),(method,params)=>this.notification(value,method,params),error=>{void this.ended(value,error).catch(()=>{});});value.transport=transport;
       if(value.stopping||this.closed){await transport.stop();throw new Error('ACP 连接已取消');}
       if(transport.pid){this.store.setPid(run.id,transport.pid);run.pid=transport.pid;}
-      const info=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:true,writeTextFile:true},terminal:true},clientInfo:{name:'agentberth',title:'AgentBerth',version:'0.18.0'}});
+      const info=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:true,writeTextFile:true},terminal:true,elicitation:{form:{}}},clientInfo:{name:'agentberth',title:'AgentBerth',version:'0.21.0'}});
       if(info.protocolVersion!==1)throw new Error('Agent 未协商兼容的 ACP v1 协议');
       value.state.agentInfo=bounded(info.agentInfo);value.state.capabilities=bounded(info.agentCapabilities)??{};value.state.authMethods=Array.isArray(info.authMethods)?info.authMethods.slice(0,20):[];
       if(saved.fingerprint&&saved.fingerprint!==fingerprint)this.append(value,'notice','Agent 或工作区配置已变化，下一条消息使用新的 ACP 会话；此前记录保留。');
@@ -130,7 +134,14 @@ export class AcpSessions {
   permission(id:string,permissionId:string,optionId:string|null){
     const value=this.require(id),pending=value.permissions.get(permissionId);if(!pending)throw new Error('授权请求已结束或不属于此会话');
     if(optionId!==null&&!pending.value.options.some(item=>item.optionId===optionId))throw new Error('无效的授权选项');
-    value.permissions.delete(permissionId);pending.resolve({outcome:optionId===null?{outcome:'cancelled'}:{outcome:'selected',optionId}});this.append(value,'notice',optionId===null?'已取消授权':'授权选择：'+pending.value.options.find(item=>item.optionId===optionId)!.name);value.state.phase=value.permissions.size?'permission':'running';this.publish(value);return {};
+    value.permissions.delete(permissionId);pending.resolve({outcome:optionId===null?{outcome:'cancelled'}:{outcome:'selected',optionId}});this.append(value,'notice',optionId===null?'已取消授权':'授权选择：'+pending.value.options.find(item=>item.optionId===optionId)!.name);value.state.phase=value.permissions.size||value.elicitations.size?'permission':value.state.turnId?'running':'ready';this.publish(value);return {};
+  }
+  async elicitation(id:string,requestId:string,action:'accept'|'decline'|'cancel',content?:ElicitationContent){
+    if(!['accept','decline','cancel'].includes(action))throw new Error('无效的提问操作');
+    const value=this.require(id),pending=value.elicitations.get(requestId);if(!pending)throw new Error('提问已结束或不属于此会话');
+    if(action==='accept'){const error=elicitationError(pending.value,content??{});if(error)throw new Error(error);await validateElicitationPatterns(pending.value,content??{});}
+    if(value.stopping||value.elicitations.get(requestId)!==pending)throw new Error('提问已结束，请重新核对当前请求');
+    value.elicitations.delete(requestId);pending.resolve({action,...(action==='accept'?{content:content??{}}:{})});this.append(value,'notice',action==='accept'?'已提交回答':action==='decline'?'已拒绝回答':'已取消回答',{elicitationId:requestId,action});value.state.phase=value.permissions.size||value.elicitations.size?'permission':value.state.turnId?'running':'ready';this.publish(value);return {};
   }
   async configure(id:string,configId:string,setting:string){
     const value=this.require(id);if(value.state.phase!=='ready')throw new Error('请等待当前任务结束后切换模式或模型');
@@ -148,6 +159,10 @@ export class AcpSessions {
   }
   private async clientRequest(value:Live,method:string,params:Record<string,any>){
     if(value.stopping||this.closed||!value.state.nativeSessionId||params.sessionId!==value.state.nativeSessionId)throw new Error('ACP 请求不属于当前会话');
+    if(method==='elicitation/create'){
+      let request:AcpElicitation;try{request=elicitationForm('question-'+randomUUID(),params);}catch(error){this.append(value,'error',String(error));throw new AcpRpcError(-32602,String(error));}
+      return new Promise(resolve=>{value.elicitations.set(request.id,{value:request,resolve});value.state.phase='permission';this.append(value,'elicitation',request.message,{elicitationId:request.id,toolCallId:request.toolCallId});this.publish(value);});
+    }
     if(method==='session/request_permission'){
       if(!Array.isArray(params.options)||!params.options.length||params.options.length>20)throw new Error('ACP 授权选项无效');
       const options=params.options.map((item:any)=>{if(typeof item.optionId!=='string'||typeof item.name!=='string'||typeof item.kind!=='string')throw new Error('ACP 授权选项无效');return {optionId:item.optionId,name:item.name,kind:item.kind};});
@@ -185,7 +200,7 @@ export class AcpSessions {
     else if(kind==='current_mode_update'&&value.state.modes){value.state.modes.currentModeId=String(update.currentModeId);this.publish(value);}
     else if(kind==='available_commands_update'){value.state.availableCommands=Array.isArray(update.availableCommands)?update.availableCommands.filter((item:any)=>item&&typeof item.name==='string'&&typeof item.description==='string').slice(0,100):[];this.publish(value);}
   }
-  private cancelPermissions(value:Live){for(const pending of value.permissions.values())pending.resolve({outcome:{outcome:'cancelled'}});value.permissions.clear();}
+  private cancelPermissions(value:Live){for(const pending of value.permissions.values())pending.resolve({outcome:{outcome:'cancelled'}});value.permissions.clear();for(const pending of value.elicitations.values())pending.resolve({action:'cancel'});value.elicitations.clear();}
   private ended(value:Live,error?:Error):Promise<void>{
     if(value.ending)return value.ending;value.stopping=true;this.cancelPermissions(value);
     const ending=(async()=>{

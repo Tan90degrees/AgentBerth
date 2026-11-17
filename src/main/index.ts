@@ -1,4 +1,5 @@
 import type { ResolvedAppearance } from '../shared/appearance';
+import { uiPalette,uiPalettes,type UiPalette } from '../shared/ui-palettes';
 import { TerminalAppearanceSync } from './terminal-appearance';
 import { PluginBrowser } from './plugin-browser';
 import { pluginBrowserRequestSchema } from '../shared/extensions';
@@ -33,8 +34,8 @@ import { DesktopExtensions } from '../extensions/desktop';
 protocol.registerSchemesAsPrivileged([{scheme:'agentberth-plugin',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 nativeTheme.themeSource = 'dark';
 const terminalAppearanceSync=new TerminalAppearanceSync();
-let terminalColorScheme:ResolvedAppearance='dark',observedNativeScheme:ResolvedAppearance='dark';
-function syncTerminalAppearance(){return connection?.connected?terminalAppearanceSync.sync(connection,terminalColorScheme):Promise.resolve();}
+let terminalColorScheme:ResolvedAppearance='dark',observedNativeScheme:ResolvedAppearance='dark',terminalPaletteFamily:UiPalette='classic';
+function syncTerminalAppearance(){return connection?.connected?terminalAppearanceSync.sync(connection,terminalColorScheme,terminalPaletteFamily):Promise.resolve();}
 
 let window: BrowserWindow | null = null;
 let pluginBrowser:PluginBrowser|null=null;
@@ -452,8 +453,8 @@ ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown)
   await connection!.rpc('deleteSshConnection',{connectionId}); sshVault.delete(connectionId);
 });
 ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:appearance',async(event,mode:unknown,resolved:unknown)=>{trusted(event);requireExtension('appearance');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');if(resolved!==undefined&&resolved!=='dark'&&resolved!=='light')throw new Error('无效主题');nativeTheme.themeSource=mode as 'system'|'light'|'dark';terminalColorScheme=mode==='system'?(resolved as ResolvedAppearance|undefined)??(nativeTheme.shouldUseDarkColors?'dark':'light'):mode as ResolvedAppearance;for(const target of [window,sshWindow])target?.setBackgroundColor(terminalColorScheme==='dark'?'#212121':'#ffffff');await syncTerminalAppearance();});
-nativeTheme.on('updated',()=>{const next:ResolvedAppearance=nativeTheme.shouldUseDarkColors?'dark':'light';if(next!==observedNativeScheme){observedNativeScheme=next;terminalColorScheme=next;}for(const target of [window,sshWindow])target?.setBackgroundColor(terminalColorScheme==='dark'?'#212121':'#ffffff');void syncTerminalAppearance().catch(console.error);});
+ipcMain.handle('berth:appearance',async(event,mode:unknown,resolved:unknown,palette:unknown)=>{trusted(event);requireExtension('appearance');if(palette!==undefined&&uiPalette(palette)!==palette)throw new Error('无效配色');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');if(resolved!==undefined&&resolved!=='dark'&&resolved!=='light')throw new Error('无效主题');terminalPaletteFamily=uiPalette(palette);nativeTheme.themeSource=mode as 'system'|'light'|'dark';terminalColorScheme=mode==='system'?(resolved as ResolvedAppearance|undefined)??(nativeTheme.shouldUseDarkColors?'dark':'light'):mode as ResolvedAppearance;for(const target of [window,sshWindow])target?.setBackgroundColor(uiPalettes[terminalPaletteFamily][terminalColorScheme]['--bg']);await syncTerminalAppearance();});
+nativeTheme.on('updated',()=>{const next:ResolvedAppearance=nativeTheme.shouldUseDarkColors?'dark':'light';if(next!==observedNativeScheme){observedNativeScheme=next;terminalColorScheme=next;}for(const target of [window,sshWindow])target?.setBackgroundColor(uiPalettes[terminalPaletteFamily][terminalColorScheme]['--bg']);void syncTerminalAppearance().catch(console.error);});
 ipcMain.handle('berth:mcpConfig', (event, provider: unknown = 'claude') => {
   requireExtension('ssh');
   trusted(event); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');

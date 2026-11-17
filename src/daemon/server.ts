@@ -1,5 +1,6 @@
 import { terminalAppearance } from './terminal-appearance';
 import type { ResolvedAppearance } from '../shared/appearance';
+import type { UiPalette } from '../shared/ui-palettes';
 import { mountHarness } from '../plugins/deepseek-harness';
 import { serviceShell } from './paths';
 import { randomUUID } from 'node:crypto';
@@ -67,6 +68,7 @@ export interface Client { id: string; disposing: boolean; subscriptions: Set<str
 export class DaemonServer {
   private stoppingAll:Promise<void>|null=null;
   private appearance:ResolvedAppearance='dark';
+  private palette:UiPalette='classic';
   private extensions:ExtensionRuntime;
   private coreContext=new Context();
   private coreRoutes=new Map<string,(request:Request,client:Client)=>Promise<unknown>>();
@@ -505,7 +507,7 @@ export class DaemonServer {
     const coreHandler=this.coreRoutes.get(request.method);if(coreHandler)return coreHandler(request,client);
     switch (request.method) {
       case 'state': return this.snapshot();
-      case 'terminalAppearance': return this.setTerminalAppearance(request.params.appearance);
+      case 'terminalAppearance': return this.setTerminalAppearance(request.params.appearance,request.params.palette);
       case 'shutdown':
         await this.stopAll(request.params.restoreOnOpen);
         return null;
@@ -739,7 +741,7 @@ export class DaemonServer {
       void this.stop(sessionId).catch(error=>this.logError(error));
     };
     const reply=(data:string)=>{if(live.closed||live.stopping)return;try{child.write(data);}catch(error){if(!remote)ptyFailure(error);}};
-    live.colors=terminalAppearance(terminal,this.appearance,reply);
+    live.colors=terminalAppearance(terminal,this.appearance,reply,this.palette);
     terminal.onData(reply);
     try {if(!remote)protectWindowsPty(child,ptyFailure);}
     catch(error){live.failure='终端通道初始化失败：'+String(error);await this.stop(sessionId);throw error;}
@@ -844,11 +846,11 @@ export class DaemonServer {
     }
   }
 
-  private async setTerminalAppearance(appearance:ResolvedAppearance):Promise<null>{
-    this.appearance=appearance;
+  private async setTerminalAppearance(appearance:ResolvedAppearance,palette:UiPalette):Promise<null>{
+    this.appearance=appearance;this.palette=palette;
     await Promise.all([...this.live.values()].filter(live=>!live.closed&&!live.stopping).map(live=>{
       this.flushOutput(live);
-      return new Promise<void>(resolve=>live.terminal.write('',()=>{if(!live.closed&&!live.stopping)live.colors?.update(appearance);resolve();}));
+      return new Promise<void>(resolve=>live.terminal.write('',()=>{if(!live.closed&&!live.stopping)live.colors?.update(appearance,palette);resolve();}));
     }));
     return null;
   }
