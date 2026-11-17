@@ -135,7 +135,7 @@ export interface WikiStatus {
   skills: number;
   links: number;
   orphans: number;
-  model: { baseURL: string; textModel: string; visionModel: string; keyConfigured: boolean; keyHint: string };
+  model: { baseURL: string; textModel: string; visionModel: string; visionBaseURL: string; visionKeyConfigured: boolean; visionKeyHint: string; llmRetries: number; llmConcurrency: number; keyConfigured: boolean; keyHint: string };
   automation: { autoCompile: boolean; autoApprove: boolean; lintMinutes: number };
   lastLint: string | null;
   tasks: WikiTask[];
@@ -144,6 +144,10 @@ export interface WikiStatus {
 
 export interface WikiConfig {
   baseURL: string;
+  visionBaseURL?: string;
+  visionAuthRequired?: boolean;
+  llmRetries?: number;
+  llmConcurrency?: number;
   textModel: string;
   visionModel: string;
   autoCompile: boolean;

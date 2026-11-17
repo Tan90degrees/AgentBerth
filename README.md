@@ -66,12 +66,12 @@
 
 | 文件 | 使用方式 |
 |---|---|
-| `AgentBerth-0.21.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
-| `AgentBerth-0.21.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
+| `AgentBerth-0.22.0-windows-x64-setup.exe` | 双击安装，选择安装目录后从快捷方式启动 |
+| `AgentBerth-0.22.0-windows-x64.zip` | 完整解压到固定目录，运行其中的 `AgentBerth.exe` |
 | `SHA256SUMS.txt` | 安装包与 ZIP 的 SHA-256 校验值 |
 | `build-info.json` | 版本、提交、Actions 运行链接与打包后测试结果 |
 
-软件包自带 Electron、Node 运行时和 `node-pty`，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code / OpenCode 需在本机单独安装、配置，并能从所选 Shell 的 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。**不支持从旧版原地升级。** 安装新架构前必须完全退出旧版本并清除原数据目录（包含项目、会话和本机设置）。程序不会自动迁移或删除旧数据；旧数据库启动时会明确报错。
+软件包自带 Electron、Node 运行时和 `node-pty`，使用时无需安装 Node.js、npm 或 C++ 编译工具。Codex / Claude Code / OpenCode 需在本机单独安装、配置，并能从所选 Shell 的 PATH 调用。ZIP 版需保留整个解压目录；daemon 使用该目录中的运行时，后台任务运行期间不要移动或删除它。**从 v0.21.x 升级保留现有数据，无需清空数据目录。** 当前数据库 schema 6–8 会自动升级为 schema 9；项目、会话、插件配置与 Wiki 素材保留。运行中的兼容后台可继续挂接；使用新增表单和终端配色协议前，先停止活跃会话并更新后台，或从托盘完整退出后重开。遇到更旧的不兼容数据库时，请保留原数据并先备份，不要删除原目录尝试升级。
 
 第一版软件包没有代码签名，Windows 可能显示“未知发布者”。正常包应对应成功的 Windows 打包任务且 `build-info.json` 中 `packagedSmoke` 为 `success`；新构建还在 `packagedSuites` 中分别记录工作台与文件预览/Git 测试结果，两组均通过才标记验证成功。若测试失败，构建产物会保留供排查，但不代表已验证可用。
 
@@ -231,7 +231,7 @@ OpenCode 会话在项目目录中执行 `opencode export <sessionID> > session.j
 
 项目目录树、Git 忽略灰显、代码及 Markdown 预览见 [文件浏览与预览](docs/files.md)。
 
-当前版本范围、升级方式与已知限制见 [v0.21.0 发行说明](docs/releases/v0.21.0.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
+当前版本范围、升级方式与已知限制见 [v0.22.0 发行说明](docs/releases/v0.22.0.md)。维护者的发布步骤见 [发布流程](docs/releasing.md)。
 
 ## 验证与打包
 

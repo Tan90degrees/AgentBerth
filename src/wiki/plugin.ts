@@ -59,6 +59,10 @@ function fit(value: unknown): unknown {
 function readConfig(config: Record<string, string | number | boolean>): WikiConfig {
   return {
     baseURL: String(config.baseURL ?? 'https://api.openai.com/v1'),
+    visionBaseURL: String(config.visionBaseURL ?? ''),
+    visionAuthRequired: config.visionAuthRequired !== false,
+    llmRetries: Number(config.llmRetries ?? 2),
+    llmConcurrency: Number(config.llmConcurrency ?? 2),
     textModel: String(config.textModel ?? 'gpt-4o-mini'),
     visionModel: String(config.visionModel ?? ''),
     autoCompile: config.autoCompile !== false,
@@ -251,9 +255,9 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   add('lint_result', '读取最近一次体检结果', schema({}), () => service.lintResult());
 
   // Credentials (private file, never in the manifest config form)
-  add('set_api_key', '保存模型 API Key', schema({ value: field('string') }, ['value']), params => service.setApiKey(text(params, 'value')));
-  add('clear_api_key', '清除模型 API Key', schema({}), () => service.clearApiKey().then(() => true));
-  add('test_connection', '测试模型连通性', schema({}), () => service.testConnection());
+  add('set_api_key', '保存模型 API Key', schema({ value: field('string'),kind:field('string',{enum:['text','vision']}) }, ['value']), params => service.setApiKey(text(params, 'value'),params.kind==='vision'?'vision':'text'));
+  add('clear_api_key', '清除模型 API Key', schema({kind:field('string',{enum:['text','vision']})}), params => service.clearApiKey(params.kind==='vision'?'vision':'text').then(() => true));
+  add('test_connection', '测试模型连通性', schema({kind:field('string',{enum:['text','vision']})}), params => service.testConnection(params.kind==='vision'?'vision':'text'));
 
   // ---- MCP tools: read-only surface for workbench Agents -----------------
   const windowFields = { offset: field('integer', { minimum: 0 }), limit: field('integer', { minimum: 2, maximum: 12000 }) };
