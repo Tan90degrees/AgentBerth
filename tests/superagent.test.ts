@@ -328,3 +328,45 @@ test('an old interrupted review shows recovery actions instead of accepting an u
     const draft=document.querySelector<HTMLTextAreaElement>('#followup')!;draft.value='UNSENT_RECOVERY_DRAFT';draft.dispatchEvent(new dom.window.Event('input',{bubbles:true}));const log=await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8');cleanup.click();await until(async()=>!(await f.task(created.id)).cleanupPending,Boolean);await until(async()=>!retry.disabled,Boolean);assert.equal(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8'),log);assert.equal((await f.task(created.id)).phase,'interrupted');assert.equal(complete.hidden,true);assert.equal(draft.value,'UNSENT_RECOVERY_DRAFT','cleanup must retain the unsent draft');
   }finally{dom.window.close();}
 });
+
+test('cancelled tasks with unfinished cleanup remain actionable and hold their pipeline',{timeout:45000},async t=>{
+  const f=await fixture(t);await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});
+  const pipeline=await f.call('save_pipeline',{name:'Cleanup queue',inputs:[{sourceId,threadIds:[]}],enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:[],autoApprove:false});
+  const first=await f.create({pipelineId:pipeline.id});await until(()=>f.worker(first.id),value=>value.permissions.length===1);
+  const next=await f.create({pipelineId:pipeline.id}),owner=await f.task(first.id),routes=(f.server as any).coreRoutes as Map<string,(request:any,client:any)=>Promise<unknown>>,stop=routes.get('stop')!;let failing=true;
+  routes.set('stop',async(request,client)=>{if(failing&&request.params.sessionId===owner.workerSession)throw new Error('FIXTURE_STOP_FAILED');return stop(request,client);});
+  const snapshot=routes.get('acpSnapshot')!;routes.set('acpSnapshot',async(request,client)=>{const value=await snapshot(request,client) as AcpSnapshot;return request.params.sessionId===owner.workerSession?{...value,phase:'disconnected',permissions:[],error:'FIXTURE_DISCONNECTED'}:value;});
+  const interrupted=await until(()=>f.task(first.id),value=>value.phase==='interrupted');assert.equal(interrupted.cleanupPending,true);assert.equal(interrupted.waitingFor,undefined);routes.set('acpSnapshot',snapshot);
+  await assert.rejects(f.call('action',{id:first.id,action:'cancel'}),/FIXTURE_STOP_FAILED/);
+  const pending=await f.call('tasks',{filter:'attention',pipelineId:pipeline.id});assert.equal(pending.total,1);assert.equal(pending.counts.attention,1);assert.equal(pending.counts.ended,1);assert.equal(pending.tasks[0].id,first.id);
+  const activity=(await f.connection.rpc<State>('state')).agentActivities?.find(item=>item.taskId===first.id);assert.equal(activity?.status,'error');assert.equal(activity?.label,'内部会话停止未完成');
+  const log=await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8');await new Promise(resolve=>setTimeout(resolve,1300));assert.equal((await f.task(next.id)).phase,'queued');assert.equal((await f.task(next.id)).blockedBy,first.id);assert.equal(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8'),log);
+  const dom=new JSDOM('<!doctype html><body>'+superagentView,{runScripts:'outside-only',pretendToBeVisual:true,url:'http://superagent.test'});
+  try{
+    Object.assign(dom.window,{TextEncoder,TextDecoder,agentberth:{ready:async()=>{},call:f.call,notify(){},openSession(){}}});dom.window.HTMLElement.prototype.scrollIntoView=function(){};dom.window.eval(dom.window.document.querySelector('script')!.textContent!);
+    const document=dom.window.document;await until(async()=>document.querySelector('[data-group="attention"] [data-task="'+first.id+'"]'),Boolean);
+    const filter=document.querySelector<HTMLSelectElement>('#boardFilter')!;filter.value='attention';filter.dispatchEvent(new dom.window.Event('change'));await until(async()=>document.querySelector('[data-group="attention"] .board-card-status')?.textContent,value=>value==='已取消 · 待停止');
+    (document.querySelector('[data-group="attention"] .board-card-title') as HTMLElement).click();await until(async()=>document.getElementById('taskTitle')?.textContent,Boolean);
+    const cleanup=document.querySelector<HTMLButtonElement>('#retryCleanup')!;assert.equal(cleanup.hidden,false);assert.equal(document.querySelector<HTMLButtonElement>('[data-action="complete"]')!.hidden,true);assert.equal(document.querySelector<HTMLButtonElement>('#resumeInterrupted')!.hidden,true);
+    failing=false;cleanup.click();await until(async()=>!(await f.task(first.id)).cleanupPending,Boolean);assert.equal((await f.task(first.id)).phase,'cancelled');assert.equal((await f.call('tasks',{filter:'attention',pipelineId:pipeline.id})).total,0);
+    await until(()=>f.worker(next.id),value=>value.permissions.length===1);assert.equal((await f.task(next.id)).phase,'working');assert.equal((await f.connection.rpc<State>('state')).agentActivities?.find(item=>item.taskId===first.id)?.status,'idle');
+  }finally{failing=false;dom.window.close();}
+});
+
+test('legacy ended cleanup failures migrate beyond the recent page and survive reload without replay',{timeout:45000},async t=>{
+  const f=await fixture(t),created=await f.create();await until(()=>f.worker(created.id),value=>value.permissions.length===1);await f.call('action',{id:created.id,action:'cancel'});
+  const original=await f.task(created.id),completedId=randomUUID(),deletedId=randomUUID(),db=new DatabaseSync(path.join(f.data,'extensions/data/superagent/superagent.sqlite'));
+  try{
+    const save=db.prepare('INSERT INTO tickets VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value'),legacy={...original,attention:false,cleanupPending:undefined,error:'后台正在退出；连接清理尚未完成'};
+    db.exec('BEGIN');save.run(created.id,JSON.stringify(legacy));save.run(completedId,JSON.stringify({...legacy,id:completedId,phase:'completed',coordinatorSession:randomUUID(),workerSession:randomUUID()}));save.run(deletedId,JSON.stringify({...legacy,id:deletedId,deletedAt:new Date().toISOString(),coordinatorSession:randomUUID(),workerSession:randomUUID()}));
+    for(let i=0;i<205;i++){const id=randomUUID();save.run(id,JSON.stringify({...original,id,cleanupPending:false,coordinatorSession:randomUUID(),workerSession:randomUUID()}));}db.exec('COMMIT');
+  }finally{db.close();}
+  const log=await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8');await f.extension({action:'reload',id:'superagent'});
+  for(const id of [created.id,completedId])assert.equal((await f.task(id)).cleanupPending,true);
+  let list=await f.call('tasks',{filter:'attention'});assert.equal(list.total,2);assert.equal(list.counts.attention,2);assert.deepEqual(new Set(list.tasks.map((task:any)=>task.id)),new Set([created.id,completedId]));
+  assert.ok((await f.call('tasks')).tasks.slice(0,2).every((task:any)=>task.cleanupPending));
+  await f.extension({action:'reload',id:'superagent'});for(const id of [created.id,completedId])assert.equal((await f.connection.rpc<State>('state')).agentActivities?.find(item=>item.taskId===id)?.status,'error');
+  for(const id of [created.id,completedId])await f.call('action',{id,action:'cleanup'});
+  assert.equal((await f.task(created.id)).phase,'cancelled');assert.equal((await f.task(completedId)).phase,'completed');list=await f.call('tasks',{filter:'attention'});assert.equal(list.total,0);assert.equal(list.counts.attention,0);
+  await assert.rejects(f.task(deletedId),/已删除/);assert.equal(await readFile(path.join(f.dir,'fixture-agent/calls.jsonl'),'utf8'),log,'migration and cleanup never request an Agent turn');
+});
