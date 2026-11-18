@@ -94,8 +94,8 @@ export function SessionInsights(props: SessionInsightsProps) {
   if (tab === 'history') {
     const plugin = definition?.plugin;
     const canAssociate = canHistory || canResume || !!plugin?.list;
-    const canDiscover = !!plugin?.list || (apiVersion >= 35 && ['codex', 'claude'].includes(session.agent)) || (apiVersion >= 38 && (session.agent === 'opencode' || !!definition?.integration));
-    const autoRead = !!plugin?.history || (!!session.nativeSessionId && (['claude', 'opencode'].includes(session.agent) || !!definition?.integration));
+    const canDiscover = !!plugin?.list || (apiVersion >= 35 && ['codex', 'claude'].includes(session.agent)) || (apiVersion >= 38 && (['opencode', 'pi'].includes(session.agent) || !!definition?.integration));
+    const autoRead = !!plugin?.history || (!!session.nativeSessionId && (['claude', 'opencode', 'pi'].includes(session.agent) || !!definition?.integration));
     return <div id="workspace-panel-history" className="workspace-panel history-workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-history">
       <HistoryPanel key={`${session.id}:${projectPath}:${JSON.stringify(plugin)}`} session={session} history={history} label={label} canHistory={canHistory} canAssociate={canAssociate} canDiscover={canDiscover} autoRead={autoRead} supported={apiVersion >= 11} disabled={disabled}
         onImport={importHistory} onRefresh={refreshHistory} onManual={props.onManualLink}

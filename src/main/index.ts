@@ -185,16 +185,25 @@ function emit(event: ServerEvent) {
     if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; void reconnect().catch(error => emit({ event: 'connection', data: { connected: false, error: String(error) } })); }, 2000);
   }
 }
+async function connectWorkspace(): Promise<void> {
+  const candidate = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
+  connection = candidate;
+  try {
+    await registerSshProvider();
+    await syncTerminalAppearance();
+    const state = await candidate.rpc<import('../shared/protocol').State>('state');
+    emit({ event: 'connection', data: { connected: true } });
+    emit({ event: 'state', data: state });
+  } catch (error) {
+    if (connection === candidate) connection = null;
+    candidate.close(true);
+    throw error;
+  }
+}
 async function reconnect(): Promise<void> {
   if (quitting) throw new Error('正在停止终端并退出');
   if (connecting) return connecting;
-  connecting = (async () => {
-    connection = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
-    await registerSshProvider();
-    await syncTerminalAppearance();
-    emit({ event: 'connection', data: { connected: true } });
-    emit({ event: 'state', data: await connection.rpc('state') });
-  })().finally(() => { connecting = null; });
+  connecting = connectWorkspace().finally(() => { connecting = null; });
   return connecting;
 }
 function secureWindow(target: BrowserWindow, detached = false) {
@@ -491,16 +500,16 @@ ipcMain.handle('berth:skills', async (event, input: unknown) => {
   requireExtension('agents');
   trusted(event);
   const request = skillRequestSchema.parse(input);
-  if(['codex','claude','opencode'].includes(request.location.agentId))requireExtension('agent.'+request.location.agentId);
+  if(['codex','claude','opencode','pi'].includes(request.location.agentId))requireExtension('agent.'+request.location.agentId);
   let projectPath: string | undefined;
-  let integration = ['claude', 'opencode'].includes(request.location.agentId) ? request.location.agentId as 'claude' | 'opencode' : undefined;
+  let integration = ['claude', 'opencode', 'pi'].includes(request.location.agentId) ? request.location.agentId as import('./agent-integration').IntegrationProvider : undefined;
   let skills = builtinSkillProviders.find(agent => agent.id === request.location.agentId)?.skills;
   if (request.location.projectId || !skills) {
     if (connecting) await connecting;
     if (!connection) await reconnect();
     const state = await connection!.rpc<import('../shared/protocol').State>('state');
     const definition = (state.agents ?? []).find(agent => agent.id === request.location.agentId);
-    if (!definition?.skills && (definition?.integration === 'claude' || definition?.integration === 'opencode')) integration ??= definition.integration;
+    if (!definition?.skills && (definition?.integration === 'claude' || definition?.integration === 'opencode' || definition?.integration === 'pi')) integration ??= definition.integration;
     skills ??= definition?.skills ?? builtinSkillProviders.find(agent => agent.id === definition?.integration)?.skills;
     projectPath = request.location.projectId ? state.projects.find(project => project.id === request.location.projectId)?.path : undefined;
     if (request.location.projectId && !projectPath) throw new Error('项目不存在，请重新选择');
@@ -533,11 +542,7 @@ ipcMain.handle('berth:restart', async event => {
   connecting = (async () => {
     await stopIdleDaemon(dataDirectory);
     connection?.close(true); connection = null;
-    connection = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
-    await registerSshProvider();
-    await syncTerminalAppearance();
-    emit({ event: 'connection', data: { connected: true } });
-    emit({ event: 'state', data: await connection.rpc('state') });
+    await connectWorkspace();
   })().finally(() => { connecting = null; restarting = false; });
   try { await connecting; }
   catch (error) { if (!connection?.connected) { connection = null; emit({ event: 'connection', data: { connected: false, error: String(error) } }); } throw error; }

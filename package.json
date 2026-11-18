@@ -139,6 +139,10 @@
         "to": "pet/opencode-pet-v2.mjs"
       },
       {
+        "from": "dist/pi-pet.mjs",
+        "to": "pet/pi-pet.mjs"
+      },
+      {
         "from": "dist/superagent-plugin.zip",
         "to": "examples/superagent-plugin.zip"
       }
