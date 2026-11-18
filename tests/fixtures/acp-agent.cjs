@@ -45,7 +45,9 @@ async function prompt(message){const p=message.params,content=p.prompt.map(item=
       const decision=await permission(sessionId,{toolCallId:'run-check',kind:'execute',title:'Run verification',status:'pending'});
       let refused=false;
       try{await call('terminal/create',{sessionId,command:process.execPath,args:['--version']});}catch(error){refused=/Superagent/.test(String(error));}
-      record({method:'superagent-policy',decision,refused});
+      let metadataRefused=false;
+      try{await call('fs/read_text_file',{sessionId,path:'.git'});}catch(error){metadataRefused=/版本控制元数据/.test(String(error));}
+      record({method:'superagent-policy',decision,refused,metadataRefused});
       text(sessionId,JSON.stringify({status:'blocked',summary:'Command requires a trusted runner',question:'Choose a file-only verification'}));result(message.id,{stopReason:'end_turn'});return;
     }
     const approval=await permission(sessionId);if(approval.outcome.optionId==='allow'){await call('fs/write_text_file',{sessionId,path:path.join(sessions[sessionId].cwd,'result.txt'),content:'SUPERAGENT_OK'});text(sessionId,JSON.stringify({status:'ready',summary:'Created result.txt; fake validated',question:'',artifacts:['result.txt','./result.txt','../outside.txt']}));}else text(sessionId,JSON.stringify({status:'blocked',summary:'permission denied',question:'需要写入权限'}));}

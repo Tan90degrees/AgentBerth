@@ -75,6 +75,7 @@ test('Superagent refuses ACP terminal execution and command approvals at the hos
   assert.ok(calls.some(item=>item.method==='initialize'&&item.arguments.includes('--superagent-tool-policy')&&item.capabilities.terminal===false));
   const blocked=calls.find(item=>item.method==='superagent-policy');
   assert.equal(blocked.refused,true);
+  assert.equal(blocked.metadataRefused,true);
   assert.equal(blocked.decision.outcome.optionId,'reject');
 });
 
