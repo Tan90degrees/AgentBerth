@@ -12,22 +12,30 @@ interface TerminalTask {child:ChildProcessWithoutNullStreams;output:Buffer;limit
 export class AcpClientTools {
   private tasks=new Map<string,TerminalTask>();
   private rootReady:Promise<string>|undefined;
-  constructor(private root:string,private released?:(view:AcpTerminal)=>void){}
+  constructor(private root:string,private released?:(view:AcpTerminal)=>void,private managed=false){}
   terminal(terminalId:string):AcpTerminal{
     const task=this.tasks.get(terminalId);if(!task)throw new Error('终端输出尚未保存或已过期');
     let start=Math.max(0,task.output.length-16384);while(start<task.output.length&&(task.output[start]&0xc0)===0x80)start++;
     return {terminalId,output:task.output.subarray(start).toString('utf8'),truncated:task.truncated||start>0,...(task.exit?{exitStatus:task.exit}:{})};
   }
   private inside(file:string,root:string){const relative=path.relative(root,file);return relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);}
+  private assertManagedPath(root:string,target:string) {
+    if(!this.managed)return;
+    const parts=path.relative(root,target).split(path.sep);
+    if(parts.some(part=>/^(?:\.git|\.hg|\.svn)$/i.test(part)||process.platform==='win32'&&/[. ]$|:/.test(part))){
+      throw new Error('Superagent 不允许访问版本控制元数据或 Windows 特殊路径');
+    }
+  }
   async file(input:string,create=false):Promise<string>{
     if(!input||input.includes('\0'))throw new Error('文件路径无效');
     const root=await(this.rootReady??=realpath(this.root)),file=path.resolve(root,input);
+    this.assertManagedPath(root,file);
     let ancestor=create?path.dirname(file):file;
     // Canonicalize the closest existing ancestor first. Windows temp paths can
     // use 8.3 aliases (RUNNER~1); comparing them lexically to realpath rejects
     // the same workspace. Symlink targets still have to remain inside root.
     while(true){
-      try{const actual=await realpath(ancestor),resolved=path.resolve(actual,path.relative(ancestor,file));if(!this.inside(actual,root)||!this.inside(resolved,root))throw new Error('ACP 路径指向工作区之外');return resolved;}
+      try{const actual=await realpath(ancestor),resolved=path.resolve(actual,path.relative(ancestor,file));if(!this.inside(actual,root)||!this.inside(resolved,root))throw new Error('ACP 路径指向工作区之外');this.assertManagedPath(root,resolved);return resolved;}
       catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;const parent=path.dirname(ancestor);if(parent===ancestor)throw error;ancestor=parent;}
     }
   }

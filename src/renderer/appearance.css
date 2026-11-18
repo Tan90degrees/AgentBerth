@@ -168,3 +168,17 @@ kbd { font-family: inherit; font-size: var(--fs-2xs); line-height: 1.6; padding:
 .ui-font-controls label { display:grid;gap:6px; }
 .ui-font-controls .text-button { justify-self:start; }
 .ui-font-sample { border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-muted);padding:16px;font-size:var(--fs-lg);overflow-wrap:anywhere; }
+
+.has-window-titlebar > .app { height: calc(100vh - 32px); }
+.window-titlebar {
+  -webkit-app-region: drag;
+  height: 32px;
+  padding-inline: 14px;
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  user-select: none;
+}

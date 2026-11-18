@@ -39,6 +39,11 @@ test('Superagent isolates ACP workers/worktrees, enforces concurrency, requests 
   const pending=await until(()=>f.worker(first.id),value=>value.permissions.length===1);const firstTask=await f.task(first.id);assert.equal((await f.task(second.id)).phase,'queued');assert.ok(firstTask.worktreePath);assert.notEqual(firstTask.coordinatorSession,firstTask.workerSession);
   await f.connection.rpc('acpPermission',{sessionId:firstTask.workerSession,permissionId:pending.permissions[0].id,optionId:'allow'});
   const ready=await until(()=>f.task(first.id),value=>value.phase==='needs_attention'&&value.stage==='worker');assert.match(ready.summary,/fake validated/);assert.equal(await readFile(path.join(ready.worktreePath,'result.txt'),'utf8'),'SUPERAGENT_OK');await assert.rejects(readFile(path.join(f.root,'result.txt')),/ENOENT/);assert.equal((await f.git('branch','--show-current')).stdout.trim(),'main');
+  assert.deepEqual(ready.artifacts,['result.txt']);
+  const artifact=await f.call('artifact_location',{id:first.id,path:'result.txt'});
+  assert.equal(artifact.worktreePath,ready.worktreePath);
+  assert.equal((await f.connection.rpc<any>('previewFile',artifact)).content,'SUPERAGENT_OK');
+  await assert.rejects(f.call('artifact_location',{id:first.id,path:'base.txt'}),/交付清单/);
   await f.call('action',{id:first.id,action:'complete'});assert.equal((await f.task(first.id)).phase,'completed');
   await until(()=>f.worker(second.id),value=>value.permissions.length===1);await f.call('action',{id:second.id,action:'cancel'});assert.equal((await f.task(second.id)).phase,'cancelled');
   const state=await f.connection.rpc<State>('state');assert.equal(state.sessions.find(session=>session.id===unrelated.id)?.latestRun?.status,'running');
@@ -58,6 +63,54 @@ test('custom source plugins bind project/ACP policy, deduplicate events, enforce
   const retried=await f.call('reply',{...message,retry:true});assert.equal(retried.state,'sent');const receipts=JSON.parse(await readFile(path.join(f.data,'extensions','data','example.superagent.source.local','receipts.json'),'utf8'));assert.equal(Object.keys(receipts).length,1);
   await f.call('source_policy',{...policy,autoApprove:false,allowedActors:[]});const waiting=await emit({id:'manual'});assert.equal((await f.task(waiting.ticketId)).approved,false);assert.equal((await f.task(waiting.ticketId)).phase,'needs_attention');
   await f.extension({action:'disable',id:'example.superagent.source.local'});assert.equal((await f.call('state')).sources.length,0);assert.ok((await f.task(accepted.ticketId)).source);
+});
+test('Superagent refuses ACP terminal execution and command approvals at the host boundary',async t=>{
+  const f=await fixture(t);
+  const guarded=await f.connection.rpc<any>('createAgent',{name:'Guarded ACP',command:f.agent.command,acp:{...f.agent.acp,args:[...f.agent.acp.args,'--superagent-tool-policy']}});
+  const {id}=await f.create({executorId:guarded.id});
+  const task=await until(()=>f.task(id),value=>value.phase==='needs_attention'&&value.stage==='worker');
+  assert.equal(task.policyDenied,true);
+  assert.equal(task.waitingFor,'answer');
+  const calls=(await readFile(path.join(f.dir,'fixture-agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.ok(calls.some(item=>item.method==='initialize'&&item.arguments.includes('--superagent-tool-policy')&&item.capabilities.terminal===false));
+  const blocked=calls.find(item=>item.method==='superagent-policy');
+  assert.equal(blocked.refused,true);
+  assert.equal(blocked.metadataRefused,true);
+  assert.equal(blocked.decision.outcome.optionId,'reject');
+});
+
+test('source pipelines send at most one ready notice and require explicit review of outbound summaries',async t=>{
+  const f=await fixture(t);
+  await f.extension({action:'install',path:path.resolve('examples/superagent-source-local')});
+  const base={name:'Replies',inputs:[{sourceId,threadIds:['thread-1']}],enabled:true,projectId:f.project.id,coordinatorId:f.agent.id,executorId:f.agent.id,allowedActors:['alice'],autoApprove:true};
+  await assert.rejects(f.call('save_pipeline',{...base,allowedActors:[],autoApprove:false,replyMode:'ready'}),/指定人员/);
+  const pipeline=await f.call('save_pipeline',{...base,replyMode:'ready'});
+  const emit=(id:string)=>f.extension({action:'call',id:'example.superagent.source.local',command:'emit',params:{id,threadId:'thread-1',actorId:'alice',title:'Reply fixture',text:'Prepare a result'}});
+  const allow=async (id:string)=>{
+    const pending=await until(()=>f.worker(id),value=>value.permissions.length===1);
+    await f.connection.rpc('acpPermission',{sessionId:(await f.task(id)).workerSession,permissionId:pending.permissions[0].id,optionId:'allow'});
+  };
+  const ready=(await emit('ready-notice')).ticketId;
+  await allow(ready);
+  const sent=await until(()=>f.call('get',{id:ready}),value=>value.outbox[0]?.state==='sent');
+  assert.equal(sent.replyDraft.text,'任务结果已就绪，等待验收。');
+  assert.equal(sent.replyDraft.automatic,true);
+  assert.equal(sent.outbox[0].threadId,'thread-1');
+  assert.equal((await emit('ready-notice')).ticketId,ready);
+  await f.call('action',{id:ready,action:'complete'});
+  assert.equal((await f.call('get',{id:ready})).outbox.length,1);
+
+  await f.call('save_pipeline',{...base,pipelineId:pipeline.id,replyMode:'accepted'});
+  const accepted=(await emit('acceptance-reply')).ticketId;
+  await allow(accepted);
+  await until(()=>f.task(accepted),value=>value.phase==='needs_attention'&&value.waitingFor==='review');
+  const {text}=await f.call('acceptance_reply',{id:accepted});
+  assert.match(text,/fake validated/);
+  assert.deepEqual((await f.call('get',{id:accepted})).outbox,[]);
+  await assert.rejects(f.call('action',{id:accepted,action:'complete',replyText:'Different text'}),/回复内容或管道设置已变更/);
+  await f.call('action',{id:accepted,action:'complete',replyText:text});
+  const received=await until(()=>f.call('get',{id:accepted}),value=>value.outbox[0]?.state==='sent');
+  assert.equal(received.replyDraft.text,text);
 });
 test('stopping/reloading Superagent retains checkpoints and never replays interrupted work',async t=>{
   const f=await fixture(t),created=await f.create();await until(()=>f.worker(created.id),value=>value.permissions.length===1);const before=await f.task(created.id);

@@ -4,7 +4,8 @@ import {pipelineFilterSchema,type PipelineFilter,type PipelineConfig,type Supera
 
 export interface SourcePolicy {enabled:boolean;projectId:string;coordinatorId:string;executorId:string;coordinatorModel?:string;executorModel?:string;allowedActors:string[];autoApprove:boolean;isolated:boolean;version:string}
 export interface PipelineInput {sourceId:string;threadIds:string[];config?:PipelineConfig}
-export interface SourcePipeline extends SourcePolicy {id:string;name:string;sourceId:string;threadIds:string[];inputs?:PipelineInput[];filter?:PipelineFilter;workspacePath?:string;workspaceBranch?:string;workspaceKind?:'git'|'copy';copyOptions?:CopyOptions;createdAt:string;updatedAt:string}
+export type SourceReplyMode = 'off' | 'accepted' | 'ready';
+export interface SourcePipeline extends SourcePolicy {id:string;name:string;sourceId:string;threadIds:string[];inputs?:PipelineInput[];filter?:PipelineFilter;workspacePath?:string;workspaceBranch?:string;workspaceKind?:'git'|'copy';copyOptions?:CopyOptions;replyMode?:SourceReplyMode;createdAt:string;updatedAt:string}
 export const pipelineInputs=(pipeline:SourcePipeline):PipelineInput[]=>pipeline.inputs??[{sourceId:pipeline.sourceId,threadIds:pipeline.threadIds}];
 export function matchesPipelineKeywords(filter:PipelineFilter|undefined,event:SuperagentSourceEvent){
   if(!filter)return true;

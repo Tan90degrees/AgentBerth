@@ -55,7 +55,7 @@ try{
   }
   await page.locator('.activity-bar').getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('navigation',{name:'设置分类',exact:true}).getByRole('button',{name:'外观',exact:true}).click();
-  for(const [label,palette,bg] of [['液态玻璃','glass','1111/1c1c/2b2b'],['Claude 风格','claude','2525/2323/1f1f'],['蓝青','ocean','1717/1e1e/2929'],['经典中性','classic','2121/2121/2121']]){
+  for(const [label,palette,bg] of [['液态玻璃','glass','2323/2727/3333'],['Claude 风格','claude','2525/2626/2424'],['蓝青','ocean','1c1c/2222/2828'],['经典中性','classic','2121/2121/2121']]){
     await page.getByRole('radio',{name:label,exact:true}).click();await page.waitForFunction(palette=>document.documentElement.dataset.palette===palette,palette);
     await until(()=>themeSnapshot().then(value=>value.snapshot.includes('BG_'+bg)&&value.snapshot.includes('DRAFT_KEEP_THEME_DRAFT')));
     assert.equal((await rpc('state')).sessions.find(value=>value.id===themeSession.id).latestRun.id,themeRun.id);

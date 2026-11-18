@@ -56,8 +56,8 @@ test('same-mode palette changes synchronize once on API 64 and remain compatible
  const old=connection(63);await sync.sync(old.target,'dark','glass');await sync.sync(old.target,'dark','claude');assert.deepEqual(old.calls,[{method:'state',params:undefined},{method:'terminalAppearance',params:{appearance:'dark'}}]);
 });
 test('same-mode family changes notify subscribed TUI and update subsequent default color queries',async t=>{
- const {terminal,replies,theme}=fixture(t);await write(terminal,'\x1b[?2031h');theme.update('dark','claude');await write(terminal,'\x1b]11;?\x07');assert.deepEqual(replies,['\x1b[?997;1n','\x1b]11;rgb:2525/2323/1f1f\x1b\\']);
- theme.update('light','glass');await write(terminal,'\x1b]11;?\x07');assert.equal(replies.at(-1),'\x1b]11;rgb:f5f5/f9f9/ffff\x1b\\');
+ const {terminal,replies,theme}=fixture(t);await write(terminal,'\x1b[?2031h');theme.update('dark','claude');await write(terminal,'\x1b]11;?\x07');assert.deepEqual(replies,['\x1b[?997;1n','\x1b]11;rgb:2525/2626/2424\x1b\\']);
+ theme.update('light','glass');await write(terminal,'\x1b]11;?\x07');assert.equal(replies.at(-1),'\x1b]11;rgb:f7f7/f9f9/fdfd\x1b\\');
 });
 test('a failed sync remains retryable and late negotiation cannot recolor a replacement daemon',async()=>{
  const sync=new TerminalAppearanceSync(),current=connection();const rpc=current.raw.rpc;let fail=true;current.raw.rpc=async(method,params)=>{if(method==='terminalAppearance'&&fail){fail=false;throw new Error('disconnected');}return rpc(method,params);};

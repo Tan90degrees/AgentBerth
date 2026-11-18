@@ -1,6 +1,10 @@
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 import { pluginNoticeSchema, type ExtensionInfo, type PluginNotice } from '../shared/extensions';
 
+import type { TaskArtifactLocation } from './TaskArtifactPreview';
+
+export type OpenTaskArtifact = (location: TaskArtifactLocation, opener: HTMLElement | null) => void;
+
 // Mirror every semantic token from tokens.css into the sandboxed plugin view.
 // view-document.ts applies them on :root, so bundled plugin CSS can share the
 // main window's type scale, radii, motion and colors.
@@ -31,8 +35,10 @@ function pluginTheme(): Record<string, string> {
 
 export const PluginNoticeContext=createContext<(pluginName:string,notice:PluginNotice)=>void>(()=>{});
 
-export function HtmlExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void;initialTaskId?:string}){
+export function HtmlExtensionView({plugin,viewId,onError,initialTaskId,onArtifact}:{plugin:ExtensionInfo;viewId:string;onError:(error:string)=>void;initialTaskId?:string;onArtifact?:OpenTaskArtifact}){
   const frame=useRef<HTMLIFrameElement>(null);
+  const openArtifact=useRef(onArtifact);openArtifact.current=onArtifact;
+  const artifactRequest=useRef(0);
   const onNotice=useContext(PluginNoticeContext);
   const reportNotice=useRef(onNotice);reportNotice.current=onNotice;
   // Attach the message bridge before paint: a fast iframe can otherwise send
@@ -55,6 +61,16 @@ export function HtmlExtensionView({plugin,viewId,onError,initialTaskId}:{plugin:
   };
   const theme=pluginTheme;const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
     if(!alive||event.source!==frame.current?.contentWindow)return;
+    if (event.data?.kind==='agentberth-superagent-artifact' && openArtifact.current && ['superagent','superagent.custom'].includes(plugin.manifest.id)) {
+      const { id, path }=event.data;
+      if (typeof id!=='string'||id.length>100||typeof path!=='string'||path.length>512) return;
+      const request=++artifactRequest.current;
+      try {
+        const location=await window.berth.extensions({action:'call',id:plugin.manifest.id,command:'artifact_location',params:{id,path}}) as unknown as TaskArtifactLocation;
+        if (alive && request===artifactRequest.current) openArtifact.current?.(location, frame.current);
+      } catch (reason) { if (alive && request===artifactRequest.current) onError(String(reason)); }
+      return;
+    }
     if(event.data?.kind==='agentberth-plugin-notice'){
       const parsed=pluginNoticeSchema.safeParse({message:event.data.message,level:event.data.level});
       if(parsed.success)reportNotice.current(plugin.manifest.name,parsed.data);

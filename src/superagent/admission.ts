@@ -26,7 +26,7 @@ export function sourceAdmission(db:DatabaseSync,pipelines:ReturnType<typeof pipe
         else {
           // A source can be removed while its asynchronous matcher is running.
           const latest=pipelines.get(frozen.id);if(!latest?.enabled||latest.projectId!==frozen.projectId||!pipelineInputs(latest).some(input=>input.sourceId===source)||!alive())throw new Error('管道已变更或停止，请确认后重试');
-          const task=await create({...latest,projectId:frozen.projectId,autoApprove:frozen.autoApprove&&latest.autoApprove},source,envelope.event!);delivery.ticketId=task.id;
+          const task=await create({...latest,projectId:frozen.projectId,autoApprove:frozen.autoApprove&&latest.autoApprove,replyMode:frozen.replyMode===latest.replyMode?latest.replyMode:'off'},source,envelope.event!);delivery.ticketId=task.id;
         }
       }catch(error){delivery.error=String(error).slice(0,500);}
       const index=deliveries.findIndex(item=>item.pipelineId===frozen.id);if(index<0)deliveries.push(delivery);else deliveries[index]=delivery;

@@ -489,8 +489,15 @@ try {
   await page.keyboard.press('Escape');
   await assertTerminalGutter(page);
   step('flat workspace context keeps the terminal mounted without a fold control');
-  const terminalTop = await page.locator('.terminal-mount').evaluate(el => el.getBoundingClientRect().top);
-  assert.ok(terminalTop <= 150, 'Flat terminal top: ' + terminalTop);
+  const layout = await page.locator('.terminal-mount').evaluate(el => {
+    const app = el.closest('.app').getBoundingClientRect();
+    const titleBar = document.querySelector('.window-titlebar')?.getBoundingClientRect();
+    // The native title was outside the viewport before adding the colorable
+    // overlay. Measure workspace chrome from the same content boundary.
+    return { terminalTop: el.getBoundingClientRect().top - app.top, appTop: app.top, titleBarBottom: titleBar?.bottom ?? 0 };
+  });
+  assert.ok(layout.terminalTop <= 150, 'Flat terminal top: ' + layout.terminalTop);
+  assert.equal(layout.appTop, layout.titleBarBottom, 'The title bar must not cover the workbench');
   assert.equal(await page.getByRole('button',{name:'折叠顶部信息',exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'展开顶部信息',exact:true}).count(),0);
   assert.equal(await page.locator('.main>.workbench-header').count(),1);
