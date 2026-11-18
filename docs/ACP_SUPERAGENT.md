@@ -7,7 +7,7 @@ Pi 内置接入使用后台 API 65。ACP 使用稳定 v1 的逐行 JSON-RPC stdi
 使用 Node.js 22.19 或更新版安装 [Pi 官方 CLI](https://github.com/earendil-works/pi) 和 [OpenMA Pi ACP 适配器](https://github.com/openma-ai/pi-acp)：
 
 ```sh
-npm install -g @earendil-works/pi-coding-agent @openma/pi-acp
+npm install -g @earendil-works/pi-coding-agent @openma/pi-acp@0.1.8
 ```
 
 确保 `pi` 和 `openma-pi-acp` 都在 PATH 中。先在 Pi 中配置模型或登录，重启 AgentBerth 后，在「插件中心 → Agent 接入」的 **Pi (ACP)** 点 **测试连接**。在本机项目选择该 Agent 新建对话，或在 Superagent 管道中将它选为协调者或执行者。模型、思考级别、交互提问、工具结果和恢复入口以适配器协商的能力为准。

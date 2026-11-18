@@ -92,6 +92,7 @@ export class AcpSessions {
       }
     }
     const response=await transport.call(nativeId?(canResume?'session/resume':'session/load'):'session/new',{...(nativeId?{sessionId:nativeId}:{}),cwd:value.cwd,mcpServers:[],...(managedPi ? { additionalDirectories: [] } : {})});
+    if (managedPi && response._meta?.pi?.additionalDirectoriesEnforced !== true) throw new Error('Pi ACP 未启用当前任务的工作区范围');
     if(!nativeId&&typeof response.sessionId!=='string')throw new Error('ACP session/new 未返回会话 ID');
     value.state.nativeSessionId=nativeId??response.sessionId;value.state.configOptions=Array.isArray(response.configOptions)?response.configOptions:[];value.state.modes=response.modes;
     value.state.phase='ready';value.state.error=undefined;

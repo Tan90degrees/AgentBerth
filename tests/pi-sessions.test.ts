@@ -103,10 +103,15 @@ test('installed Pi ACP negotiates managed workspace support without calling a mo
   const work = await mkdtemp(path.join(tmpdir(), 'berth-pi-acp-'));
   t.after(() => rm(work, { recursive: true, force: true, maxRetries: 5 }));
   const modules = path.join(liveInstall!, 'node_modules');
+  const agentDir = path.join(work, 'pi');
+  await mkdir(agentDir);
+  await writeFile(path.join(agentDir, 'models.json'), JSON.stringify({
+    providers: { fixture: { baseUrl: 'http://127.0.0.1:1/v1', api: 'openai-completions', apiKey: 'local-test',
+      models: [{ id: 'fixture-model' }] } },
+  }));
   const transport = await AcpTransport.open({
     executable: 'node',
-    args: [path.join(modules, '@openma', 'pi-acp', 'dist', 'bin.js'), '--pi-package-dir',
-      path.join(modules, '@earendil-works', 'pi-coding-agent'), '--agent-dir', path.join(work, 'pi')],
+    args: [path.join(modules, '@openma', 'pi-acp', 'dist', 'bin.js'), '--agent-dir', agentDir, '--model', 'fixture/fixture-model'],
     env: { PI_ACP_DELEGATION: '1' }, startupTimeoutMs: 20000,
   }, work, async () => { throw new Error('Connection probe may not use tools'); }, () => {}, () => {});
   try {
@@ -118,5 +123,9 @@ test('installed Pi ACP negotiates managed workspace support without calling a mo
     assert.equal(info.agentCapabilities.loadSession, true);
     assert.ok(Object.hasOwn(info.agentCapabilities.sessionCapabilities, 'additionalDirectories'));
     assert.deepEqual(info.agentCapabilities._meta.pi.delegation, { readTextFile: true, writeTextFile: true, terminal: false });
+    const created = await transport.call('session/new', { cwd: work, mcpServers: [], additionalDirectories: [] });
+    assert.equal(typeof created.sessionId, 'string');
+    assert.equal(created._meta.pi.additionalDirectoriesEnforced, true);
+    await transport.call('session/close', { sessionId: created.sessionId });
   } finally { await transport.stop(); }
 });
