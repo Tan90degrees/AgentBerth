@@ -60,7 +60,8 @@ test('Pi preview bounds do not apply to full history and legacy linear records s
   assert.equal(full.messages.at(-1)?.text.length, 50000);
   assert.equal(full.messages[0].text, 'msg 0');
   assert.equal(piResumeCommand('pwsh', file, 'linux'), 'pi --session "$env:AGENTBERTH_PI_SESSION_FILE"');
-  assert.match(piResumeCommand('powershell.exe', file, 'win32'), /Get-Command pi\.cmd.*--session "\$env:AGENTBERTH_PI_SESSION_FILE"$/);
+  assert.equal(piResumeCommand('powershell.exe', file, 'win32'), '& $env:ComSpec --% /d /v:off /c pi --session "%AGENTBERTH_PI_SESSION_FILE%"');
+  assert.throws(() => piResumeCommand('powershell.exe', 'C:\\unsafe%PATH%\\file.jsonl', 'win32'), /安全续接/);
   assert.match(piLaunchCommand('powershell.exe', 'fresh', 'win32'), /Get-Command pi\.cmd.*--session-id fresh$/);
   assert.equal(piResumeCommand('/bin/bash', file), 'pi --session "$AGENTBERTH_PI_SESSION_FILE"');
   assert.throws(() => piResumeCommand('cmd.exe', 'C:\\unsafe!\\file.jsonl'), /安全续接/);

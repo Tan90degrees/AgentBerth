@@ -164,8 +164,14 @@ export function piLaunchCommand(executable: string, nativeId: string, platform =
 /** Pass the validated path as environment data, never interpolate it into shell input. */
 export function piResumeCommand(executable: string, file: string, platform = process.platform): string {
   const shell = shellName(executable);
-  if (shell === 'powershell' || shell === 'pwsh') return piLauncher(shell, platform) + ' --session "$env:AGENTBERTH_PI_SESSION_FILE"';
-  if (shell === 'cmd' && !/[!%"\r\n]/.test(file)) return 'pi --session "%AGENTBERTH_PI_SESSION_FILE%"';
+  const powershell = shell === 'powershell' || shell === 'pwsh';
+  const usesCmd = shell === 'cmd' || powershell && platform === 'win32';
+  if (usesCmd && !/[!%"\r\n]/.test(file)) {
+    // Keep the path quoted in CMD, including when npm's launcher is a .cmd shim.
+    const command = 'pi --session "%AGENTBERTH_PI_SESSION_FILE%"';
+    return powershell ? '& $env:ComSpec --% /d /v:off /c ' + command : command;
+  }
+  if (powershell && !usesCmd) return 'pi --session "$env:AGENTBERTH_PI_SESSION_FILE"';
   if (['bash', 'sh', 'dash', 'zsh', 'fish', 'ksh'].includes(shell)) return 'pi --session "$AGENTBERTH_PI_SESSION_FILE"';
   throw new Error('这个终端或路径无法安全续接 Pi，请用 PowerShell 或 Bash，或在 Pi 中使用 /resume');
 }
