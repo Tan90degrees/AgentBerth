@@ -215,9 +215,16 @@ function secureWindow(target: BrowserWindow, detached = false) {
       void connection.rpc('state').then(data => { if (!target.isDestroyed()) target.webContents.send('berth:event', { event: 'state', data }); }).catch(() => {});
     }
   });
+  const query: Record<string,string> = {};
+  if (detached) query.view = 'ssh';
+  if (themedTitleBar) query.titleBar = String(titleBarHeight);
   const developmentUrl = process.env.AGENTBERTH_DEV_URL;
-  if (developmentUrl === 'http://127.0.0.1:5173') return target.loadURL(developmentUrl + (detached ? '?view=ssh' : ''));
-  return target.loadFile(path.join(__dirname, 'renderer', 'index.html'), detached ? { query: { view: 'ssh' } } : {});
+  if (developmentUrl === 'http://127.0.0.1:5173') {
+    const url = new URL(developmentUrl);
+    url.search = new URLSearchParams(query).toString();
+    return target.loadURL(url.href);
+  }
+  return target.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query });
 }
 function publishPet() {
   if (petPublishTimer || !pet || quitting) return;
@@ -352,6 +359,24 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
     case 'showSession': showPetSession(); return;
   }
 });
+const themedTitleBar = process.platform === 'win32' || process.platform === 'linux';
+const titleBarHeight = 32;
+function windowColors() {
+  const palette = uiPalettes[terminalPaletteFamily][terminalColorScheme];
+  return { backgroundColor: palette['--bg'], overlay: { color: palette['--bg'], symbolColor: palette['--text'], height: titleBarHeight } };
+}
+function workspaceWindowAppearance(): Pick<Electron.BrowserWindowConstructorOptions, 'backgroundColor'|'titleBarStyle'|'titleBarOverlay'> {
+  const { backgroundColor, overlay } = windowColors();
+  return themedTitleBar ? { backgroundColor, titleBarStyle: 'hidden', titleBarOverlay: overlay } : { backgroundColor };
+}
+function syncWindowAppearance() {
+  const { backgroundColor, overlay } = windowColors();
+  for (const target of [window, sshWindow]) {
+    if (!target || target.isDestroyed()) continue;
+    target.setBackgroundColor(backgroundColor);
+    if (themedTitleBar) target.setTitleBarOverlay(overlay);
+  }
+}
 function sshWindowState(): SshWindowState { return { detached: !!sshWindow && !sshWindow.isDestroyed(), sessionId: sshWindowSession }; }
 function publishSshWindow() {
   const state = sshWindowState();
@@ -361,7 +386,7 @@ function publishSshWindow() {
 }
 async function openSshWindow() {
   if (sshWindow && !sshWindow.isDestroyed()) { if (sshWindow.isMinimized()) sshWindow.restore(); sshWindow.show(); sshWindow.focus(); return; }
-  const target = new BrowserWindow({ width: 1100, height: 700, minWidth: 640, minHeight: 360, title: 'AgentBerth · SSH', icon: iconFile, show: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const target = new BrowserWindow({ width: 1100, height: 700, minWidth: 640, minHeight: 360, title: 'AgentBerth · SSH', icon: iconFile, show: false, ...workspaceWindowAppearance(), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   sshWindow = target;
   publishSshWindow();
   target.once('ready-to-show', () => { if (!quitting) { target.show(); target.focus(); } });
@@ -370,7 +395,7 @@ async function openSshWindow() {
   catch (error) { if (!target.isDestroyed()) target.destroy(); throw error; }
 }
 function createWindow() {
-  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, show: false, backgroundColor: nativeTheme.shouldUseDarkColors ? '#212121' : '#ffffff', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, show: false, ...workspaceWindowAppearance(), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window.once('ready-to-show',()=>{if(!quitting)window?.show();});
   window.on('close', event => { if (!quitReady) { event.preventDefault(); window?.hide(); } });
   window.on('closed', () => { window = null; });
@@ -453,8 +478,8 @@ ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown)
   await connection!.rpc('deleteSshConnection',{connectionId}); sshVault.delete(connectionId);
 });
 ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:appearance',async(event,mode:unknown,resolved:unknown,palette:unknown)=>{trusted(event);requireExtension('appearance');if(palette!==undefined&&uiPalette(palette)!==palette)throw new Error('无效配色');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');if(resolved!==undefined&&resolved!=='dark'&&resolved!=='light')throw new Error('无效主题');terminalPaletteFamily=uiPalette(palette);nativeTheme.themeSource=mode as 'system'|'light'|'dark';terminalColorScheme=mode==='system'?(resolved as ResolvedAppearance|undefined)??(nativeTheme.shouldUseDarkColors?'dark':'light'):mode as ResolvedAppearance;for(const target of [window,sshWindow])target?.setBackgroundColor(uiPalettes[terminalPaletteFamily][terminalColorScheme]['--bg']);await syncTerminalAppearance();});
-nativeTheme.on('updated',()=>{const next:ResolvedAppearance=nativeTheme.shouldUseDarkColors?'dark':'light';if(next!==observedNativeScheme){observedNativeScheme=next;terminalColorScheme=next;}for(const target of [window,sshWindow])target?.setBackgroundColor(uiPalettes[terminalPaletteFamily][terminalColorScheme]['--bg']);void syncTerminalAppearance().catch(console.error);});
+ipcMain.handle('berth:appearance',async(event,mode:unknown,resolved:unknown,palette:unknown)=>{trusted(event);requireExtension('appearance');if(palette!==undefined&&uiPalette(palette)!==palette)throw new Error('无效配色');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');if(resolved!==undefined&&resolved!=='dark'&&resolved!=='light')throw new Error('无效主题');terminalPaletteFamily=uiPalette(palette);nativeTheme.themeSource=mode as 'system'|'light'|'dark';terminalColorScheme=mode==='system'?(resolved as ResolvedAppearance|undefined)??(nativeTheme.shouldUseDarkColors?'dark':'light'):mode as ResolvedAppearance;syncWindowAppearance();await syncTerminalAppearance();});
+nativeTheme.on('updated',()=>{const next:ResolvedAppearance=nativeTheme.shouldUseDarkColors?'dark':'light';if(next!==observedNativeScheme){observedNativeScheme=next;terminalColorScheme=next;}syncWindowAppearance();void syncTerminalAppearance().catch(console.error);});
 ipcMain.handle('berth:mcpConfig', (event, provider: unknown = 'claude') => {
   requireExtension('ssh');
   trusted(event); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');

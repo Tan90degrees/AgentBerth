@@ -10,10 +10,10 @@ import { previewStyle, usePreviewAppearance } from './preview-settings';
 
 let imageReaders = 0;
 const waitingImages: (() => void)[] = [];
-async function localImage(projectId: string, path: string, cancelled: () => boolean): Promise<Preview | null> {
+async function localImage(projectId: string, worktreePath: string | null, path: string, cancelled: () => boolean): Promise<Preview | null> {
   if (imageReaders < 1) imageReaders++;
   else await new Promise<void>(resolve => waitingImages.push(resolve));
-  try { return cancelled() ? null : await window.berth.rpc<Preview>('previewFile', { projectId, path }); }
+  try { return cancelled() ? null : await window.berth.rpc<Preview>('previewFile', { projectId, worktreePath, path }); }
   finally { const next = waitingImages.shift(); if (next) next(); else imageReaders--; }
 }
 
@@ -31,7 +31,7 @@ function MarkdownCode({ children, className }: { children?: ReactNode; className
   const html = useHighlightedCode(text, language ?? 'plaintext', !!language && text.length <= 64000);
   return html === null ? <code className={className}>{children}</code> : <code className={`hljs ${className ?? ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
-function MarkdownImage({ src, alt, projectId, path }: { src?: string; alt?: string; projectId: string; path: string }) {
+function MarkdownImage({ src, alt, projectId, worktreePath, path }: { src?: string; alt?: string; projectId: string; worktreePath: string | null; path: string }) {
   const [image, setImage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const local = previewLink(path, src ?? '');
@@ -39,26 +39,26 @@ function MarkdownImage({ src, alt, projectId, path }: { src?: string; alt?: stri
     let cancelled = false;
     setImage(null); setFailed(false);
     if (!src || !local) return;
-    void localImage(projectId, local.path, () => cancelled).then(value => {
+    void localImage(projectId, worktreePath, local.path, () => cancelled).then(value => {
       if (!cancelled) { setImage(value?.kind === 'image' ? value.content : null); setFailed(value?.kind !== 'image'); }
     }).catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [src, projectId, local?.path]);
+  }, [src, projectId, worktreePath, local?.path]);
   if (image) return <img src={image} alt={alt ?? ''} loading="lazy" onError={() => { setImage(null); setFailed(true); }} />;
   if (src && /^https?:\/\//i.test(src)) return <a href={src} onClick={event => { event.preventDefault(); void window.berth.openExternal(src).catch(() => {}); }}>外部图片：{alt || src}</a>;
   return <span className="markdown-image-placeholder">{failed ? '无法预览图片' : '图片'}{alt ? `：${alt}` : ''}</span>;
 }
-export function MarkdownDocument({ content, projectId, path, onNavigate, onError }: { content: string; projectId: string; path: string; onNavigate: (path: string, anchor?: string) => void; onError: (error: string) => void }) {
+export function MarkdownDocument({ content, projectId, worktreePath = null, path, onNavigate, onError }: { content: string; projectId: string; worktreePath?: string | null; path: string; onNavigate: (path: string, anchor?: string) => void; onError: (error: string) => void }) {
   const components = useMemo<Components>(() => ({
     h1: heading(1), h2: heading(2), h3: heading(3), h4: heading(4), h5: heading(5), h6: heading(6), code: MarkdownCode,
-    img: ({ src, alt }) => <MarkdownImage src={typeof src === 'string' ? src : undefined} alt={alt} projectId={projectId} path={path} />,
+    img: ({ src, alt }) => <MarkdownImage src={typeof src === 'string' ? src : undefined} alt={alt} projectId={projectId} worktreePath={worktreePath} path={path} />,
     a: ({ href, children }) => !href ? <span>{children}</span> : <a href={href} onClick={event => {
       event.preventDefault();
       if (/^https?:\/\//i.test(href)) { void window.berth.openExternal(href).catch(error => onError(String(error))); return; }
       const target = previewLink(path, href);
       if (target) onNavigate(target.path, target.anchor); else onError('此链接无法在项目中打开');
     }}>{children}</a>,
-  }), [projectId, path, onNavigate, onError]);
+  }), [projectId, worktreePath, path, onNavigate, onError]);
   return <article className="markdown-document"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={components}>{content}</Markdown></article>;
 }
 function CodePreview({ text, language, appearance, position }: { text: string; language: string; appearance: PreviewAppearance; position?: { line: number; column: number; nonce: number } | null }) {
@@ -77,7 +77,7 @@ function CodePreview({ text, language, appearance, position }: { text: string; l
   const targetLine = position ? Math.min(position.line, lineNumbers.length) : 0;
   return <div ref={host} className="source-preview" tabIndex={0} aria-label="文件源码"><pre className="source-lines" aria-hidden="true">{targetLine ? <>{lineNumbers.slice(0, targetLine - 1).join('\n')}{targetLine > 1 ? '\n' : ''}<span className="source-target-line">{targetLine}</span>{targetLine < lineNumbers.length ? '\n' : ''}{lineNumbers.slice(targetLine).join('\n')}</> : lineNumbers.join('\n')}</pre><pre className="source-code" style={targetLine ? { backgroundImage: 'linear-gradient(var(--selected), var(--selected))', backgroundSize: `100% ${appearance.size * 1.7}px`, backgroundPosition: `0 ${14 + (targetLine - 1) * appearance.size * 1.7}px`, backgroundRepeat: 'no-repeat' } : undefined}>{highlighted !== null ? <code className="hljs" data-language={language} dangerouslySetInnerHTML={{ __html: highlighted }} /> : <code data-language={language}>{text}</code>}</pre></div>;
 }
-export default function FilePreview({ position, file, projectId, markdown, onMarkdown, onNavigate, onRefresh, onError, onDiff }: { onDiff?: (staged: boolean) => void; position?: { path: string; line: number; column: number; nonce: number } | null; file: Preview; projectId: string; markdown: boolean; onMarkdown: (value: boolean) => void; onNavigate: (path: string, anchor?: string) => void; onRefresh: () => void; onError: (error: string) => void }) {
+export default function FilePreview({ position, file, projectId, worktreePath = null, markdown, onMarkdown, onNavigate, onRefresh, onError, onDiff }: { onDiff?: (staged: boolean) => void; position?: { path: string; line: number; column: number; nonce: number } | null; file: Preview; projectId: string; worktreePath?: string | null; markdown: boolean; onMarkdown: (value: boolean) => void; onNavigate: (path: string, anchor?: string) => void; onRefresh: () => void; onError: (error: string) => void }) {
   const [copied, setCopied] = useState(false);
   const appearance = usePreviewAppearance();
   const [language, setLanguage] = useState('file');
@@ -99,7 +99,7 @@ export default function FilePreview({ position, file, projectId, markdown, onMar
     </div>
     {file.truncated && <p className="file-preview-notice" role="status">文件较大，仅预览开头部分内容。</p>}
     <div className="file-preview-content" style={previewStyle(appearance)}>
-    {file.kind === 'text' ? markdown && isMarkdown(file.name) ? <div className="markdown-scroll"><MarkdownDocument content={file.content ?? ''} projectId={projectId} path={file.path} onNavigate={onNavigate} onError={onError} /></div> : <CodePreview position={position?.path === file.path ? position : null} text={file.content ?? ''} language={selectedLanguage} appearance={appearance} /> : file.kind === 'image' ? <div className="image-preview"><img src={file.content ?? ''} alt={file.name} /><span>{file.name}</span></div> : <div className="file-preview-empty"><span>无法直接预览</span><p>{file.message ?? '此文件不是可预览的文本或图片。'}</p><small>{fileSize(file.size)}</small></div>}
+    {file.kind === 'text' ? markdown && isMarkdown(file.name) ? <div className="markdown-scroll"><MarkdownDocument content={file.content ?? ''} projectId={projectId} worktreePath={worktreePath} path={file.path} onNavigate={onNavigate} onError={onError} /></div> : <CodePreview position={position?.path === file.path ? position : null} text={file.content ?? ''} language={selectedLanguage} appearance={appearance} /> : file.kind === 'image' ? <div className="image-preview"><img src={file.content ?? ''} alt={file.name} /><span>{file.name}</span></div> : <div className="file-preview-empty"><span>无法直接预览</span><p>{file.message ?? '此文件不是可预览的文本或图片。'}</p><small>{fileSize(file.size)}</small></div>}
     </div>
   </>;
 }

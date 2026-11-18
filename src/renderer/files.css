@@ -221,3 +221,7 @@
 .sidebar .sidebar-tabs{align-self:flex-start;flex:0 0 auto;width:max-content;max-width:calc(100% - 8px);margin:8px 4px 6px;padding:2px;gap:2px}
 .sidebar .sidebar-tabs button{flex:0 0 auto;min-height:27px;padding:4px 7px;gap:4px;font-size: var(--fs-xs);line-height:17px}
 .sidebar .sidebar-tabs button svg{width:15px;height:15px}
+
+.dialog:has(.task-artifact-preview) { width: min(960px, calc(100vw - 48px)); }
+.task-artifact-preview { display:flex; flex-direction:column; height:min(62vh, 660px); min-width:0; }
+.task-artifact-preview .file-preview-tools { flex-wrap:wrap; }

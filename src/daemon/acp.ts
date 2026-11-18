@@ -4,6 +4,7 @@ import type { AgentDefinition, Run, Session, ServerEvent } from '../shared/proto
 import type { Store } from './store';
 import { AcpTransport, AcpRpcError } from './acp-transport';
 import { AcpClientTools } from './acp-client-tools';
+import { reviewableSuperagentTool } from './superagent-tool-policy';
 import type {AgentActivity} from '../shared/pet';
 import {elicitationForm,elicitationError,type AcpElicitation,type ElicitationContent} from '../shared/acp-elicitation';
 import {validateElicitationPatterns} from './elicitation-patterns';
@@ -61,7 +62,7 @@ export class AcpSessions {
       const transport=await AcpTransport.open(definition.acp,cwd,(method,params)=>this.clientRequest(value,method,params),(method,params)=>this.notification(value,method,params),error=>{void this.ended(value,error).catch(()=>{});});value.transport=transport;
       if(value.stopping||this.closed){await transport.stop();throw new Error('ACP 连接已取消');}
       if(transport.pid){this.store.setPid(run.id,transport.pid);run.pid=transport.pid;}
-      const info=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:true,writeTextFile:true},terminal:true,elicitation:{form:{}}},clientInfo:{name:'agentberth',title:'AgentBerth',version:'0.21.0'}});
+      const info=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:true,writeTextFile:true},terminal:session.owner?.kind!=='superagent',elicitation:{form:{}}},clientInfo:{name:'agentberth',title:'AgentBerth',version:'0.21.0'}});
       if(info.protocolVersion!==1)throw new Error('Agent 未协商兼容的 ACP v1 协议');
       value.state.agentInfo=bounded(info.agentInfo);value.state.capabilities=bounded(info.agentCapabilities)??{};value.state.authMethods=Array.isArray(info.authMethods)?info.authMethods.slice(0,20):[];
       if(saved.fingerprint&&saved.fingerprint!==fingerprint)this.append(value,'notice','Agent 或工作区配置已变化，下一条消息使用新的 ACP 会话；此前记录保留。');
@@ -165,9 +166,22 @@ export class AcpSessions {
     }
     if(method==='session/request_permission'){
       if(!Array.isArray(params.options)||!params.options.length||params.options.length>20)throw new Error('ACP 授权选项无效');
-      const options=params.options.map((item:any)=>{if(typeof item.optionId!=='string'||typeof item.name!=='string'||typeof item.kind!=='string')throw new Error('ACP 授权选项无效');return {optionId:item.optionId,name:item.name,kind:item.kind};});
+      let options=params.options.map((item:any)=>{if(typeof item.optionId!=='string'||typeof item.name!=='string'||typeof item.kind!=='string')throw new Error('ACP 授权选项无效');return {optionId:item.optionId,name:item.name,kind:item.kind};});
+      if (value.session.owner?.kind==='superagent') {
+        if (!reviewableSuperagentTool(params.toolCall)) {
+          this.append(value,'error','Superagent 已拒绝命令执行、删除或无法验证的工具授权', { policy:'superagent-tool-denied' });
+          const reject=options.find((item:AcpPermission['options'][number])=>item.kind==='reject_once');
+          return {outcome:reject?{outcome:'selected',optionId:reject.optionId}:{outcome:'cancelled'}};
+        }
+        options=options.filter((item:AcpPermission['options'][number])=>item.kind==='allow_once'||item.kind==='reject_once');
+        if (!options.length) return {outcome:{outcome:'cancelled'}};
+      }
       const id='permission-'+Date.now()+'-'+Math.random().toString(36).slice(2),permission:AcpPermission={id,title:String(params.toolCall?.title??'Agent 请求授权').slice(0,1000),options,toolCall:bounded(params.toolCall)};
       return new Promise(resolve=>{value.permissions.set(id,{value:permission,resolve});value.state.phase='permission';this.append(value,'permission',permission.title,{permissionId:id});this.publish(value);});
+    }
+    if (method.startsWith('terminal/') && value.session.owner?.kind==='superagent') {
+      this.append(value,'error','Superagent 已拒绝通过宿主执行命令', { policy:'superagent-tool-denied' });
+      throw new AcpRpcError(-32601,'Superagent 不提供任意命令执行，请使用受限工作区文件操作');
     }
     if(method.startsWith('fs/')||method.startsWith('terminal/'))return value.tools.call(method,params);
     throw new AcpRpcError(-32601,'未声明此 ACP 客户端能力：'+method);
