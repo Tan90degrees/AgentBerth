@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { logLine, pageHash, pageFromDocument, pageToDocument, skillFromDocument, skillToDocument, truncate, validateSkillName, slugify } from './core';
+import { sourceIdPattern, sourceMime, validSourcePath } from './source-directory';
 import type { WikiAnswer, WikiDraft, WikiLint, WikiPage, WikiSkill, WikiSource } from './types';
 
 const IMAGE_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -39,6 +40,7 @@ export class WikiStore {
     if (info.size <= 1024 * 1024) this.cache.set(file, { stamp, value });
     return structuredClone(value);
   }
+  readonly sourceFilesRoot: string;
   private readonly wikiDir: string;
   private readonly rawDir: string;
   private readonly assetDir: string;
@@ -51,10 +53,11 @@ export class WikiStore {
     this.wikiDir = path.join(root, 'wiki');
     this.rawDir = path.join(root, 'raw');
     this.assetDir = path.join(root, 'raw', 'assets');
+    this.sourceFilesRoot = path.join(root, 'raw', 'files');
     this.skillDir = path.join(root, 'skills');
     this.draftDir = path.join(root, 'drafts');
     this.historyDir = path.join(root, 'history');
-    for (const dir of [root, this.wikiDir, this.rawDir, this.assetDir, this.skillDir, this.draftDir, this.historyDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const dir of [root, this.wikiDir, this.rawDir, this.assetDir, this.sourceFilesRoot, this.skillDir, this.draftDir, this.historyDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 
   private file(dir: string, name: string, suffix: string): string {
@@ -120,6 +123,23 @@ export class WikiStore {
   addDocument(bytes: Uint8Array): string {
     const name = randomUUID() + '.pdf'; writeFileSync(path.join(this.assetDir, name), bytes, { mode: 0o600 }); return name;
   }
+  sourceDirectory(id: string): string {
+    if (!sourceIdPattern.test(id)) throw new Error('素材 ID 无效');
+    if (!lstatSync(this.sourceFilesRoot).isDirectory()) throw new Error('素材目录不可用');
+    return path.join(this.sourceFilesRoot, id);
+  }
+  sourceFile(id: string, name: string, forWrite = false): string {
+    if (!validSourcePath(name) || !sourceMime(name)) throw new Error('原始文件路径无效');
+    let target = this.sourceDirectory(id);
+    const parts = name.split('/');
+    for (const part of ['', ...parts.slice(0, -1)]) {
+      target = path.join(target, part);
+      if ((!forWrite || existsSync(target)) && !lstatSync(target).isDirectory()) throw new Error('素材路径指向非目录');
+    }
+    target = path.join(target, parts.at(-1)!);
+    if ((!forWrite || existsSync(target)) && !lstatSync(target).isFile()) throw new Error('素材路径指向非普通文件');
+    return target;
+  }
   assetFile(name: string): string { return this.file(this.assetDir, name, ''); }
   removeAsset(name: string): void { rmSync(this.assetFile(name), { force: true }); }
   assetBytes(name: string): Uint8Array { return new Uint8Array(readFileSync(this.file(this.assetDir, name, ''))); }
@@ -141,7 +161,9 @@ export class WikiStore {
   }
   sourceHash(source: Pick<WikiSource, 'title' | 'text' | 'images' | 'vision'> & { document?: { hash?: string } }): string {
     const identity: (string | string[])[] = [source.text, source.images]; if (source.document?.hash) identity.push(source.document.hash);
-    const parts=(source as WikiSource).parts;if(parts?.length)identity.push(parts.map(part=>[part.id,part.name,part.hash].join(':')));
+    const { parts, directory } = source as WikiSource;
+    if (parts?.length) identity.push(parts.map(part => [part.id, part.name, part.hash].join(':')));
+    if (directory) identity.push(directory);
     return createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 32);
   }
 

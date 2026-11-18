@@ -4,12 +4,17 @@ import path from 'node:path';
 import { unzipSync, zipSync } from 'fflate';
 import { byteTruncate, pageHash, slugify } from './core';
 import type { WikiAnswer, WikiPage, WikiSource } from './types';
+import { sourceIdPattern, sourceMime, validSourcePath } from './source-directory';
 import type { WikiStore } from './store';
 
 export interface EditorDraft { key: string; fields: Record<string, string>; at: string; }
 export interface TrashEntry { id: string; kind: 'page' | 'source'; title: string; at: string; page?: WikiPage; source?: WikiSource; }
 const allowed = /^(?:wiki\/[^/]+\.md|raw\/[^/]+\.json|raw\/assets\/[^/]+\.(?:png|jpg|jpeg|webp|gif|pdf)|skills\/[a-z0-9-]+\/SKILL\.md|(?:drafts|trash|answers|editor-drafts)\/[^/]+\.json|history\/[^/]+\.md|(?:schema|index|log)\.md|(?:meta|tasks)\.json)$/;
-const safePath = (name: string) => name.length <= 240 && !name.includes('..') && !/[\\\x00<>:"|?*]/.test(name) && allowed.test(name);
+function originalEntry(name: string) {
+  const match = /^raw\/files\/([a-f0-9-]{36})\/(.+)$/.exec(name);
+  return match && validSourcePath(match[2]) && sourceMime(match[2]) ? { id: match[1], name: match[2] } : null;
+}
+const safePath = (name: string) => !!originalEntry(name) || name.length <= 240 && !name.includes('..') && !/[\\\x00<>:"|?*]/.test(name) && allowed.test(name);
 const MAX_ARCHIVE = 64 * 1024 * 1024;
 
 /** User state and portable data. Credentials, host settings and inbox watch
@@ -50,7 +55,8 @@ export class WikiWorkspace {
       for(const part of source.parts??[])if(part.asset)retained.add(part.asset);
     }
     // Pages, review bodies and historical versions may still embed an asset.
-    const texts=[...this.store.listPages().map(page=>page.body),...all.filter(item=>!selected.includes(item)).flatMap(item=>item.page?[item.page.body]:[]),...this.store.listDrafts().flatMap(draft=>draft.pages.flatMap(page=>[page.body,page.previous??''])),...this.editorDrafts().flatMap(draft=>Object.values(draft.fields))];
+    const pages=this.store.listPages();
+    const texts=[...pages.map(page=>page.body),...all.filter(item=>!selected.includes(item)).flatMap(item=>item.page?[item.page.body]:[]),...this.store.listDrafts().flatMap(draft=>draft.pages.flatMap(page=>[page.body,page.previous??''])),...this.editorDrafts().flatMap(draft=>Object.values(draft.fields))];
     const history=path.join(this.store.root,'history');
     if(existsSync(history))for(const file of readdirSync(history,{withFileTypes:true}))if(file.isFile()&&file.name.endsWith('.md'))texts.push(readFileSync(path.join(history,file.name),'utf8'));
     for(const body of texts)for(const name of body.match(/[a-zA-Z0-9-]+\.(?:png|jpe?g|webp|gif|pdf)\b/g)??[])retained.add(name);
@@ -59,6 +65,14 @@ export class WikiWorkspace {
     for(const entry of selected)rmSync(path.join(this.folder('trash'),entry.id+'.json'));
     let assetsRemoved=0,retainedAssets=0;const failedAssets:string[]=[];
     for(const name of assets){if(retained.has(name)){retainedAssets++;continue;}try{const file=this.store.assetFile(name);if(existsSync(file)){rmSync(file);assetsRemoved++;}}catch{failedAssets.push(name);}}
+    for(const entry of selected){
+      const source=entry.source;
+      if(!source?.directory)continue;
+      const count=source.parts?.length??0, prefix='wiki-source:'+source.id+'/';
+      if(pages.some(page=>page.sources.includes(source.id))||texts.some(body=>body.includes(prefix))){retainedAssets+=count;continue;}
+      try{rmSync(this.store.sourceDirectory(source.id),{recursive:true,force:true});assetsRemoved+=count;}
+      catch{failedAssets.push(source.id);}
+    }
     this.store.invalidate();return {deleted:selected.length,assetsRemoved,retainedAssets,failedAssets:failedAssets.slice(0,20),failedAssetCount:failedAssets.length};
   }
   deleteReviewEditors(id: string): void {
@@ -113,7 +127,7 @@ export class WikiWorkspace {
     const visit = (dir: string, prefix = '') => {
       for (const item of readdirSync(dir, { withFileTypes: true })) {
         const name = prefix + item.name;
-        if (item.isDirectory() && /^(?:wiki|raw|raw\/assets|skills|skills\/[a-z0-9-]+|drafts|history|trash|answers|editor-drafts)$/.test(name)) visit(path.join(dir, item.name), name + '/');
+        if (item.isDirectory() && (/^(?:wiki|raw|raw\/assets|raw\/files|skills|skills\/[a-z0-9-]+|drafts|history|trash|answers|editor-drafts)$/.test(name) || /^raw\/files\/[a-f0-9-]{36}(?:\/|$)/.test(name))) visit(path.join(dir, item.name), name + '/');
         else if (item.isFile() && safePath(name)) { total += statSync(path.join(dir, item.name)).size; if (files.length >= 10000 || total > 256 * 1024 * 1024) throw new Error('备份原始数据超过 256 MiB 或 10000 个文件'); files.push(name); }
       }
     };
@@ -139,6 +153,7 @@ export class WikiWorkspace {
     if (metadata.format !== 'agentberth-wiki' || metadata.version !== 1) throw new Error('不是支持的知识库备份');
     delete files['wiki-backup.json'];
     for (const [name, data] of Object.entries(files)) {
+      if (originalEntry(name)) continue;
       const text = new TextDecoder().decode(data);
       if (name.endsWith('.json')) {
         const item = JSON.parse(text), object = item && typeof item === 'object';
@@ -148,6 +163,7 @@ export class WikiWorkspace {
         if (item.document && (typeof item.document.asset !== 'string' || !/^[a-f0-9-]+\.pdf$/.test(item.document.asset) || !Array.isArray(item.document.ranges))) throw new Error('备份 PDF 元数据无效');
         const source=item.source??item;
         if(source.parts!==undefined&&(!Array.isArray(source.parts)||typeof source.text!=='string'||source.parts.some((part:NonNullable<WikiSource['parts']>[number])=>!part||typeof part.id!=='string'||typeof part.name!=='string'||!['text','image','pdf'].includes(part.kind)||typeof part.hash!=='string'||!Number.isSafeInteger(part.start)||!Number.isSafeInteger(part.end)||part.start<0||part.end<part.start||part.end>source.text.length||(part.asset!==undefined&&!/^[a-f0-9-]+\.(?:png|jpe?g|webp|gif|pdf)$/.test(part.asset)))))throw new Error('备份混合素材元数据无效');
+        if(source.directory!==undefined&&(!Array.isArray(source.directory)||!sourceIdPattern.test(source.id)||source.directory.some((name:unknown)=>typeof name!=='string'||!validSourcePath(name))||!Array.isArray(source.parts)||source.parts.some((part:NonNullable<WikiSource['parts']>[number])=>!validSourcePath(part.name)||!sourceMime(part.name))))throw new Error('备份素材目录元数据无效');
         if (name.startsWith('answers/') && !validAnswer(item)) throw new Error('备份问答无效');
         if (name === 'meta.json' && (!Array.isArray(item.answers) || !item.answers.every(validAnswer))) throw new Error('备份索引无效');
         if (name === 'tasks.json' && (!Array.isArray(item) || item.some((task: { id?: string; kind?: string; status?: string }) => !task || typeof task.id !== 'string' || typeof task.kind !== 'string' || typeof (task as { label?: string }).label !== 'string' || typeof (task as { startedAt?: string }).startedAt !== 'string' || !['queued', 'running', 'done', 'failed', 'cancelled'].includes(task.status ?? '')))) throw new Error('备份任务记录无效');
@@ -176,13 +192,15 @@ export class WikiWorkspace {
     let imported = 0, skipped = 0, removed = 0;
     try {
       for (const [name, value] of Object.entries(files)) {
-        const file = path.join(this.store.root, name);
+        const raw = originalEntry(name);
+        const file = raw ? this.store.sourceFile(raw.id, raw.name, true) : path.join(this.store.root, name);
         if (existsSync(file) && (!overwrite || Buffer.from(value).equals(readFileSync(file)))) { skipped++; continue; }
         before.set(file, existsSync(file) ? readFileSync(file) : null); this.write(file, value); imported++;
       }
       if (exact) for (const name of previousFiles) {
         if (Object.hasOwn(files, name)) continue;
-        const file = path.join(this.store.root, name); before.set(file, readFileSync(file)); rmSync(file); this.cache.delete(file); removed++;
+        const raw = originalEntry(name);
+        const file = raw ? this.store.sourceFile(raw.id, raw.name, true) : path.join(this.store.root, name); before.set(file, readFileSync(file)); rmSync(file); this.cache.delete(file); removed++;
       }
     } catch (error) { for (const [file, value] of before) if (value === null) rmSync(file, { force: true }); else this.write(file, value); throw error; }
     this.store.invalidate(); return { imported, skipped, removed, rollback };

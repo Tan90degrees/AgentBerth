@@ -1,6 +1,8 @@
 import { buildIndex, extractLinks, byteTruncate } from './core';
 import { withWriteLock } from './store';
 import { WikiTransfers } from './transfers';
+import path from 'node:path';
+import { sourceMime, sourceReference } from './source-directory';
 import type { WikiService } from './service';
 import type { WikiTask } from './types';
 type Params = Record<string, unknown>;
@@ -45,11 +47,22 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   cmd('purge_trash','永久删除回收记录及未引用附件',id,['id'],p=>write(()=>workspace.purgeTrash(str(p,'id'))));
   cmd('clear_trash','清空回收站及未引用附件',{},[],()=>write(()=>workspace.purgeTrash()));
   cmd('delete_draft','删除审阅记录，保留页面和素材',id,['id'],p=>service.deleteDraft(str(p,'id')).then(()=>true));
-  cmd('delete_impact', '删除前查看引用影响', { kind: field('string'), ...id }, ['kind', 'id'], p => ({ pages: service.listPages().filter(item => p.kind === 'source' ? item.sources.includes(str(p, 'id')) || item.evidence.some(e => e.sourceId === p.id) : extractLinks(item.body).includes(str(p, 'id'))).map(item => item.title).slice(0, 100) }));
+  cmd('delete_impact', '删除前查看引用影响', { kind: field('string'), ...id }, ['kind', 'id'], p => ({ pages: service.listPages().filter(item => p.kind === 'source' ? item.sources.includes(str(p, 'id')) || item.evidence.some(e => e.sourceId === p.id) || item.body.includes('wiki-source:'+p.id+'/') : extractLinks(item.body).includes(str(p, 'id'))).map(item => item.title).slice(0, 100) }));
   cmd('edit_draft_page', '逐页选择、修改和合并提案', { ...id, slug: field('string'), selected: field('boolean'), body: field('string'), merge: field('boolean') }, ['id', 'slug', 'selected'], p => service.editDraftPage(str(p, 'id'), str(p, 'slug'), p.selected === true, typeof p.body === 'string' ? p.body : undefined, p.merge === true).then(() => true));
   cmd('draft_page_text', '读取提案的可编辑正文', { ...id, slug: field('string') }, ['id', 'slug'], p => { const draft = service.getDraft(str(p, 'id')), item = draft?.pages.find(item => item.slug === p.slug); return item ? { body: item.body, selected: item.selected !== false, merge: !!item.allowHumanMerge, action: item.action, editable: draft?.status === 'pending' } : null; });
   cmd('source_assets', '分页读取全部素材图片', { ...id, ...page }, ['id'], p => { const source = service.getSource(str(p, 'id')); if (!source) throw new Error('素材不存在'); const names=slice(source.images, { ...p, limit: num(p, 'limit', 6) });return { names, total: source.images.length, labels:Object.fromEntries(names.map(name=>[name,byteTruncate(source.parts?.find(part=>part.asset===name)?.name??name,600)])) }; });
   cmd('source_parts','分页读取混合素材的组成文件',{...id,...page},['id'],p=>{const source=service.getSource(str(p,'id'));if(!source)throw new Error('素材不存在');return {total:source.parts?.length??0,parts:slice(source.parts??[],p).map(({id,name,kind,asset,start,end,pages})=>({id,name:byteTruncate(name,600),kind,asset,start,end,pages}))};});
+  cmd('source_directory', '浏览素材目录', { ...id, directory: field('string'), ...page }, ['id'], p =>
+    service.directory(str(p, 'id'), str(p, 'directory'), num(p, 'offset'), num(p, 'limit', 25)));
+  const file = { ...id, path: field('string') };
+  cmd('source_original_text', '按文件读取原文', { ...file, offset: page.offset, page: field('integer', { minimum: 1 }) }, ['id', 'path'], p =>
+    service.originalText(str(p, 'id'), str(p, 'path'), num(p, 'offset'), 12000, typeof p.page === 'number' ? p.page : undefined));
+  cmd('download_original', '读取原文件', file, ['id', 'path'], p => {
+    const id = str(p, 'id'), name = str(p, 'path');
+    if(store.getSource(id)?.staging) throw new Error('素材尚未完成保存');
+    const file = store.sourceFile(id, name);
+    return { ...transfers.downloadFile(path.posix.basename(name), file, sourceMime(name)!), reference: sourceReference(id, name) };
+  });
   cmd('source_text', '分页读取原始素材全文和 PDF 页码', { ...id, offset: field('integer', { minimum: 0 }), limit: field('integer', { minimum: 1, maximum: 12000 }), quote: field('string'), page: field('integer', { minimum: 1 }) }, ['id'], p => {
     const source = service.getSource(str(p, 'id')); if (!source) throw new Error('素材不存在');
     const quote = str(p, 'quote'), found = quote ? source.text.indexOf(quote) : -1;
@@ -76,6 +89,17 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   cmd('image_upload_start', '上传原始图片', { sourceId: field('string'), mime: field('string') }, ['sourceId', 'mime'], p => staged('image', p));
   cmd('material_upload_start','上传同组 Markdown、文本或图片部件',{sourceId:field('string'),partId:field('string'),name:field('string'),mime:field('string')},['sourceId','partId','name','mime'],p=>staged('part',p));
   cmd('discard_empty_source','取消尚未接收内容的临时素材',id,['id'],p=>service.discardEmptySource(str(p,'id')));
+  cmd('source_file_start', '开始上传一个 ZIP 或原始文件', { sourceId: field('string'), name: field('string') }, ['sourceId', 'name'], p => staged('original', p));
+  cmd('source_file_chunk', '分片上传原文件，完成后在后台导入', { ...id, base64: field('string'), done: field('boolean') }, ['id', 'base64'], p => {
+    const id = str(p, 'id'), metadata = uploads.get(id);
+    if (metadata?.kind !== 'original') throw new Error('上传已过期');
+    const file = transfers.appendToFile(id, str(p, 'base64'), p.done === true);
+    if (!file) return null;
+    const release = () => { uploads.delete(id); transfers.cancel(id); };
+    transfers.retain(id);
+    try { return service.finishSourceUpload(str(metadata, 'sourceId'), str(metadata, 'name'), file, release); }
+    catch (error) { release(); throw error; }
+  });
   cmd('draft_upload_start', '分片保存完整编辑草稿', { key: field('string') }, ['key'], p => staged('draft', p));
   const finishUpload = async (p: Params) => {
     const id = str(p, 'id'), metadata = uploads.get(id); if (!metadata) throw new Error('上传已过期');

@@ -47,7 +47,14 @@ test('pet hooks isolate sessions/runs, highlight waiting and invalidate old laun
   a.latestRun!.id = randomUUID(); pet.update(state);
   assert.equal(pet.snapshot().sessions[0].hooked, false);
   assert.equal(pet.accept(event), false);
-  a.latestRun!.status = 'stopped'; pet.update(state);
+  a.latestRun!.status = 'stopped';
+  state.agentActivities = [{ id: a.id, title: a.title, projectId: a.projectId, kind: 'acp', status: 'completed', label: '', updatedAt: 1, managedSessionIds: [] }];
+  pet.update(state);
+  assert.deepEqual(pet.snapshot().sessions.map(session => session.sessionId), [b.id]);
+  assert.equal(pet.preferences.selectedSessionId, b.id);
+  b.latestRun!.status = 'exited'; pet.update(state);
+  assert.equal(pet.snapshot().sessions.length, 0);
+  assert.equal(pet.preferences.selectedSessionId, '');
   assert.equal(pet.accept({ ...event, runId: a.latestRun!.id }), false);
   pet.connection(false);
   assert.ok(pet.snapshot().sessions.every(session => session.status === 'unknown'));

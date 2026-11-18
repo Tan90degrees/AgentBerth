@@ -17,6 +17,8 @@ export interface SourceExcerpt {
   quote: string;
   context: string;
   verified: boolean;
+  path?: string;
+  offset?: number;
 }
 
 export interface WikiPage {
@@ -35,8 +37,10 @@ export interface WikiPage {
 }
 
 export interface WikiSource {
+  /** Relative directories of a source bundle on disk, including empty directories. */
+  directory?: string[];
   /** Ordered, immutable components of one mixed import. Text offsets address text verbatim. */
-  parts?: { id: string; name: string; kind: 'text' | 'image' | 'pdf'; hash: string; start: number; end: number; asset?: string; pages?: number; ranges?: { page: number; start: number; end: number }[] }[];
+  parts?: { id: string; name: string; kind: 'text' | 'image' | 'pdf'; hash: string; start: number; end: number; size?: number; asset?: string; pages?: number; ranges?: { page: number; start: number; end: number }[] }[];
   /** Proposal deletion or failed JSON repair pauses auto-compilation until manual compile. */
   autoCompilePaused?: boolean;
   id: string;

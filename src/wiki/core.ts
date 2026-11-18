@@ -76,18 +76,21 @@ function findSpan(text: string, quote: string): { start: number; end: number } {
   return { start: positions[at], end: (positions[at + needle.length - 1] ?? positions[at]) + 1 };
 }
 
-export function sourceExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text'>, quote: string): SourceExcerpt {
+export function sourceExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text' | 'directory' | 'parts'>, quote: string): SourceExcerpt {
   const text = String(source.text ?? '');
   const { start, end } = findSpan(text, quote);
   const base: SourceExcerpt = { sourceId: source.id, title: source.title, quote, context: '', verified: compact(quote).length >= MIN_QUOTE_CHARS && start >= 0 };
   if (start < 0) return base;
-  const from = Math.max(0, start - 180), to = Math.min(text.length, end + 180);
-  return { ...base, context: (from > 0 ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '') };
+  const part = source.directory ? source.parts?.find(part => part.start <= start && part.end >= end) : undefined;
+  if (source.directory && !part) return { ...base, verified: false };
+  const left = part?.start ?? 0, right = part?.end ?? text.length;
+  const from = Math.max(left, start - 180), to = Math.min(right, end + 180);
+  return { ...base, ...(part ? { path: part.name, offset: from - left } : {}), context: (from > left ? '…' : '') + text.slice(from, to) + (to < right ? '…' : '') };
 }
 
 /** Local fallback when a page has no model-supplied quotes: pick the source
  * passage sharing the most tokens with the page body. It never invents text. */
-export function bestExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text'>, pageBody: string): SourceExcerpt {
+export function bestExcerpt(source: Pick<WikiSource, 'id' | 'title' | 'text' | 'directory' | 'parts'>, pageBody: string): SourceExcerpt {
   const text = String(source.text ?? '');
   const words = tokens(pageBody);
   const chunks = text.split(/\n\s*\n|\n/).map(value => value.trim()).filter(value => compact(value).length >= MIN_QUOTE_CHARS).slice(0, 200);

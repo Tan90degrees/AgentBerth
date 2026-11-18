@@ -5,13 +5,13 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { openNotifications } from './smoke-navigation.mjs';
 import { cleanupSmoke } from './smoke-cleanup.mjs';
 
 const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-wiki-window-'));
 await mkdir('test-results', { recursive: true });
-const requests = [],modelRoutes=[];
+const requests = [],modelRoutes=[], sourceOrder=[];
 const model = createServer(async (request, response) => {
   let body = '';
   for await (const chunk of request) body += chunk;
@@ -19,7 +19,14 @@ const model = createServer(async (request, response) => {
   const joined = JSON.stringify(payload.messages ?? []);
   requests.push(joined);modelRoutes.push({url:request.url,model:payload.model,auth:request.headers.authorization});
   let content;
-  if (joined.includes('素材摄入')) content = JSON.stringify({ summary: '关于向量检索的素材', concepts: [{ title: '向量检索', kind: 'concept', summary: '用嵌入召回', relevance: 0.9 }], claims: ['召回与精度需要平衡'], contradictions: [] });
+  if (joined.includes('你在只读素材目录中收集证据')) {
+    const { listing } = JSON.parse(payload.messages.at(-1).content);
+    const next = listing.items.find(item=>item.kind!=='directory'&&item.remaining);
+    if (listing.directory==='' && !sourceOrder.includes('assets/diagram.png')) content = JSON.stringify({ directory: 'assets', offset: 0 });
+    else if (next) { sourceOrder.push(next.name); content = JSON.stringify({ path: next.name }); }
+    else content = JSON.stringify({ directory: 'docs', offset: 0 });
+  }
+  else if (joined.includes('素材摄入')) content = JSON.stringify({ summary: '关于向量检索的素材', concepts: [{ title: '向量检索', kind: 'concept', summary: '用嵌入召回', relevance: 0.9 }], claims: ['召回与精度需要平衡'], contradictions: [] });
   else if (joined.includes('编译（Compile）')) content = JSON.stringify({ summary: '编译出两页', log: '窗口验证编译', contradictions: [], pages: [
     { slug: '向量检索', title: '向量检索', kind: 'concept', summary: '用嵌入召回候选', tags: ['检索'], body: '# 向量检索\n\n用嵌入召回候选，见 [[重排序]]。', sources: [], evidence: [{ quote: '向量检索与重排序的关系' }] },
     { slug: '重排序', title: '重排序', kind: 'concept', summary: '提升精度', tags: [], body: '# 重排序\n\n提升精度，见 [[向量检索]]。', sources: [], evidence: [{ quote: '向量检索与重排序的关系' }] },
@@ -367,7 +374,7 @@ try {
   await clickWiki(frame.locator('#newSource'));
   assert.equal(await frame.locator('#sourceView input[type=file]').count(),1);assert.equal(await frame.locator('#sourceView [data-action="startImport"]').count(),1);assert.equal(await frame.locator('#sourceView [data-action="saveSource"]').count(),0);
   await frame.locator('#sourceView [data-field="title"]').fill('纯图片窗口素材');
-  await frame.locator('#sourceView [data-field="pdf"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
+  await frame.locator('#sourceView [data-field="sourceFile"]').setInputFiles({ name: 'pixel.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=', 'base64') });
   await frame.locator('#sourceView [data-field="compileImported"]').check();
   await page.screenshot({animations:'disabled',path:'test-results/wiki-unified-import.png'});
   await clickWiki(frame.locator('#sourceView [data-action="startImport"]'));
@@ -377,7 +384,7 @@ try {
   step('unified import uploads images before compilation and uses the independent image endpoint and key');
   await clickWiki(frame.locator('.tabs [data-tab="sources"]'));
   await clickWiki(frame.locator('#newSource'));
-  await frame.locator('#sourceView [data-field="pdf"]').setInputFiles({ name: 'window-upload.pdf', mimeType: 'application/pdf', buffer: iframePdf });
+  await frame.locator('#sourceView [data-field="sourceFile"]').setInputFiles({ name: 'window-upload.pdf', mimeType: 'application/pdf', buffer: iframePdf });
   await frame.locator('#sourceView [data-field="compileImported"]').check();
   await clickWiki(frame.locator('[data-action="startImport"]'));
   await until(async () => (await call('list_sources')).some(item => item.title === 'window-upload' && item.compiled), 'iframe PDF upload imported and compiled');
@@ -393,12 +400,12 @@ try {
   await clickWiki(frame.locator('#newSource'));
   await frame.locator('#sourceView [data-field="title"]').fill('混合资料窗口验证');
   await frame.locator('#sourceView [data-field="text"]').fill('补充说明：图中的箭头表示依赖方向。');
-  await frame.locator('#sourceView [data-field="pdf"]').setInputFiles([
-    {name:'article.md',mimeType:'text/markdown',buffer:Buffer.from('# 混合文档\n\n![结构](diagram.png)\n\n原文结尾证据。')},
-    {name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('同组补充记录，不能单独变成另一个提案。')},
-    {name:'diagram.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=','base64')},
-  ]);
-  assert.equal(await frame.locator('[data-field="separateImported"]').isChecked(),false);
+  const bundle=zipSync({
+    'docs/article.md':Buffer.from('# 混合文档\n\n![结构](../assets/diagram.png)\n\n原文结尾证据。'),
+    'notes.txt':Buffer.from('同组补充记录，不能单独变成另一个提案。'),
+    'assets/diagram.png':Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=','base64'),
+  });
+  await frame.locator('#sourceView [data-field="sourceFile"]').setInputFiles({name:'mixed.zip',mimeType:'application/zip',buffer:Buffer.from(bundle)});
   await frame.locator('[data-field="compileImported"]').check();
   await clickWiki(frame.locator('[data-action="startImport"]'));
   await until(async()=> (await call('list_sources')).some(source=>source.title==='混合资料窗口验证'&&source.compiled),'mixed source compiled');
@@ -406,15 +413,30 @@ try {
   assert.equal((await call('list_drafts')).length,mixedDraftCount+1,'one review proposal for the whole bundle');
   const mixedSource=(await call('list_sources')).find(source=>source.title==='混合资料窗口验证');
   const mixed=await call('get_source',{id:mixedSource.id});
-  assert.equal(mixed.partCount,3);assert.equal(mixed.imageCount,1);
-  for(const value of ['补充说明','![结构](diagram.png)','原文结尾证据','同组补充记录'])assert.ok(mixed.text.includes(value),value);
-  assert.ok(requests.some(request=>request.includes('图片理解助手')&&request.includes('diagram.png')));
+  assert.equal(mixed.partCount,4);assert.equal(mixed.imageCount,1);assert.equal(sourceOrder[0],'assets/diagram.png');
+  for(const value of ['补充说明','![结构](../assets/diagram.png)','原文结尾证据','同组补充记录'])assert.ok(mixed.text.includes(value),value);
+  assert.ok(requests.some(request=>request.includes('描述原始文件')&&request.includes('assets/diagram.png')));
   await until(async()=> await frame.locator('.tabs [data-tab="review"]').evaluate(node=>node.classList.contains('active')),'mixed proposal opened');
   await clickWiki(frame.locator('.tabs [data-tab="sources"]'));
   await until(async()=>await frame.locator('#sourceList [data-id="'+mixedSource.id+'"]').count()>0,'mixed source listed');
   await clickWiki(frame.locator('#sourceList [data-id="'+mixedSource.id+'"]'));
-  await until(async()=> (await frame.locator('#mixedParts').innerText()).includes('diagram.png'),'mixed components visible');
+  await clickWiki(frame.locator('#mixedParts [data-path="docs"]'));
+  await clickWiki(frame.locator('#mixedParts [data-path="docs/article.md"]'));
+  const originalPreview=frame.getByRole('dialog',{name:'原始文件预览'});
+  await originalPreview.getByRole('heading',{name:'混合文档',exact:true}).waitFor();
+  await originalPreview.locator('img[src^="blob:"]').waitFor();
+  await originalPreview.getByRole('button',{name:'引用 Markdown',exact:true}).click();
+  assert.match(await originalPreview.getByLabel('Markdown 引用').inputValue(),/wiki-source:.*\/docs\/article\.md/);
+  await originalPreview.getByRole('button',{name:'关闭',exact:true}).click();
   await page.screenshot({animations:'disabled',path:'test-results/wiki-window-mixed.png'});
+  await call('save_page', {slug:'raw-file-reference',title:'原始文件引用',body:'![原图](wiki-source:'+mixedSource.id+'/assets/diagram.png)\n\n[查看原始笔记](wiki-source:'+mixedSource.id+'/notes.txt)'});
+  await clickWiki(frame.locator('.tabs [data-tab="wiki"]'));
+  await clickWiki(frame.locator('#pageList [data-slug="raw-file-reference"]'));
+  await frame.locator('#pageView img[alt="原图"][src^="blob:"]').waitFor();
+  await clickWiki(frame.getByRole('button',{name:'查看原始笔记',exact:true}));
+  await originalPreview.getByText('同组补充记录，不能单独变成另一个提案。',{exact:true}).waitFor();
+  await originalPreview.getByRole('button',{name:'关闭',exact:true}).click();
+
   await clickWiki(frame.locator('.tabs [data-tab="ask"]'));
   await frame.locator('#question').fill('向量检索：窗口里直接提问可以吗？');
   await clickWiki(frame.locator('#ask'));
@@ -494,6 +516,7 @@ try {
   const backupBytes = await readFile(backupPath), archive = unzipSync(backupBytes);
   assert.ok(archive['wiki/window-trash.md'], 'download contains restored page');
   assert.equal(archive['credentials.json'], undefined, 'portable backup excludes credentials');
+  assert.ok(archive['raw/files/'+mixedSource.id+'/assets/diagram.png'], 'portable backup preserves original nested files');
   assert.ok(Object.keys(archive).some(name => name.startsWith('raw/assets/') && name.endsWith('.pdf')), 'original PDFs are backed up');
   await frame.locator('#backupFile').setInputFiles({ name: 'backup.zip', mimeType: 'application/zip', buffer: backupBytes });
   await clickWiki(frame.locator('[data-action="previewBackup"]'));

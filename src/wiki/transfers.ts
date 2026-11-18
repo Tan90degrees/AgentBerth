@@ -33,11 +33,15 @@ export class WikiTransfers {
    * Idle browser uploads still expire normally. */
   retain(id: string, retained = true): void { this.get(id).retained = retained; }
   append(id: string, base64: string, done: boolean): Uint8Array | null {
+    const file = this.appendToFile(id, base64, done);
+    return file ? new Uint8Array(readFileSync(file)) : null;
+  }
+  appendToFile(id: string, base64: string, done: boolean): string | null {
     const entry = this.get(id); if (entry.ready) throw new Error('上传已完成');
     const chunk = Buffer.from(base64, 'base64'); if (chunk.length > 36 * 1024) throw new Error('分片过大');
     if (entry.size + chunk.length > entry.maximum) { this.cancel(id); throw new Error('文件超过备份传输上限'); }
     appendFileSync(entry.file, chunk); entry.size += chunk.length;
-    if (!done) return null; entry.ready = true; return new Uint8Array(readFileSync(entry.file));
+    if (!done) return null; entry.ready = true; return entry.file;
   }
   bytes(id: string): Uint8Array { const entry = this.get(id); if (!entry.ready) throw new Error('文件尚未上传完成'); return new Uint8Array(readFileSync(entry.file)); }
   read(id: string, offset: number) {

@@ -6,6 +6,8 @@ import type { State, Session } from '../shared/protocol';
 
 const MAX_GIF_BYTES = 8 * 1024 * 1024;
 const isAgentSession = (session: Session) => !session.remote && session.agent !== 'shell';
+const isLiveAgentSession = (session: Session) => isAgentSession(session) &&
+  (session.latestRun?.status === 'running' || session.latestRun?.status === 'stopping');
 export function gifData(bytes: Buffer): string {
   if (bytes.length < 14 || bytes.length > MAX_GIF_BYTES || !['GIF87a', 'GIF89a'].includes(bytes.subarray(0, 6).toString('ascii'))) throw new Error('请选择有效的 GIF，文件不能超过 8 MiB');
   const width = bytes.readUInt16LE(6), height = bytes.readUInt16LE(8);
@@ -41,9 +43,10 @@ export class PetState {
   save(value: unknown) { const preferences = this.selection(petPreferencesSchema.parse(value));if(preferences.appearance==='naiwa'&&!this.naiwa.ready)throw new Error('请先下载奶蛙素材'); this.persist(preferences); this.preferences = preferences; this.changed(); }
   connection(connected: boolean) { this.connected = connected; this.changed(); }
   update(state: State) {
-    const previous=this.activityStatuses;this.activityStatuses=new Map((state.agentActivities??[]).map(value=>[value.id,value.status]));
+    const previous=this.activityStatuses;
+    const live = new Map(state.sessions.filter(isLiveAgentSession).map(session => [session.id, session.latestRun!]));
+    this.activityStatuses=new Map((state.agentActivities??[]).filter(value=>value.kind!=='acp'||live.has(value.id)).map(value=>[value.id,value.status]));
     this.state = state;
-    const live = new Map(state.sessions.filter(isAgentSession).map(session => [session.id, session.latestRun]));
     for (const [id, hook] of this.hooks) if (live.get(id)?.id !== hook.runId) this.hooks.delete(id);
     this.preferences = this.selection(this.preferences);
     if(this.preferences.autoSwitch){const attention=this.snapshot().sessions.find(session=>session.kind&&['waiting','error'].includes(session.status)&&previous.get(session.sessionId)!==session.status);if(attention)this.preferences={...this.preferences,selectedSessionId:attention.sessionId};}
@@ -51,20 +54,21 @@ export class PetState {
   }
   accept(hook: PetHook, now = Date.now()): boolean {
     const session = this.state?.sessions.find(session => session.id === hook.sessionId);
-    if (!this.connected || !session || !isAgentSession(session) || !session.latestRun || session.latestRun.id !== hook.runId || !['running', 'stopping'].includes(session.latestRun.status)) return false;
+    if (!this.connected || !session || !isLiveAgentSession(session) || session.latestRun?.id !== hook.runId) return false;
     this.hooks.set(hook.sessionId, { ...hook, updatedAt: now });
     if (this.preferences.autoSwitch && ['waiting', 'error'].includes(hook.status)) { this.preferences = { ...this.preferences, selectedSessionId: hook.sessionId }; }
     this.changed(); return true;
   }
   snapshot(now = Date.now()): PetSnapshot {
     const projects = new Map(this.state?.projects.map(project => [project.id, project.name]));
-    const activities=this.state?.agentActivities??[],managed=new Set(activities.filter(value=>value.kind==='superagent').flatMap(value=>value.managedSessionIds)),native=new Set(activities.map(value=>value.id));
-    const sessions: PetSession[] = (this.state?.sessions ?? []).filter(session => isAgentSession(session) && !session.owner && session.latestRun&&!managed.has(session.id)&&!native.has(session.id)).map(session => {
+    const liveSessions = (this.state?.sessions ?? []).filter(isLiveAgentSession);
+    const liveIds = new Set(liveSessions.map(session => session.id));
+    const activities=(this.state?.agentActivities??[]).filter(value=>value.kind!=='acp'||liveIds.has(value.id)),managed=new Set(activities.filter(value=>value.kind==='superagent').flatMap(value=>value.managedSessionIds)),native=new Set(activities.map(value=>value.id));
+    const sessions: PetSession[] = liveSessions.filter(session => !session.owner&&!managed.has(session.id)&&!native.has(session.id)).map(session => {
       const run = session.latestRun!, hook = this.hooks.get(session.id);
-      const live = ['running', 'stopping'].includes(run.status);
-      let status: PetStatus = live ? hook?.status ?? 'unknown' : run.status === 'failed' || (run.exitCode !== null && run.exitCode !== 0) ? 'error' : hook?.status === 'completed' ? 'completed' : 'idle';
-      let label = live ? hook?.label ?? (hook ? '' : '未接入 hook · Agent 状态待确认') : 'Agent 会话已停止';
-      if (hook?.status === 'working' && live && now - hook.updatedAt > 10 * 60_000) { status = 'unknown'; label = '超过 10 分钟未收到 hook'; }
+      let status: PetStatus = hook?.status ?? 'unknown';
+      let label = hook?.label ?? (hook ? '' : '未接入 hook · Agent 状态待确认');
+      if (hook?.status === 'working' && now - hook.updatedAt > 10 * 60_000) { status = 'unknown'; label = '超过 10 分钟未收到 hook'; }
       if (!this.connected) { status = 'unknown'; label = '后台连接已断开'; }
       return { sessionId: session.id, runId: run.id, title: session.title, project: projects.get(session.projectId) ?? '', status, label, hooked: !!hook, updatedAt: hook?.updatedAt ?? Date.parse(run.startedAt) };
     });
