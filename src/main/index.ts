@@ -491,16 +491,16 @@ ipcMain.handle('berth:skills', async (event, input: unknown) => {
   requireExtension('agents');
   trusted(event);
   const request = skillRequestSchema.parse(input);
-  if(['codex','claude','opencode'].includes(request.location.agentId))requireExtension('agent.'+request.location.agentId);
+  if(['codex','claude','opencode','pi'].includes(request.location.agentId))requireExtension('agent.'+request.location.agentId);
   let projectPath: string | undefined;
-  let integration = ['claude', 'opencode'].includes(request.location.agentId) ? request.location.agentId as 'claude' | 'opencode' : undefined;
+  let integration = ['claude', 'opencode', 'pi'].includes(request.location.agentId) ? request.location.agentId as import('./agent-integration').IntegrationProvider : undefined;
   let skills = builtinSkillProviders.find(agent => agent.id === request.location.agentId)?.skills;
   if (request.location.projectId || !skills) {
     if (connecting) await connecting;
     if (!connection) await reconnect();
     const state = await connection!.rpc<import('../shared/protocol').State>('state');
     const definition = (state.agents ?? []).find(agent => agent.id === request.location.agentId);
-    if (!definition?.skills && (definition?.integration === 'claude' || definition?.integration === 'opencode')) integration ??= definition.integration;
+    if (!definition?.skills && (definition?.integration === 'claude' || definition?.integration === 'opencode' || definition?.integration === 'pi')) integration ??= definition.integration;
     skills ??= definition?.skills ?? builtinSkillProviders.find(agent => agent.id === definition?.integration)?.skills;
     projectPath = request.location.projectId ? state.projects.find(project => project.id === request.location.projectId)?.path : undefined;
     if (request.location.projectId && !projectPath) throw new Error('项目不存在，请重新选择');

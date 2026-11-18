@@ -38,7 +38,7 @@ export function mount(ctx:Context,server:DaemonServer){
       case 'linkNativeSession': {
         const session = host.store.session(request.params.sessionId);
         host.requireHistoryAvailable(session.id);
-        if (!['codex', 'claude', 'opencode'].includes(host.integration(session)) && !(session.agent.startsWith('agent:') && (host.store.agent(session.agent).resumeCommand || host.store.agent(session.agent).plugin?.resume || host.store.agent(session.agent).plugin?.history || host.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
+        if (!['codex', 'claude', 'opencode', 'pi'].includes(host.integration(session)) && !(session.agent.startsWith('agent:') && (host.store.agent(session.agent).resumeCommand || host.store.agent(session.agent).plugin?.resume || host.store.agent(session.agent).plugin?.history || host.store.agent(session.agent).plugin?.list))) throw new Error('当前 Agent 不支持原生会话恢复');
         const history = host.store.nativeHistory(session.id, request.params.nativeSessionId) ?? { messages: [], warnings: ['仅关联原生会话 ID；导入记录后可查看对话文本'], path: null, nativeSessionId: request.params.nativeSessionId };
         host.nativeTracking.delete(session.id);
         host.store.saveHistory(session.id, history); host.changed(); return history;
@@ -52,10 +52,11 @@ export function mount(ctx:Context,server:DaemonServer){
       case 'nativeSessionDetected': {
         const p = request.params, session = host.store.session(p.sessionId), tracking = host.nativeTracking.get(session.id);
         const version = host.agentVersion(session.agent);
-        if (host.integration(session) !== p.provider || session.remote || session.latestRun?.id !== p.runId || !host.live.has(session.id) || host.live.get(session.id)?.closed || tracking?.runId !== p.runId || session.nativeSessionId && session.nativeSessionId !== tracking.hookNativeId || host.historyBusy.has(session.id) || !await matchesProject(p.cwd, host.store.project(session.projectId).path)) return { linked: false };
+        const project = await host.sessionProjectPath(session);
+        if (host.integration(session) !== p.provider || session.remote || session.latestRun?.id !== p.runId || !host.live.has(session.id) || host.live.get(session.id)?.closed || tracking?.runId !== p.runId || session.nativeSessionId && session.nativeSessionId !== tracking.hookNativeId || host.historyBusy.has(session.id) || !await matchesProject(p.cwd, project)) return { linked: false };
         if (session.nativeSessionId === p.nativeSessionId) return { linked: true };
-        const transcript = p.provider === 'claude' ? (await host.nativeDiscovery.list('claude', host.store.project(session.projectId).path)).find(item => item.nativeSessionId === p.nativeSessionId)?.path : null;
-        if (p.provider === 'claude' && !transcript) return { linked: false };
+        const transcript = p.provider === 'opencode' ? null : (await host.nativeDiscovery.list(p.provider, project)).find(item => item.nativeSessionId === p.nativeSessionId)?.path;
+        if (p.provider !== 'opencode' && !transcript) return { linked: false };
         // Recheck after path I/O: manual association/unlink always wins.
         if (host.nativeTracking.get(session.id) !== tracking || host.store.session(session.id).nativeSessionId !== session.nativeSessionId || host.agentVersion(session.agent) !== version) return { linked: false };
         host.store.saveHistory(session.id, { messages: [], warnings: [], path: transcript ?? null, nativeSessionId: p.nativeSessionId });
@@ -68,7 +69,7 @@ export function mount(ctx:Context,server:DaemonServer){
       case 'importHistory': return host.importHistory(request.params.sessionId, request.params.path);
       case 'refreshHistory': {
         const session = host.store.session(request.params.sessionId);
-        if (!session.transcriptPath && !(['claude', 'opencode'].includes(host.integration(session)) && session.nativeSessionId) && !(session.agent.startsWith('agent:') && host.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
+        if (!session.transcriptPath && !(['claude', 'opencode', 'pi'].includes(host.integration(session)) && session.nativeSessionId) && !(session.agent.startsWith('agent:') && host.store.agent(session.agent).plugin?.history)) throw new Error('请先关联原生对话记录');
         return host.importHistory(request.params.sessionId, session.transcriptPath);
       }
  default:throw new Error('核心接口不支持此请求');

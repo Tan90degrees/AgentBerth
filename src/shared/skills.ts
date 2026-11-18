@@ -8,6 +8,7 @@ export type AgentSkills = z.infer<typeof agentSkillsSchema>;
 export const builtinSkillProviders: { id: string; name: string; skills: AgentSkills }[] = [
   { id: 'codex', name: 'Codex', skills: { project: '.agents/skills', user: '~/.agents/skills' } },
   { id: 'claude', name: 'Claude Code', skills: { project: '.claude/skills', user: '~/.claude/skills' } },
+  { id: 'pi', name: 'Pi', skills: { project: '.pi/skills', user: '~/.pi/agent/skills' } },
   { id: 'opencode', name: 'OpenCode', skills: { project: '.opencode/skills', user: '~/.config/opencode/skills' } },
 ];
 export const skillLocationSchema = z.object({

@@ -5,6 +5,7 @@ import { mountHarness } from '../plugins/deepseek-harness';
 import { serviceShell } from './paths';
 import { randomUUID } from 'node:crypto';
 import { openCodeLaunch } from './opencode-launch';
+import { piResumeCommand, piSessionFile, readPiHistory } from './pi-sessions';
 import { SshTerminal } from './ssh-terminal';
 import type { SshChallenge, SshSecret, TransferEndpoint } from '../shared/protocol';
 import { localTransferFs, RemoteTransfers, sftpTransferFs } from './remote-transfer';
@@ -136,7 +137,7 @@ export class DaemonServer {
       agentsChanged:values=>{
         const names=new Set<string>();for(const {agent} of values){const name=agent.definition.name.toLocaleLowerCase();if(names.has(name))throw new Error('插件 Agent 名称重复：'+agent.definition.name);names.add(name);}
         const next=new Map<string,string>();
-        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const builtin=pluginId===`agent.${agent.id}`&&['codex','claude','opencode'].includes(agent.id);const id=builtin?agent.id:`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition=agentDefinitionSchema.parse({...agent.definition,sourceId:'ext.'+hash.slice(0,32)}),previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
+        for(const {pluginId,agent} of values){const hash=createHash('sha256').update(pluginId+'\0'+agent.id).digest('hex');const builtin=pluginId===`agent.${agent.id}`&&['codex','claude','opencode','pi'].includes(agent.id);const id=builtin?agent.id:`agent:${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;const definition=agentDefinitionSchema.parse({...agent.definition,sourceId:'ext.'+hash.slice(0,32)}),previous=this.store.agents().find(value=>value.id===id);if(JSON.stringify(previous&&(({id,...value})=>value)(previous))!==JSON.stringify(definition)){this.store.saveAgent(definition,id);this.agentVersions.set(id,this.agentVersion(id)+1);}next.set(id,pluginId);}
         this.extensionAgents=next;
       },changed:()=>this.changed(),
     });
@@ -304,7 +305,7 @@ export class DaemonServer {
       discoverHistories:self.discoverHistories.bind(self),
       get historyBusy(){return self.historyBusy;},
       importHistory:self.importHistory.bind(self),
-      integration:self.integration.bind(self),
+      integration:self.integration.bind(self),sessionProjectPath:self.sessionProjectPath.bind(self),
       get live(){return self.live;},
       get nativeDiscovery(){return self.nativeDiscovery;},
       get nativeTracking(){return self.nativeTracking;},
@@ -361,6 +362,11 @@ export class DaemonServer {
       'agent.claude':{id:'claude',definition:{name:'Claude Code',command:'claude',integration:'claude',resumeCommand:'claude --resume {sessionId}',skills:{project:'.claude/skills',user:'~/.claude/skills'},plugin:null}},
       'agent.opencode':{id:'opencode',definition:{name:'OpenCode',command:'opencode',integration:'opencode',resumeCommand:'opencode --session {sessionId}',skills:{project:'.opencode/skills',user:'~/.config/opencode/skills'},plugin:null}},
     };
+    if (id === 'agent.pi') {
+      ctx.berth.agent({id:'pi',definition:{name:'Pi',command:'pi',integration:'pi',resumeCommand:'pi --session {sessionId}',skills:{project:'.pi/skills',user:'~/.pi/agent/skills'},plugin:null}});
+      ctx.berth.agent({id:'pi-acp',definition:{name:'Pi (ACP)',command:'openma-pi-acp',resumeCommand:'',acp:{executable:'openma-pi-acp',args:[],env:{PI_ACP_DELEGATION:'1'}},plugin:null}});
+      return;
+    }
     const provider=providers[id];if(provider)ctx.berth.agent(provider);
   }
   private recoveryConfiguration(session: import('../shared/protocol').Session): string {
@@ -536,7 +542,7 @@ export class DaemonServer {
   }
 
   private agentVersion(id: string): number { return this.agentVersions.get(id) ?? 0; }
-  private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:')||['codex','claude','opencode'].includes(session.agent) ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
+  private integration(session: import('../shared/protocol').Session) { return session.agent.startsWith('agent:')||['codex','claude','opencode','pi'].includes(session.agent) ? this.store.agent(session.agent).integration ?? session.agent : session.agent; }
   private async sessionProjectPath(session: import('../shared/protocol').Session): Promise<string> {
     const projectPath = this.store.project(session.projectId).path;
     return session.remote || !session.worktreePath ? projectPath : this.resolveWorkspace(session.projectId,projectPath, session.worktreePath);
@@ -546,9 +552,9 @@ export class DaemonServer {
     if (session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) return this.plugins.history(this.store.agent(session.agent), session, project, file, full);
     const provider = this.integration(session);
     if (!file && provider === 'opencode' && session.nativeSessionId) return this.nativeDiscovery.opencode.history(session.nativeSessionId, project, full);
-    if (!file && provider === 'claude' && session.nativeSessionId) file = (await this.nativeDiscovery.list('claude', project)).find(item => item.nativeSessionId === session.nativeSessionId)?.path ?? null;
+    if (!file && (provider === 'claude' || provider === 'pi') && session.nativeSessionId) file = (await this.nativeDiscovery.list(provider, project)).find(item => item.nativeSessionId === session.nativeSessionId)?.path ?? null;
     if (!file) throw new Error('请先关联原生记录文件');
-    return readHistory(file, provider, project, { full });
+    return provider === 'pi' ? readPiHistory(file, project, full) : readHistory(file, provider, project, { full });
   }
   private assertAgentVersion(id: string, version: number): void {
     if (this.agentVersion(id) !== version) throw new Error('Agent 插件已更新，请重新读取或重试');
@@ -590,7 +596,7 @@ export class DaemonServer {
   private async discoverHistories(sessionId: string, pagination: HistoryQuery) {
     this.requireHistoryAvailable(sessionId);
     const session = this.store.session(sessionId);
-    if (['codex', 'claude', 'opencode'].includes(this.integration(session)) && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.list)) {
+    if (['codex', 'claude', 'opencode', 'pi'].includes(this.integration(session)) && !(session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.list)) {
       this.reserveHistory(sessionId);
       try {
         const version = this.agentVersion(session.agent);
@@ -621,10 +627,10 @@ export class DaemonServer {
   private async previewHistory(sessionId: string, nativeSessionId: string, refresh: boolean): Promise<History> {
     this.requireHistoryAvailable(sessionId);
     const cached = this.store.nativeHistory(sessionId, nativeSessionId);
-    if (cached && !refresh && (cached.messages.length || !cached.path && !['claude', 'opencode'].includes(this.integration(this.store.session(sessionId))))) return cached;
+    if (cached && !refresh && (cached.messages.length || !cached.path && !['claude', 'opencode', 'pi'].includes(this.integration(this.store.session(sessionId))))) return cached;
     const session = this.store.session(sessionId);
     const agent = session.agent.startsWith('agent:') ? this.store.agent(session.agent) : null;
-    if (!agent && !cached?.path && !['claude', 'opencode'].includes(this.integration(session))) throw new Error('此记录尚未导入，请先选择原生记录文件');
+    if (!agent && !cached?.path && !['claude', 'opencode', 'pi'].includes(this.integration(session))) throw new Error('此记录尚未导入，请先选择原生记录文件');
     this.reserveHistory(sessionId);
     try {
       const version = this.agentVersion(session.agent);
@@ -641,7 +647,7 @@ export class DaemonServer {
     if(session.remote||session.agent==='shell')return;
     const owner=this.extensionAgents.get(session.agent);
     if(owner)this.extensions.require(owner);
-    else if(['codex','claude','opencode'].includes(session.agent)||session.agent.startsWith('agent:')&&this.store.agent(session.agent).sourceId?.startsWith('ext.'))throw new Error('此 Agent 的接入插件未启用，请在插件中心启用对应 Agent');
+    else if(['codex','claude','opencode','pi'].includes(session.agent)||session.agent.startsWith('agent:')&&this.store.agent(session.agent).sourceId?.startsWith('ext.'))throw new Error('此 Agent 的接入插件未启用，请在插件中心启用对应 Agent');
   }
   private async start(sessionId: string, resume: boolean, cols: number, rows: number, remoteOwner?: 'user'|'agent'): Promise<Run> {
     const session = this.store.session(sessionId);
@@ -672,16 +678,28 @@ export class DaemonServer {
     const acpDefinition=this.store.agents().find(agent=>agent.id===session.agent&&agent.acp);
     if(acpDefinition){if(session.remote||project.remoteWorkspace)throw new Error('ACP 接入目前仅支持本机项目，请使用本机 ACP 会话');return this.acp.start(session,acpDefinition,await directory(projectPath),cols,rows);}
     const version = this.agentVersion(session.agent);
-    let command = resume && session.agent.startsWith('agent:')
+    const provider = this.integration(session);
+    const resumePi = resume && provider === 'pi';
+    let piFile: string | undefined;
+    let command = resumePi ? 'pi' : resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
       : launchCommand(session, resume);
-    if (this.integration(session) === 'opencode') command = await openCodeLaunch(command, projectPath);
+    if (provider === 'opencode') command = await openCodeLaunch(command, projectPath);
     const config = session.terminal ?? this.store.settings().terminal;
     let cwd: string;
     let selected: { file: string; args: string[] };
     try {
       cwd = await directory(projectPath);
       selected = session.remote?.connectionId ? { file: 'SSH', args: [] } : await resolveTerminal(session.remote ? { profile: 'custom', executable: 'ssh', args: [] } : config);
+      if (resumePi) {
+        const id = session.nativeSessionId;
+        const file = session.transcriptPath ?? (await this.nativeDiscovery.list('pi', cwd)).find(item => item.nativeSessionId === id)?.path;
+        if (!id || !file) throw new Error('找不到已关联的 Pi 原生会话，请从对话历史中重新关联');
+        const { canonical, identity } = await piSessionFile(file, cwd);
+        if (identity.id !== id) throw new Error('Pi 记录的原生会话 ID 已变化，请重新关联');
+        piFile = canonical;
+        command = piResumeCommand(selected.file, canonical);
+      }
     } catch (error) {
       if (!this.closing) {
         const failed = this.store.createRun(sessionId, command, cols, rows, config.profile === 'custom' ? config.executable : '');
@@ -692,8 +710,7 @@ export class DaemonServer {
     if (this.closing) throw new Error('后台无法再启动终端');
     if (this.agentOwners.get(sessionId)?.disposing) throw new Error('SSH 连接已取消，Agent 正在清理自己的连接');
     if (resume && session.agent.startsWith('agent:')) this.assertAgentVersion(session.agent, version);
-    const provider = this.integration(session);
-    const trackNative = !resume && !session.remote && (['codex', 'claude', 'opencode'].includes(provider) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
+    const trackNative = !resume && !session.remote && (['codex', 'claude', 'opencode', 'pi'].includes(provider) || session.agent.startsWith('agent:') && !!this.store.agent(session.agent).plugin?.list);
     let baseline: NativeCandidate[] | null = [];
     // OpenCode hooks carry the exact native ID. Do not start another OpenCode
     // process or poll its database just to launch an existing TUI.
@@ -723,7 +740,7 @@ export class DaemonServer {
         }, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId))
           : new RemoteTerminal(session.remote, sessionId, cols, rows, update => activity.change(update), (kind,status,cwd,requestId) => activity.marker(kind,status,cwd,requestId), selected.file);
         remote = { transport, activity }; child = transport;
-      } else child = this.spawnPty(selected.file, session.service ? serviceShell(selected.file,selected.args,command).args : selected.args, { cwd, cols, rows, name: 'xterm-256color', useConptyDll: process.platform==='win32', env: { ...terminalEnvironment(selected.file), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
+      } else child = this.spawnPty(selected.file, session.service ? serviceShell(selected.file,selected.args,command).args : selected.args, { cwd, cols, rows, name: 'xterm-256color', useConptyDll: process.platform==='win32', env: { ...terminalEnvironment(selected.file), ...(piFile ? { AGENTBERTH_PI_SESSION_FILE: piFile } : {}), AGENTBERTH_DATA_DIR: this.dataDirectory, AGENTBERTH_SESSION_ID: sessionId, AGENTBERTH_RUN_ID: run.id, AGENTBERTH_AGENT: provider, AGENTBERTH_NATIVE_SESSION_ID: resume ? session.nativeSessionId ?? '' : '' } });
     }
     catch (error) {
       terminal.dispose();
@@ -759,7 +776,7 @@ export class DaemonServer {
       peers.forEach(id => { this.nativeTracking.get(id)!.ambiguous = true; });
       this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: provider === 'opencode' || peers.length > 0 || baseline === null });
       this.scheduleNativeScan();
-    } else if (resume && !session.remote && ['claude', 'opencode'].includes(provider)) {
+    } else if (resume && !session.remote && ['claude', 'opencode', 'pi'].includes(provider)) {
       // Resume keeps the selected ID; a later /new can still announce its exact
       // replacement. Manual association/unlink during this run deletes tracking.
       this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set(), started: Date.now(), ambiguous: true, hookNativeId: session.nativeSessionId ?? undefined });
@@ -826,7 +843,7 @@ export class DaemonServer {
       const current = this.store.session(sessionId);
       if (this.nativeTracking.get(sessionId) !== tracking || current.latestRun?.id !== tracking.runId || current.nativeSessionId || this.historyBusy.has(sessionId)) return;
       this.store.saveHistory(sessionId, { messages: [], warnings: [], path: candidate.path, nativeSessionId: candidate.nativeSessionId });
-      if (this.integration(session) === 'claude') { tracking.ambiguous = true; tracking.hookNativeId = candidate.nativeSessionId; }
+      if (['claude', 'pi'].includes(this.integration(session))) { tracking.ambiguous = true; tracking.hookNativeId = candidate.nativeSessionId; }
       else this.nativeTracking.delete(sessionId);
       this.changed();
     } catch (error) { this.logError(error); }
@@ -899,7 +916,7 @@ export class DaemonServer {
       if (!session.remote && session.nativeSessionId && !this.historyBusy.has(sessionId)) {
         try {
           const version = this.agentVersion(session.agent);
-          const history = !this.closing && (session.transcriptPath || this.integration(session) === 'opencode' || session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) ? await this.integratedHistory(session, session.transcriptPath) : null;
+          const history = !this.closing && (session.transcriptPath || ['opencode', 'pi'].includes(this.integration(session)) || session.agent.startsWith('agent:') && this.store.agent(session.agent).plugin?.history) ? await this.integratedHistory(session, session.transcriptPath) : null;
           this.assertAgentVersion(session.agent, version);
           if (history && history.nativeSessionId === session.nativeSessionId && this.store.session(sessionId).nativeSessionId === session.nativeSessionId && !this.historyBusy.has(sessionId)) this.store.saveHistory(sessionId, history);
         } catch (error) { this.logError(error); } // Keep a valid recovery ID if the transcript cannot be read.

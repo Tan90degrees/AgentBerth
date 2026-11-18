@@ -5,12 +5,16 @@ import path from 'node:path';
 import { AgentCli } from '../daemon/agent-cli';
 import { petHookConfiguration } from './pet-config';
 
-export type IntegrationProvider = 'claude' | 'opencode';
+export type IntegrationProvider = 'claude' | 'opencode' | 'pi';
 export interface HookInstallation { path: string; backup: string | null; provider: IntegrationProvider; message: string }
 const pending = new Map<string, Promise<unknown>>();
 const marker = '// AgentBerth desktop-pet adapter; managed file.';
 export function integrationRoot(provider: IntegrationProvider, project?: string, home = os.homedir(), env = process.env) {
-  if (project) return path.join(project, provider === 'claude' ? '.claude' : '.opencode');
+  if (project) return path.join(project, { claude: '.claude', opencode: '.opencode', pi: '.pi' }[provider]);
+  if (provider === 'pi') {
+    const custom = env.PI_CODING_AGENT_DIR;
+    return custom ? /^~[\\/]/.test(custom) ? path.resolve(home, custom.slice(2)) : path.resolve(custom) : path.join(home, '.pi', 'agent');
+  }
   const custom = provider === 'claude' ? env.CLAUDE_CONFIG_DIR : env.XDG_CONFIG_HOME;
   if (custom && !path.isAbsolute(custom)) throw new Error('Agent 配置目录环境变量必须是绝对路径');
   return provider === 'claude' ? custom || path.join(home, '.claude') : path.join(custom || path.join(home, '.config'), 'opencode');
@@ -40,7 +44,7 @@ export async function installAgentHook(options: {
   detectVersion?: () => Promise<string>;
 }): Promise<HookInstallation> {
   const { provider } = options, root = integrationRoot(provider, options.project, options.home, options.env);
-  const file = provider === 'claude' ? path.join(root, options.project ? 'settings.local.json' : 'settings.json') : path.join(root, 'plugins', 'agentberth-pet.js');
+  const file = provider === 'claude' ? path.join(root, options.project ? 'settings.local.json' : 'settings.json') : provider === 'pi' ? path.join(root, 'extensions', 'agentberth-pet.mjs') : path.join(root, 'plugins', 'agentberth-pet.js');
   const previous = pending.get(file) ?? Promise.resolve();
   const task = previous.catch(() => {}).then(async () => {
     const before = await existing(file);
@@ -63,6 +67,10 @@ export async function installAgentHook(options: {
         if (!found) list.push(entries[0]);
       }
       after = JSON.stringify(config, null, 2) + '\n';
+    } else if (provider === 'pi') {
+      if (before !== null && !before.startsWith(marker)) throw new Error('同名扩展文件不属于 AgentBerth，原文件保留');
+      after = await readFile(path.join(options.pluginDirectory, 'pi-pet.mjs'), 'utf8');
+      if (!after.startsWith(marker)) throw new Error('应用中的 Pi 适配文件不完整，请重新安装应用');
     } else {
       let version = options.version ?? 'auto';
       if (version === 'auto') {

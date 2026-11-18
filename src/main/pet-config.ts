@@ -53,6 +53,10 @@ ${(['working', 'waiting', 'completed', 'error', 'idle'] as const).map(event => `
 插件只在 AGENTBERTH_AGENT=opencode 的本机 Agent 会话生效，通过真实事件上报工作、授权等待、完成和失败，并关联原生会话 ID。子会话完成不会覆盖主会话状态。重新启动对应 Agent 会话后触发真实请求验证；官方接口：https://opencode.ai/docs/plugins/ 。
 Claude 全局自定义目录遵循 CLAUDE_CONFIG_DIR；两者的项目配置保留各自目录。自定义 Agent JSON 可声明 integration 为 claude 或 opencode 继承适配，启动命令仍使用用户已有 CLI。
 
+## Pi 1.x
+在桌宠配置中选择 Pi，安装到 ~/.pi/agent/extensions/agentberth-pet.mjs 或项目的 .pi/extensions/agentberth-pet.mjs。全局路径跟随 PI_CODING_AGENT_DIR。项目安装遵循 Pi 的项目受信任设定。使用全局或项目其中一个范围，重启 Pi 会话后开始上报。
+适配仅上报会话标识和活动，使用 agent_settled 确认本轮结束，也处理扩展界面的等待事件。
+
 ## 验证与交付
 - 先检查实际配置文件语法、重复项、脚本和运行时是否存在，以及命令的路径引号。
 - 当前进程若没有三个 AGENTBERTH 环境变量，提示我从 AgentBerth 启动/重新启动一个 Agent 类型会话。不要替我停止正在执行的任务或重启整个后台；外部终端和 SSH 无法用于此次绑定验证。

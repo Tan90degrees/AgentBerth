@@ -4,6 +4,7 @@ import path from 'node:path';
 import { matchesProject } from './history';
 import type { Agent, NativeHistoryItem } from '../shared/protocol';
 import { OpenCodeHistory } from './opencode-history';
+import { discoverPiSessions } from './pi-sessions';
 
 export interface NativeCandidate extends NativeHistoryItem { path: string | null; modified: number }
 // Discovery reads metadata only. Large transcripts remain resumable by ID.
@@ -14,6 +15,7 @@ export class NativeDiscovery {
     claude: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude'), 'projects'),
   }, readonly opencode = new OpenCodeHistory()) {}
   async list(agent: Agent, project: string): Promise<NativeCandidate[]> {
+    if (agent === 'pi') return discoverPiSessions(project);
     if (agent === 'opencode') return this.opencode.list(project);
     if (agent !== 'codex' && agent !== 'claude') return [];
     const files: { path: string; modified: number }[] = [];

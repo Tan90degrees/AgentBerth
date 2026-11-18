@@ -14,7 +14,7 @@ export function settingsCatalog(_agents: AgentDefinition[], _apiVersion: number)
     { id: 'appearance', category: 'appearance', title: '外观主题', keywords: 'theme appearance dark light system classic ocean claude glass 深色 浅色 跟随系统 经典 中性 蓝青 液态 玻璃', common: true },
     { id: 'ui-font-family', category: 'appearance', title: '界面字体', keywords: '界面 字体 自定义 ui font family 思源 衬线 等宽', common: true },
     { id: 'ui-font', category: 'appearance', title: '界面字号', keywords: '界面 字号 缩放 ui font scale 大小 显示 布局', common: true, field: 'uiFontScale' },
-    { id: 'default-agent', category: 'agent', title: '默认 Agent', keywords: 'agent provider codex claude opencode 默认接入', common: true, field: 'defaultAgent' },
+    { id: 'default-agent', category: 'agent', title: '默认 Agent', keywords: 'agent provider codex claude opencode pi 默认接入', common: true, field: 'defaultAgent' },
     { id: 'skills', category: 'agent', title: 'Skills 管理', keywords: 'agent skill 技能 导入 管理', common: true },
     { id: 'preview', category: 'files', title: '文件预览', keywords: 'preview font 字体 字号 markdown 语法高亮', common: true },
     { id: 'ssh-limit', category: 'ssh', title: 'SSH 会话上限', keywords: 'ssh maxSshTerminals 并发 数量 容量', field: 'maxSshTerminals' },
