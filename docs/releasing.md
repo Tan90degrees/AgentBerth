@@ -9,7 +9,7 @@
 
 ## 自动发布
 
-`CI and Windows packages` 在 main 上执行全部检查。仅当 check 的两个系统和 windows-package 均成功时，Publish verified release 才会运行；PR、开发分支与 fork 不发布。
+`CI and Windows packages` 在 main 上执行全部检查。仅当 check、acp-check 的两个系统和 windows-package 均成功时，Publish verified release 才会运行；PR、开发分支与 fork 不发布。
 
 开发分支通过 PR 事件执行完整验证，避免 push 与 PR 同时重复构建。未创建 PR 时，可在 Actions 手动运行工作流并选择分支生成测试包；main 的推送继续自动验证并发布。
 
@@ -25,7 +25,7 @@
 
 桌面与打包后测试分别执行工作台套件和文件预览/Git 套件，各自使用独立的 5 分钟步骤时限，避免前一组耗时挤掉后一组。全部原有断言保留，任一组失败仍使任务失败；未取消时会继续执行另一组以提供独立诊断。打包信息中的 `packagedSuites.workbench` 与 `packagedSuites.files` 分别记录结果，只有两组都为 success 时 `packagedSmoke` 才为 success。发布脚本同时核对总结果和存在的分组结果，失败、取消、跳过或缺少任一分组结果的包均不能发布；旧格式构建信息继续按原有总结果验证。本地 `npm run test:desktop` 和 `npm run test:packaged` 仍按顺序执行两组。
 
-Windows 打包版的 ACP/Superagent、隔离工作区、服务终端与原生插件窗口分别运行，避免其中一组耗时影响下一组。三组均成功才将构建信息中的 `packagedSuites.acp` 记为 success。任一组失败或跳过都会阻止发布。
+Windows 源码及打包版的 ACP/Superagent、隔离工作区、服务终端与原生插件窗口分别运行，每组使用独立的三分钟步骤时限。三组打包版测试均成功才将构建信息中的 `packagedSuites.acp` 记为 success。任一组失败或跳过都会阻止发布。
 
 Windows 安装定制位于 `build/agentberth-installer.nsh`。保留 electron-builder 的引导、应用 ID、注册表、快捷方式和卸载器生成/签名，仅通过包含路径中的两个薄包装替换文件准备及旧版清理。此实现与锁定的 electron-builder 26.15.3 模板配套；升级构建器时需复核包含顺序及宏名。`afterSign` 钩子为最终程序生成文件清单，避免图标/版本资源或签名修改造成校验失配；同时固定 7z 使用 BCJ 过滤器，规避当前解码器静默跳过 ARM64 原生文件的[上游问题](https://github.com/electron-userland/electron-builder/issues/9983)。`scripts/test-installer.ps1` 使用构建出的真实 EXE，覆盖进度、日志、首次和升级取消、取消后继续、损坏旧卸载器的升级、后台运行保护、当前用户/所有用户安装及卸载。测试日志和截图保存到 `installer-smoke-Windows` 产物。
 

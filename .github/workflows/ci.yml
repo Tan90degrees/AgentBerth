@@ -191,13 +191,15 @@ jobs:
         timeout-minutes: 3
       - name: ACP and Superagent smoke (Windows)
         if: runner.os == 'Windows'
-        run: |
-          node scripts/smoke-acp.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/smoke-isolated.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/smoke-services.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: node scripts/smoke-acp.mjs
+        timeout-minutes: 3
+      - name: Isolated workspace smoke (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-isolated.mjs
+        timeout-minutes: 3
+      - name: Services and native plugin windows smoke (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-services.mjs
         timeout-minutes: 3
       - name: UI recovery and keyboard smoke (Linux)
         if: runner.os == 'Linux'
