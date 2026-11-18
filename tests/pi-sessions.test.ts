@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
+import { AcpTransport } from '../src/daemon/acp-transport';
 import { discoverPiSessions, piResumeCommand, piSessionFile, piSessionRoot, readPiHistory } from '../src/daemon/pi-sessions';
 import type { History, NativeHistoryPage, Project, Session, State } from '../src/shared/protocol';
 import { shouldResume } from '../src/daemon/recovery';
@@ -20,7 +21,7 @@ test('Pi discovery uses workspace headers, honors location overrides and reads o
   assert.equal(root, path.join(tmp, '.pi', 'agent', 'sessions', '--' + project.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-') + '--'));
   assert.equal(piSessionRoot(project, tmp, { PI_CODING_AGENT_SESSION_DIR: '~/overridden' }), path.join(tmp, 'overridden'));
   await mkdir(root, { recursive: true });
-  const file = path.join(root, 'pi-sample.jsonl');
+  const file = path.join(root, 'pi-sample_native-pi.jsonl');
   await writeFile(file, lines([
     session('native-pi', project),
     message('first', null, 'user', '中文\u2028原样'),
@@ -34,6 +35,8 @@ test('Pi discovery uses workspace headers, honors location overrides and reads o
   await writeFile(path.join(root, 'bad.jsonl'), lines([{ type: 'message', id: 'bad', cwd: project }]));
   const candidates = await discoverPiSessions(project, tmp, {});
   assert.deepEqual(candidates.map(({ nativeSessionId, title }) => ({ nativeSessionId, title })), [{ nativeSessionId: 'native-pi', title: '我的 Pi 会话' }]);
+  assert.equal((await discoverPiSessions(project, tmp, {}, 'native-pi')).length, 1);
+  assert.equal((await discoverPiSessions(project, tmp, {}, 'foreign')).length, 0);
   const old = await readFile(file, 'utf8');
   const history = await readPiHistory(file, project, true);
   assert.deepEqual(history.messages.map(({ text }) => text), ['中文\u2028原样', '继续']);
@@ -93,4 +96,27 @@ test('Pi terminal and ACP are registered and native history reaches normal RPC e
   const history = await client.rpc<History>('history', { sessionId: item.id, full: true });
   assert.equal(history.messages[0].text, '完整原生记录');
   assert.ok(shouldResume({ ...item, nativeSessionId: 'existing' }));
+});
+
+const liveInstall = process.env.AGENTBERTH_PI_TEST_DIRECTORY;
+test('installed Pi ACP negotiates managed workspace support without calling a model', { skip: !liveInstall, timeout: 30000 }, async t => {
+  const work = await mkdtemp(path.join(tmpdir(), 'berth-pi-acp-'));
+  t.after(() => rm(work, { recursive: true, force: true, maxRetries: 5 }));
+  const modules = path.join(liveInstall!, 'node_modules');
+  const transport = await AcpTransport.open({
+    executable: 'node',
+    args: [path.join(modules, '@openma', 'pi-acp', 'dist', 'bin.js'), '--pi-package-dir',
+      path.join(modules, '@earendil-works', 'pi-coding-agent'), '--agent-dir', path.join(work, 'pi')],
+    env: { PI_ACP_DELEGATION: '1' }, startupTimeoutMs: 20000,
+  }, work, async () => { throw new Error('Connection probe may not use tools'); }, () => {}, () => {});
+  try {
+    const info = await transport.call('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false, elicitation: { form: {} } },
+    });
+    assert.equal(info.protocolVersion, 1);
+    assert.equal(info.agentCapabilities.loadSession, true);
+    assert.ok(Object.hasOwn(info.agentCapabilities.sessionCapabilities, 'additionalDirectories'));
+    assert.deepEqual(info.agentCapabilities._meta.pi.delegation, { readTextFile: true, writeTextFile: true, terminal: false });
+  } finally { await transport.stop(); }
 });

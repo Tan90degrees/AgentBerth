@@ -63,14 +63,14 @@ export async function piSessionFile(file: string, project: string) {
   } finally { await handle.close(); }
 }
 
-export async function discoverPiSessions(project: string, home = homedir(), env = process.env): Promise<NativeCandidate[]> {
+export async function discoverPiSessions(project: string, home = homedir(), env = process.env, expectedId?: string): Promise<NativeCandidate[]> {
   const paths = new Set([piSessionRoot(project, home, env)]);
   try { paths.add(piSessionRoot(await realpath(project), home, env)); } catch { /* The registered directory may have moved. */ }
   const files: { path: string; modified: number }[] = [];
   for (const root of paths) {
     const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
     for (const file of entries) {
-      if (!file.isFile() || !file.name.endsWith('.jsonl')) continue;
+      if (!file.isFile() || !file.name.endsWith(expectedId ? '_' + expectedId + '.jsonl' : '.jsonl')) continue;
       const filename = path.join(root, file.name);
       try { files.push({ path: filename, modified: (await stat(filename)).mtimeMs }); } catch { /* Session was removed. */ }
     }
@@ -80,6 +80,7 @@ export async function discoverPiSessions(project: string, home = homedir(), env 
   for (const { path: filename, modified } of files.slice(0, 500)) {
     try {
       const { identity, title, canonical } = await piSessionFile(filename, project);
+      if (expectedId && identity.id !== expectedId) continue;
       if (!result.has(identity.id)) result.set(identity.id, { nativeSessionId: identity.id, title, path: canonical, modified, updatedAt: new Date(modified).toISOString() });
     } catch { /* Ignore partial, foreign and unsupported records during discovery. */ }
   }

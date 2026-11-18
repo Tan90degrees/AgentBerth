@@ -14,8 +14,8 @@ export class NativeDiscovery {
     codex: path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'sessions'),
     claude: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude'), 'projects'),
   }, readonly opencode = new OpenCodeHistory()) {}
-  async list(agent: Agent, project: string): Promise<NativeCandidate[]> {
-    if (agent === 'pi') return discoverPiSessions(project);
+  async list(agent: Agent, project: string, expectedId?: string): Promise<NativeCandidate[]> {
+    if (agent === 'pi') return discoverPiSessions(project, undefined, undefined, expectedId);
     if (agent === 'opencode') return this.opencode.list(project);
     if (agent !== 'codex' && agent !== 'claude') return [];
     const files: { path: string; modified: number }[] = [];

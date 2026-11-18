@@ -170,6 +170,15 @@ jobs:
         timeout-minutes: 2
         env:
           AGENTBERTH_OPENCODE_TEST_DIRECTORY: ${{ runner.temp }}/agentberth-opencode-test
+      - name: Install isolated Pi ACP and official Pi CLI
+        shell: bash
+        run: npm install --prefix "$RUNNER_TEMP/agentberth-pi-test" --ignore-scripts --prefer-offline --no-audit --no-fund @earendil-works/pi-coding-agent@1.5.2 @openma/pi-acp@0.1.9
+        timeout-minutes: 2
+      - name: Validate real Pi ACP negotiation and workspace history
+        run: node scripts/test.mjs tests/pi-sessions.test.ts
+        timeout-minutes: 2
+        env:
+          AGENTBERTH_PI_TEST_DIRECTORY: ${{ runner.temp }}/agentberth-pi-test
       - name: Validate ACP scripts and bidirectional sessions
         run: node scripts/test.mjs tests/acp.test.ts
         timeout-minutes: 2

@@ -103,7 +103,7 @@ export class DaemonServer {
   private closing = false;
   private logs: string;
   private nativeDiscovery = new NativeDiscovery();
-  private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string }>();
+  private nativeTracking = new Map<string, { runId: string; baseline: Set<string>; started: number; ambiguous: boolean; hookNativeId?: string; expectedId?: string }>();
   private nativeTimer: NodeJS.Timeout | null = null;
   private pruneTimer: NodeJS.Timeout | null = null;
   private nativeScanning: Promise<void> | null = null;
@@ -363,7 +363,7 @@ export class DaemonServer {
       'agent.opencode':{id:'opencode',definition:{name:'OpenCode',command:'opencode',integration:'opencode',resumeCommand:'opencode --session {sessionId}',skills:{project:'.opencode/skills',user:'~/.config/opencode/skills'},plugin:null}},
     };
     if (id === 'agent.pi') {
-      ctx.berth.agent({id:'pi',definition:{name:'Pi',command:'pi',integration:'pi',resumeCommand:'pi --session {sessionId}',skills:{project:'.pi/skills',user:'~/.pi/agent/skills'},plugin:null}});
+      ctx.berth.agent({id:'pi',definition:{name:'Pi',command:'pi',integration:'pi',resumeCommand:'',skills:{project:'.pi/skills',user:'~/.pi/agent/skills'},plugin:null}});
       ctx.berth.agent({id:'pi-acp',definition:{name:'Pi (ACP)',command:'openma-pi-acp',resumeCommand:'',acp:{executable:'openma-pi-acp',args:[],env:{PI_ACP_DELEGATION:'1'}},plugin:null}});
       return;
     }
@@ -679,9 +679,10 @@ export class DaemonServer {
     if(acpDefinition){if(session.remote||project.remoteWorkspace)throw new Error('ACP 接入目前仅支持本机项目，请使用本机 ACP 会话');return this.acp.start(session,acpDefinition,await directory(projectPath),cols,rows);}
     const version = this.agentVersion(session.agent);
     const provider = this.integration(session);
-    const resumePi = resume && provider === 'pi';
+    const resumePi = resume && session.agent === 'pi';
+    const newPiId = !resume && session.agent === 'pi' ? randomUUID() : undefined;
     let piFile: string | undefined;
-    let command = resumePi ? 'pi' : resume && session.agent.startsWith('agent:')
+    let command = newPiId ? 'pi --session-id ' + newPiId : resumePi ? 'pi' : resume && session.agent.startsWith('agent:')
       ? await this.plugins.resume(this.store.agent(session.agent), session, projectPath)
       : launchCommand(session, resume);
     if (provider === 'opencode') command = await openCodeLaunch(command, projectPath);
@@ -714,7 +715,7 @@ export class DaemonServer {
     let baseline: NativeCandidate[] | null = [];
     // OpenCode hooks carry the exact native ID. Do not start another OpenCode
     // process or poll its database just to launch an existing TUI.
-    if (trackNative && provider !== 'opencode') { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
+    if (trackNative && provider !== 'opencode' && !newPiId) { try { baseline = await this.nativeCandidates(sessionId); } catch (error) { baseline = null; this.logError(error); } }
     const run = this.store.createRun(sessionId, command, cols, rows, selected.file, remoteOwner !== undefined);
     const terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true, windowsPty: session.remote ? undefined : windowsPtyFor(process.platform, release()) });
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
@@ -773,8 +774,8 @@ export class DaemonServer {
     if (!resume && !session.remote && session.agent !== 'shell') this.store.saveHistory(sessionId, { messages: [], warnings: [], path: null, nativeSessionId: null });
     if (trackNative) {
       const peers = [...this.nativeTracking.keys()].filter(id => { const peer = this.store.session(id); return peer.projectId === session.projectId && this.integration(peer) === provider; });
-      peers.forEach(id => { this.nativeTracking.get(id)!.ambiguous = true; });
-      this.nativeTracking.set(sessionId, { runId: run.id, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: provider === 'opencode' || peers.length > 0 || baseline === null });
+      peers.forEach(id => { const other = this.nativeTracking.get(id)!; if (!other.expectedId) other.ambiguous = true; });
+      this.nativeTracking.set(sessionId, { runId: run.id, expectedId: newPiId, baseline: new Set((baseline ?? []).map(item => item.nativeSessionId)), started: Date.now(), ambiguous: !newPiId && (provider === 'opencode' || peers.length > 0 || baseline === null) });
       this.scheduleNativeScan();
     } else if (resume && !session.remote && ['claude', 'opencode', 'pi'].includes(provider)) {
       // Resume keeps the selected ID; a later /new can still announce its exact
@@ -834,7 +835,9 @@ export class DaemonServer {
     try {
       const session = this.store.session(sessionId);
       if (session.latestRun?.id !== tracking.runId || session.nativeSessionId) { this.nativeTracking.delete(sessionId); return; }
-      const items = await this.nativeCandidates(sessionId);
+      const items = tracking.expectedId
+        ? await this.nativeDiscovery.list('pi', await this.sessionProjectPath(session), tracking.expectedId)
+        : await this.nativeCandidates(sessionId);
       if (!items) return;
       const claimed = new Set(this.store.state().sessions.filter(item => item.id !== sessionId && item.projectId === session.projectId && this.integration(item) === this.integration(session)).flatMap(item => item.nativeSessionId ? [item.nativeSessionId] : []));
       const candidate = unambiguousNewHistory(items, tracking.baseline, tracking.started, claimed);
