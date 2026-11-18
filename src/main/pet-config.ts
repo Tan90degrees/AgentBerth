@@ -54,7 +54,7 @@ ${(['working', 'waiting', 'completed', 'error', 'idle'] as const).map(event => `
 Claude 全局自定义目录遵循 CLAUDE_CONFIG_DIR；两者的项目配置保留各自目录。自定义 Agent JSON 可声明 integration 为 claude 或 opencode 继承适配，启动命令仍使用用户已有 CLI。
 
 ## Pi 1.x
-在桌宠配置中选择 Pi，安装到 ~/.pi/agent/extensions/agentberth-pet.mjs 或项目的 .pi/extensions/agentberth-pet.mjs。全局路径跟随 PI_CODING_AGENT_DIR。项目安装遵循 Pi 的项目受信任设定。使用全局或项目其中一个范围，重启 Pi 会话后开始上报。
+在桌宠配置中选择 Pi，安装到 ~/.pi/agent/extensions/agentberth-pet.ts 或项目的 .pi/extensions/agentberth-pet.ts。全局路径跟随 PI_CODING_AGENT_DIR。项目安装遵循 Pi 的项目受信任设定。使用全局或项目其中一个范围，重启 Pi 会话后开始上报。
 适配仅上报会话标识和活动，使用 agent_settled 确认本轮结束，也处理扩展界面的等待事件。
 
 ## 验证与交付

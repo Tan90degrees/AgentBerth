@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DaemonServer } from '../src/daemon/server';
 import { Store } from '../src/daemon/store';
+import { installAgentHook } from '../src/main/agent-integration';
 import { DaemonConnection } from '../src/main/connection';
 import { AcpTransport } from '../src/daemon/acp-transport';
 import { discoverPiSessions, piLaunchCommand, piResumeCommand, piSessionFile, piSessionRoot, readPiHistory } from '../src/daemon/pi-sessions';
@@ -43,6 +44,20 @@ test('Pi discovery uses workspace headers, honors location overrides and reads o
   assert.deepEqual(history.messages.map(({ text }) => text), ['中文\u2028原样', '继续']);
   assert.equal(await readFile(file, 'utf8'), old);
   await assert.rejects(piSessionFile(file, path.join(project, 'elsewhere')), /工作区不一致/);
+});
+
+test('Pi desktop adapter is installed as a discoverable extension and preserves a foreign file', async t => {
+  const project = await mkdtemp(path.join(tmpdir(), 'berth-pi-pet-'));
+  t.after(() => rm(project, { recursive: true, force: true, maxRetries: 5 }));
+  const options = { provider: 'pi' as const, project, pluginDirectory: path.resolve('dist'),
+    executable: process.execPath, script: '', dataDirectory: project };
+  const installed = await installAgentHook(options);
+  assert.equal(installed.path, path.join(project, '.pi', 'extensions', 'agentberth-pet.ts'));
+  assert.match(await readFile(installed.path, 'utf8'), /agent_settled/);
+  assert.equal((await installAgentHook(options)).backup, null);
+  await writeFile(installed.path, '// user extension');
+  await assert.rejects(installAgentHook(options), /原文件保留/);
+  assert.equal(await readFile(installed.path, 'utf8'), '// user extension');
 });
 
 test('Pi preview bounds do not apply to full history and legacy linear records still import', async t => {
