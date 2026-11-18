@@ -11,10 +11,10 @@ const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['
 const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
 const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = 64;
+export const API_VERSION = 65;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
-export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'custom']);
+export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'pi', 'custom']);
 export const agentSchema = z.union([builtinAgentSchema, z.string().regex(/^agent:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)]);
 export type Agent = z.infer<typeof agentSchema>;
 export const terminalProfileSchema = z.enum(['auto', 'powershell', 'pwsh', 'cmd', 'bash', 'custom']);
@@ -41,7 +41,7 @@ const title = z.string().trim().min(1).max(100);
 export const agentDefinitionSchema = z.object({
   name: title,
   acp: acpConfigSchema.optional(),
-  integration: z.enum(['codex', 'claude', 'opencode']).optional(),
+  integration: z.enum(['codex', 'claude', 'opencode', 'pi']).optional(),
   skills: agentSkillsSchema.optional(),
   sourceId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
   command: singleLine.refine(value => !!value.trim(), '请填写启动命令'),
@@ -179,7 +179,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('restoreWorkspace'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('linkNativeSession'), params: z.object({ sessionId: id, nativeSessionId: nativeSessionIdSchema }).strict() }),
   z.object({ id, method: z.literal('unlinkNativeSession'), params: z.object({ sessionId: id }).strict() }),
-  z.object({ id, method: z.literal('nativeSessionDetected'), params: z.object({ sessionId: id, runId: id, nativeSessionId: nativeSessionIdSchema, provider: z.enum(['claude', 'opencode']), cwd: z.string().min(1).max(4096) }).strict() }),
+  z.object({ id, method: z.literal('nativeSessionDetected'), params: z.object({ sessionId: id, runId: id, nativeSessionId: nativeSessionIdSchema, provider: z.enum(['claude', 'opencode', 'pi']), cwd: z.string().min(1).max(4096) }).strict() }),
   z.object({ id, method: z.literal('nativeHistories'), params: historyQuerySchema.extend({ sessionId: id }) }),
   z.object({ id, method: z.literal('discoverNativeHistories'), params: historyQuerySchema.extend({ sessionId: id }) }),
   z.object({ id, method: z.literal('nativeHistory'), params: z.object({ sessionId: id, nativeSessionId: nativeSessionIdSchema, refresh: z.boolean().default(false) }).strict() }),

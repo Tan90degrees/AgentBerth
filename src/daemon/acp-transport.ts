@@ -45,7 +45,10 @@ export class AcpTransport {
   private pending=new Map<string,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer?:NodeJS.Timeout}>();
   private incoming=0;readonly child:ChildProcessWithoutNullStreams;readonly exited:Promise<void>;stderr='';
   static async open(config:AcpConfig,cwd:string,request:Handler,notify:(method:string,params:Record<string,any>)=>void,onExit:(error:Error)=>void){
-    const {file,args}=await acpCommand(config.executable,config.args);
+    const {file,args}=await acpCommand(config.executable,config.args).catch(error => {
+      if (config.executable === 'openma-pi-acp') throw new Error('找不到 Pi ACP 适配器，请安装 @openma/pi-acp 并重启 AgentBerth，使 PATH 生效', { cause: error });
+      throw error;
+    });
     const child=spawn(file,args,{cwd,env:{...terminalEnvironment(file),...config.env},shell:false,windowsHide:true,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
     const transport=new AcpTransport(child,request,notify,onExit,config.startupTimeoutMs??ACP_STARTUP_TIMEOUT_MS);
     try{await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});}

@@ -1,6 +1,18 @@
 # ACP Agent 与 Superagent
 
-适用 AgentBerth 0.20 / 后台 API 55。ACP 使用稳定 v1 的逐行 JSON-RPC stdio 协议，不捆绑模型或 Agent 运行时。已有 CLI / TUI 接入继续可用。
+Pi 内置接入使用后台 API 65。ACP 使用稳定 v1 的逐行 JSON-RPC stdio 协议，不捆绑模型或 Agent 运行时。已有 CLI / TUI 接入继续可用。
+
+## 内置 Pi ACP
+
+使用 Node.js 22.19 或更新版安装 [Pi 官方 CLI](https://github.com/earendil-works/pi) 和 [OpenMA Pi ACP 适配器](https://github.com/openma-ai/pi-acp)：
+
+```sh
+npm install -g @earendil-works/pi-coding-agent @openma/pi-acp@0.1.8
+```
+
+确保 `pi` 和 `openma-pi-acp` 都在 PATH 中。先在 Pi 中配置模型或登录，重启 AgentBerth 后，在「插件中心 → Agent 接入」的 **Pi (ACP)** 点 **测试连接**。在本机项目选择该 Agent 新建对话，或在 Superagent 管道中将它选为协调者或执行者。模型、思考级别、交互提问、工具结果和恢复入口以适配器协商的能力为准。
+
+Superagent 要求此适配器声明项目范围和客户端文件委托能力，文件 RPC 仅可访问任务工作区。适配器在自己的进程里运行，若使用自动触发，请按下文配置进程隔离。SSH 使用 AgentBerth 的 SSH 工作台和 MCP 工具。
 
 ## 配置已有 ACP Agent
 
@@ -279,7 +291,7 @@ AgentBerth 根据 Agent 声明协商 `session/resume` 或 `session/load`，本�
 
 ## 执行中的提问与工具详情
 
-后台 API 63 增加 ACP 表单提问回传。当前 API 64，兼容连接 API 44–63；使用新能力需在空闲时更新后台，或从托盘完整退出旧版后重开，无需清空数据。
+后台 API 63 增加 ACP 表单提问回传。当前 API 65，兼容连接 API 44–64；使用新能力需在空闲时更新后台，或从托盘完整退出旧版后重开，无需清空数据。
 
 连接时声明 `elicitation.form`，处理标准 `elicitation/create` 请求。支持单选、多选、多题表单、文本、数字/整数和是/否；保留选项的原始值与展示名称，提交前检查必填、选择范围及字段约束。Agent 请求的表单和工具授权在普通 ACP 对话与 Superagent 任务页均可操作。提交、拒绝和取消直接回复当前请求，不重发协调或执行 prompt；提问答案不会替代工具授权。尚未支持的 URL 提问模式不在初始化中声明，未知字段类型明确返回错误，由 Agent 采用其支持的回退方式。
 
