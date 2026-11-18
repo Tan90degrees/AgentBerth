@@ -4,9 +4,10 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DaemonServer } from '../src/daemon/server';
+import { Store } from '../src/daemon/store';
 import { DaemonConnection } from '../src/main/connection';
 import { AcpTransport } from '../src/daemon/acp-transport';
-import { discoverPiSessions, piResumeCommand, piSessionFile, piSessionRoot, readPiHistory } from '../src/daemon/pi-sessions';
+import { discoverPiSessions, piLaunchCommand, piResumeCommand, piSessionFile, piSessionRoot, readPiHistory } from '../src/daemon/pi-sessions';
 import type { History, NativeHistoryPage, Project, Session, State } from '../src/shared/protocol';
 import { shouldResume } from '../src/daemon/recovery';
 
@@ -58,7 +59,9 @@ test('Pi preview bounds do not apply to full history and legacy linear records s
   assert.equal(full.messages.length, 1002);
   assert.equal(full.messages.at(-1)?.text.length, 50000);
   assert.equal(full.messages[0].text, 'msg 0');
-  assert.equal(piResumeCommand('powershell.exe', file), 'pi --session "$env:AGENTBERTH_PI_SESSION_FILE"');
+  assert.equal(piResumeCommand('pwsh', file, 'linux'), 'pi --session "$env:AGENTBERTH_PI_SESSION_FILE"');
+  assert.match(piResumeCommand('powershell.exe', file, 'win32'), /Get-Command pi\.cmd.*--session "\$env:AGENTBERTH_PI_SESSION_FILE"$/);
+  assert.match(piLaunchCommand('powershell.exe', 'fresh', 'win32'), /Get-Command pi\.cmd.*--session-id fresh$/);
   assert.equal(piResumeCommand('/bin/bash', file), 'pi --session "$AGENTBERTH_PI_SESSION_FILE"');
   assert.throws(() => piResumeCommand('cmd.exe', 'C:\\unsafe!\\file.jsonl'), /安全续接/);
 });
@@ -72,7 +75,11 @@ test('Pi terminal and ACP are registered and native history reaches normal RPC e
     if (previous === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
     else process.env.PI_CODING_AGENT_SESSION_DIR = previous;
   });
-  const backend = new DaemonServer(path.join(tmp, 'data'));
+  const data = path.join(tmp, 'data');
+  const legacy = new Store(data);
+  const existing = legacy.saveAgent({ name: 'Pi', command: 'legacy-pi', resumeCommand: '', plugin: null });
+  legacy.close();
+  const backend = new DaemonServer(data);
   const client = await DaemonConnection.open(await backend.listen(), () => {});
   t.after(async () => {
     client.close();
@@ -82,6 +89,8 @@ test('Pi terminal and ACP are registered and native history reaches normal RPC e
   const state = await client.rpc<State>('state');
   const tui = state.agents?.find(agent => agent.id === 'pi');
   assert.equal(tui?.command, 'pi');
+  assert.equal(tui?.name, 'Pi · 内置');
+  assert.equal(state.agents?.find(agent => agent.id === existing.id)?.command, 'legacy-pi');
   assert.equal(tui?.skills?.project, '.pi/skills');
   assert.equal(state.agents?.find(agent => agent.name === 'Pi (ACP)')?.acp?.executable, 'openma-pi-acp');
   const project = await client.rpc<Project>('createProject', { name: 'Pi', path: tmp });

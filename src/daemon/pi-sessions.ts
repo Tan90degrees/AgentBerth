@@ -145,10 +145,26 @@ export async function readPiHistory(file: string, project: string, full = false)
   return { path: canonical, nativeSessionId: identity.id, messages: recent.reverse(), warnings };
 }
 
+function shellName(executable: string): string {
+  return executable.split(/[\\/]/).at(-1)!.replace(/\.exe$/i, '').toLowerCase();
+}
+function piLauncher(shell: string, platform: NodeJS.Platform): string {
+  // npm may also install a .ps1 shim that Windows PowerShell cannot execute.
+  if (platform === 'win32' && (shell === 'powershell' || shell === 'pwsh')) {
+    return "& $(if (Get-Command pi.cmd -CommandType Application -ErrorAction SilentlyContinue) { 'pi.cmd' } else { 'pi' })";
+  }
+  return 'pi';
+}
+
+export function piLaunchCommand(executable: string, nativeId: string, platform = process.platform): string {
+  if (!validId.test(nativeId)) throw new Error('Pi 原生会话 ID 无效');
+  return piLauncher(shellName(executable), platform) + ' --session-id ' + nativeId;
+}
+
 /** Pass the validated path as environment data, never interpolate it into shell input. */
-export function piResumeCommand(executable: string, file: string): string {
-  const shell = executable.split(/[\\/]/).at(-1)!.replace(/\.exe$/i, '').toLowerCase();
-  if (shell === 'powershell' || shell === 'pwsh') return 'pi --session "$env:AGENTBERTH_PI_SESSION_FILE"';
+export function piResumeCommand(executable: string, file: string, platform = process.platform): string {
+  const shell = shellName(executable);
+  if (shell === 'powershell' || shell === 'pwsh') return piLauncher(shell, platform) + ' --session "$env:AGENTBERTH_PI_SESSION_FILE"';
   if (shell === 'cmd' && !/[!%"\r\n]/.test(file)) return 'pi --session "%AGENTBERTH_PI_SESSION_FILE%"';
   if (['bash', 'sh', 'dash', 'zsh', 'fish', 'ksh'].includes(shell)) return 'pi --session "$AGENTBERTH_PI_SESSION_FILE"';
   throw new Error('这个终端或路径无法安全续接 Pi，请用 PowerShell 或 Bash，或在 Pi 中使用 /resume');

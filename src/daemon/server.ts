@@ -5,7 +5,7 @@ import { mountHarness } from '../plugins/deepseek-harness';
 import { serviceShell } from './paths';
 import { randomUUID } from 'node:crypto';
 import { openCodeLaunch } from './opencode-launch';
-import { piResumeCommand, piSessionFile, readPiHistory } from './pi-sessions';
+import { piLaunchCommand, piResumeCommand, piSessionFile, readPiHistory } from './pi-sessions';
 import { SshTerminal } from './ssh-terminal';
 import type { SshChallenge, SshSecret, TransferEndpoint } from '../shared/protocol';
 import { localTransferFs, RemoteTransfers, sftpTransferFs } from './remote-transfer';
@@ -363,8 +363,18 @@ export class DaemonServer {
       'agent.opencode':{id:'opencode',definition:{name:'OpenCode',command:'opencode',integration:'opencode',resumeCommand:'opencode --session {sessionId}',skills:{project:'.opencode/skills',user:'~/.config/opencode/skills'},plugin:null}},
     };
     if (id === 'agent.pi') {
-      ctx.berth.agent({id:'pi',definition:{name:'Pi',command:'pi',integration:'pi',resumeCommand:'',skills:{project:'.pi/skills',user:'~/.pi/agent/skills'},plugin:null}});
-      ctx.berth.agent({id:'pi-acp',definition:{name:'Pi (ACP)',command:'openma-pi-acp',resumeCommand:'',acp:{executable:'openma-pi-acp',args:[],env:{PI_ACP_DELEGATION:'1'}},plugin:null}});
+      const registered = this.store.agents();
+      const availableName = (agentId: string, preferred: string) => {
+        const sourceId = 'ext.' + createHash('sha256').update(id + '\0' + agentId).digest('hex').slice(0, 32);
+        const used = new Set(registered.filter(agent => agent.sourceId !== sourceId).map(agent => agent.name.toLocaleLowerCase()));
+        if (!used.has(preferred.toLocaleLowerCase())) return preferred;
+        const builtin = preferred + ' · 内置';
+        let name = builtin;
+        for (let i = 2; used.has(name.toLocaleLowerCase()); i++) name = builtin + ' ' + i;
+        return name;
+      };
+      ctx.berth.agent({id:'pi',definition:{name:availableName('pi','Pi'),command:'pi',integration:'pi',resumeCommand:'',skills:{project:'.pi/skills',user:'~/.pi/agent/skills'},plugin:null}});
+      ctx.berth.agent({id:'pi-acp',definition:{name:availableName('pi-acp','Pi (ACP)'),command:'openma-pi-acp',resumeCommand:'',acp:{executable:'openma-pi-acp',args:[],env:{PI_ACP_DELEGATION:'1'}},plugin:null}});
       return;
     }
     const provider=providers[id];if(provider)ctx.berth.agent(provider);
@@ -692,6 +702,7 @@ export class DaemonServer {
     try {
       cwd = await directory(projectPath);
       selected = session.remote?.connectionId ? { file: 'SSH', args: [] } : await resolveTerminal(session.remote ? { profile: 'custom', executable: 'ssh', args: [] } : config);
+      if (newPiId) command = piLaunchCommand(selected.file, newPiId);
       if (resumePi) {
         const id = session.nativeSessionId;
         const file = session.transcriptPath ?? (await this.nativeDiscovery.list('pi', cwd)).find(item => item.nativeSessionId === id)?.path;
