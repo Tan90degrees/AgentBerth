@@ -169,6 +169,7 @@ test('daemon exposes Agent CRUD, plugin history and resume while retaining prior
   const server = new DaemonServer(path.join(folder, 'data')); const runtime = await server.listen(); const c = await DaemonConnection.open(runtime, () => {});
   t.after(async () => { c.close(); await server.close(); rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const p = await c.rpc<Project>('createProject', { name: '项目', path: folder });
+  const builtinIds = (await c.rpc<State>('state')).agents!.map(agent => agent.id);
   const { id: _id, ...config } = a;
   const saved = await c.rpc<AgentDefinition>('createAgent', config);
   const s = await c.rpc<Session>('createSession', { projectId: p.id, title: '中文会话', agent: saved.id, command: '' });
@@ -188,5 +189,5 @@ test('daemon exposes Agent CRUD, plugin history and resume while retaining prior
   const deadline = Date.now() + 5000;
   while ((await c.rpc<State>('state')).sessions.find(item => item.id === s.id)?.latestRun?.status !== 'stopped') { assert.ok(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 50)); }
   await c.rpc('deleteSession', { sessionId: s.id }); await c.rpc('deleteAgent', { agentId: saved.id });
-  assert.equal((await c.rpc<State>('state')).agents!.length, 3,'the three built-in Agent providers remain registered in the core registry');
+  assert.deepEqual((await c.rpc<State>('state')).agents!.map(agent => agent.id), builtinIds, 'Deleting a custom Agent preserves the built-in registrations');
 });

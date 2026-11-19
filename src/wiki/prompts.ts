@@ -145,12 +145,14 @@ export function compileContext(source: WikiSource, ingest: string, pages: WikiPa
 }
 
 export function compileMessages(
-  source: WikiSource, ingest: string, pages: WikiPage[], schema: string, skill: WikiSkill, feedback: string[],
+  source: WikiSource, ingest: string, pages: WikiPage[], schema: string, skill: WikiSkill, feedback: string[], fileReference?: string, relatedFindings: string[] = [],
 ): ChatMessage[] {
   const related = pages.map(page => `## [[${page.slug}]] ${page.title}\n摘要：${page.summary}\n来源：${page.sources.join('、')}\n现有完整正文：\n${page.body}`).join('\n');
   const context = [
     '# 现有页面（仅可更新以下提供了完整正文的页面，保留旧结论与来源，slug 必须一致）', related || '（尚无页面）',
     '\n# 本次素材', `素材 ID：${source.id}`, `标题：${source.title}`, truncate(source.text, 16000),
+    fileReference ? '原始文件引用：' + fileReference + '。可用 [文件](引用) 或 ![图注](引用) 精确回到原件。图片理解不是可逐字引用的原文。' : '',
+    relatedFindings.length ? '同组已读文件的编译摘要：' + truncate(relatedFindings.join('\n'), 2400) : '',
     source.vision ? '\n# 图片理解（模型生成，不属于原文引文）\n' + source.vision : '',
     '\n# 摄入结果（概念与论断）', truncate(ingest, 12000),
     feedback.length ? '\n# 上次拒绝反馈（必须逐条回应）\n' + feedback.map(item => '- ' + item).join('\n') : '',

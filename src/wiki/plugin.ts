@@ -145,7 +145,7 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
   // bridge caps a command's params at 64 KiB).
   add('list_sources', '列出原始素材', schema(paging), params => pageSlice(service.listSources(), params).map(source => ({
     id: source.id, title: byteTruncate(source.title, 300), createdAt: source.createdAt, compiled: source.compiled,
-    images: source.images.length, hasVision: !!source.vision, length: source.text.length,
+    images: source.directory ? source.parts?.filter(part=>part.kind==='image').length??0 : source.images.length, hasVision: !!source.vision, length: source.text.length,
   })));
   add('get_source', '读取素材全文', schema({ id: field('string') }, ['id']), params => {
     const source = service.getSource(text(params, 'id'));
@@ -155,8 +155,8 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
       totalCharacters: source.text.length,
       document: source.document ? { ...source.document, ranges: source.document.ranges.slice(0, 30) } : undefined,
       vision: byteTruncate(source.vision, 20 * 1024),
-      images: source.images.slice(0, 6), imageCount: source.images.length,
-      parts:undefined,partCount:source.parts?.length??0,imageLabels:Object.fromEntries(source.images.slice(0,6).map(name=>[name,byteTruncate(source.parts?.find(part=>part.asset===name)?.name??name,600)])),
+      images: source.images.slice(0, 6),
+      parts:undefined,directory:undefined,hasDirectory:!!source.directory,partCount:source.parts?.length??0, imageCount:source.directory?source.parts?.filter(part=>part.kind==='image').length??0:source.images.length,imageLabels:Object.fromEntries(source.images.slice(0,6).map(name=>[name,byteTruncate(source.parts?.find(part=>part.asset===name)?.name??name,600)])),
     } : null;
   });
   add('add_source', '新增原始素材（不可变）', schema({ title: field('string'), text: field('string'), staging: field('boolean') }, ['text']), params => service.addSource({ title: text(params, 'title'), text: text(params, 'text'), staging: bool(params, 'staging') }));
@@ -273,13 +273,15 @@ export function apply(ctx: Context, config: Record<string, string | number | boo
       id: source.id, title: source.title, createdAt: source.createdAt, compiled: source.compiled, characters: source.text.length, images: source.images.length,
     })), next = offset + items.length; return { items, offset, next, total: sources.length, hasMore: next < sources.length }; }, true);
   add('wiki_source', 'MCP：按需读取完整原始素材；首次可用 quote 定位，继续时 offset 优先。hasMore 时用 next 继续。section=vision 可读取图片理解',
-    mcpSchema({ id: field('string'), ...windowFields, quote: field('string'), section: field('string', { enum: ['text', 'vision'] }) }, ['id']), params => {
+    mcpSchema({ directory:field('string'), path:field('string'), id: field('string'), ...windowFields, quote: field('string'), section: field('string', { enum: ['text', 'vision'] }) }, ['id']), async params => {
       const source = service.getSource(text(params, 'id'));
       if (!source) return null;
       if(source.staging)throw new Error('素材仍在上传 / 导入，请完成整组保存后再读取');
+      if(typeof params.path==='string')return service.originalText(source.id,params.path,number(params,'offset'),number(params,'limit',12000));
+      if(typeof params.directory==='string')return service.directory(source.id,params.directory,number(params,'offset'),Math.min(50,number(params,'limit',25)));
       const section = params.section === 'vision' ? 'vision' : 'text', content = source[section], quote = text(params, 'quote'), found = quote ? content.indexOf(quote) : -1;
       const offset = typeof params.offset === 'number' ? params.offset : found >= 0 ? Math.max(0, found - 150) : 0;
-      return { id: source.id, title: source.title, createdAt: source.createdAt, section, images: source.images.length, ...materialWindow(content, offset, number(params, 'limit', 12000)) };
+      return { id: source.id, title: source.title, createdAt: source.createdAt, section, images: source.images.length, hasDirectory: !!source.directory, ...materialWindow(content, offset, number(params, 'limit', 12000)) };
     }, true);
   add('wiki_status', 'MCP：读取知识库规模与模型配置状态',
     mcpSchema({}), () => {
