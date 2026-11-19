@@ -142,6 +142,7 @@ export interface WikiStatus {
   model: { baseURL: string; textModel: string; visionModel: string; visionBaseURL: string; visionKeyConfigured: boolean; visionKeyHint: string; llmRetries: number; llmConcurrency: number; keyConfigured: boolean; keyHint: string };
   automation: { autoCompile: boolean; autoApprove: boolean; lintMinutes: number };
   lastLint: string | null;
+  activeTasks: number;
   tasks: WikiTask[];
   ready: boolean;
 }

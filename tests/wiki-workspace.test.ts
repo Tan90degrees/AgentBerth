@@ -305,6 +305,51 @@ test('active model tasks cancel without storing answers, queued tasks cancel, an
   const retried = await finished(reopened, reopened.retryTask(queued)); assert.equal(retried.status, 'done'); assert.equal(reopened.answers()[0].answer, 'retried answer');
 });
 
+test('history deletion keeps live tasks and source data, and never requeues a cancelled compile across restart', async t => {
+  let release!: (response: Response) => void;
+  const { store, service, workspace, controller } = fixture(t, { fetchImpl: () => new Promise(resolve => { release = resolve; }) });
+  const source = await service.addSource({ title: 'retained', text: 'full original source' });
+  const old: WikiTask = { id: 'old', kind: 'lint', status: 'done', progress: '已完成', label: 'Old history', startedAt: '2000-01-01T00:00:00Z', finishedAt: '2000-01-01T00:00:01Z' };
+  workspace.saveTasks([old]);
+  service.reloadWorkspaceState();
+  service.tick();
+  assert.ok(service.taskStatus(old.id), 'finished tasks remain available after an hour');
+  const active = service.compile(source.id), queued = service.ask('queued');
+  await assert.rejects(service.deleteTaskHistory(active), /等待清理/);
+  await assert.rejects(service.deleteTaskHistory(queued), /等待清理/);
+  assert.equal(service.cancelTask(queued), true);
+  assert.equal(await service.deleteTaskHistory(queued), 1, 'queued cancellation can be deleted before the other job drains');
+  assert.equal(await service.deleteTaskHistory(), 1);
+  assert.equal(service.taskStatus(active)?.status, 'running');
+  assert.equal(service.cancelTask(active), true);
+  await assert.rejects(service.deleteTaskHistory(active), /等待清理/);
+  assert.equal(await service.deleteTaskHistory(), 0);
+  release(Response.json({ choices: [{ message: { content: 'late result' } }] }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.doesNotThrow(() => service.assertWorkspaceIdle());
+  const cancelled = service.taskStatus(active)!;
+  assert.equal(await service.deleteTaskHistory(active), 1);
+  workspace.saveTasks([cancelled], true);
+  assert.equal(workspace.taskRecords().length, 0, 'late job updates only apply to records still on disk');
+  let calls = 0;
+  const reopened = new WikiService({
+    store: new WikiStore(store.root), config: { ...config, autoCompile: true }, signal: controller.signal,
+    fetchImpl: async () => {
+      calls++;
+      const content = JSON.stringify({ pages: [{ slug: 'retained', title: 'Retained', body: 'full original source' }] });
+      return Response.json({ choices: [{ message: { content } }] });
+    },
+  });
+  reopened.tick();
+  assert.equal(calls, 0);
+  assert.equal(reopened.taskList().length, 0);
+  assert.equal(reopened.getSource(source.id)?.text, 'full original source');
+  const done = await finished(reopened, reopened.compile(source.id));
+  assert.equal(done.status, 'done', done.error);
+  assert.equal(await reopened.deleteTaskHistory(done.id), 1);
+  assert.ok(reopened.getDraft(String(done.result)), 'deleting task history retains its proposal');
+});
+
 test('review selection and explicit human merge preserve conflict checks and explain every skipped page', async t => {
   const { store, service } = fixture(t); const original = page('manual', 'original'); store.savePage(original);
   const draft: WikiDraft = { id: 'draft', sourceId: null, sourceTitle: 'review', createdAt: new Date().toISOString(), model: 'local', summary: '', contradictions: [], feedback: [], status: 'pending', pages: [
@@ -352,7 +397,7 @@ test('view commands paginate full-text matches, locate late evidence and scope b
   await assert.rejects(call('download_source_asset', { id: first.id, name: second.images[0] }), /不属于/);
   const download = await call('download_source_asset', { id: first.id, name: first.images[0] }) as { id: string };
   assert.equal((await call('binary_chunk', { id: download.id, offset: 0 }) as { base64: string }).base64, 'eA==');
-  for (const name of ['save_editor_draft', 'cancel_task', 'restore_trash', 'edit_draft_page', 'apply_backup']) assert.equal(commands.get(name)!.mcp, false, name);
+  for (const name of ['save_editor_draft', 'cancel_task', 'delete_task', 'clear_task_history', 'restore_trash', 'edit_draft_page', 'apply_backup']) assert.equal(commands.get(name)!.mcp, false, name);
 });
 
 test('malformed backup records are refused before any file is overwritten', t => {

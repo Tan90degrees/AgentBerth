@@ -39,6 +39,8 @@ article{overflow:auto;padding:18px 22px;min-width:0}
 .list-head strong{font-size:var(--fs-sm,13px)}
 .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .row>.grow{flex:1;min-width:120px}
+.task-toolbar{margin-bottom:12px}
+.task-toolbar select{width:auto}
 .stack{display:flex;flex-direction:column;gap:8px}
 .item{display:block;text-align:left;width:100%;border:1px solid transparent;background:transparent;border-radius:var(--radius-sm,6px);padding:8px 10px;margin-bottom:3px;color:inherit}
 .item:hover{background:var(--hover,#eee)}

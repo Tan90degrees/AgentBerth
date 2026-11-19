@@ -8,14 +8,16 @@ import { JSDOM } from 'jsdom';
 import { apply } from '../src/wiki/plugin';
 import { WikiStore } from '../src/wiki/store';
 import { WikiService } from '../src/wiki/service';
+import { WikiWorkspace } from '../src/wiki/workspace';
 import { notesWikiView } from '../src/wiki/view';
 import { pageToDocument } from '../src/wiki/core';
-import type { WikiDraft } from '../src/wiki/types';
+import type { WikiDraft, WikiTask } from '../src/wiki/types';
 
 async function until(check: () => unknown, label: string) { for (let i = 0; i < 200; i++) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw new Error(label); }
-function setup(t: { after: (fn: () => void) => void }) {
+function setup(t: { after: (fn: () => void) => void }, history: WikiTask[] = []) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'wiki-dom-')), controller = new AbortController(), store = new WikiStore(root);
   const config = { autoCompile: false, authRequired: true, baseURL: 'http://127.0.0.1:1/v1', textModel: 'local', visionModel: '', autoApprove: false, lintMinutes: 0, maxContextPages: 8 };
+  if (history.length) new WikiWorkspace(store).saveTasks(history);
   const service = new WikiService({ store, config, signal: controller.signal });
   const commands = new Map<string, (params: Record<string, unknown>) => unknown>();
   const views: JSDOM[] = [];
@@ -451,6 +453,34 @@ test('Wiki results notify the host once and retain only a result action in the c
   assert.equal(toolbar.textContent, '查看素材', 'no separate message banner remains');
   click(dom, '#uxNotice [data-action="openSource"]');
   await until(() => dom.window.document.querySelector('#sourceText')?.textContent?.includes('the complete original conversation'), 'result action opens original material');
+});
+
+test('task history filters records and supports confirmed single and bulk removal', async t => {
+  const base = { kind: 'lint', progress: '', startedAt: '2026-01-01T00:00:00Z' } as const;
+  const { open, service } = setup(t, [
+    { ...base, id: 'history-failed', label: '失败的体检', status: 'failed', retry: { action: 'lint', params: {} } },
+    { ...base, id: 'history-done', label: '完成的体检', status: 'done' },
+  ]);
+  const dom = open(), document = dom.window.document;
+  click(dom, '[data-tab="tasks"]');
+  await until(() => document.querySelectorAll('[data-action="deleteTask"]').length === 2, 'both history rows visible');
+  const filter = document.querySelector<HTMLSelectElement>('#taskFilter')!;
+  filter.value = 'failed'; filter.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await until(() => document.querySelectorAll('[data-action="deleteTask"]').length === 1 && document.querySelector('[data-action="retryTask"]'), 'failed filter matches one retryable task');
+  click(dom, '[data-action="deleteTask"]');
+  await until(() => document.querySelector('[data-action="dialogCancel"]'), 'single delete confirmed');
+  click(dom, '[data-action="dialogCancel"]');
+  assert.equal(service.workspace.taskRecords().length, 2);
+  await until(() => !document.querySelector<HTMLButtonElement>('[data-action="deleteTask"]')!.disabled, 'delete button available after dismissal');
+  click(dom, '[data-action="deleteTask"]');
+  await until(() => document.querySelector('[data-action="dialogAccept"]'), 'single delete reopened');
+  click(dom, '[data-action="dialogAccept"]');
+  await until(() => document.querySelector('#taskView')?.textContent?.includes('暂无任务'), 'filtered page refreshes after deletion');
+  assert.deepEqual(service.workspace.taskRecords().map(task => task.id), ['history-done']);
+  click(dom, '[data-action="clearTaskHistory"]');
+  await until(() => document.querySelector('[data-action="dialogAccept"]'), 'bulk clear confirmed');
+  click(dom, '[data-action="dialogAccept"]');
+  await until(() => service.workspace.taskRecords().length === 0, 'all completed history removed from storage');
 });
 
 

@@ -12,6 +12,7 @@ import { cleanupSmoke } from './smoke-cleanup.mjs';
 const folder = await mkdtemp(path.join(os.tmpdir(), 'berth-wiki-window-'));
 await mkdir('test-results', { recursive: true });
 const requests = [],modelRoutes=[], sourceOrder=[];
+let repeatedDirectory = false;
 const model = createServer(async (request, response) => {
   let body = '';
   for await (const chunk of request) body += chunk;
@@ -23,6 +24,7 @@ const model = createServer(async (request, response) => {
     const { listing } = JSON.parse(payload.messages.at(-1).content);
     const next = listing.items.find(item=>item.kind!=='directory'&&item.remaining);
     if (listing.directory==='' && !sourceOrder.includes('assets/diagram.png')) content = JSON.stringify({ directory: 'assets', offset: 0 });
+    else if (listing.directory==='' && !repeatedDirectory) { repeatedDirectory = true; content = JSON.stringify({ directory: '', offset: 0 }); }
     else if (next) { sourceOrder.push(next.name); content = JSON.stringify({ path: next.name }); }
     else content = JSON.stringify({ directory: 'docs', offset: 0 });
   }
@@ -131,7 +133,7 @@ try {
   const tools = new Map(plugin.commands.map(command => [command.name, command]));
   for (const name of ['wiki_index', 'wiki_search', 'wiki_read', 'wiki_sources', 'wiki_source', 'wiki_status', 'wiki_ask', 'wiki_task'])
     assert.equal(tools.get(name)?.mcp, true, name + ' is exposed as an MCP tool');
-  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key', 'delete_draft', 'purge_trash', 'clear_trash', 'scan_inbox'])
+  for (const name of ['save_page', 'add_source', 'compile', 'review_draft', 'set_api_key', 'delete_draft', 'purge_trash', 'clear_trash', 'scan_inbox', 'delete_task', 'clear_task_history'])
     assert.equal(tools.get(name)?.mcp, false, name + ' stays behind human review');
   const hits = await call('wiki_search', { query: '向量检索', agentId: 'smoke-agent' });
   assert.ok(hits.some(item => item.slug === '向量检索'), 'MCP search tolerates the injected agentId');
@@ -414,6 +416,7 @@ try {
   const mixedSource=(await call('list_sources')).find(source=>source.title==='混合资料窗口验证');
   const mixed=await call('get_source',{id:mixedSource.id});
   assert.equal(mixed.partCount,4);assert.equal(mixed.imageCount,1);assert.equal(sourceOrder[0],'assets/diagram.png');
+  assert.equal(repeatedDirectory, true, 'a repeated directory choice must not fail the entire compilation');
   for(const value of ['补充说明','![结构](../assets/diagram.png)','原文结尾证据','同组补充记录'])assert.ok(mixed.text.includes(value),value);
   assert.ok(requests.some(request=>request.includes('描述原始文件')&&request.includes('assets/diagram.png')));
   await until(async()=> await frame.locator('.tabs [data-tab="review"]').evaluate(node=>node.classList.contains('active')),'mixed proposal opened');
@@ -457,7 +460,20 @@ try {
   step('all primary iframe buttons are wired');
 
 
-  await until(async () => (await call('status')).tasks.every(task => !['queued', 'running'].includes(task.status)), 'background tasks drained before backup');
+  await until(async () => (await call('status')).activeTasks === 0, 'background tasks drained before backup');
+  await clickWiki(frame.locator('.tabs [data-tab="tasks"]'));
+  await frame.getByLabel('任务状态').selectOption('done');
+  const finishedTask = frame.locator('#taskView [data-action="deleteTask"]').first();
+  const finishedId = await finishedTask.getAttribute('data-id');
+  await clickWiki(finishedTask);
+  await clickWiki(frame.locator('[data-action="dialogAccept"]'));
+  await until(async () => !(await call('task', { id: finishedId })), 'one confirmed history record removed');
+  await clickWiki(frame.locator('[data-action="clearTaskHistory"]'));
+  await clickWiki(frame.locator('[data-action="dialogAccept"]'));
+  await until(async () => (await call('tasks')).length === 0, 'finished task history cleared');
+  assert.ok(await call('get_draft', { id: draftId }), 'clearing task history keeps the proposal');
+  assert.ok((await call('answers')).length > 0, 'clearing task history keeps answers');
+  step('task history filters, deletes one record and clears the finished history in the real window');
   await clickWiki(frame.locator('.tabs [data-tab="review"]'));
   await until(async () => await frame.locator('#draftList [data-id="' + draftId + '"]').count() > 0, 'approved review record listed');
   await clickWiki(frame.locator('#draftList [data-id="' + draftId + '"]'));

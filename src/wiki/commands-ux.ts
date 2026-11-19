@@ -5,6 +5,7 @@ import path from 'node:path';
 import { sourceMime, sourceReference } from './source-directory';
 import type { WikiService } from './service';
 import type { WikiTask } from './types';
+import { isActiveTask } from './workspace';
 type Params = Record<string, unknown>;
 const str = (p: Params, key: string) => typeof p[key] === 'string' ? p[key] as string : '';
 const num = (p: Params, key: string, fallback = 0) => typeof p[key] === 'number' ? p[key] as number : fallback;
@@ -39,9 +40,15 @@ export function registerWorkspaceCommands(service: WikiService, add: (name: stri
   cmd('editor_drafts', '列出可恢复的编辑草稿', {}, [], () => workspace.editorDrafts().map(({ key, at }) => ({ key, at })));
   cmd('get_editor_draft', '恢复编辑草稿', { key: field('string') }, ['key'], p => workspace.editorDrafts().find(draft => draft.key === str(p, 'key')) ?? null);
   cmd('save_editor_draft', '自动保存编辑草稿（不含凭据）', { key: field('string'), fields: field('object'), discard: field('boolean') }, ['key'], p => write(() => { workspace.saveEditorDraft(str(p, 'key'), p.discard === true ? null : p.fields as Record<string, string>); return true; }));
-  cmd('tasks', '任务队列与历史', page, [], p => slice(service.taskList(), p).map(task => ({ ...task, label: byteTruncate(task.label, 300), error: task.error ? byteTruncate(task.error, 400) : undefined, retry: task.retry ? { action: task.retry.action, params: {} } : undefined, result: taskResult(task) })));
+  cmd('tasks', '任务队列与历史', { ...page, status: field('string', { enum: ['active', 'done', 'failed', 'cancelled'] }) }, [], p => {
+    const status = str(p, 'status');
+    const tasks = service.taskList().filter(task => !status || (status === 'active' ? isActiveTask(task) : task.status === status));
+    return slice(tasks, p).map(task => ({ ...task, removable: service.canRemoveTask(task), label: byteTruncate(task.label, 300), error: task.error ? byteTruncate(task.error, 400) : undefined, retry: task.retry ? { action: task.retry.action, params: {} } : undefined, result: taskResult(task) }));
+  });
   cmd('cancel_task', '取消排队或执行中的任务', id, ['id'], p => service.cancelTask(str(p, 'id')));
   cmd('retry_task', '重试失败或已取消的任务', id, ['id'], p => service.retryTask(str(p, 'id')));
+  cmd('delete_task', '删除一条已结束的任务记录', id, ['id'], p => service.deleteTaskHistory(str(p, 'id')));
+  cmd('clear_task_history', '清空已结束的任务记录', {}, [], () => service.deleteTaskHistory());
   cmd('trash', '回收站', page, [], p => slice(workspace.trash(), p).map(({ id, kind, title, at }) => ({ id, kind, title, at })));
   cmd('restore_trash', '恢复已删除页面或素材', { ...id, asCopy: field('boolean') }, ['id'], p => write(() => { const item = workspace.restoreTrash(str(p, 'id'), p.asCopy === true); store.saveIndex(buildIndex(store.listPages())); return { kind: item.kind, slug: item.page?.slug, sourceId: item.source?.id }; }));
   cmd('purge_trash','永久删除回收记录及未引用附件',id,['id'],p=>write(()=>workspace.purgeTrash(str(p,'id'))));

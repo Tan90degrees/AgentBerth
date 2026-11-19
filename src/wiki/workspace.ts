@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import path from 'node:path';
 import { unzipSync, zipSync } from 'fflate';
 import { byteTruncate, pageHash, slugify } from './core';
-import type { WikiAnswer, WikiPage, WikiSource } from './types';
+import type { WikiAnswer, WikiPage, WikiSource, WikiTask } from './types';
 import { sourceIdPattern, sourceMime, validSourcePath } from './source-directory';
 import type { WikiStore } from './store';
 
@@ -16,6 +16,9 @@ function originalEntry(name: string) {
 }
 const safePath = (name: string) => !!originalEntry(name) || name.length <= 240 && !name.includes('..') && !/[\\\x00<>:"|?*]/.test(name) && allowed.test(name);
 const MAX_ARCHIVE = 64 * 1024 * 1024;
+const TASK_HISTORY_LIMIT = 200;
+export const isActiveTask = (task: WikiTask) => task.status === 'queued' || task.status === 'running';
+const taskEnd = (task: WikiTask) => typeof task.finishedAt === 'string' ? task.finishedAt : task.startedAt;
 
 /** User state and portable data. Credentials, host settings and inbox watch
  * folders are excluded. Mutations run under the shared store write lock. */
@@ -120,7 +123,22 @@ export class WikiWorkspace {
     for (const answer of this.entries<WikiAnswer>('answers')) records.set(answer.at, answer);
     return [...records.values()].sort((a, b) => b.at.localeCompare(a.at));
   }
-  saveTasks(value: import('./types').WikiTask[]): void { const records = new Map(this.tasks<import('./types').WikiTask[]>([]).map(task => [task.id, task])); for (const task of value) records.set(task.id, task); this.write(path.join(this.store.root, 'tasks.json'), JSON.stringify([...records.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt)).slice(-200))); }
+  saveTasks(value: WikiTask[], existingOnly = false): WikiTask[] {
+    const records = new Map(this.taskRecords().map(task => [task.id, task]));
+    for (const task of value) if (!existingOnly || records.has(task.id)) records.set(task.id, task);
+    const sorted = [...records.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    const history = new Set(sorted.filter(task => !isActiveTask(task)).sort((a, b) => taskEnd(a).localeCompare(taskEnd(b))).slice(-TASK_HISTORY_LIMIT));
+    const retained = sorted.filter(task => isActiveTask(task) || history.has(task));
+    this.write(path.join(this.store.root, 'tasks.json'), JSON.stringify(retained));
+    return retained;
+  }
+  deleteTasks(ids: ReadonlySet<string>): void {
+    this.write(path.join(this.store.root, 'tasks.json'), JSON.stringify(this.taskRecords().filter(task => !ids.has(task.id))));
+  }
+  taskRecords(): WikiTask[] {
+    const saved = this.tasks<WikiTask[]>([]);
+    return Array.isArray(saved) ? saved.filter(task => task && typeof task.id === 'string' && typeof task.startedAt === 'string') : [];
+  }
   tasks<T>(fallback: T): T { return this.json(path.join(this.store.root, 'tasks.json'), fallback); }
   private portableFiles(): string[] {
     const files: string[] = []; let total = 0;
