@@ -28,7 +28,7 @@ export const petHookSchema = z.object({
   status: z.enum(petStatuses).exclude(['unknown']),
   // Human-readable summaries only; command output and prompts are never collected.
   label: z.string().max(120).optional(),
-  provider: z.enum(['claude', 'opencode']).optional(),
+  provider: z.enum(['claude', 'opencode', 'pi']).optional(),
   nativeSessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(),
   cwd: z.string().max(4096).optional(),
 }).strict();
@@ -44,7 +44,7 @@ export const petRequestSchema = z.discriminatedUnion('action', [
   z.object({action:z.literal('selectAppearance'),appearance:z.enum(petAppearances)}).strict(),
   z.object({action:z.literal('appearanceImage'),appearance:z.literal('naiwa')}).strict(),
   z.object({ action: z.enum(['importImage', 'resetImage', 'image']), status: z.enum(petStatuses) }).strict(),
-  z.object({ action: z.literal('installHook'), provider: z.enum(['claude', 'opencode']), projectId: z.uuid().nullable(), opencodeVersion: z.enum(['auto', '1', '2']).default('auto') }).strict(),
+  z.object({ action: z.literal('installHook'), provider: z.enum(['claude', 'opencode', 'pi']), projectId: z.uuid().nullable(), opencodeVersion: z.enum(['auto', '1', '2']).default('auto') }).strict(),
 ]);
 export type PetRequest = z.infer<typeof petRequestSchema>;
 

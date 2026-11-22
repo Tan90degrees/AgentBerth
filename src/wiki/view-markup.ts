@@ -73,7 +73,17 @@ export const notesWikiMarkup = String.raw`
       </section>
       <section class="panel" data-panel="skills"><div id="skillView"></div></section>
       <section class="panel" data-panel="settings"><div id="settingsView"></div></section>
-      <section class="panel" data-panel="tasks"><h2>任务中心</h2><div id="taskView"></div></section>
+      <section class="panel" data-panel="tasks">
+        <h2>任务中心</h2>
+        <div class="row task-toolbar">
+          <select id="taskFilter" aria-label="任务状态">
+            <option value="">所有任务</option><option value="active">进行中</option><option value="done">已完成</option>
+            <option value="failed">失败</option><option value="cancelled">已取消</option>
+          </select>
+          <button class="danger" data-action="clearTaskHistory">清空已结束记录</button>
+        </div>
+        <div id="taskView"></div>
+      </section>
       <section class="panel" data-panel="trash"><h2>回收站</h2><div id="trashView"></div></section>
     </article>
   </main>

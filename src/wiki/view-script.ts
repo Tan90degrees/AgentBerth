@@ -23,13 +23,36 @@ export const notesWikiScript = String.raw`
   // Render Markdown without a library: the whole document is escaped first, so
   // every replacement below only ever inserts already-escaped text or markup
   // we generate ourselves (and link protocols are allow-listed).
-  function markdown(text){
+  function rawReference(url,raw){
+    var match=/^wiki-source:([a-f0-9-]{36})\/(.+)$/.exec(url);
+    var id=match?.[1]||raw?.id;
+    if(!id||!match&&(/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(url)||!raw))return null;
+    var path=match?[]:raw.path.split('/').slice(0,-1);
+    try{
+      for(var entry of (match?match[2]:url.split('#')[0]).split('/')){
+        var part=decodeURIComponent(entry);
+        if(/[\\/\x00-\x1f]/.test(part)||match&&(!part||part==='.'||part==='..'))return null;
+        if(part==='..'){if(!path.length)return null;path.pop()}
+        else if(part&&part!=='.')path.push(part);
+      }
+    }catch{return null}
+    return path.length?{id:id,path:path.join('/')}:null;
+  }
+  function markdown(text,raw){
     var tick=String.fromCharCode(96),fence=tick+tick+tick;
     var lines=esc(text||'').split(/\r?\n/),out=[],list=null,inCode=false,para=[];
     var codeRe=new RegExp(tick+'([^'+tick+']+)'+tick,'g');
     var inline=function(value){
-      var codes=[];
+      var codes=[],references=[];
       value=value.replace(codeRe,function(_,code){codes.push('<code>'+code+'</code>');return '@@CODE'+(codes.length-1)+'@@'});
+      value=value.replace(/(!?)\[([^\]]+)\]\(([^)\s]+)\)/g,function(original,image,label,url){
+        var target=rawReference(unesc(url),raw);if(!target)return image?label:original;
+        var attrs=' data-id="'+esc(target.id)+'" data-path="'+esc(target.path)+'"';
+        references.push(image&&/\.(png|jpe?g|webp|gif)$/i.test(target.path)
+          ?'<button class="source-inline-image" data-action="openOriginal"'+attrs+' aria-label="'+label+'"><img data-source-image'+attrs+' alt="'+label+'"></button>'
+          :'<button class="wikilink" data-action="openOriginal"'+attrs+'>'+label+'</button>');
+        return '@@RAW'+(references.length-1)+'@@';
+      });
       value=value.replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g,function(_,target,label){
         var slug=pageSlug(unesc(target));
         return '<button class="wikilink" data-action="openPage" data-slug="'+esc(slug)+'">'+(label||target)+'</button>';
@@ -40,6 +63,7 @@ export const notesWikiScript = String.raw`
         if(!/^(https?:\/\/|mailto:|\/|#|\.\/|\.\.\/)/i.test(url))return label;
         return '<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+label+'</a>';
       });
+      value=value.replace(/@@RAW(\d+)@@/g,function(_,i){return references[Number(i)]||''});
       value=value.replace(/@@CODE(\d+)@@/g,function(_,i){return codes[Number(i)]||''});
       return value;
     };
@@ -79,7 +103,7 @@ export const notesWikiScript = String.raw`
   function evidenceBlock(list){
     if(!list||!list.length)return '';
     return '<details class="evidence" open><summary>原始出处（'+list.length+'）</summary>'+list.map(function(e){
-      return '<div class="evidence-item"><div class="row" style="justify-content:space-between"><strong>'+esc(e.title||'素材')+'</strong>'+button('openSource','定位原文','',' data-id="'+esc(e.sourceId)+'" data-quote="'+esc(e.quote)+'"')+'</div><blockquote>'+esc(e.context||e.quote)+'</blockquote><small>引文：'+esc(e.quote)+'</small></div>';
+      return '<div class="evidence-item"><div class="row" style="justify-content:space-between"><strong>'+esc(e.title||'素材')+'</strong>'+button(e.path?'openOriginal':'openSource','定位原文','',' data-id="'+esc(e.sourceId)+'" data-quote="'+esc(e.quote)+'"'+(e.path?' data-path="'+esc(e.path)+'" data-offset="'+Number(e.offset||0)+'"':''))+'</div><blockquote>'+esc(e.context||e.quote)+'</blockquote><small>引文：'+esc(e.quote)+'</small></div>';
     }).join('')+'</details>';
   }
   function captureOptions(query){
@@ -97,34 +121,6 @@ export const notesWikiScript = String.raw`
   function mdEditor(labelText,field,rows,value,max){
     return '<label>'+esc(labelText)+'</label><div class="md-editor"><div class="md-tools">'+button('mdPreview','预览','ghost')+'</div><textarea data-field="'+esc(field)+'" rows="'+rows+'" maxlength="'+max+'">'+esc(value||'')+'</textarea><div class="md-preview markdown" hidden></div></div>';
   }
-  function uploadPdf(file,progress){
-    var uploadId='';
-    var cancel=function(){if(!uploadId)return;var id=uploadId;uploadId='';call('pdf_upload_cancel',{uploadId:id}).catch(function(){})};
-    var finish=function(result){
-      uploadId='';
-      if(!result||!result.id){progress('');return Promise.resolve()}
-      progress(result.skipped?'内容已存在，跳过导入。':'导入完成（'+result.pages+' 页），正在启动编译…');
-      state.newSource=false;state.source=result.id;state.tab='sources';setTab('sources');
-      return call('compile',{sourceId:result.id}).then(function(taskId){startTask(taskId,'compile')},function(){return refreshLists()});
-    };
-    var chain=function(offset,base64){
-      var done=offset>=file.size;
-      call('pdf_upload_chunk',{uploadId:uploadId,base64:base64,done:done}).then(function(result){
-        if(done)return finish(result);
-        progress('上传中 '+Math.min(99,Math.round(offset*100/Math.max(1,file.size)))+'%');
-        read(offset);
-      }).catch(function(error){cancel();progress('');err(error)});
-    };
-    var read=function(offset){
-      var reader=new FileReader();
-      reader.onerror=function(){cancel();progress('');err(new Error('PDF 读取失败：'+file.name))};
-      reader.onload=function(){chain(offset+36*1024,String(reader.result).split(',')[1]||'')};
-      reader.readAsDataURL(file.slice(offset,offset+36*1024));
-    };
-    progress('准备上传…');
-    call('pdf_upload_start',{title:file.name.replace(/\.pdf$/i,'')}).then(function(start){uploadId=start.uploadId;read(0)}).catch(function(error){progress('');err(error)});
-  }
-
   function setTab(name){
     state.tab=name;
     document.querySelectorAll('.tabs [data-tab]').forEach(function(node){node.classList.toggle('active',node.dataset.tab===name)});
@@ -188,7 +184,7 @@ export const notesWikiScript = String.raw`
   function renderSource(){
     renderSourceList();var host=$('sourceView');
     if(state.newSource){
-      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文<textarea data-field="text" rows="14" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>文件<input type="file" data-field="pdf" accept="application/pdf,.pdf"></label><p id="pdfProgress" class="muted"></p><div class="row">'+button('startImport','保存素材','primary')+button('cancelImport','取消导入','ghost',' hidden')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
+      host.innerHTML=card('新增原始素材','<label>标题<input data-field="title" placeholder="例如：一篇关于向量检索的文章"></label><label>正文<textarea data-field="text" rows="14" placeholder="粘贴文章、会议记录或你的随手笔记…"></textarea></label><label>ZIP 或单个文件（Markdown、文本、PDF、图片）<input type="file" data-field="sourceFile" accept=".zip,.pdf,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp,.gif"></label><p id="importProgress" class="muted"></p><div class="row">'+button('startImport','保存素材','primary')+button('cancelImport','取消导入','ghost',' hidden')+button('cancelSource','取消')+'</div><p id="sourceProgress" class="muted"></p>');
       return;
     }
     if(!state.source){host.innerHTML=captureCard()+empty('从左侧选择素材，或点 ＋ 新增。');return}

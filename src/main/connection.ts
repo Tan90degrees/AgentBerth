@@ -117,6 +117,18 @@ export async function shutdownDaemon(directory: string, restoreOnOpen = false): 
   } finally { candidate.close(true); }
 }
 
+async function stopConnectedIdleDaemon(directory: string, runtime: RuntimeInfo, candidate: DaemonConnection): Promise<void> {
+  if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
+  try { await candidate.rpc('shutdownIdle'); }
+  catch (error) {
+    if (!(error instanceof Error) || error.message !== '后台连接已断开') throw error;
+    await waitForExit(runtime.pid);
+    if (runtimeFile(directory)?.token === runtime.token || existsSync(path.join(directory, 'daemon.lock'))) throw error;
+    return;
+  }
+  await waitForExit(runtime.pid);
+}
+
 export async function stopIdleDaemon(directory: string): Promise<void> {
   const runtime = runtimeFile(directory);
   if (!runtime) throw new Error('无法确认后台进程，请重新连接后重试');
@@ -124,22 +136,51 @@ export async function stopIdleDaemon(directory: string): Promise<void> {
   try {
     const state = await candidate.rpc<State>('state');
     if (state.sessions.some(session => ['running', 'stopping'].includes(session.latestRun?.status ?? ''))) throw new Error('请先停止全部终端，再更新后台');
-    if (runtimeFile(directory)?.token !== runtime.token) throw new Error('后台实例已变化，请重新连接后重试');
-    await candidate.rpc('shutdownIdle');
-    await waitForExit(runtime.pid);
+    await stopConnectedIdleDaemon(directory, runtime, candidate);
   } finally { candidate.close(true); }
+}
+
+async function assertCompatibleDaemon(candidate: DaemonConnection): Promise<void> {
+  const { apiVersion } = await candidate.rpc<State>('state');
+  if (apiVersion !== API_VERSION && !(Number.isInteger(apiVersion) && apiVersion >= 44 && apiVersion <= 64)) {
+    throw new DaemonRpcError('运行中的后台协议与当前版本不兼容，请从托盘完整退出旧版后重新打开。工作区数据会保留。', 'BACKEND_UPGRADE_REQUIRED');
+  }
+}
+
+function isLegacyIntegrationError(error: unknown): boolean {
+  if (!(error instanceof DaemonRpcError)) return false;
+  try {
+    const issues: unknown = JSON.parse(error.message);
+    if (!Array.isArray(issues) || issues.length !== 1) return false;
+    const issue = issues[0];
+    // The Wiki-only test build returns Zod's legacy integration enum error
+    // before it can report its API version. Match only this validation issue.
+    return issue?.code === 'invalid_value' && Array.isArray(issue.path) &&
+      issue.path.length === 1 && issue.path[0] === 'integration' &&
+      Array.isArray(issue.values) && issue.values.join(',') === 'codex,claude,opencode';
+  } catch { return false; }
 }
 
 export async function connectDaemon(directory: string, daemonFile: string, executable: string, onEvent: (event: ServerEvent) => void): Promise<DaemonConnection> {
   const runtime = runtimeFile(directory);
   if (runtime) {
-    let candidate: DaemonConnection | null = null;
-    try { candidate = await DaemonConnection.open(runtime, onEvent); const state=await candidate.rpc<State>('state'); if(state.apiVersion!==API_VERSION&&!([44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63].includes(state.apiVersion)&&API_VERSION===64))throw new Error('运行中的后台协议与当前版本不兼容；请从托盘完整退出旧版后重新打开，保留原数据目录。'); return candidate; }
+    let candidate: DaemonConnection | undefined;
+    try { candidate = await DaemonConnection.open(runtime, onEvent); }
     catch (error) {
-      candidate?.close();
-      if(String(error).includes('运行中的后台版本与当前架构不同'))throw error;
-      try { process.kill(runtime.pid, 0); throw new Error('后台进程仍在运行但无法连接，请稍后重试'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+      if (isAlive(runtime.pid)) throw new Error('后台进程仍在运行但无法连接，请稍后重试', { cause: error });
+    }
+    if (candidate) {
+      try {
+        await assertCompatibleDaemon(candidate);
+        return candidate;
+      } catch (error) {
+        try {
+          if (!isLegacyIntegrationError(error)) throw error;
+          // Keep the old process in charge of its idle gate. An active
+          // terminal or a pending operation prevents replacement.
+          await stopConnectedIdleDaemon(directory, runtime, candidate);
+        } finally { candidate.close(true); }
+      }
     }
   }
   const child = spawn(executable, [daemonFile, directory], {
@@ -170,7 +211,13 @@ export async function connectDaemon(directory: string, daemonFile: string, execu
     const failure = startupFailure();
     if (failure) throw new Error(failure.replace(/^Error:\s*/, ''));
     const next = runtimeFile(directory);
-    if (next) { try { return await DaemonConnection.open(next, onEvent); } catch { /* Another client may be starting the daemon. */ } }
+    if (next) {
+      const candidate = await DaemonConnection.open(next, onEvent).catch(() => undefined);
+      if (candidate) {
+        try { await assertCompatibleDaemon(candidate); return candidate; }
+        catch (error) { candidate.close(true); throw error; }
+      }
+    }
     if (child.exitCode !== null || child.signalCode !== null) throw new Error('后台进程启动后立即退出（退出码 '+String(child.exitCode)+'）。请查看数据目录中的 daemon-startup-error.json');
     await new Promise(resolve => setTimeout(resolve, 100));
   }
