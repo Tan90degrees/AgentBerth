@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_MONITORED_NODES, type AcceleratorNode, type AcceleratorReading } from './accelerator';
 
 export const petStatuses = ['idle', 'working', 'waiting', 'completed', 'error', 'unknown'] as const;
 export type PetStatus = typeof petStatuses[number];
@@ -14,12 +15,17 @@ export const agentActivitySchema=z.object({id:z.string().min(1).max(100),title:z
 export type AgentActivity=z.infer<typeof agentActivitySchema>&{pluginId?:string;taskId?:string};
 export const petLabels: Record<PetStatus, string> = { idle: '空闲', working: '执行中', waiting: '等待你处理', completed: '已完成', error: '执行失败', unknown: '状态待确认' };
 export const petWindowSize = { width: 216, height: 180 } as const;
+export const petMonitorWindowSize = { width: 280, height: 354 } as const;
+export const petDimensions = (monitoring: boolean) => monitoring ? petMonitorWindowSize : petWindowSize;
 export const petScales = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
+const monitorNodeIds = z.array(z.uuid()).max(MAX_MONITORED_NODES).refine(ids => new Set(ids).size === ids.length);
 export const petPreferencesSchema = z.object({
   enabled: z.boolean().default(false), alwaysOnTop: z.boolean().default(true),
   autoSwitch: z.boolean().default(true), scale: z.number().min(0.5).max(2).default(1),
   selectedSessionId: z.string().max(100).default(''),
   appearance:z.enum(petAppearances).default('dafeiyu'),customImages:z.boolean().default(true),
+  monitorNodeIds: monitorNodeIds.default([]),
+  monitorSelectedId: z.union([z.literal(''), z.uuid()]).default(''),
 }).strict();
 export type PetPreferences = z.infer<typeof petPreferencesSchema>;
 export const defaultPetPreferences = petPreferencesSchema.parse({});
@@ -37,10 +43,13 @@ export interface PetSession { sessionId: string; runId: string; title: string; p
 export interface PetSnapshot {
   preferences: PetPreferences; sessions: PetSession[]; connected: boolean;
   images: Partial<Record<PetStatus, string>>; imageVersion: number; availableAppearances?:PetAppearance[];
+  monitor?: { available: boolean; nodes: AcceleratorNode[]; readings: AcceleratorReading[] };
 }
 export const petRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.enum(['state', 'hookConfig', 'hookGuide', 'showSession', 'menu', 'dragStart', 'dragMove', 'dragEnd']) }).strict(),
   z.object({ action: z.literal('save'), preferences: petPreferencesSchema }).strict(),
+  z.object({ action: z.literal('saveMonitor'), ids: monitorNodeIds }).strict(),
+  z.object({ action: z.literal('selectMonitor'), id: z.uuid() }).strict(),
   z.object({action:z.literal('selectAppearance'),appearance:z.enum(petAppearances)}).strict(),
   z.object({action:z.literal('appearanceImage'),appearance:z.literal('naiwa')}).strict(),
   z.object({ action: z.enum(['importImage', 'resetImage', 'image']), status: z.enum(petStatuses) }).strict(),

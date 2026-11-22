@@ -50,6 +50,9 @@ try {
   // Seed a failed remote locally without making a network connection.
   console.log('Pet smoke: validating SSH fixture and Agent sessions');
   const profile = await page.evaluate(privateKeyPath => window.berth.saveSshConnection({ alias: 'pet-filter-fixture', hostname: '127.0.0.1', port: 22, username: 'fixture', authentication: 'key', privateKeyPath, allowAgent: false }, undefined, {}, false), path.join(folder, 'missing-fixture-key'));
+  const secondNode = await page.evaluate(() => window.berth.saveSshConnection({
+    alias: 'second-monitor-fixture', hostname: '127.0.0.1', port: 23, username: 'fixture', authentication: 'agent', allowAgent: false,
+  }, undefined, {}, false));
   const remote = await rpc('createRemoteSession', { title: 'Excluded SSH', remote: { host: profile.alias, connectionId: profile.id, directory: '' } });
   await assert.rejects(rpc('start', { sessionId: remote.id, cols: 80, rows: 24 }), /无法读取私钥/);
   const create = title => rpc('createSession', { projectId: project.id, title, agent: 'custom', command: 'echo Agent-fixture-ready' });
@@ -73,6 +76,19 @@ try {
   assert.equal(await pet.locator('.pet-card, .pet-drag, select').count(), 0, 'Only the character should be visible');
   const initialPet = await pet.evaluate(() => window.berth.pet({ action: 'state' }));
   assert.deepEqual(initialPet.sessions.map(session => session.sessionId).sort(), [a.id, b.id].sort());
+  console.log('Pet smoke: configuring and switching remote monitoring nodes');
+  const nodePicker = page.getByLabel('添加监控节点');
+  await nodePicker.selectOption(profile.id);
+  const panel = pet.getByRole('region', { name: '远程 GPU / NPU 监控' });
+  await panel.getByRole('button', { name: profile.alias }).waitFor();
+  await nodePicker.selectOption(secondNode.id);
+  await panel.getByRole('button', { name: secondNode.alias }).click();
+  await pet.waitForFunction(id => window.berth.pet({ action: 'state' }).then(value => value.preferences.monitorSelectedId === id), secondNode.id);
+  await panel.getByText(/先从 SSH 连接打开此节点/).waitFor();
+  await pet.waitForFunction(() => Math.abs(document.querySelector('.desktop-pet').getBoundingClientRect().height - innerHeight) <= 1);
+  const remove = page.locator('.pet-monitor-settings').getByRole('button', { name: '移除', exact: true }).first();
+  await remove.click(); await remove.click();
+  await panel.waitFor({ state: 'hidden' });
   // Native menus are outside the renderer. Capture the real Menu object at its
   // popup boundary and invoke its actual handlers without opening an OS modal.
   await application.evaluate(({ Menu }) => { Menu.prototype.popup = function () { globalThis.petSmokeMenu = this; }; });

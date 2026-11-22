@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState,type CSSProperties } from 'react';
-import { defaultPetPreferences, petAppearances,petAppearanceLabels,naiwaClips,type PetAppearance, petLabels, petStatuses, petScales, petWindowSize, type PetPreferences, type PetSnapshot, type PetStatus } from '../shared/pet';
+import { defaultPetPreferences, petAppearances,petAppearanceLabels,naiwaClips,type PetAppearance, petLabels, petStatuses, petScales, petDimensions, type PetPreferences, type PetSnapshot, type PetStatus } from '../shared/pet';
+import { ACCELERATOR_API_VERSION, MAX_MONITORED_NODES } from '../shared/accelerator';
 import { AsyncButton } from './AsyncButton';
 import './pet.css';
 
@@ -80,6 +81,39 @@ function PetScale({ value, disabled, onChange }: { value: number; disabled: bool
   return <select aria-label="桌宠大小" title="调整桌宠大小" value={value} disabled={disabled} onChange={event => onChange(Number(event.target.value))}>{scales.map(scale => <option key={scale} value={scale}>{Math.round(scale * 100)}%</option>)}</select>;
 }
 
+function AcceleratorPanel({ snapshot, select }: { snapshot: PetSnapshot; select: (id: string) => void }) {
+  const { monitorNodeIds, monitorSelectedId } = snapshot.preferences;
+  const monitor = snapshot.monitor;
+  const selected = monitorNodeIds.includes(monitorSelectedId) ? monitorSelectedId : monitorNodeIds[0];
+  const reading = monitor?.readings.find(node => node.id === selected);
+  const timestamp = reading?.sample ? new Date(reading.sample.sampledAt).toLocaleTimeString() : '';
+  const alias = (id: string) => monitor?.nodes.find(node => node.id === id)?.alias ?? '未知节点';
+  const percent = (value: number | null) => value === null ? '—' : value + '%';
+  const capacity = (value: number) => (value / 1024).toFixed(1);
+  return <section className="pet-accelerators" aria-label="远程 GPU / NPU 监控">
+    <div className="pet-monitor-nodes" role="group" aria-label="切换监控节点">
+      {monitorNodeIds.map(id => <button key={id} type="button" title={alias(id)} aria-pressed={id === selected} onClick={() => select(id)}>{alias(id)}</button>)}
+    </div>
+    <div className="pet-monitor-state" role="status">
+      {!monitor?.available ? '监控暂不可用' + (timestamp ? ' · 上次 ' + timestamp : '') :
+        !monitor.nodes.some(node => node.id === selected) ? 'SSH 连接不存在' :
+        reading?.error ? (timestamp ? '采集失败 · 上次 ' + timestamp : reading.error) :
+        reading?.sample ? (reading.sample.warning ?? (reading.sample.devices.length + ' 张卡')) + ' · ' + timestamp : '正在采集…'}
+    </div>
+    {!!reading?.error && !!reading.sample && <div className="pet-monitor-error" title={reading.error}>{reading.error}</div>}
+    <div className="pet-monitor-devices" tabIndex={reading?.sample?.devices.length ? 0 : undefined} aria-label={alias(selected) + ' 的设备列表'}>
+      {reading?.sample?.devices.map(device => <div className="pet-monitor-device" key={device.kind + device.id} title={[device.model, device.health].filter(Boolean).join(' · ')}>
+        <div><strong>{device.kind.toUpperCase()} {device.id}</strong> <span>{device.model}</span></div>
+        <div className="pet-monitor-metrics">
+          <span>{device.kind === 'npu' ? 'AI Core' : '利用率'} {percent(device.utilization)}</span>
+          <span>{device.memory ? device.memory.kind + ' ' + capacity(device.memory.used) + '/' + capacity(device.memory.total) + ' GiB' : '显存 —'}</span>
+          <span>{device.temperature === null ? '—' : device.temperature + '°C'}</span>
+        </div>
+      </div>)}
+    </div>
+  </section>;
+}
+
 export function DesktopPet() {
   const { snapshot, error, setError,atlas } = usePet();
   const dragging = useRef(false), frame = useRef(0);
@@ -97,7 +131,11 @@ export function DesktopPet() {
     if (dragging.current) void window.berth.pet({ action: 'dragEnd' }).catch(() => {});
   }, []);
   const menu = () => { endDrag(); request('menu'); };
-  return <main className={`desktop-pet pet-state-${status}`} data-session-id={selected?.sessionId ?? ''} style={{ zoom: snapshot.preferences.scale, ...petWindowSize }}>
+  const monitoring = snapshot.preferences.monitorNodeIds.length > 0;
+  return <main className={`desktop-pet pet-state-${status}`} data-session-id={selected?.sessionId ?? ''} style={{ zoom: snapshot.preferences.scale, ...petDimensions(monitoring) }}>
+    {monitoring && <AcceleratorPanel snapshot={snapshot} select={id => {
+      void window.berth.pet({ action: 'selectMonitor', id }).catch(reason => setError(String(reason)));
+    }} />}
     <button type="button" className="pet-stage" aria-label={`桌宠：${selected?.title ?? '暂无 Agent 会话'}，${petLabels[status]}；右键打开菜单`}
       title={error || '按住图像拖动；右键打开操作菜单'}
       onContextMenu={event => { event.preventDefault(); menu(); }}
@@ -137,6 +175,27 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     <label className="pet-toggle"><input type="checkbox" checked={preferences.alwaysOnTop} disabled={busy} onChange={event => void apply({ alwaysOnTop: event.target.checked })} />保持在其他窗口上方</label>
     <label className="pet-toggle"><input type="checkbox" checked={preferences.autoSwitch} disabled={busy} onChange={event => void apply({ autoSwitch: event.target.checked })} />等待处理或失败时，自动切换到对应会话</label>
     <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label>{/* 支持 50%–200%，也可右键桌宠图像，在“桌宠大小”中调节，自动保存。 */}
+    <h3>远程 GPU / NPU 监控 · {preferences.monitorNodeIds.length}/{MAX_MONITORED_NODES}</h3>
+    <label>添加 SSH 节点<select aria-label="添加监控节点" value="" disabled={busy || !snapshot.monitor?.available || preferences.monitorNodeIds.length >= MAX_MONITORED_NODES} onChange={event => {
+      const id = event.target.value;
+      setBusy(true); setError('');
+      void window.berth.pet<PetSnapshot>({ action: 'saveMonitor', ids: [...preferences.monitorNodeIds, id] })
+        .then(setSnapshot).catch(reason => setError(String(reason))).finally(() => setBusy(false));
+    }}>
+      <option value="">{snapshot.monitor?.nodes.length ? '选择 SSH 连接' : '请先在 SSH 设置中保存连接'}</option>
+      {snapshot.monitor?.nodes.filter(node => !preferences.monitorNodeIds.includes(node.id)).map(node => <option key={node.id} value={node.id}>{node.alias}</option>)}
+    </select></label>
+    {apiVersion < ACCELERATOR_API_VERSION && <p className="form-hint" role="status">请先在设置中更新空闲后台。</p>}
+    <div className="pet-monitor-settings">
+      {preferences.monitorNodeIds.map(id => {
+        const alias = snapshot.monitor?.nodes.find(node => node.id === id)?.alias ?? '未知节点';
+        return <div key={id}><span>{alias}</span><AsyncButton className="text-button" disabled={busy} onError={setError} onAction={async () => {
+          setBusy(true); setError('');
+          try { setSnapshot(await window.berth.pet({ action: 'saveMonitor', ids: preferences.monitorNodeIds.filter(nodeId => nodeId !== id) })); }
+          finally { setBusy(false); }
+        }}>移除</AsyncButton></div>;
+      })}
+    </div>
     <h3>形象与动作</h3><label>桌宠形象<select aria-label="桌宠形象" value={preferences.appearance} disabled={busy} onChange={event=>{const appearance=event.target.value as PetAppearance;setBusy(true);setError('');void window.berth.pet({action:'selectAppearance',appearance}).then(setSnapshot).catch(reason=>setError(String(reason))).finally(()=>setBusy(false));}}>{petAppearances.map(appearance=><option key={appearance} value={appearance}>{petAppearanceLabels[appearance]}{appearance==='naiwa'&&!snapshot.availableAppearances?.includes('naiwa')?'（首次下载）':''}</option>)}</select></label>
     {busy&&<p role="status" className="form-hint">正在更新桌宠…</p>}
     <p className="form-hint">奶蛙首次选择时下载完整动作图集，之后可离线使用。素材来源：<AsyncButton className="text-button" onError={setError} onAction={()=>window.berth.openExternal('https://github.com/timerring/codex-pet-naiwa')}>codex-pet-naiwa</AsyncButton>。</p>

@@ -22,6 +22,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { PROTOCOL_VERSION, requestSchema, agentDefinitionSchema, type Attachment, type HistoryQuery, type History, type Request, type Run, type RuntimeInfo, type ServerEvent } from '../shared/protocol';
 import { Store } from './store';
 import { ResourceSampler } from './resources';
+import { RemoteAcceleratorSampler } from './accelerators';
 import {IsolatedWorkspaces} from './isolated-workspaces';
 import {mount as mountIsolated} from '../core/isolated-workspaces';
 import { GitWorkspace } from './git';
@@ -76,6 +77,8 @@ export class DaemonServer {
   private extensionCaller=new AsyncLocalStorage<Client>();
   private extensionAgents=new Map<string,string>();
   private sshProvider: Client | null = null;
+  private accelerators = new RemoteAcceleratorSampler();
+  private acceleratorShutdown = new AbortController();
   private sshChallenges = new Map<string, { client: Client; resolve: (value: {secret?: SshSecret; accepted?: boolean}) => void; reject: (error: Error) => void }>();
   private agentOwners = new Map<string, Client>();
   private openingAliases = new Map<string, Promise<{sessionId:string;runId:string;info: import('../shared/protocol').RemoteInfo}>>();
@@ -178,7 +181,7 @@ export class DaemonServer {
           return;
         }
         // Resource polling is cancelled by close() and must not block an idle restart.
-        const blocksIdleShutdown = !['resources','mcpMetrics','mcpRecordCall'].includes(result.data.method);
+        const blocksIdleShutdown = !['resources','sampleAccelerators','mcpMetrics','mcpRecordCall'].includes(result.data.method);
         client.pending++;
         if (blocksIdleShutdown) this.pendingWork++;
         void this.dispatch(result.data, client).then(value => this.send(socket, { id: result.data.id, result: value }, ['shutdown','shutdownIdle'].includes(result.data.method) ? this.onShutdown : undefined)).catch(error => this.send(socket, { id: result.data.id, error: error instanceof Error ? error.message : '操作失败', ...(error instanceof RemoteOperationError?{errorCode:error.code,errorDetails:error.details}:{}) })).finally(() => {
@@ -279,6 +282,8 @@ export class DaemonServer {
       requireIdle:self.requireIdle.bind(self),
       get restoredRuns(){return self.restoredRuns;},
       runRemoteCommand:self.runRemoteCommand.bind(self),
+      sampleAccelerators:self.sampleAccelerators.bind(self),
+      invalidateAccelerators:(id:string)=>self.accelerators.invalidate(id),
       screen:self.screen.bind(self),
       get sshChallenges(){return self.sshChallenges;},
       get sshProvider(){return self.sshProvider;},
@@ -458,17 +463,28 @@ export class DaemonServer {
     if (this.terminal(sessionId,runId).stopping) throw new Error('终端正在停止');
     return remote;
   }
-  private challenge(profile: {id: string; alias: string; hostname: string; port: number}, kind: SshChallenge['kind'], fingerprint?: string): Promise<{secret?: SshSecret; accepted?: boolean}> {
+  private challenge(profile: {id: string; alias: string; hostname: string; port: number}, kind: SshChallenge['kind'], fingerprint?: string, signal?: AbortSignal): Promise<{secret?: SshSecret; accepted?: boolean}> {
+    signal?.throwIfAborted();
     const provider = this.sshProvider;
     const socket = [...this.clients].find(([,client]) => client === provider)?.[0];
     if (!provider || !socket) return Promise.reject(new Error('请打开 AgentBerth，在 SSH 连接设置中输入登录信息后重试'));
     const id = randomUUID();
     return new Promise((resolve,reject) => {
-      const complete = () => { clearTimeout(timer); this.sshChallenges.delete(id); };
+      const complete = () => { clearTimeout(timer); this.sshChallenges.delete(id); signal?.removeEventListener('abort', cancel); };
+      const cancel = () => { complete(); reject(new Error('远程监控登录请求已取消或超时')); };
       const timer = setTimeout(() => { complete(); reject(new Error('SSH 登录信息或主机指纹确认超时，请在 AgentBerth 中重试')); }, 40000);
       this.sshChallenges.set(id, { client: provider, resolve: value => { complete(); resolve(value); }, reject: error => { complete(); reject(error); } });
+      signal?.addEventListener('abort', cancel, { once: true });
       this.send(socket, { event: 'sshChallenge', data: { id, connectionId: profile.id, alias: profile.alias, kind, fingerprint, hostname: profile.hostname, port: profile.port } });
     });
+  }
+  private sampleAccelerators(connectionId: string, client: Client) {
+    if (client !== this.sshProvider) throw new Error('仅桌面监控可以采集 GPU / NPU');
+    const profile = this.store.sshConnection(connectionId);
+    const fingerprint = this.store.sshFingerprint(profile.id);
+    if (!fingerprint) throw new Error('请先从 SSH 连接打开此节点并确认主机指纹');
+    return this.accelerators.sample(profile, fingerprint, async signal => (await this.challenge(profile, 'credentials', undefined, signal)).secret ?? {},
+      AbortSignal.any([client.abort.signal, this.acceleratorShutdown.signal]));
   }
   private aliasTarget(alias: string, client?: Client, human = false) {
     const profile = this.store.sshConnections().find(item => item.alias.toLowerCase() === alias.toLowerCase());
@@ -1009,6 +1025,7 @@ export class DaemonServer {
     return this.stoppingAll;
   }
   private async drainAll(restoreOnOpen:boolean):Promise<void>{
+      this.acceleratorShutdown.abort();
       if (restoreOnOpen) this.checkpointWorkspace();
       // Quiesce schedulers before waiting on any slow resource shutdown.
       await this.extensions.close();

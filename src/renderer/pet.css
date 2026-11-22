@@ -4,6 +4,18 @@ html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { b
 .pet-stage:active { cursor:grabbing; }
 .desktop-pet .pet-stage:hover:not(:disabled), .desktop-pet .pet-stage:active { background:transparent; box-shadow:none; border-color:transparent; }
 .pet-stage:focus-visible { outline:2px solid #8cdec4; outline-offset:0; }
+.pet-accelerators { height:166px; margin-bottom:8px; padding:8px 9px; display:flex; flex-direction:column; gap:4px; overflow:hidden; border-radius:13px; border:1px solid #455962; background:#18252a; color:#ecf5f3; }
+.pet-monitor-nodes { display:flex; gap:4px; }
+.pet-monitor-nodes button { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; padding:3px 6px; color:#ecf5f3; border:1px solid transparent; background:#273b43; border-radius:5px; }
+.pet-monitor-nodes button[aria-pressed=true] { background:#bce8d8; color:#142b24; }
+.pet-monitor-nodes button:focus-visible, .pet-monitor-devices:focus-visible { outline:2px solid #8cdec4; outline-offset:-2px; }
+.pet-monitor-state, .pet-monitor-error { color:#b8d0d3; overflow-wrap:anywhere; }
+.pet-monitor-error { color:#ffc8a0; }
+.pet-monitor-devices { min-height:0; overflow:auto; scrollbar-width:thin; font-variant-numeric:tabular-nums; }
+.pet-monitor-device { padding:3px 2px; border-top:1px solid #354950; }
+.pet-monitor-device > div:first-child { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.pet-monitor-metrics { display:flex; justify-content:space-between; gap:4px; color:#bce8d8; font-size:11px; }
+.pet-monitor-settings > div { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0; }
 .pet-character { width:192px; height:160px; object-fit:contain; pointer-events:none; }
 .pet-settings .pet-toggle { display:flex; align-items:center; gap:8px; margin:12px 0; }
 .pet-settings .pet-toggle input { width:auto; margin:0; }
