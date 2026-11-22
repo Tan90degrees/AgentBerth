@@ -186,6 +186,7 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     return () => { alive = false; };
   }, []);
   const preferences = snapshot.preferences;
+  const [pendingVisibility, setPendingVisibility] = useState<boolean>();
   const [refreshInput, setRefreshInput] = useState(String(preferences.monitorRefreshSeconds));
   useEffect(() => setRefreshInput(String(preferences.monitorRefreshSeconds)), [preferences.monitorRefreshSeconds]);
   const refreshSeconds = Number(refreshInput);
@@ -199,11 +200,11 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     <label className="pet-toggle"><input type="checkbox" checked={preferences.autoSwitch} disabled={busy} onChange={event => void apply({ autoSwitch: event.target.checked })} />等待处理或失败时，自动切换到对应会话</label>
     <label>桌宠大小<PetScale value={preferences.scale} disabled={busy} onChange={scale => void apply({ scale })} /></label>{/* 支持 50%–200%，也可右键桌宠图像，在“桌宠大小”中调节，自动保存。 */}
     <h3>远程资源监控 · {preferences.monitorNodeIds.length}/{MAX_MONITORED_NODES}</h3>
-    <label className="pet-toggle"><input type="checkbox" checked={preferences.monitorVisible} disabled={busy} onChange={event => {
+    <label className="pet-toggle"><input type="checkbox" checked={pendingVisibility ?? preferences.monitorVisible} disabled={busy} onChange={event => {
       const visible = event.target.checked;
-      setBusy(true); setError('');
+      setPendingVisibility(visible); setBusy(true); setError('');
       void window.berth.pet<PetSnapshot>({ action: 'showMonitor', visible })
-        .then(setSnapshot).catch(reason => setError(String(reason))).finally(() => setBusy(false));
+        .then(setSnapshot).catch(reason => setError(String(reason))).finally(() => { setPendingVisibility(undefined); setBusy(false); });
     }} />显示远程资源</label>
     <label>监控字号<select aria-label="监控字号" value={preferences.monitorFontSize} disabled={busy} onChange={event => {
       const size = Number(event.target.value);

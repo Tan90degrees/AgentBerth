@@ -91,10 +91,12 @@ try {
   await page.getByLabel('监控字号').selectOption('14');
   await pet.waitForFunction(() => document.querySelector('.pet-accelerators').style.fontSize === '14px');
   const toggle = page.getByLabel('显示远程资源', { exact: true });
-  await toggle.uncheck();
+  await toggle.click();
   await panel.waitFor({ state: 'hidden' });
-  await toggle.check();
+  assert.equal(await toggle.isChecked(), false);
+  await toggle.click();
   await panel.getByRole('region', { name: thirdNode.alias }).waitFor();
+  assert.equal(await toggle.isChecked(), true);
   const snapshot = await pet.evaluate(() => window.berth.pet({ action: 'state' }));
   assert.equal(snapshot.preferences.monitorFontSize, 14);
   snapshot.monitor.readings = [profile, secondNode, thirdNode].map((node, index) => ({ id: node.id, sample: {
@@ -106,16 +108,15 @@ try {
     const target = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet'));
     target.webContents.send('berth:petState', snapshot);
   }, snapshot);
-  await pet.waitForFunction(() => document.querySelectorAll('.pet-monitor-cards tbody tr').length === 24);
   await pet.waitForFunction(() => {
     const columns = Array.from(document.querySelectorAll('.pet-monitor-node'));
     const boxes = columns.map(column => column.getBoundingClientRect());
     const lastRows = columns.map(column => column.querySelector('tbody tr:last-child').getBoundingClientRect());
     return columns.length === 3 && new Set(boxes.map(box => box.x)).size === 3 &&
+      columns.every(column => column.querySelectorAll('tbody tr').length === 8 && column.textContent.includes('16.0/64.0 GiB')) &&
+      columns[0].textContent.includes('37%') &&
       lastRows.every(box => box.width > 0 && box.height > 0 && box.bottom <= window.innerHeight + 1 && box.right <= window.innerWidth + 1);
   });
-  assert.equal(await panel.getByText('37%').count(), 1);
-  assert.equal(await panel.getByText('16.0/64.0 GiB').count(), 3);
   const refreshInterval = page.getByLabel('监控刷新间隔（秒）');
   assert.equal(await refreshInterval.inputValue(), '20');
   await refreshInterval.fill('1');
