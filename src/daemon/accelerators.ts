@@ -5,6 +5,7 @@ import { MAX_MONITORED_NODES, type AcceleratorDevice, type AcceleratorSample } f
 import type { SshConnection, SshSecret } from '../shared/protocol';
 
 const NVIDIA_START = '__AGENTBERTH_NVIDIA__';
+const HOST_START = '__AGENTBERTH_HOST__';
 const ASCEND_START = '__AGENTBERTH_ASCEND__';
 const END = '__AGENTBERTH_END__';
 const OUTPUT_LIMIT = 256 * 1024;
@@ -12,6 +13,9 @@ const OUTPUT_LIMIT = 256 * 1024;
 // The command is fixed. No connection fields or remote output enter the shell.
 export const acceleratorProbe = [
   'export LC_ALL=C',
+  "printf '\\n" + HOST_START + "\\n'",
+  "awk '/^(cpu |btime )/' /proc/stat 2>/dev/null",
+  "awk '/^(MemTotal|MemAvailable):/' /proc/meminfo 2>/dev/null",
   "printf '\\n" + NVIDIA_START + "\\n'",
   'if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits; else (exit 127); fi',
   "printf '\\n" + ASCEND_START + " %s\\n' \"$?\"",
@@ -67,7 +71,25 @@ export function parseAscendSmi(output: string): AcceleratorDevice[] {
   return [...devices.values()];
 }
 
-export function parseAcceleratorProbe(output: string): AcceleratorSample {
+interface CpuCounters { total: number; idle: number; boot: number | null }
+
+function readCpuCounters(lines: string[]): CpuCounters | undefined {
+  const values = lines.find(line => /^cpu\s/.test(line))?.trim().split(/\s+/).slice(1, 9).map(Number);
+  if (!values || values.length < 4 || values.some(value => !Number.isSafeInteger(value) || value < 0)) return;
+  // user and nice already include guest time, which is listed again later.
+  const total = values.reduce((sum, value) => sum + value, 0);
+  const idle = values[3] + (values[4] ?? 0);
+  const boot = number(lines.find(line => line.startsWith('btime '))?.slice(6));
+  return { total, idle, boot };
+}
+
+function cpuUtilization(current?: CpuCounters, previous?: CpuCounters): number | null {
+  if (!current || !previous || current.boot !== previous.boot) return null;
+  const total = current.total - previous.total, idle = current.idle - previous.idle;
+  return total > 0 && idle >= 0 && idle <= total ? Math.round((total - idle) * 1000 / total) / 10 : null;
+}
+
+export function parseAcceleratorProbe(output: string, previous?: CpuCounters, recordCpu?: (value: CpuCounters | undefined) => void): AcceleratorSample {
   const lines = output.split(/\r?\n/);
   const start = lines.indexOf(NVIDIA_START);
   const middle = lines.findIndex((line, i) => i > start && line.startsWith(ASCEND_START + ' '));
@@ -78,15 +100,24 @@ export function parseAcceleratorProbe(output: string): AcceleratorSample {
   const npu = npuCode === '0' ? parseAscendSmi(lines.slice(middle + 1, finish).join('\n')) : [];
   const devices = [...gpu, ...npu];
   const problem = [gpuCode !== '127' && !gpu.length ? 'NVIDIA GPU' : '', npuCode !== '127' && !npu.length ? '昇腾 NPU' : ''].filter(Boolean);
-  if (!devices.length) {
+  const hostStart = lines.indexOf(HOST_START);
+  const hostLines = hostStart >= 0 ? lines.slice(hostStart + 1, start) : [];
+  const counters = readCpuCounters(hostLines);
+  const memoryValue = (key: string) => number(hostLines.find(line => line.startsWith(key + ':'))?.match(/:\s*(\d+)\s+kB\s*$/)?.[1]);
+  const totalKiB = memoryValue('MemTotal'), available = memoryValue('MemAvailable');
+  const memory = totalKiB && available !== null && available <= totalKiB ? { usedKiB: totalKiB - available, totalKiB } : null;
+  const host = counters || memory ? { cpu: cpuUtilization(counters, previous), memory } : undefined;
+  recordCpu?.(counters);
+  if (!devices.length && !host) {
     if (!problem.length) throw new Error('未找到 nvidia-smi 或 npu-smi，请检查驱动工具及 SSH 登录环境的 PATH');
     throw new Error(problem.join('、') + ' 未返回可识别的设备信息，请检查驱动、设备权限或工具版本');
   }
-  return { devices, sampledAt: Date.now(), ...(problem.length ? { warning: problem.join('、') + ' 未返回可用数据' } : {}) };
+  return { devices, sampledAt: Date.now(), ...(host ? { host } : {}), ...(problem.length ? { warning: problem.join('、') + ' 未返回可用数据' } : {}) };
 }
 
 export class RemoteAcceleratorSampler {
   private readonly active = new Map<string, { result: Promise<AcceleratorSample>; controller: AbortController }>();
+  private readonly cpu = new Map<string, CpuCounters>();
 
   sample(profile: SshConnection, fingerprint: string, credentials: (signal: AbortSignal) => Promise<SshSecret>, signal: AbortSignal): Promise<AcceleratorSample> {
     const pending = this.active.get(profile.id);
@@ -102,6 +133,7 @@ export class RemoteAcceleratorSampler {
   invalidate(id: string): void {
     this.active.get(id)?.controller.abort(new Error('SSH 连接配置已变化'));
     this.active.delete(id);
+    this.cpu.delete(id);
   }
 
   private async collect(profile: SshConnection, fingerprint: string, credentials: (signal: AbortSignal) => Promise<SshSecret>, signal: AbortSignal) {
@@ -160,6 +192,10 @@ export class RemoteAcceleratorSampler {
         });
       } catch { end(new Error('SSH 登录配置无效，请检查私钥格式、密钥口令或登录方式')); }
     });
-    return parseAcceleratorProbe(output);
+    signal.throwIfAborted();
+    return parseAcceleratorProbe(output, this.cpu.get(profile.id), counters => {
+      if (counters) this.cpu.set(profile.id, counters);
+      else this.cpu.delete(profile.id);
+    });
   }
 }

@@ -50,9 +50,11 @@ try {
   // Seed a failed remote locally without making a network connection.
   console.log('Pet smoke: validating SSH fixture and Agent sessions');
   const profile = await page.evaluate(privateKeyPath => window.berth.saveSshConnection({ alias: 'pet-filter-fixture', hostname: '127.0.0.1', port: 22, username: 'fixture', authentication: 'key', privateKeyPath, allowAgent: false }, undefined, {}, false), path.join(folder, 'missing-fixture-key'));
-  const secondNode = await page.evaluate(() => window.berth.saveSshConnection({
-    alias: 'second-monitor-fixture', hostname: '127.0.0.1', port: 23, username: 'fixture', authentication: 'agent', allowAgent: false,
-  }, undefined, {}, false));
+  const addNode = (alias, port) => page.evaluate(({ alias, port }) => window.berth.saveSshConnection({
+    alias, hostname: '127.0.0.1', port, username: 'fixture', authentication: 'agent', allowAgent: false,
+  }, undefined, {}, false), { alias, port });
+  const secondNode = await addNode('second-monitor-fixture', 23);
+  const thirdNode = await addNode('third-monitor-fixture', 24);
   const remote = await rpc('createRemoteSession', { title: 'Excluded SSH', remote: { host: profile.alias, connectionId: profile.id, directory: '' } });
   await assert.rejects(rpc('start', { sessionId: remote.id, cols: 80, rows: 24 }), /无法读取私钥/);
   const create = title => rpc('createSession', { projectId: project.id, title, agent: 'custom', command: 'echo Agent-fixture-ready' });
@@ -76,15 +78,44 @@ try {
   assert.equal(await pet.locator('.pet-card, .pet-drag, select').count(), 0, 'Only the character should be visible');
   const initialPet = await pet.evaluate(() => window.berth.pet({ action: 'state' }));
   assert.deepEqual(initialPet.sessions.map(session => session.sessionId).sort(), [a.id, b.id].sort());
-  console.log('Pet smoke: configuring and switching remote monitoring nodes');
+  console.log('Pet smoke: simultaneous three-node resource display and preferences');
   const nodePicker = page.getByLabel('添加监控节点');
   await nodePicker.selectOption(profile.id);
-  const panel = pet.getByRole('region', { name: '远程 GPU / NPU 监控' });
-  await panel.getByRole('button', { name: profile.alias }).waitFor();
+  const panel = pet.getByRole('region', { name: '远程资源监控' });
+  await panel.getByRole('region', { name: profile.alias }).waitFor();
   await nodePicker.selectOption(secondNode.id);
-  await panel.getByRole('button', { name: secondNode.alias }).click();
-  await pet.waitForFunction(id => window.berth.pet({ action: 'state' }).then(value => value.preferences.monitorSelectedId === id), secondNode.id);
-  await panel.getByText(/先从 SSH 连接打开此节点/).waitFor();
+  await nodePicker.selectOption(thirdNode.id);
+  for (const node of [profile, secondNode, thirdNode]) {
+    await panel.getByRole('region', { name: node.alias }).getByText(/先从 SSH 连接打开此节点/).waitFor();
+  }
+  await page.getByLabel('监控字号').selectOption('14');
+  await pet.waitForFunction(() => document.querySelector('.pet-accelerators').style.fontSize === '14px');
+  const toggle = page.getByLabel('显示远程资源', { exact: true });
+  await toggle.uncheck();
+  await panel.waitFor({ state: 'hidden' });
+  await toggle.check();
+  await panel.getByRole('region', { name: thirdNode.alias }).waitFor();
+  const snapshot = await pet.evaluate(() => window.berth.pet({ action: 'state' }));
+  assert.equal(snapshot.preferences.monitorFontSize, 14);
+  snapshot.monitor.readings = [profile, secondNode, thirdNode].map((node, index) => ({ id: node.id, sample: {
+    sampledAt: Date.now(), host: { cpu: 37 + index, memory: { usedKiB: 16777216, totalKiB: 67108864 } },
+    devices: Array.from({ length: 8 }, (_, card) => ({ kind: index === 0 ? 'gpu' : 'npu', id: String(card),
+      model: 'fixture', utilization: 20 + card, memory: { used: 8192, total: 16384, kind: 'VRAM' }, temperature: 55 })),
+  } }));
+  await application.evaluate(({ BrowserWindow }, snapshot) => {
+    const target = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('view=pet'));
+    target.webContents.send('berth:petState', snapshot);
+  }, snapshot);
+  await pet.waitForFunction(() => document.querySelectorAll('.pet-monitor-cards tbody tr').length === 24);
+  await pet.waitForFunction(() => {
+    const columns = Array.from(document.querySelectorAll('.pet-monitor-node'));
+    const boxes = columns.map(column => column.getBoundingClientRect());
+    const lastRows = columns.map(column => column.querySelector('tbody tr:last-child').getBoundingClientRect());
+    return columns.length === 3 && new Set(boxes.map(box => box.x)).size === 3 &&
+      lastRows.every(box => box.width > 0 && box.height > 0 && box.bottom <= window.innerHeight + 1 && box.right <= window.innerWidth + 1);
+  });
+  assert.equal(await panel.getByText('37%').count(), 1);
+  assert.equal(await panel.getByText('16.0/64.0 GiB').count(), 3);
   const refreshInterval = page.getByLabel('监控刷新间隔（秒）');
   assert.equal(await refreshInterval.inputValue(), '20');
   await refreshInterval.fill('1');
@@ -92,7 +123,7 @@ try {
   await pet.waitForFunction(() => window.berth.pet({ action: 'state' }).then(value => value.preferences.monitorRefreshSeconds === 1));
   await pet.waitForFunction(() => Math.abs(document.querySelector('.desktop-pet').getBoundingClientRect().height - innerHeight) <= 1);
   const remove = page.locator('.pet-monitor-settings').getByRole('button', { name: '移除', exact: true }).first();
-  await remove.click(); await remove.click();
+  await remove.click(); await remove.click(); await remove.click();
   await panel.waitFor({ state: 'hidden' });
   // Native menus are outside the renderer. Capture the real Menu object at its
   // popup boundary and invoke its actual handlers without opening an OS modal.

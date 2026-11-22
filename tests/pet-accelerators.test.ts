@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID, generateKeyPairSync, createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
@@ -11,7 +11,7 @@ import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import { PetMonitor } from '../src/main/pet-monitor';
 import { PetState } from '../src/main/pet-state';
-import { petPreferencesSchema, petRequestSchema } from '../src/shared/pet';
+import { petDimensions, petMonitorLayout, petPreferencesSchema, petRequestSchema } from '../src/shared/pet';
 import type { AcceleratorSample } from '../src/shared/accelerator';
 import type { SshConnection } from '../src/shared/protocol';
 
@@ -26,9 +26,25 @@ const npu = [
   '| 1             | 0000:08:00.0 | 3    1024 / 44215 |',
   '| NPU Chip   | Process id | Process name | Process memory(MB) |',
 ].join('\n');
-function framed(nvidia: string, ascend: string, gpuCode = 0, npuCode = 0) {
-  return ['login banner', '__AGENTBERTH_NVIDIA__', nvidia, '__AGENTBERTH_ASCEND__ ' + gpuCode, ascend, '__AGENTBERTH_END__ ' + npuCode].join('\n');
+function framed(nvidia: string, ascend: string, gpuCode = 0, npuCode = 0, host = '') {
+  return ['login banner', '__AGENTBERTH_HOST__', host, '__AGENTBERTH_NVIDIA__', nvidia, '__AGENTBERTH_ASCEND__ ' + gpuCode, ascend, '__AGENTBERTH_END__ ' + npuCode].join('\n');
 }
+
+const hostStats = (user: number, idle: number, boot = 100) =>
+  `cpu  ${user} 0 10 ${idle} 5 0 0 0 900 120\nbtime ${boot}\nMemTotal:   67108864 kB\nMemAvailable: 50331648 kB`;
+
+test('host-only monitoring measures CPU deltas and RAM use and resets after reboot', () => {
+  let baseline: Parameters<typeof parseAcceleratorProbe>[1];
+  const record = (value: typeof baseline) => { baseline = value; };
+  const first = parseAcceleratorProbe(framed('', '', 127, 127, hostStats(50, 100)), baseline, record);
+  assert.deepEqual(first.devices, []);
+  assert.deepEqual(first.host, { cpu: null, memory: { usedKiB: 16777216, totalKiB: 67108864 } });
+  const second = parseAcceleratorProbe(framed('', '', 127, 127, hostStats(80, 170)), baseline, record);
+  assert.equal(second.host?.cpu, 30);
+  assert.equal(parseAcceleratorProbe(framed('', '', 127, 127, hostStats(90, 200, 101)), baseline).host?.cpu, null);
+  const partial = parseAcceleratorProbe(framed('', '', 127, 127, 'MemTotal: 64 kB\nMemAvailable: 0 kB'));
+  assert.deepEqual(partial.host, { cpu: null, memory: { usedKiB: 64, totalKiB: 64 } });
+});
 
 test('per-card NVIDIA and Ascend metrics keep physical/chip identifiers and distinguish missing readings from zero', () => {
   const devices = parseAcceleratorProbe(framed(gpu, npu)).devices;
@@ -75,12 +91,23 @@ test('desktop keeps three independent readings, drops late results after selecti
   t.after(() => rm(dir, { force: true, recursive: true }));
   const pet = new PetState(dir);
   assert.equal(pet.preferences.monitorRefreshSeconds, 20);
-  pet.save({ monitorNodeIds: ids.slice(1), monitorSelectedId: ids[2], monitorRefreshSeconds: 35 });
+  await writeFile(path.join(dir, 'settings.json'), JSON.stringify({ monitorNodeIds: ids.slice(1), monitorSelectedId: ids[2], monitorRefreshSeconds: 35 }));
   const restored = new PetState(dir);
-  assert.equal(restored.preferences.monitorSelectedId, ids[2]);
+  assert.deepEqual(restored.preferences.monitorNodeIds, ids.slice(1));
   assert.equal(restored.preferences.monitorRefreshSeconds, 35);
-  pet.save({ monitorNodeIds: [ids[3]], monitorSelectedId: ids[2] });
-  assert.equal(pet.preferences.monitorSelectedId, ids[3]);
+  assert.equal(restored.preferences.monitorFontSize, 10);
+  assert.equal(restored.preferences.monitorVisible, true);
+  assert.equal('monitorSelectedId' in restored.preferences, false);
+  const readings = [{ id: ids[2], sample: { devices: Array.from({ length: 8 }, () => parseNvidiaSmi(gpu)[0]), sampledAt: 0 } }];
+  const preferred = { ...restored.preferences, monitorFontSize: 14 };
+  assert.equal(petMonitorLayout(preferred, readings).height, 14 + 19 * 12, 'the panel fits the largest whole device list');
+  assert.equal(petDimensions(preferred, readings).height, 28 + 160 + 14 + 19 * 12);
+  pet.save({ ...preferred, monitorVisible: false });
+  const hidden = new PetState(dir).preferences;
+  assert.deepEqual(hidden.monitorNodeIds, ids.slice(1));
+  assert.equal(hidden.monitorFontSize, 14);
+  assert.equal(hidden.monitorVisible, false);
+  assert.deepEqual(petDimensions(hidden, readings), { width: 216, height: 180 });
 });
 
 test('changing the refresh interval replaces the timer and skips samples still in flight', async t => {
@@ -139,7 +166,7 @@ test('accelerator RPC uses the registered desktop provider and verified SSH host
         executions++;
         const channel = accept();
         channel.exit(0);
-        channel.end(framed(gpu, npu));
+        channel.end(framed(gpu, npu, 0, 0, hostStats(50 + 30 * executions, 100 + 70 * executions)));
       });
     }));
   });
@@ -175,6 +202,9 @@ test('accelerator RPC uses the registered desktop provider and verified SSH host
   daemon.sshCorePort().store.trustSshFingerprint(profile.id, fingerprint);
   const samples = await Promise.all([desktop.rpc<AcceleratorSample>('sampleAccelerators', params), desktop.rpc<AcceleratorSample>('sampleAccelerators', params)]);
   assert.equal(samples[0].devices.length, 5);
+  assert.equal(samples[0].host?.memory?.usedKiB, 16777216);
+  assert.equal(samples[0].host?.cpu, null);
   assert.deepEqual(samples[0], samples[1]);
   assert.equal(executions, 1, 'simultaneous requests share the same bounded probe');
+  assert.equal((await desktop.rpc<AcceleratorSample>('sampleAccelerators', params)).host?.cpu, 30);
 });

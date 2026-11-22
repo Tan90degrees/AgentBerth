@@ -7,7 +7,7 @@ import { PetState } from './pet-state';
 import { petMenuTemplate } from './pet-menu';
 import { keepPetAboveWindows } from './pet-window';
 import { PetHooks } from './pet-hooks';
-import { petDimensions, petRequestSchema, petStatuses } from '../shared/pet';
+import { petDimensions, petRequestSchema, petStatuses, showsPetMonitor } from '../shared/pet';
 import { ACCELERATOR_API_VERSION, type AcceleratorNode, type AcceleratorSample } from '../shared/accelerator';
 import { PetMonitor } from './pet-monitor';
 import { statSync, writeFileSync } from 'node:fs';
@@ -259,7 +259,7 @@ function petSnapshot(): import('../shared/pet').PetSnapshot {
 function syncPetMonitor(active = true) {
   if (!pet) return;
   const ids = pet.preferences.monitorNodeIds.filter(id => acceleratorNodes.some(node => node.id === id));
-  petMonitor.configure(ids, active && !quitting && pet.preferences.enabled && !!petWindow?.isVisible() && acceleratorAvailable(), pet.preferences.monitorRefreshSeconds);
+  petMonitor.configure(ids, active && !quitting && pet.preferences.enabled && showsPetMonitor(pet.preferences) && !!petWindow?.isVisible() && acceleratorAvailable(), pet.preferences.monitorRefreshSeconds);
 }
 async function refreshAcceleratorNodes() {
   const generation = ++acceleratorRefresh;
@@ -276,20 +276,37 @@ function publishPet() {
   petPublishTimer = setTimeout(() => {
     petPublishTimer = null;
     const snapshot = petSnapshot();
+    resizePetWindow();
     for (const target of [window, sshWindow, petWindow]) if (target && !target.isDestroyed()) target.webContents.send('berth:petState', snapshot);
   }, 60);
+}
+function petSize(area: { width: number; height: number }) {
+  const size = petDimensions(pet.preferences, petMonitor.snapshot());
+  return { width: Math.min(size.width, area.width), height: Math.min(size.height, area.height) };
+}
+function resizePetWindow() {
+  if (!petWindow || petWindow.isDestroyed() || petDrag) return;
+  const current = petWindow.getBounds(), area = screen.getDisplayMatching(current).workArea;
+  const { width, height } = petSize(area);
+  if (width === current.width && height === current.height) return;
+  const x = current.x + (current.width - width) / 2, y = current.y + current.height - height;
+  petWindow.setBounds({ width, height,
+    x: Math.round(Math.max(area.x, Math.min(x, area.x + area.width - width))),
+    y: Math.round(Math.max(area.y, Math.min(y, area.y + area.height - height))),
+  });
 }
 async function openPetWindow() {
   requireExtension('pet');
   if (quitting) return;
   if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop); return; }
-  const size = petDimensions(pet.preferences.monitorNodeIds.length > 0);
-  const width = Math.round(size.width * pet.preferences.scale), height = Math.round(size.height * pet.preferences.scale);
-  let area = screen.getPrimaryDisplay().workArea, x = area.x + area.width - width - 20, y = area.y + area.height - height - 20;
+  let area = screen.getPrimaryDisplay().workArea, position: { x: number; y: number } | undefined;
   try {
     const saved = JSON.parse(readFileSync(path.join(dataDirectory, 'pet', 'position.json'), 'utf8'));
-    if (Number.isSafeInteger(saved.x) && Number.isSafeInteger(saved.y)) { area = screen.getDisplayNearestPoint(saved).workArea; x = Math.min(Math.max(saved.x, area.x), area.x + area.width - width); y = Math.min(Math.max(saved.y, area.y), area.y + area.height - height); }
+    if (Number.isSafeInteger(saved.x) && Number.isSafeInteger(saved.y)) { area = screen.getDisplayNearestPoint(saved).workArea; position = saved; }
   } catch { /* First launch or unavailable monitor. */ }
+  const { width, height } = petSize(area);
+  const x = Math.max(area.x, Math.min(position?.x ?? area.x + area.width - width - 20, area.x + area.width - width));
+  const y = Math.max(area.y, Math.min(position?.y ?? area.y + area.height - height - 20, area.y + area.height - height));
   const target = new BrowserWindow({ x, y, width, height, resizable: false, frame: false, transparent: true, hasShadow: false, alwaysOnTop: pet.preferences.alwaysOnTop, skipTaskbar: true, show: false, title: 'AgentBerth · 桌宠', icon: iconFile, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
   petWindow = target;
   const keepAbove = () => keepPetAboveWindows(target, pet.preferences.alwaysOnTop);
@@ -326,24 +343,10 @@ async function selectPetAppearance(appearance:import('../shared/pet').PetAppeara
   return savePetPreferences({...pet.preferences,appearance,customImages:false});
 }
 async function savePetPreferences(preferences: unknown) {
-  const monitored = pet.preferences.monitorNodeIds.length > 0;
-  const previousBounds = petWindow?.getBounds();
   pet.save(preferences);
   if (pet.preferences.enabled) {
     await openPetWindow(); if (petWindow) keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop);
-    if (petWindow) {
-      const monitoring = pet.preferences.monitorNodeIds.length > 0;
-      const size = petDimensions(monitoring), scale = pet.preferences.scale;
-      const width = Math.round(size.width * scale), height = Math.round(size.height * scale);
-      const current = petWindow.getBounds();
-      const anchor = previousBounds ?? current, area = screen.getDisplayMatching(anchor).workArea;
-      const x = monitored !== monitoring && previousBounds ? anchor.x + (anchor.width - width) / 2 : current.x;
-      const y = monitored !== monitoring && previousBounds ? anchor.y + anchor.height - height : current.y;
-      petWindow.setBounds({ width, height,
-        x: Math.round(Math.max(area.x, Math.min(x, area.x + area.width - width))),
-        y: Math.round(Math.max(area.y, Math.min(y, area.y + area.height - height))),
-      });
-    }
+    resizePetWindow();
   } else petWindow?.close();
   syncPetMonitor();
   return petSnapshot();
@@ -367,6 +370,7 @@ function openPetMenu() {
     select: selectedSessionId => change({ selectedSessionId }), scale: scale => change({ scale }),
     appearance:appearance=>run(()=>selectPetAppearance(appearance)),customImages:customImages=>change({customImages}),
     alwaysOnTop: alwaysOnTop => change({ alwaysOnTop }), autoSwitch: autoSwitch => change({ autoSwitch }),
+    monitorVisible: monitorVisible => change({ monitorVisible }),
     open: () => showPetSession(), settings: () => petNavigate('berth:petSettings'),
     hide: () => change({ enabled: false }),
   })).popup({ window: petWindow });
@@ -381,7 +385,7 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
     case 'state': return petSnapshot();
     case 'save': return savePetPreferences({
       ...request.preferences, monitorNodeIds: pet.preferences.monitorNodeIds,
-      monitorSelectedId: pet.preferences.monitorSelectedId, monitorRefreshSeconds: pet.preferences.monitorRefreshSeconds,
+      monitorFontSize: pet.preferences.monitorFontSize, monitorRefreshSeconds: pet.preferences.monitorRefreshSeconds, monitorVisible: pet.preferences.monitorVisible,
     });
     case 'saveMonitor':
       if (event.sender === petWindow?.webContents) throw new Error('请在桌宠设置中配置节点');
@@ -392,10 +396,11 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
       pet.save({ ...pet.preferences, monitorRefreshSeconds: request.seconds });
       syncPetMonitor();
       return petSnapshot();
-    case 'selectMonitor':
-      if (!pet.preferences.monitorNodeIds.includes(request.id)) throw new Error('此节点未加入监控');
-      pet.save({ ...pet.preferences, monitorSelectedId: request.id });
-      return petSnapshot();
+    case 'saveMonitorFontSize':
+      if (event.sender === petWindow?.webContents) throw new Error('请在桌宠设置中配置监控字号');
+      return savePetPreferences({ ...pet.preferences, monitorFontSize: request.size });
+    case 'showMonitor':
+      return savePetPreferences({ ...pet.preferences, monitorVisible: request.visible });
     case 'selectAppearance': return selectPetAppearance(request.appearance);
     case 'appearanceImage': return pet.naiwa.image();
     case 'hookConfig': return petHookConfig();
@@ -424,7 +429,7 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
       const cursor = screen.getCursorScreenPoint(), area = screen.getDisplayNearestPoint(cursor).workArea, bounds = petWindow!.getBounds();
       petWindow!.setPosition(Math.round(Math.max(area.x, Math.min(cursor.x - petDrag.x, area.x + area.width - bounds.width))), Math.round(Math.max(area.y, Math.min(cursor.y - petDrag.y, area.y + area.height - bounds.height)))); return;
     }
-    case 'dragEnd': petDrag = null; return;
+    case 'dragEnd': petDrag = null; resizePetWindow(); return;
     case 'image': return pet.image(request.status);
     case 'resetImage': pet.resetImage(request.status); return petSnapshot();
     case 'importImage': {
