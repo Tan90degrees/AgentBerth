@@ -16,6 +16,8 @@ html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { b
 .pet-monitor-device > div:first-child { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .pet-monitor-metrics { display:flex; justify-content:space-between; gap:4px; color:#bce8d8; font-size:11px; }
 .pet-monitor-settings > div { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0; }
+.pet-monitor-interval { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; }
+.pet-monitor-interval label { max-width:180px; }
 .pet-character { width:192px; height:160px; object-fit:contain; pointer-events:none; }
 .pet-settings .pet-toggle { display:flex; align-items:center; gap:8px; margin:12px 0; }
 .pet-settings .pet-toggle input { width:auto; margin:0; }

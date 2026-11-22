@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MAX_MONITORED_NODES, type AcceleratorNode, type AcceleratorReading } from './accelerator';
+import { ACCELERATOR_REFRESH_SECONDS, MAX_MONITORED_NODES, type AcceleratorNode, type AcceleratorReading } from './accelerator';
 
 export const petStatuses = ['idle', 'working', 'waiting', 'completed', 'error', 'unknown'] as const;
 export type PetStatus = typeof petStatuses[number];
@@ -19,6 +19,7 @@ export const petMonitorWindowSize = { width: 280, height: 354 } as const;
 export const petDimensions = (monitoring: boolean) => monitoring ? petMonitorWindowSize : petWindowSize;
 export const petScales = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 const monitorNodeIds = z.array(z.uuid()).max(MAX_MONITORED_NODES).refine(ids => new Set(ids).size === ids.length);
+const monitorInterval = z.number().int().min(ACCELERATOR_REFRESH_SECONDS.min).max(ACCELERATOR_REFRESH_SECONDS.max);
 export const petPreferencesSchema = z.object({
   enabled: z.boolean().default(false), alwaysOnTop: z.boolean().default(true),
   autoSwitch: z.boolean().default(true), scale: z.number().min(0.5).max(2).default(1),
@@ -26,6 +27,7 @@ export const petPreferencesSchema = z.object({
   appearance:z.enum(petAppearances).default('dafeiyu'),customImages:z.boolean().default(true),
   monitorNodeIds: monitorNodeIds.default([]),
   monitorSelectedId: z.union([z.literal(''), z.uuid()]).default(''),
+  monitorRefreshSeconds: monitorInterval.default(ACCELERATOR_REFRESH_SECONDS.default),
 }).strict();
 export type PetPreferences = z.infer<typeof petPreferencesSchema>;
 export const defaultPetPreferences = petPreferencesSchema.parse({});
@@ -49,6 +51,7 @@ export const petRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.enum(['state', 'hookConfig', 'hookGuide', 'showSession', 'menu', 'dragStart', 'dragMove', 'dragEnd']) }).strict(),
   z.object({ action: z.literal('save'), preferences: petPreferencesSchema }).strict(),
   z.object({ action: z.literal('saveMonitor'), ids: monitorNodeIds }).strict(),
+  z.object({ action: z.literal('saveMonitorInterval'), seconds: monitorInterval }).strict(),
   z.object({ action: z.literal('selectMonitor'), id: z.uuid() }).strict(),
   z.object({action:z.literal('selectAppearance'),appearance:z.enum(petAppearances)}).strict(),
   z.object({action:z.literal('appearanceImage'),appearance:z.literal('naiwa')}).strict(),

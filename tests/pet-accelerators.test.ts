@@ -11,7 +11,7 @@ import { DaemonServer } from '../src/daemon/server';
 import { DaemonConnection } from '../src/main/connection';
 import { PetMonitor } from '../src/main/pet-monitor';
 import { PetState } from '../src/main/pet-state';
-import { petPreferencesSchema } from '../src/shared/pet';
+import { petPreferencesSchema, petRequestSchema } from '../src/shared/pet';
 import type { AcceleratorSample } from '../src/shared/accelerator';
 import type { SshConnection } from '../src/shared/protocol';
 
@@ -74,10 +74,45 @@ test('desktop keeps three independent readings, drops late results after selecti
   const dir = await mkdtemp(path.join(os.tmpdir(), 'pet-monitor-'));
   t.after(() => rm(dir, { force: true, recursive: true }));
   const pet = new PetState(dir);
-  pet.save({ monitorNodeIds: ids.slice(1), monitorSelectedId: ids[2] });
-  assert.equal(new PetState(dir).preferences.monitorSelectedId, ids[2]);
+  assert.equal(pet.preferences.monitorRefreshSeconds, 20);
+  pet.save({ monitorNodeIds: ids.slice(1), monitorSelectedId: ids[2], monitorRefreshSeconds: 35 });
+  const restored = new PetState(dir);
+  assert.equal(restored.preferences.monitorSelectedId, ids[2]);
+  assert.equal(restored.preferences.monitorRefreshSeconds, 35);
   pet.save({ monitorNodeIds: [ids[3]], monitorSelectedId: ids[2] });
   assert.equal(pet.preferences.monitorSelectedId, ids[3]);
+});
+
+test('changing the refresh interval replaces the timer and skips samples still in flight', async t => {
+  const id = randomUUID();
+  const pending: Array<(sample: AcceleratorSample) => void> = [];
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const monitor = new PetMonitor(() => new Promise(resolve => pending.push(resolve)), () => {});
+  monitor.configure([id], true);
+  assert.equal(pending.length, 1);
+  monitor.configure([id], true, 5);
+  t.mock.timers.tick(5_000);
+  assert.equal(pending.length, 1, 'a changed interval does not duplicate a live request');
+  pending[0]({ sampledAt: 0, devices: [] });
+  await nextTurn();
+  t.mock.timers.tick(5_000);
+  assert.equal(pending.length, 2, 'new interval is applied without reopening the window');
+  pending[1]({ sampledAt: 10_000, devices: [] });
+  await nextTurn();
+  monitor.configure([id], true, 60);
+  t.mock.timers.tick(59_000);
+  assert.equal(pending.length, 2, 'old timer has stopped');
+  t.mock.timers.tick(1_000);
+  assert.equal(pending.length, 3);
+  monitor.configure([id], false);
+  t.mock.timers.tick(60_000);
+  assert.equal(pending.length, 3);
+  for (const seconds of [0, 4, 5.5, 301]) {
+    assert.equal(petRequestSchema.safeParse({ action: 'saveMonitorInterval', seconds }).success, false);
+  }
+  for (const seconds of [5, 300]) {
+    assert.equal(petRequestSchema.safeParse({ action: 'saveMonitorInterval', seconds }).success, true);
+  }
 });
 
 test('accelerator RPC uses the registered desktop provider and verified SSH host, and executes only the fixed probe', async t => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState,type CSSProperties } from 'react';
 import { defaultPetPreferences, petAppearances,petAppearanceLabels,naiwaClips,type PetAppearance, petLabels, petStatuses, petScales, petDimensions, type PetPreferences, type PetSnapshot, type PetStatus } from '../shared/pet';
-import { ACCELERATOR_API_VERSION, MAX_MONITORED_NODES } from '../shared/accelerator';
+import { ACCELERATOR_API_VERSION, ACCELERATOR_REFRESH_SECONDS, MAX_MONITORED_NODES } from '../shared/accelerator';
 import { AsyncButton } from './AsyncButton';
 import './pet.css';
 
@@ -167,6 +167,10 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
     return () => { alive = false; };
   }, []);
   const preferences = snapshot.preferences;
+  const [refreshInput, setRefreshInput] = useState(String(preferences.monitorRefreshSeconds));
+  useEffect(() => setRefreshInput(String(preferences.monitorRefreshSeconds)), [preferences.monitorRefreshSeconds]);
+  const refreshSeconds = Number(refreshInput);
+  const validRefresh = Number.isInteger(refreshSeconds) && refreshSeconds >= ACCELERATOR_REFRESH_SECONDS.min && refreshSeconds <= ACCELERATOR_REFRESH_SECONDS.max;
   const apply = async (change: Partial<PetPreferences>) => {
     setBusy(true); setError(''); try { await save(change); } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
@@ -185,6 +189,18 @@ export function PetSettings({ projects = [], currentProjectId, apiVersion = 38 }
       <option value="">{snapshot.monitor?.nodes.length ? '选择 SSH 连接' : '请先在 SSH 设置中保存连接'}</option>
       {snapshot.monitor?.nodes.filter(node => !preferences.monitorNodeIds.includes(node.id)).map(node => <option key={node.id} value={node.id}>{node.alias}</option>)}
     </select></label>
+    <div className="pet-monitor-interval">
+      <label>刷新间隔（秒）<input aria-label="监控刷新间隔（秒）" type="number" value={refreshInput} disabled={busy}
+        min={ACCELERATOR_REFRESH_SECONDS.min} max={ACCELERATOR_REFRESH_SECONDS.max} step={1}
+        onChange={event => setRefreshInput(event.target.value)} /></label>
+      <AsyncButton className="subtle" disabled={busy || !validRefresh || refreshSeconds === preferences.monitorRefreshSeconds} onError={setError}
+        onAction={async () => {
+          setBusy(true); setError('');
+          try { setSnapshot(await window.berth.pet({ action: 'saveMonitorInterval', seconds: refreshSeconds })); }
+          finally { setBusy(false); }
+        }}>保存刷新间隔</AsyncButton>
+    </div>
+    {!validRefresh && <p className="form-error" role="alert">请输入 {ACCELERATOR_REFRESH_SECONDS.min}–{ACCELERATOR_REFRESH_SECONDS.max} 之间的整数秒。</p>}
     {apiVersion < ACCELERATOR_API_VERSION && <p className="form-hint" role="status">请先在设置中更新空闲后台。</p>}
     <div className="pet-monitor-settings">
       {preferences.monitorNodeIds.map(id => {

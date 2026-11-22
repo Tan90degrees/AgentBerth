@@ -1,6 +1,6 @@
 export const MAX_MONITORED_NODES = 3;
 export const ACCELERATOR_API_VERSION = 66;
-export const ACCELERATOR_SAMPLE_INTERVAL_MS = 20_000;
+export const ACCELERATOR_REFRESH_SECONDS = { min: 5, default: 20, max: 300 } as const;
 
 export interface AcceleratorDevice {
   id: string;

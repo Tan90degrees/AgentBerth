@@ -259,7 +259,7 @@ function petSnapshot(): import('../shared/pet').PetSnapshot {
 function syncPetMonitor(active = true) {
   if (!pet) return;
   const ids = pet.preferences.monitorNodeIds.filter(id => acceleratorNodes.some(node => node.id === id));
-  petMonitor.configure(ids, active && !quitting && pet.preferences.enabled && !!petWindow?.isVisible() && acceleratorAvailable());
+  petMonitor.configure(ids, active && !quitting && pet.preferences.enabled && !!petWindow?.isVisible() && acceleratorAvailable(), pet.preferences.monitorRefreshSeconds);
 }
 async function refreshAcceleratorNodes() {
   const generation = ++acceleratorRefresh;
@@ -379,11 +379,19 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
   if (['menu', 'dragStart', 'dragMove', 'dragEnd'].includes(request.action) && event.sender !== petWindow?.webContents) throw new Error('此操作仅供桌宠图像使用');
   switch (request.action) {
     case 'state': return petSnapshot();
-    case 'save': return savePetPreferences({ ...request.preferences, monitorNodeIds: pet.preferences.monitorNodeIds, monitorSelectedId: pet.preferences.monitorSelectedId });
+    case 'save': return savePetPreferences({
+      ...request.preferences, monitorNodeIds: pet.preferences.monitorNodeIds,
+      monitorSelectedId: pet.preferences.monitorSelectedId, monitorRefreshSeconds: pet.preferences.monitorRefreshSeconds,
+    });
     case 'saveMonitor':
       if (event.sender === petWindow?.webContents) throw new Error('请在桌宠设置中配置节点');
       if (request.ids.some(id => !pet.preferences.monitorNodeIds.includes(id) && !acceleratorNodes.some(node => node.id === id))) throw new Error('所选 SSH 连接不存在，请重新选择');
       return savePetPreferences({ ...pet.preferences, monitorNodeIds: request.ids });
+    case 'saveMonitorInterval':
+      if (event.sender === petWindow?.webContents) throw new Error('请在桌宠设置中配置刷新间隔');
+      pet.save({ ...pet.preferences, monitorRefreshSeconds: request.seconds });
+      syncPetMonitor();
+      return petSnapshot();
     case 'selectMonitor':
       if (!pet.preferences.monitorNodeIds.includes(request.id)) throw new Error('此节点未加入监控');
       pet.save({ ...pet.preferences, monitorSelectedId: request.id });
