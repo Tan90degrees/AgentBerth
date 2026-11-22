@@ -7,11 +7,12 @@ import { remoteKeys } from '../daemon/remote-activity';
 import { sshHosts } from '../daemon/remote';
 import { directory } from '../daemon/paths';
 import { randomUUID } from 'node:crypto';
-export const methods=["sshConnections", "registerSshProvider", "sshChallengeReply", "saveSshConnection", "deleteSshConnection", "mcpMetrics", "mcpRecordCall", "remoteAliases", "remoteAgentRecover", "remoteAgentClose", "remoteAgentSessions", "remoteResolve", "remoteOpen", "sshHosts", "remoteManage", "remoteTransferStart", "remoteTransferStatus", "remoteTransferCancel", "remoteTransfers", "createRemoteSession", "remoteInfo", "remoteActions", "remoteControl", "remoteReconnect", "remoteExecute", "remoteCommand", "remoteReadOutput", "remoteKeys", "remoteWait", "remoteScreen"] as const;
+export const methods=["sshConnections", "sampleAccelerators", "registerSshProvider", "sshChallengeReply", "saveSshConnection", "deleteSshConnection", "mcpMetrics", "mcpRecordCall", "remoteAliases", "remoteAgentRecover", "remoteAgentClose", "remoteAgentSessions", "remoteResolve", "remoteOpen", "sshHosts", "remoteManage", "remoteTransferStart", "remoteTransferStatus", "remoteTransferCancel", "remoteTransfers", "createRemoteSession", "remoteInfo", "remoteActions", "remoteControl", "remoteReconnect", "remoteExecute", "remoteCommand", "remoteReadOutput", "remoteKeys", "remoteWait", "remoteScreen"] as const;
 export function mount(ctx:Context,server:DaemonServer){
  const host=server.sshCorePort();
  server.registerCoreRoutes(ctx,methods,async(request:Request,client:Client)=>{switch(request.method){
       case 'sshConnections': return host.store.sshConnections();
+      case 'sampleAccelerators': return host.sampleAccelerators(request.params.connectionId, client);
       case 'registerSshProvider': {
         if (host.sshProvider && host.sshProvider !== client) throw new Error('SSH 登录提供端已连接');
         host.sshProvider = client; return null;
@@ -23,9 +24,10 @@ export function mount(ctx:Context,server:DaemonServer){
       }
       case 'saveSshConnection': {
         if (request.params.connectionId) for (const session of host.store.state().sessions) if (session.remote?.connectionId === request.params.connectionId) host.requireIdle(session.id);
-        const profile = host.store.saveSshConnection(request.params.config, request.params.connectionId); host.changed(); return profile;
+        const profile = host.store.saveSshConnection(request.params.config, request.params.connectionId);
+        host.invalidateAccelerators(profile.id); host.changed(); return profile;
       }
-      case 'deleteSshConnection': host.store.deleteSshConnection(request.params.connectionId); return null;
+      case 'deleteSshConnection': host.store.deleteSshConnection(request.params.connectionId); host.invalidateAccelerators(request.params.connectionId); return null;
       case 'mcpMetrics': return host.mcpStats.snapshot();
       case 'mcpRecordCall': {
         host.mcpStats.record(request.params);

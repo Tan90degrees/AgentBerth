@@ -200,7 +200,7 @@ test('pet size settings persist the full supported range and reject invalid dime
 
 test('image context menu exposes Agent operations, checked preferences and empty-state settings', t => {
   const { pet, a, b } = fixture(t), calls: unknown[] = [];
-  const actions: PetMenuActions = {appearance:value=>calls.push(value),customImages:value=>calls.push(value), select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), hide: () => calls.push('hide') };
+  const actions: PetMenuActions = {appearance:value=>calls.push(value),customImages:value=>calls.push(value), select: value => calls.push(value), scale: value => calls.push(value), alwaysOnTop: value => calls.push(value), autoSwitch: value => calls.push(value), monitorVisible: value => calls.push(value), open: () => calls.push('open'), settings: () => calls.push('settings'), hide: () => calls.push('hide') };
   const items = petMenuTemplate(pet.snapshot(), actions);
   const choose = (label: string) => { const item = items.find(item => item.label === label)!; assert.ok(item); return item; };
   const sessions = choose('切换 Agent 会话').submenu as Electron.MenuItemConstructorOptions[];

@@ -5,6 +5,7 @@ export interface PetMenuActions {
   select(id: string): void; scale(value: number): void;
   appearance(value:PetAppearance):void;customImages(value:boolean):void;
   alwaysOnTop(value: boolean): void; autoSwitch(value: boolean): void;
+  monitorVisible(value: boolean): void;
   open(): void; settings(): void; hide(): void;
 }
 
@@ -23,6 +24,8 @@ export function petMenuTemplate(snapshot: PetSnapshot, actions: PetMenuActions):
     { label: '桌宠大小', submenu: scales.map(scale => ({ label: `${Math.round(scale * 100)}%`, type: 'radio', checked: preferences.scale === scale, click: () => actions.scale(scale) })) },
     { label: '保持置顶', type: 'checkbox', checked: preferences.alwaysOnTop, click: item => actions.alwaysOnTop(item.checked) },
     { label: '自动关注待处理会话', type: 'checkbox', checked: preferences.autoSwitch, click: item => actions.autoSwitch(item.checked) },
+    { label: '显示远程资源', type: 'checkbox', enabled: preferences.monitorNodeIds.length > 0,
+      checked: preferences.monitorVisible && preferences.monitorNodeIds.length > 0, click: item => actions.monitorVisible(item.checked) },
     { type: 'separator' },
     { label: '桌宠设置…', click: () => actions.settings() },
     { label: '隐藏桌宠', click: () => actions.hide() },

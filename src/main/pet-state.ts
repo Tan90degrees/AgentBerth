@@ -40,7 +40,8 @@ export class PetState {
     const selectedSessionId = sessions.some(session => session.sessionId === preferences.selectedSessionId) ? preferences.selectedSessionId : sessions[0]?.sessionId ?? '';
     return selectedSessionId === preferences.selectedSessionId ? preferences : { ...preferences, selectedSessionId };
   }
-  save(value: unknown) { const preferences = this.selection(petPreferencesSchema.parse(value));if(preferences.appearance==='naiwa'&&!this.naiwa.ready)throw new Error('请先下载奶蛙素材'); this.persist(preferences); this.preferences = preferences; this.changed(); }
+  save(value: unknown) { const preferences = this.selection(petPreferencesSchema.parse(value));if(preferences.appearance==='naiwa'&&!this.naiwa.ready)throw new Error('请先下载奶蛙素材');
+    this.persist(preferences); this.preferences = preferences; this.changed(); }
   connection(connected: boolean) { this.connected = connected; this.changed(); }
   update(state: State) {
     const previous=this.activityStatuses;

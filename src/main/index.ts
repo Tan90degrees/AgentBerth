@@ -7,7 +7,9 @@ import { PetState } from './pet-state';
 import { petMenuTemplate } from './pet-menu';
 import { keepPetAboveWindows } from './pet-window';
 import { PetHooks } from './pet-hooks';
-import { petRequestSchema, petStatuses, petWindowSize } from '../shared/pet';
+import { petDimensions, petRequestSchema, petStatuses, showsPetMonitor } from '../shared/pet';
+import { ACCELERATOR_API_VERSION, type AcceleratorNode, type AcceleratorSample } from '../shared/accelerator';
+import { PetMonitor } from './pet-monitor';
 import { statSync, writeFileSync } from 'node:fs';
 import { petHookConfiguration, petHookSetupGuide } from './pet-config';
 import { installAgentHook, integrationRoot } from './agent-integration';
@@ -66,6 +68,12 @@ if (!app.commandLine.hasSwitch('user-data-dir')) { const profile = path.join(app
 const dataDirectory = process.env.AGENTBERTH_DATA_DIR ?? path.join(app.getPath('userData'), 'data');
 let extensionSnapshot:ExtensionSnapshot|undefined;
 let desktopState:import('../shared/protocol').State|undefined;
+let acceleratorNodes: AcceleratorNode[] = [];
+let acceleratorRefresh = 0;
+const petMonitor = new PetMonitor(async connectionId => {
+  if (!connection?.connected) throw new Error('后台连接已断开');
+  return connection.rpc<AcceleratorSample>('sampleAccelerators', { connectionId });
+}, publishPet);
 const requireExtension=(id:string)=>{if(!extensionEnabled(extensionSnapshot,id))throw new Error('此功能插件未启用，请在设置 → 插件中启用');};
 const desktopExtensions=new DesktopExtensions({
   pet:ctx=>mountPetDesktop(ctx,{dataDirectory,createHooks:()=>new PetHooks(dataDirectory,hook=>{const accepted=pet.accept(hook);if(accepted&&hook.provider&&hook.nativeSessionId&&hook.cwd&&connection?.connected)void connection.rpc('nativeSessionDetected',{sessionId:hook.sessionId,runId:hook.runId,provider:hook.provider,nativeSessionId:hook.nativeSessionId,cwd:hook.cwd}).catch(()=>{});return accepted;}),setHooks:value=>{petHooks=value;},enabled:()=>pet.preferences.enabled,open:openPetWindow,publish:publishPet,destroy:()=>{petWindow?.destroy();petWindow=null;}}),
@@ -167,8 +175,14 @@ function emit(event: ServerEvent) {
     pluginBrowser?.reconcile();desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};if(!quitting)void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
     if(!quitting&&(!sshWasEnabled||sshGeneration!==extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation)&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
   }
-  if (event.event === 'state') pet?.update(event.data);
-  if (event.event === 'connection') pet?.connection(event.data.connected);
+  if (event.event === 'state') {
+    pet?.update(event.data);
+    syncPetMonitor();
+  }
+  if (event.event === 'connection') {
+    pet?.connection(event.data.connected);
+    if (!event.data.connected) syncPetMonitor(false);
+  }
   if (event.event === 'sshChallenge') { void answerSshChallenge(event.data); return; }
   if (event.event === 'state') remoteSessionIds = new Set(event.data.sessions.filter(session => session.remote).map(session => session.id));
   for (const target of [window, sshWindow]) {
@@ -194,6 +208,7 @@ async function connectWorkspace(): Promise<void> {
     const state = await candidate.rpc<import('../shared/protocol').State>('state');
     emit({ event: 'connection', data: { connected: true } });
     emit({ event: 'state', data: state });
+    void refreshAcceleratorNodes().catch(() => {});
   } catch (error) {
     if (connection === candidate) connection = null;
     candidate.close(true);
@@ -235,29 +250,70 @@ function secureWindow(target: BrowserWindow, detached = false) {
   }
   return target.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query });
 }
+function acceleratorAvailable() {
+  return !!connection?.connected && (desktopState?.apiVersion ?? 0) >= ACCELERATOR_API_VERSION && extensionEnabled(extensionSnapshot, 'ssh');
+}
+function petSnapshot(): import('../shared/pet').PetSnapshot {
+  return { ...pet.snapshot(), monitor: { available: acceleratorAvailable(), nodes: acceleratorNodes, readings: petMonitor.snapshot() } };
+}
+function syncPetMonitor(active = true) {
+  if (!pet) return;
+  const ids = pet.preferences.monitorNodeIds.filter(id => acceleratorNodes.some(node => node.id === id));
+  petMonitor.configure(ids, active && !quitting && pet.preferences.enabled && showsPetMonitor(pet.preferences) && !!petWindow?.isVisible() && acceleratorAvailable(), pet.preferences.monitorRefreshSeconds);
+}
+async function refreshAcceleratorNodes() {
+  const generation = ++acceleratorRefresh;
+  const candidate = connection;
+  if (!candidate?.connected) return;
+  const profiles = await candidate.rpc<import('../shared/protocol').SshConnection[]>('sshConnections');
+  if (candidate !== connection || generation !== acceleratorRefresh) return;
+  acceleratorNodes = profiles.map(({ id, alias }) => ({ id, alias }));
+  syncPetMonitor();
+  publishPet();
+}
 function publishPet() {
   if (petPublishTimer || !pet || quitting) return;
   petPublishTimer = setTimeout(() => {
     petPublishTimer = null;
-    const snapshot = pet.snapshot();
+    const snapshot = petSnapshot();
+    resizePetWindow();
     for (const target of [window, sshWindow, petWindow]) if (target && !target.isDestroyed()) target.webContents.send('berth:petState', snapshot);
   }, 60);
+}
+function petSize(area: { width: number; height: number }) {
+  const size = petDimensions(pet.preferences, petMonitor.snapshot());
+  return { width: Math.min(size.width, area.width), height: Math.min(size.height, area.height) };
+}
+function resizePetWindow() {
+  if (!petWindow || petWindow.isDestroyed() || petDrag) return;
+  const current = petWindow.getBounds(), area = screen.getDisplayMatching(current).workArea;
+  const { width, height } = petSize(area);
+  if (width === current.width && height === current.height) return;
+  const x = current.x + (current.width - width) / 2, y = current.y + current.height - height;
+  petWindow.setBounds({ width, height,
+    x: Math.round(Math.max(area.x, Math.min(x, area.x + area.width - width))),
+    y: Math.round(Math.max(area.y, Math.min(y, area.y + area.height - height))),
+  });
 }
 async function openPetWindow() {
   requireExtension('pet');
   if (quitting) return;
   if (petWindow && !petWindow.isDestroyed()) { petWindow.showInactive(); keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop); return; }
-  const width = Math.round(petWindowSize.width * pet.preferences.scale), height = Math.round(petWindowSize.height * pet.preferences.scale);
-  let area = screen.getPrimaryDisplay().workArea, x = area.x + area.width - width - 20, y = area.y + area.height - height - 20;
+  let area = screen.getPrimaryDisplay().workArea, position: { x: number; y: number } | undefined;
   try {
     const saved = JSON.parse(readFileSync(path.join(dataDirectory, 'pet', 'position.json'), 'utf8'));
-    if (Number.isSafeInteger(saved.x) && Number.isSafeInteger(saved.y)) { area = screen.getDisplayNearestPoint(saved).workArea; x = Math.min(Math.max(saved.x, area.x), area.x + area.width - width); y = Math.min(Math.max(saved.y, area.y), area.y + area.height - height); }
+    if (Number.isSafeInteger(saved.x) && Number.isSafeInteger(saved.y)) { area = screen.getDisplayNearestPoint(saved).workArea; position = saved; }
   } catch { /* First launch or unavailable monitor. */ }
+  const { width, height } = petSize(area);
+  const x = Math.max(area.x, Math.min(position?.x ?? area.x + area.width - width - 20, area.x + area.width - width));
+  const y = Math.max(area.y, Math.min(position?.y ?? area.y + area.height - height - 20, area.y + area.height - height));
   const target = new BrowserWindow({ x, y, width, height, resizable: false, frame: false, transparent: true, hasShadow: false, alwaysOnTop: pet.preferences.alwaysOnTop, skipTaskbar: true, show: false, title: 'AgentBerth · 桌宠', icon: iconFile, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
   petWindow = target;
   const keepAbove = () => keepPetAboveWindows(target, pet.preferences.alwaysOnTop);
   keepAbove();
   target.on('show', keepAbove);
+  target.on('show', () => syncPetMonitor());
+  target.on('hide', () => syncPetMonitor(false));
   target.on('restore', keepAbove);
   target.on('blur', keepAbove);
   target.on('moved', () => { try { const { x, y } = target.getBounds(); writeFileSync(path.join(dataDirectory, 'pet', 'position.json'), JSON.stringify({ x, y }), { mode: 0o600 }); } catch { /* Position failure must not affect a terminal. */ } });
@@ -265,7 +321,7 @@ async function openPetWindow() {
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   target.webContents.on('will-navigate', event => event.preventDefault());
   target.once('ready-to-show', () => { if (!quitting && pet.preferences.enabled) target.showInactive(); });
-  target.on('closed', () => { if (petWindow === target) { petWindow = null; petDrag = null; } });
+  target.on('closed', () => { if (petWindow === target) { petWindow = null; petDrag = null; syncPetMonitor(false); } });
   try {
     if (process.env.AGENTBERTH_DEV_URL === 'http://127.0.0.1:5173') await target.loadURL(process.env.AGENTBERTH_DEV_URL + '?view=pet');
     else await target.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { view: 'pet' } });
@@ -282,7 +338,7 @@ function petGuide(): string {
 async function selectPetAppearance(appearance:import('../shared/pet').PetAppearance){
   const sequence=++petAppearanceSequence;
   if(appearance==='naiwa')await pet.naiwa.install((url,init)=>net.fetch(url,init));
-  if(sequence!==petAppearanceSequence)return pet.snapshot();
+  if(sequence!==petAppearanceSequence)return petSnapshot();
   requireExtension('pet');if(quitting)throw new Error('应用正在退出');
   return savePetPreferences({...pet.preferences,appearance,customImages:false});
 }
@@ -290,10 +346,10 @@ async function savePetPreferences(preferences: unknown) {
   pet.save(preferences);
   if (pet.preferences.enabled) {
     await openPetWindow(); if (petWindow) keepPetAboveWindows(petWindow, pet.preferences.alwaysOnTop);
-    petWindow?.setSize(Math.round(petWindowSize.width * pet.preferences.scale), Math.round(petWindowSize.height * pet.preferences.scale));
-    if (petWindow) { const bounds = petWindow.getBounds(), area = screen.getDisplayMatching(bounds).workArea; petWindow.setPosition(Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width)), Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height))); }
+    resizePetWindow();
   } else petWindow?.close();
-  return pet.snapshot();
+  syncPetMonitor();
+  return petSnapshot();
 }
 function petNavigate(channel: 'berth:petSession' | 'berth:petSettings', id?: string) {
   showWindow();
@@ -314,6 +370,7 @@ function openPetMenu() {
     select: selectedSessionId => change({ selectedSessionId }), scale: scale => change({ scale }),
     appearance:appearance=>run(()=>selectPetAppearance(appearance)),customImages:customImages=>change({customImages}),
     alwaysOnTop: alwaysOnTop => change({ alwaysOnTop }), autoSwitch: autoSwitch => change({ autoSwitch }),
+    monitorVisible: monitorVisible => change({ monitorVisible }),
     open: () => showPetSession(), settings: () => petNavigate('berth:petSettings'),
     hide: () => change({ enabled: false }),
   })).popup({ window: petWindow });
@@ -325,8 +382,25 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
   const request = petRequestSchema.parse(raw);
   if (['menu', 'dragStart', 'dragMove', 'dragEnd'].includes(request.action) && event.sender !== petWindow?.webContents) throw new Error('此操作仅供桌宠图像使用');
   switch (request.action) {
-    case 'state': return pet.snapshot();
-    case 'save': return savePetPreferences(request.preferences);
+    case 'state': return petSnapshot();
+    case 'save': return savePetPreferences({
+      ...request.preferences, monitorNodeIds: pet.preferences.monitorNodeIds,
+      monitorFontSize: pet.preferences.monitorFontSize, monitorRefreshSeconds: pet.preferences.monitorRefreshSeconds, monitorVisible: pet.preferences.monitorVisible,
+    });
+    case 'saveMonitor':
+      if (event.sender === petWindow?.webContents) throw new Error('请在桌宠设置中配置节点');
+      if (request.ids.some(id => !pet.preferences.monitorNodeIds.includes(id) && !acceleratorNodes.some(node => node.id === id))) throw new Error('所选 SSH 连接不存在，请重新选择');
+      return savePetPreferences({ ...pet.preferences, monitorNodeIds: request.ids });
+    case 'saveMonitorInterval':
+      if (event.sender === petWindow?.webContents) throw new Error('请在桌宠设置中配置刷新间隔');
+      pet.save({ ...pet.preferences, monitorRefreshSeconds: request.seconds });
+      syncPetMonitor();
+      return petSnapshot();
+    case 'saveMonitorFontSize':
+      if (event.sender === petWindow?.webContents) throw new Error('请在桌宠设置中配置监控字号');
+      return savePetPreferences({ ...pet.preferences, monitorFontSize: request.size });
+    case 'showMonitor':
+      return savePetPreferences({ ...pet.preferences, monitorVisible: request.visible });
     case 'selectAppearance': return selectPetAppearance(request.appearance);
     case 'appearanceImage': return pet.naiwa.image();
     case 'hookConfig': return petHookConfig();
@@ -355,15 +429,15 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
       const cursor = screen.getCursorScreenPoint(), area = screen.getDisplayNearestPoint(cursor).workArea, bounds = petWindow!.getBounds();
       petWindow!.setPosition(Math.round(Math.max(area.x, Math.min(cursor.x - petDrag.x, area.x + area.width - bounds.width))), Math.round(Math.max(area.y, Math.min(cursor.y - petDrag.y, area.y + area.height - bounds.height)))); return;
     }
-    case 'dragEnd': petDrag = null; return;
+    case 'dragEnd': petDrag = null; resizePetWindow(); return;
     case 'image': return pet.image(request.status);
-    case 'resetImage': pet.resetImage(request.status); return pet.snapshot();
+    case 'resetImage': pet.resetImage(request.status); return petSnapshot();
     case 'importImage': {
       const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { title: '选择此状态的 GIF 动画', properties: ['openFile'], filters: [{ name: 'GIF 动画', extensions: ['gif'] }] });
       if (result.canceled) return null;
       const file = result.filePaths[0];
       if (statSync(file).size > 8 * 1024 * 1024) throw new Error('GIF 不能超过 8 MiB');
-      pet.importImage(request.status, readFileSync(file), file); return pet.snapshot();
+      pet.importImage(request.status, readFileSync(file), file); return petSnapshot();
     }
     case 'showSession': showPetSession(); return;
   }
@@ -435,7 +509,7 @@ ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unkn
 });
 ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string, unknown>) => {
   trusted(event);
-  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['terminalAppearance','restoreWorkspace','registerSshProvider','sshChallengeReply','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
+  if (quitting || method === 'shutdown' || method === 'shutdownIdle' || ['terminalAppearance','restoreWorkspace','registerSshProvider','sshChallengeReply','sampleAccelerators','saveSshConnection','deleteSshConnection','remoteOpen','nativeSessionDetected'].includes(method)) throw new Error('请从托盘退出应用，或在设置中更新后台');
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;
@@ -479,12 +553,15 @@ ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, conn
   if (remember && Object.values(credentials).some(Boolean) && (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'))) throw new Error('系统安全凭据存储不可用，请取消记住密码');
   const profile = await connection!.rpc('saveSshConnection', {connectionId: id, config: config.data});
   sshVault.save(id, config.data.authentication === 'password' ? { password: credentials.password } : config.data.authentication === 'key' ? { passphrase: credentials.passphrase } : {}, remember);
+  void refreshAcceleratorNodes().then(() => petMonitor.reset(id)).catch(() => {});
   return profile;
 });
 ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown) => {
   trusted(event); if (typeof connectionId !== 'string') throw new Error('连接无效');
   if (!connection) await reconnect();
   await connection!.rpc('deleteSshConnection',{connectionId}); sshVault.delete(connectionId);
+  if (pet?.preferences.monitorNodeIds.includes(connectionId)) await savePetPreferences({ ...pet.preferences, monitorNodeIds: pet.preferences.monitorNodeIds.filter(id => id !== connectionId) });
+  void refreshAcceleratorNodes().catch(() => {});
 });
 ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:appearance',async(event,mode:unknown,resolved:unknown,palette:unknown)=>{trusted(event);requireExtension('appearance');if(palette!==undefined&&uiPalette(palette)!==palette)throw new Error('无效配色');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');if(resolved!==undefined&&resolved!=='dark'&&resolved!=='light')throw new Error('无效主题');terminalPaletteFamily=uiPalette(palette);nativeTheme.themeSource=mode as 'system'|'light'|'dark';terminalColorScheme=mode==='system'?(resolved as ResolvedAppearance|undefined)??(nativeTheme.shouldUseDarkColors?'dark':'light'):mode as ResolvedAppearance;syncWindowAppearance();await syncTerminalAppearance();});

@@ -4,6 +4,27 @@ html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { b
 .pet-stage:active { cursor:grabbing; }
 .desktop-pet .pet-stage:hover:not(:disabled), .desktop-pet .pet-stage:active { background:transparent; box-shadow:none; border-color:transparent; }
 .pet-stage:focus-visible { outline:2px solid #8cdec4; outline-offset:0; }
+.desktop-pet[data-monitoring=true] { display:flex; flex-direction:column; align-items:center; gap:8px; width:100%; height:100%; }
+.desktop-pet[data-monitoring=true] > * { flex:none; }
+.pet-accelerators { display:grid; align-items:start; gap:6px; line-height:var(--monitor-row); }
+.pet-monitor-node { min-width:0; padding:6px; border:1px solid #42545c; border-radius:9px; background:#17262d; color:#e9f4f5; }
+.pet-monitor-node-name, .pet-monitor-state { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pet-monitor-state { color:#adc5ca; }
+.pet-monitor-state[data-stale=true] { color:#ffcd9f; }
+.pet-monitor-host { display:flex; justify-content:space-between; gap:4px; color:#bde8dc; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.pet-monitor-cards { width:100%; table-layout:fixed; border-collapse:collapse; text-align:right; font:inherit; font-variant-numeric:tabular-nums; }
+.pet-monitor-cards tr { height:var(--monitor-row); }
+.pet-monitor-cards th, .pet-monitor-cards td { padding:0 2px; border:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pet-monitor-cards :is(th,td):first-child { padding-left:0; text-align:left; }
+.pet-monitor-cards thead th { color:#adc5ca; font-weight:500; }
+.pet-monitor-cards thead th:nth-child(1) { width:26%; }
+.pet-monitor-cards thead th:nth-child(2) { width:19%; }
+.pet-monitor-cards thead th:nth-child(3) { width:36%; }
+.pet-monitor-cards thead th:nth-child(4) { width:19%; }
+.pet-monitor-cards tbody tr:nth-child(odd) { background:#21343b; }
+.pet-monitor-settings > div { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0; }
+.pet-monitor-interval { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; }
+.pet-monitor-interval label { max-width:180px; }
 .pet-character { width:192px; height:160px; object-fit:contain; pointer-events:none; }
 .pet-settings .pet-toggle { display:flex; align-items:center; gap:8px; margin:12px 0; }
 .pet-settings .pet-toggle input { width:auto; margin:0; }

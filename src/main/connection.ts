@@ -142,7 +142,7 @@ export async function stopIdleDaemon(directory: string): Promise<void> {
 
 async function assertCompatibleDaemon(candidate: DaemonConnection): Promise<void> {
   const { apiVersion } = await candidate.rpc<State>('state');
-  if (apiVersion !== API_VERSION && !(Number.isInteger(apiVersion) && apiVersion >= 44 && apiVersion <= 64)) {
+  if (apiVersion !== API_VERSION && !(Number.isInteger(apiVersion) && apiVersion >= 44 && apiVersion <= 66)) {
     throw new DaemonRpcError('运行中的后台协议与当前版本不兼容，请从托盘完整退出旧版后重新打开。工作区数据会保留。', 'BACKEND_UPGRADE_REQUIRED');
   }
 }
