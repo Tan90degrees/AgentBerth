@@ -87,9 +87,9 @@ try {
   await panel.getByText(/先从 SSH 连接打开此节点/).waitFor();
   const refreshInterval = page.getByLabel('监控刷新间隔（秒）');
   assert.equal(await refreshInterval.inputValue(), '20');
-  await refreshInterval.fill('35');
+  await refreshInterval.fill('1');
   await page.getByRole('button', { name: '保存刷新间隔' }).click();
-  await pet.waitForFunction(() => window.berth.pet({ action: 'state' }).then(value => value.preferences.monitorRefreshSeconds === 35));
+  await pet.waitForFunction(() => window.berth.pet({ action: 'state' }).then(value => value.preferences.monitorRefreshSeconds === 1));
   await pet.waitForFunction(() => Math.abs(document.querySelector('.desktop-pet').getBoundingClientRect().height - innerHeight) <= 1);
   const remove = page.locator('.pet-monitor-settings').getByRole('button', { name: '移除', exact: true }).first();
   await remove.click(); await remove.click();

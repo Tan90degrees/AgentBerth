@@ -90,14 +90,14 @@ test('changing the refresh interval replaces the timer and skips samples still i
   const monitor = new PetMonitor(() => new Promise(resolve => pending.push(resolve)), () => {});
   monitor.configure([id], true);
   assert.equal(pending.length, 1);
-  monitor.configure([id], true, 5);
-  t.mock.timers.tick(5_000);
+  monitor.configure([id], true, 1);
+  t.mock.timers.tick(1_000);
   assert.equal(pending.length, 1, 'a changed interval does not duplicate a live request');
   pending[0]({ sampledAt: 0, devices: [] });
   await nextTurn();
-  t.mock.timers.tick(5_000);
+  t.mock.timers.tick(1_000);
   assert.equal(pending.length, 2, 'new interval is applied without reopening the window');
-  pending[1]({ sampledAt: 10_000, devices: [] });
+  pending[1]({ sampledAt: 2_000, devices: [] });
   await nextTurn();
   monitor.configure([id], true, 60);
   t.mock.timers.tick(59_000);
@@ -107,10 +107,10 @@ test('changing the refresh interval replaces the timer and skips samples still i
   monitor.configure([id], false);
   t.mock.timers.tick(60_000);
   assert.equal(pending.length, 3);
-  for (const seconds of [0, 4, 5.5, 301]) {
+  for (const seconds of [0, 0.5, 1.5, 301]) {
     assert.equal(petRequestSchema.safeParse({ action: 'saveMonitorInterval', seconds }).success, false);
   }
-  for (const seconds of [5, 300]) {
+  for (const seconds of [1, 2, 3, 300]) {
     assert.equal(petRequestSchema.safeParse({ action: 'saveMonitorInterval', seconds }).success, true);
   }
 });
