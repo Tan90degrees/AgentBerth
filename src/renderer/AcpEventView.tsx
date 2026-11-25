@@ -62,5 +62,7 @@ export const AcpEventView=memo(function AcpEventView({events,streaming,sessionId
   }
   if(first.kind==='permission')return <details className="acp-permission-record"><summary>授权请求 · {text}</summary>{/* 授权通过下方操作卡片处理。已处理的选择记录保留在对话中。 */}{!!first.data?.toolCall&&<pre>{JSON.stringify(first.data.toolCall,null,2)}</pre>}</details>;
   if(first.kind==='notice'||first.kind==='turn')return <div className="acp-turn-divider"><span>{first.kind==='turn'?'✓ ':''}{text}</span></div>;
-  return <ConversationMessage role={first.kind==='user'?'user':first.kind==='error'?'error':'assistant'} text={first.data?.content?'':text} label={label} timestamp={first.createdAt} streaming={streaming} onError={onError}>{!!first.data?.content&&<Content content={first.data.content} onOpenFile={onOpenFile}/>}</ConversationMessage>;
+  return <ConversationMessage role={first.kind==='user'?'user':first.kind==='error'?'error':'assistant'} text={first.data?.content?'':text} label={label} timestamp={first.createdAt} streaming={streaming} onError={onError}>{!!first.data?.content&&<Content content={first.data.content} onOpenFile={onOpenFile}/>}
+    {Array.isArray(first.data?.attachments)&&<div className="acp-attachment-list">{first.data.attachments.map((item,index)=>
+      item?.type==='file'&&typeof item.path==='string'&&onOpenFile?<button key={index} onClick={()=>onOpenFile(item.path)}>{item.path}</button>:<span className="badge" key={index}>{String(item?.name??item?.path??'附件')}</span>)}</div>}</ConversationMessage>;
 });

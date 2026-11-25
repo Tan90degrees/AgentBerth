@@ -35,6 +35,81 @@ test('ACP sends once, streams structured output, switches models and restores th
   const log=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(log.filter(item=>item.method==='prompt').length,2);assert.equal(log.filter(item=>item.method==='load').length,1);
 });
 
+test('ACP workbench sends scoped files and images, forwards supported MCP and records usage',async t=>{
+  const f=await fixture(t,['--workbench']);
+  await writeFile(path.join(f.root,'上下文.txt'),'example');
+  const params={sessionId:f.session.id};
+  await f.connection.rpc('acpMcpConfig',{agentId:f.agent.id,servers:[
+    {type:'http',name:'supported',url:'https://example.invalid/mcp'},
+    {type:'sse',name:'unsupported',url:'https://example.invalid/events'},
+  ]});
+  await f.connection.rpc('start',{...params,cols:100,rows:30});
+  await assert.rejects(f.connection.rpc('acpMcpConfig',{agentId:f.agent.id,servers:[]}),/先断开/);
+  const imageId=randomUUID();
+  const header=Buffer.from([137,80,78,71,13,10,26,10]);
+  await assert.rejects(f.connection.rpc('acpImage',{...params,imageId,mimeType:'image/png',data:header.toString('base64'),offset:1,last:true}),/中断/);
+  await f.connection.rpc('acpImage',{...params,imageId,mimeType:'image/png',data:header.subarray(0,4).toString('base64'),offset:0,last:false});
+  await f.connection.rpc('acpImage',{...params,imageId,mimeType:'image/png',data:header.subarray(4).toString('base64'),offset:4,last:true});
+  await assert.rejects(f.connection.rpc('acpSubmit',{...params,message:{requestId:randomUUID(),text:'',attachments:[{type:'file',path:'../outside'}]}}),/路径无效/);
+  await f.connection.rpc('acpSubmit',{...params,message:{requestId:randomUUID(),text:'review',attachments:[{type:'file',path:'上下文.txt',text:'example'},{type:'image',id:imageId,name:'preview.png'}]}});
+  const snapshot=await until(f.snapshot,value=>value.phase==='ready'&&!!value.usage);
+  assert.deepEqual(snapshot.usage,{used:240,size:1000,cost:{amount:0.02,currency:'USD'}});
+  assert.ok(snapshot.events.find(event=>event.kind==='user')?.data?.attachments);
+  const log=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(log.find(item=>item.method==='new').mcpServers.map((server:any)=>server.name),['supported']);
+  assert.deepEqual(log.find(item=>item.method==='prompt').blocks.map((block:any)=>block.type),['text','resource_link','text','image']);
+});
+
+test('ACP queue edits and withdrawal work during a turn, stays paused on reconnect, and dispatches exactly once',async t=>{
+  const f=await fixture(t),params={sessionId:f.session.id};
+  await f.send('long');
+  await until(f.snapshot,value=>value.phase==='running');
+  const keep=randomUUID(),remove=randomUUID();
+  const enqueue=(requestId:string,text:string)=>f.connection.rpc('acpSubmit',{...params,message:{requestId,text},queue:true});
+  await enqueue(keep,'original');
+  await enqueue(remove,'withdraw me');
+  await f.connection.rpc('acpQueue',{...params,action:'edit',requestId:keep,text:'edited'});
+  await f.connection.rpc('acpQueue',{...params,action:'remove',requestId:remove});
+  await f.connection.rpc('stop',params);
+  await f.connection.rpc('start',{...params,resume:true,cols:100,rows:30});
+  const paused=await f.snapshot();
+  assert.equal(paused.queuePaused,true);assert.equal(paused.queue?.length,1);
+  assert.equal(paused.queue?.[0].text,'edited');
+  assert.ok(!paused.events.some(event=>event.text==='edited'));
+  await f.connection.rpc('acpQueue',{...params,action:'resume'});
+  const sent=await until(f.snapshot,value=>value.phase==='ready'&&!!value.events.find(item=>item.text==='edited'));
+  assert.equal(sent.events.filter(event=>event.kind==='user'&&event.text==='edited').length,1);
+  assert.equal(sent.queue?.length,0);
+  await enqueue(keep,'edited');
+  assert.equal((await f.snapshot()).events.filter(event=>event.kind==='user'&&event.text==='edited').length,1);
+});
+
+test('ACP history archives safely and imports native sessions only from the selected work directory',async t=>{
+  const f=await fixture(t,['--workbench']);
+  const scope={projectId:f.project.id,agentId:f.agent.id};
+  await f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30});
+  await assert.rejects(f.connection.rpc('acpArchive',{sessionId:f.session.id,archived:true}),/先断开/);
+  await f.connection.rpc('stop',{sessionId:f.session.id});
+  await f.connection.rpc('acpArchive',{sessionId:f.session.id,archived:true});
+  const history=await f.connection.rpc<any[]>('acpHistory');
+  assert.equal(history.find(item=>item.sessionId===f.session.id).archived,true);
+  assert.equal(history.find(item=>item.sessionId===f.session.id).resumable,true);
+  const transport=await AcpTransport.open(f.agent.acp!,f.root,async()=>{throw new Error('Unexpected callback');},()=>{},()=>{});
+  t.after(()=>transport.stop());
+  await transport.call('initialize',{protocolVersion:1,clientCapabilities:{}});
+  const outsideLocalJournal=await transport.call('session/new',{cwd:f.root,mcpServers:[]});
+  await transport.stop();
+  const native=await f.connection.rpc<any>('acpNativeHistory',scope);
+  assert.equal(native.sessions.length,2);assert.ok(native.sessions.every((item:any)=>item.cwd===f.root));
+  await assert.rejects(f.connection.rpc('acpNativeHistory',{...scope,nativeId:'unrelated'}),/先刷新/);
+  const imported=await f.connection.rpc<{imported:string}>('acpNativeHistory',{...scope,nativeId:outsideLocalJournal.sessionId});
+  await f.connection.rpc('start',{sessionId:imported.imported,resume:true,cols:100,rows:30});
+  const get=()=>f.connection.rpc<AcpSnapshot>('acpSnapshot',{sessionId:imported.imported});
+  assert.ok((await get()).events.some(event=>event.text.includes('REMOTE_REPLAY')));
+  await f.connection.rpc('stop',{sessionId:imported.imported});
+  await f.connection.rpc('start',{sessionId:imported.imported,resume:true,cols:100,rows:30});
+  assert.equal((await get()).events.filter(event=>event.text.includes('REMOTE_REPLAY')).length,1);
+});
 test('ACP answers structured forms on the original request and keeps concurrent permission separate',async t=>{
   const f=await fixture(t);await f.send('elicitation-and-permission');const pending=await until(f.snapshot,value=>value.elicitations?.length===1&&value.permissions.length===1),question=pending.elicitations![0],params={sessionId:f.session.id,requestId:question.id,action:'accept'};
   await assert.rejects(f.connection.rpc('acpElicitation',{...params,content:{strategy:'渐进修改',checks:['unit'],count:2,enabled:false}}),/有效选项/);assert.equal((await f.snapshot()).elicitations?.length,1);
@@ -186,4 +261,24 @@ test('an ACP connection can be cancelled during initialization without submittin
   await until(f.snapshot,value=>value.phase==='connecting');
   await f.connection.rpc('stop',{sessionId:f.session.id});await started;
   assert.equal(f.server.acpCorePort().acp.live.size,0);const state=await f.snapshot();assert.equal(state.nativeSessionId,null);assert.equal(state.events.filter(event=>event.kind==='user').length,0);assert.equal(state.phase,'disconnected');
+});
+
+test('Registry binary uses digest verification and never extracts archive paths outside staging',async t=>{
+  const {installAcpBinary}=await import('../src/daemon/acp-registry-binary');
+  const {zipSync}=await import('fflate');
+  const {createHash}=await import('node:crypto');
+  const {readdir}=await import('node:fs/promises');
+  const dir=await mkdtemp(path.join(os.tmpdir(),'berth-acp-registry-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const contents=Buffer.from('fixture only');
+  let archive=zipSync({'agent.exe':contents});
+  t.mock.method(globalThis,'fetch',async()=>new Response(Buffer.from(archive)));
+  const getRecipe=()=>({url:'https://example.invalid/agent.zip',sha256:createHash('sha256').update(archive).digest('hex'),kind:'zip' as const,command:'agent.exe',args:[]});
+  const command=await installAcpBinary(dir,getRecipe());
+  assert.deepEqual(await readFile(command),contents);
+  const before=await readdir(dir);
+  await assert.rejects(installAcpBinary(dir,{...getRecipe(),sha256:'0'.repeat(64)}),/SHA-256/);
+  archive=zipSync({'../escape.exe':contents,'agent.exe':contents});
+  await assert.rejects(installAcpBinary(dir,getRecipe()),/file name|路径/);
+  assert.deepEqual(await readdir(dir),before);
 });

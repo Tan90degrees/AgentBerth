@@ -7,6 +7,10 @@ import { AcpClientTools } from './acp-client-tools';
 import { reviewableSuperagentTool } from './superagent-tool-policy';
 import type {AgentActivity} from '../shared/pet';
 import {elicitationForm,elicitationError,type AcpElicitation,type ElicitationContent} from '../shared/acp-elicitation';
+import { acpCapability, type AcpHistoryEntry, type AcpMessage, type AcpNativeSession, type acpImageChunkSchema } from '../shared/acp-workbench';
+import { AcpAttachments } from './acp-attachments';
+import type { z } from 'zod';
+import path from 'node:path';
 import {validateElicitationPatterns} from './elicitation-patterns';
 
 type Metadata=Omit<AcpSnapshot,'events'|'before'|'hasMore'>;
@@ -15,6 +19,9 @@ interface Live {
   state:Metadata;permissions:Map<string,{value:AcpPermission;resolve:(value:unknown)=>void}>;
   elicitations:Map<string,{value:AcpElicitation;resolve:(value:unknown)=>void}>;
   stopping:boolean;cancelled:boolean;fingerprint:string;serial:Promise<unknown>;ending?:Promise<void>;
+  attachments:AcpAttachments;
+  draining?:boolean;
+  importing?: { events: { kind:AcpEvent['kind']; text:string; data?:Record<string,unknown> }[] };
   toolStates:Map<string,{turnId:string|null;data:Record<string,any>}>;
 }
 const bounded=(value:unknown):Record<string,unknown>|undefined=>{if(!value||typeof value!=='object'||Array.isArray(value))return;const text=JSON.stringify(value);return Buffer.byteLength(text)<=32768?JSON.parse(text):{omitted:true};};
@@ -22,8 +29,10 @@ export class AcpSessions {
   readonly live=new Map<string,Live>();private closed=false;
   private discovering=new Map<string,Promise<AcpModels>>();
   private probes=new Set<AcpTransport>();
+  private nativeLists=new Map<string,{expires:number;sessions:Map<string,AcpNativeSession>;capabilities:Record<string,unknown>}>();
   constructor(private store:Store,private emit:(event:ServerEvent)=>void,private changed:()=>void){}
   active(id:string){return this.live.has(id);}
+  usesAgent(agentId:string){return [...this.live.values()].some(value=>value.definition.id===agentId);}
   activities(sessions:Session[],agents:AgentDefinition[]):AgentActivity[]{
     const ids=new Set(agents.filter(agent=>agent.acp).map(agent=>agent.id));
     return sessions.filter(session=>!session.remote&&session.latestRun&&ids.has(session.agent)).map(session=>{
@@ -36,7 +45,7 @@ export class AcpSessions {
   private publish(value:Live){
     value.state.permissions=[...value.permissions.values()].map(item=>item.value);
     value.state.elicitations=[...value.elicitations.values()].map(({value:{schema,...request}})=>request);
-    this.store.saveAcpState(value.session.id,{...value.state,permissions:[],elicitations:[],fingerprint:value.fingerprint});
+    this.store.saveAcpState(value.session.id,{...value.state,permissions:[],elicitations:[],fingerprint:value.fingerprint,archived:this.store.acpState(value.session.id).archived===true,importPending:!!value.importing});
     this.emit({event:'acp',data:{sessionId:value.session.id,state:{...value.state}}});
     this.changed();
   }
@@ -48,15 +57,14 @@ export class AcpSessions {
   }
   snapshot(id:string,pagination:{before?:number;after?:number;limit?:number}={}):AcpSnapshot{
     const saved=this.store.acpState(id),value=this.live.get(id);
-    const state:Metadata=value?{...value.state,permissions:[...value.permissions.values()].map(p=>p.value),elicitations:[...value.elicitations.values()].map(({value:{schema,...request}})=>request)}:{sessionId:id,nativeSessionId:saved.nativeSessionId??null,phase:'disconnected',turnId:null,permissions:[],elicitations:[],error:saved.error,agentInfo:saved.agentInfo,capabilities:saved.capabilities,configOptions:saved.configOptions,modes:saved.modes,authMethods:saved.authMethods,availableCommands:saved.availableCommands,lastTurnStatus:saved.lastTurnStatus,...(saved.phase==='running'||saved.phase==='permission'?{error:'上次操作因后台退出而中断；结果未知，不会自动重放'}:{})};
+    const state:Metadata=value?{...value.state,permissions:[...value.permissions.values()].map(p=>p.value),elicitations:[...value.elicitations.values()].map(({value:{schema,...request}})=>request)}:{sessionId:id,nativeSessionId:saved.nativeSessionId??null,phase:'disconnected',turnId:null,permissions:[],elicitations:[],error:saved.error,agentInfo:saved.agentInfo,capabilities:saved.capabilities,configOptions:saved.configOptions,modes:saved.modes,authMethods:saved.authMethods,availableCommands:saved.availableCommands,lastTurnStatus:saved.lastTurnStatus,usage:saved.usage,queue:saved.queue,queuePaused:!!saved.queue?.length,...(saved.phase==='running'||saved.phase==='permission'?{error:'上次操作因后台退出而中断；结果未知，不会自动重放'}:{})};
     return {...state,...this.store.acpEvents(id,pagination)};
   }
   async start(session:Session,definition:AgentDefinition,cwd:string,cols:number,rows:number):Promise<Run>{
     if(this.closed)throw new Error('ACP 后台正在退出');if(this.live.has(session.id))throw new Error('ACP 会话已连接');if(!definition.acp)throw new Error('此 Agent 未配置 ACP');
     const run=this.store.createRun(session.id,'ACP',cols,rows,definition.acp.executable),saved=this.store.acpState(session.id);
-    const {startupTimeoutMs:_,...launchConfig}=definition.acp;
-    const fingerprint=createHash('sha256').update(JSON.stringify([definition.id,launchConfig,cwd])).digest('hex');
-    const value:Live={session,run,cwd,definition,transport:null,tools:new AcpClientTools(cwd,view=>this.append(value,'terminal','',{...view}),session.owner?.kind==='superagent'),toolStates:new Map(),permissions:new Map(),elicitations:new Map(),stopping:false,cancelled:false,fingerprint,serial:Promise.resolve(),state:{sessionId:session.id,nativeSessionId:saved.fingerprint===fingerprint?saved.nativeSessionId??null:null,phase:'connecting',turnId:null,permissions:[]}};
+    const fingerprint=this.fingerprint(definition,cwd);
+    const value:Live={session,run,cwd,definition,transport:null,tools:new AcpClientTools(cwd,view=>this.append(value,'terminal','',{...view}),session.owner?.kind==='superagent'),toolStates:new Map(),attachments:new AcpAttachments(),...(saved.importPending&&saved.fingerprint===fingerprint?{importing:{events:[]}}:{}),permissions:new Map(),elicitations:new Map(),stopping:false,cancelled:false,fingerprint,serial:Promise.resolve(),state:{sessionId:session.id,nativeSessionId:saved.fingerprint===fingerprint?saved.nativeSessionId??null:null,phase:'connecting',turnId:null,permissions:[],queue:saved.queue??[],queuePaused:!!saved.queue?.length}};
     this.live.set(session.id,value);this.publish(value);this.changed();
     try{
       const transport=await AcpTransport.open(definition.acp,cwd,(method,params)=>this.clientRequest(value,method,params),(method,params)=>this.notification(value,method,params),error=>{void this.ended(value,error).catch(()=>{});});value.transport=transport;
@@ -78,7 +86,12 @@ export class AcpSessions {
     value.state.phase='connecting';
     const transport=value.transport!,savedId=value.state.nativeSessionId;
     const sessions=value.state.capabilities?.sessionCapabilities as Record<string,unknown>|undefined;
-    const canResume=!!sessions&&Object.hasOwn(sessions,'resume');
+    const canResume=acpCapability(value.state.capabilities,'sessionCapabilities','resume')&&!value.importing;
+    if(value.importing&&!value.state.capabilities?.loadSession)throw new Error('该 Agent 已不支持读取原生历史');
+    const configured=value.session.owner?.kind==='superagent'?[]:this.store.acpMcpServers(value.definition.id);
+    const mcpServers=configured.filter(server=>server.type==='stdio'||acpCapability(value.state.capabilities,'mcpCapabilities',server.type));
+    if(mcpServers.length!==configured.length)this.append(value,'notice','Agent 不支持部分已配置的 MCP 传输方式');
+
     if(savedId&&!value.state.capabilities?.loadSession&&!canResume){
       value.state.nativeSessionId=null;this.append(value,'notice','此 Agent 未声明会话恢复能力；保留历史记录并创建新会话，不会重放旧消息。');
     }
@@ -91,10 +104,15 @@ export class AcpSessions {
         throw new Error('此 Pi ACP 版本未提供工作区范围或工具委托，请升级 @openma/pi-acp 后重试');
       }
     }
-    const response=await transport.call(nativeId?(canResume?'session/resume':'session/load'):'session/new',{...(nativeId?{sessionId:nativeId}:{}),cwd:value.cwd,mcpServers:[],...(managedPi ? { additionalDirectories: [] } : {})});
+    const response=await transport.call(nativeId?(canResume?'session/resume':'session/load'):'session/new',{...(nativeId?{sessionId:nativeId}:{}),cwd:value.cwd,mcpServers,...(managedPi ? { additionalDirectories: [] } : {})});
     if (managedPi && response._meta?.pi?.additionalDirectoriesEnforced !== true) throw new Error('Pi ACP 未启用当前任务的工作区范围');
     if(!nativeId&&typeof response.sessionId!=='string')throw new Error('ACP session/new 未返回会话 ID');
     value.state.nativeSessionId=nativeId??response.sessionId;value.state.configOptions=Array.isArray(response.configOptions)?response.configOptions:[];value.state.modes=response.modes;
+    if(value.importing){
+      const events=this.store.importAcpEvents(value.session.id,value.importing.events);
+      value.importing=undefined;
+      for(const event of events)this.emit({event:'acp',data:{sessionId:value.session.id,event}});
+    }
     value.state.phase='ready';value.state.error=undefined;
     this.store.saveHistory(value.session.id,{messages:[],warnings:[],path:null,nativeSessionId:value.state.nativeSessionId});
     this.publish(value);
@@ -104,6 +122,7 @@ export class AcpSessions {
     await value.transport!.call('authenticate',{methodId},60000);await this.prepare(value);return this.snapshot(id);
   }
   async probe(config:AcpConfig,cwd:string){
+    if(this.closed)throw new Error('ACP 后台正在退出');
     const transport=await AcpTransport.open(config,cwd,async()=>{throw new AcpRpcError(-32601,'探测连接不提供会话文件和终端');},()=>{},()=>{});
     this.probes.add(transport);try{if(this.closed)throw new Error('ACP 后台正在退出');return await transport.call('initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'agentberth-probe',version:'0.18.0'}});}finally{this.probes.delete(transport);await transport.stop();}
   }
@@ -120,27 +139,152 @@ export class AcpSessions {
       finally{this.probes.delete(transport);await transport.stop();}
     })().finally(()=>this.discovering.delete(key));this.discovering.set(key,task);return task;
   }
+  private fingerprint(definition:AgentDefinition,cwd:string){
+    const {startupTimeoutMs:_,registryId:_id,registryVersion:_version,...launchConfig}=definition.acp!;
+    const binding=_id ? { registryId:_id } : launchConfig;
+    return createHash('sha256').update(JSON.stringify([definition.id,binding,cwd])).digest('hex');
+  }
+  history():AcpHistoryEntry[]{
+    const acp=new Set(this.store.agents().filter(agent=>agent.acp).map(agent=>agent.id));
+    return this.store.state().sessions.filter(session=>!session.remote&&!session.owner&&acp.has(session.agent)).map(session=>{
+      const state=this.store.acpState(session.id);
+      return {sessionId:session.id,projectId:session.projectId,title:session.title,agentId:session.agent,worktreePath:session.worktreePath??null,
+        nativeSessionId:state.nativeSessionId??null,phase:this.live.get(session.id)?.state.phase??'disconnected',
+        resumable:!!state.nativeSessionId&&(state.capabilities?.loadSession===true||acpCapability(state.capabilities,'sessionCapabilities','resume')),
+        archived:state.archived===true,updatedAt:session.latestRun?.startedAt};
+    });
+  }
+  archive(id:string,archived:boolean){
+    if(archived&&this.active(id))throw new Error('请先断开 Agent，再归档会话');
+    this.store.saveAcpState(id,{...this.store.acpState(id),archived});
+    this.changed();
+    return {};
+  }
+  async nativeHistory(definition:AgentDefinition,cwd:string,projectId:string,worktreePath:string|null,cursor?:string,nativeId?:string){
+    if(this.closed||!definition.acp)throw new Error('请选择可用的 ACP Agent');
+    const key=JSON.stringify([this.fingerprint(definition,cwd),projectId]);
+    const cached=this.nativeLists.get(key);
+    if(nativeId){
+      const target=cached&&cached.expires>Date.now()?cached.sessions.get(nativeId):undefined;
+      if(!target||cached?.capabilities.loadSession!==true)throw new Error('请先刷新列表，并选择支持读取历史的原生会话');
+      const existing=this.history().find(session=>session.projectId===projectId&&session.agentId===definition.id&&session.worktreePath===worktreePath&&session.nativeSessionId===nativeId);
+      if(existing)return {imported:existing.sessionId};
+      const session=this.store.createSession(projectId,target.title,definition.id,definition.command,null,null,worktreePath);
+      this.store.saveAcpState(session.id,{nativeSessionId:nativeId,fingerprint:this.fingerprint(definition,cwd),capabilities:cached.capabilities,importPending:true});
+      this.changed();
+      return {imported:session.id,created:true};
+    }
+    const transport=await AcpTransport.open(definition.acp,cwd,async()=>{throw new AcpRpcError(-32601,'导入历史不提供会话工具');},()=>{},()=>{});
+    this.probes.add(transport);
+    try{
+      if(this.closed)throw new Error('ACP 后台正在退出');
+      const info=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'agentberth-history',version:'0.23.0'}});
+      const capabilities=bounded(info.agentCapabilities)??{};
+      if(info.protocolVersion!==1||!acpCapability(capabilities,'sessionCapabilities','list'))throw new Error('此 Agent 未声明列出原生会话的能力');
+      const result=await transport.call('session/list',{cwd,...(cursor?{cursor}:{})});
+      const normalize=(value:string)=>process.platform==='win32'?path.resolve(value).toLowerCase():path.resolve(value);
+      const sessions:AcpNativeSession[]=Array.isArray(result.sessions)?result.sessions.slice(0,100).flatMap((entry:any)=>{
+        if(typeof entry?.sessionId!=='string'||!entry.sessionId||entry.sessionId.length>500||typeof entry.cwd!=='string'||!path.isAbsolute(entry.cwd)||normalize(entry.cwd)!==normalize(cwd))return [];
+        return [{sessionId:entry.sessionId,cwd,title:String(entry.title||entry.sessionId).slice(0,100),updatedAt:typeof entry.updatedAt==='string'?entry.updatedAt.slice(0,80):undefined}];
+      }):[];
+      const known=cursor&&cached&&cached.expires>Date.now()?cached.sessions:new Map<string,AcpNativeSession>();
+      for(const session of sessions)if(known.size<2000)known.set(session.sessionId,session);
+      if(this.nativeLists.size>=24)this.nativeLists.delete(this.nativeLists.keys().next().value!);
+      this.nativeLists.set(key,{expires:Date.now()+10*60_000,sessions:known,capabilities});
+      return {sessions,resumable:capabilities.loadSession===true,nextCursor:typeof result.nextCursor==='string'&&result.nextCursor.length<=1000?result.nextCursor:undefined};
+    }finally{this.probes.delete(transport);await transport.stop();}
+  }
+  image(params:z.infer<typeof acpImageChunkSchema>){
+    const live=this.require(params.sessionId);
+    if(!acpCapability(live.state.capabilities,'promptCapabilities','image'))throw new Error('此 Agent 不支持图片输入');
+    return live.attachments.add(params);
+  }
+  async submit(id:string,message:AcpMessage,queue:boolean){
+    const previous=this.store.acpTurn(message.requestId);
+    if(previous){
+      if(previous.sessionId!==id)throw new Error('请求 ID 已属于另一会话');
+      return {turnId:message.requestId,state:previous.state,duplicate:true};
+    }
+    const live=this.require(id);
+    if(live.state.queue?.some(item=>item.requestId===message.requestId))return {turnId:message.requestId,state:'queued',duplicate:true};
+    if(queue){
+      if(live.state.phase==='connecting'||live.state.phase==='error')throw new Error('请先完成 Agent 连接');
+      if((live.state.queue?.length??0)>=12)throw new Error('消息队列已满');
+      live.state.queue=[...(live.state.queue??[]),message];
+      this.publish(live);
+      this.drain(live);
+      return {turnId:message.requestId,state:'queued',duplicate:false};
+    }
+    if(live.state.phase!=='ready'||live.draining||live.state.queue?.length&&!live.state.queuePaused)throw new Error('当前任务未结束，可将消息加入队列');
+    const prompt=await live.attachments.prompt(live.cwd,message.text,message.attachments??[]);
+    if(this.require(id)!==live)throw new Error('会话连接已变化，请重新发送');
+    return this.send(id,message.requestId,message.text,prompt,message.attachments);
+  }
+  queue(id:string,action:'remove'|'edit'|'resume',requestId?:string,text?:string){
+    const live=this.live.get(id);
+    const saved=this.store.acpState(id);
+    const messages:AcpMessage[]=live?.state.queue??saved.queue??[];
+    let next=messages;
+    if(action==='resume'){
+      if(!live||live.stopping||live.state.phase!=='ready')throw new Error('Agent 已就绪后才能继续队列');
+      live.state.queuePaused=false;
+    }else{
+      const message=messages.find(item=>item.requestId===requestId);
+      if(!message)throw new Error('消息已发送或已移除');
+      if(action==='edit'&&!text&&!message.attachments?.length)throw new Error('请输入消息');
+      next=action==='remove'?messages.filter(item=>item!==message):messages.map(item=>item===message?{...item,text:text??''}:item);
+      if(action==='remove')live?.attachments.remove(message.attachments);
+    }
+    if(live){
+      live.state.queue=next;
+      this.publish(live);
+      this.drain(live);
+    }else this.store.saveAcpState(id,{...saved,queue:next,queuePaused:true});
+    return {queue:next,queuePaused:live?.state.queuePaused??true};
+  }
+  private drain(live:Live){
+    const message=live.state.queue?.[0];
+    if(!message||live.stopping||live.draining||live.state.queuePaused||live.state.phase!=='ready')return;
+    live.draining=true;
+    void live.attachments.prompt(live.cwd,message.text,message.attachments??[]).then(prompt=>{
+      if(this.live.get(live.session.id)!==live||live.stopping||live.state.queuePaused||live.state.phase!=='ready'||live.state.queue?.[0]!==message)return;
+      this.send(live.session.id,message.requestId,message.text,prompt,message.attachments);
+      live.state.queue=live.state.queue.slice(1);
+      this.publish(live);
+    }).catch(error=>{
+      if(!live.stopping&&live.state.queue?.[0]===message){
+        live.state.queuePaused=true;
+        this.append(live,'notice','队列已暂停：'+String(error),undefined,null);
+        this.publish(live);
+      }
+    }).finally(()=>{
+      live.draining=false;
+      this.drain(live);
+    });
+  }
   terminal(id:string,terminalId:string):AcpTerminal{
     this.store.session(id);const live=this.live.get(id);if(live)try{return live.tools.terminal(terminalId);}catch{/* A released terminal is saved in the journal. */}
     let before:number|undefined;for(let page=0;page<26;page++){const result=this.store.acpEvents(id,{before,limit:200}),found=[...result.events].reverse().find(event=>event.kind==='terminal'&&event.data?.terminalId===terminalId);if(found)return found.data as unknown as AcpTerminal;if(!result.hasMore)break;before=result.before??undefined;}
     throw new Error('终端输出不属于此会话或已超出历史保留范围');
   }
   private require(id:string){const value=this.live.get(id);if(!value||value.stopping||!value.transport)throw new Error('ACP 会话尚未连接，请启动会话');return value;}
-  send(id:string,requestId:string,text:string){
+  send(id:string,requestId:string,text:string,prompt?:Awaited<ReturnType<AcpAttachments['prompt']>>,attachments?:AcpMessage['attachments']){
     const previous=this.store.acpTurn(requestId);if(previous){if(previous.sessionId!==id)throw new Error('请求 ID 已属于另一会话');return {turnId:requestId,state:previous.state,duplicate:true};}
     const value=this.require(id);if(value.state.phase!=='ready')throw new Error('ACP 正在执行或等待授权，请先停止当前任务或完成授权');
     this.store.beginAcpTurn(id,requestId);value.state.turnId=requestId;value.state.phase='running';value.state.error=undefined;value.cancelled=false;
-    this.append(value,'user',text);this.publish(value);
+    this.append(value,'user',text || '已发送附件',attachments?.length?{attachments:attachments.map(attachment=>attachment.type==='file'?{type:attachment.type,path:attachment.path}:{type:attachment.type,name:attachment.name})}:undefined);
+    value.attachments.remove(attachments);
+    this.publish(value);
     // Ordinary prompts have no wall-clock timeout. Long tasks stay attached;
     // cancel/stop are explicit, and disconnect never resubmits the prompt.
-    value.serial=value.transport!.call('session/prompt',{sessionId:value.state.nativeSessionId,prompt:[{type:'text',text}]},0).then(response=>{
-      value.state.lastTurnStatus=value.cancelled||response.stopReason==='cancelled'?'cancelled':'completed';this.store.finishAcpTurn(requestId,value.state.lastTurnStatus);this.append(value,'turn',value.cancelled?'已停止当前任务':({end_turn:'本轮已完成',max_tokens:'已达到 Agent 输出上限',max_turn_requests:'已达到 Agent 请求上限',refusal:'Agent 未执行此请求',cancelled:'已停止当前任务'} as Record<string,string>)[String(response.stopReason)]??'本轮已结束',{stopReason:response.stopReason??'end_turn'});
-    },error=>{this.store.finishAcpTurn(requestId,'interrupted');if(!value.stopping)this.append(value,'error',String(error));value.state.error=String(error);}).finally(()=>{
-      this.cancelPermissions(value);value.state.turnId=null;if(this.live.get(id)===value&&!value.stopping){value.state.phase=value.state.error?'error':'ready';this.publish(value);}
+    value.serial=value.transport!.call('session/prompt',{sessionId:value.state.nativeSessionId,prompt:prompt??[{type:'text',text}]},0).then(response=>{
+      value.state.lastTurnStatus=value.cancelled||response.stopReason==='cancelled'?'cancelled':'completed';if(value.state.lastTurnStatus==='cancelled')value.state.queuePaused=!!value.state.queue?.length;this.store.finishAcpTurn(requestId,value.state.lastTurnStatus);this.append(value,'turn',value.cancelled?'已停止当前任务':({end_turn:'本轮已完成',max_tokens:'已达到 Agent 输出上限',max_turn_requests:'已达到 Agent 请求上限',refusal:'Agent 未执行此请求',cancelled:'已停止当前任务'} as Record<string,string>)[String(response.stopReason)]??'本轮已结束',{stopReason:response.stopReason??'end_turn'});
+    },error=>{this.store.finishAcpTurn(requestId,'interrupted');value.state.lastTurnStatus='interrupted';value.state.queuePaused=!!value.state.queue?.length;if(!value.stopping)this.append(value,'error',String(error));value.state.error=String(error);}).finally(()=>{
+      this.cancelPermissions(value);value.state.turnId=null;if(this.live.get(id)===value&&!value.stopping){value.state.phase=value.state.error?'error':'ready';this.publish(value);this.drain(value);}
     });
     return {turnId:requestId,state:'running',duplicate:false};
   }
-  cancel(id:string){const value=this.require(id);if(!value.state.turnId)return {cancelled:false};value.cancelled=true;this.cancelPermissions(value);value.transport!.notify('session/cancel',{sessionId:value.state.nativeSessionId});value.state.phase='running';this.publish(value);return {cancelled:true,turnId:value.state.turnId};}
+  cancel(id:string){const value=this.require(id);if(!value.state.turnId)return {cancelled:false};value.cancelled=true;value.state.queuePaused=!!value.state.queue?.length;this.cancelPermissions(value);value.transport!.notify('session/cancel',{sessionId:value.state.nativeSessionId});value.state.phase='running';this.publish(value);return {cancelled:true,turnId:value.state.turnId};}
   permission(id:string,permissionId:string,optionId:string|null){
     const value=this.require(id),pending=value.permissions.get(permissionId);if(!pending)throw new Error('授权请求已结束或不属于此会话');
     if(optionId!==null&&!pending.value.options.some(item=>item.optionId===optionId))throw new Error('无效的授权选项');
@@ -201,6 +345,12 @@ export class AcpSessions {
     const kind=update.sessionUpdate;
     // session/load may replay tools and plans as well as message chunks.
     // Keep our durable journal once; still accept current configuration state.
+    if(value.state.phase==='connecting'&&value.importing&&['agent_message_chunk','user_message_chunk','agent_thought_chunk'].includes(kind)){
+      if(params.sessionId===value.state.nativeSessionId&&update.content?.type==='text'&&value.importing.events.length<5000){
+        value.importing.events.push({kind:kind==='user_message_chunk'?'user':kind==='agent_thought_chunk'?'thought':'assistant',text:String(update.content.text??'').slice(0,8192)});
+      }
+      return;
+    }
     if(value.state.phase==='connecting'&&['agent_message_chunk','agent_thought_chunk','user_message_chunk','tool_call','tool_call_update','plan'].includes(kind))return;
     if(['agent_message_chunk','agent_thought_chunk','user_message_chunk'].includes(kind)){
       // loadSession may replay the remote transcript. Our journal is already
@@ -219,6 +369,13 @@ export class AcpSessions {
       this.append(value,'tool',String(data.title??data.status??'工具执行'),data,owner);
     }
     else if(kind==='plan')this.append(value,'plan','执行计划',bounded(update));
+    else if(kind==='usage_update'){
+      const {used,size,cost}=update;
+      if(typeof used==='number'&&Number.isFinite(used)&&used>=0&&typeof size==='number'&&Number.isFinite(size)&&size>0){
+        value.state.usage={used,size,...(typeof cost?.amount==='number'&&Number.isFinite(cost.amount)&&cost.amount>=0&&/^[A-Z]{3}$/.test(cost.currency)?{cost:{amount:cost.amount,currency:cost.currency}}:{})};
+        this.publish(value);
+      }
+    }
     else if(kind==='config_option_update'){value.state.configOptions=Array.isArray(update.configOptions)?update.configOptions:[];this.publish(value);}
     else if(kind==='current_mode_update'&&value.state.modes){value.state.modes.currentModeId=String(update.currentModeId);this.publish(value);}
     else if(kind==='available_commands_update'){value.state.availableCommands=Array.isArray(update.availableCommands)?update.availableCommands.filter((item:any)=>item&&typeof item.name==='string'&&typeof item.description==='string').slice(0,100):[];this.publish(value);}
@@ -235,7 +392,7 @@ export class AcpSessions {
       const failed=results.find(result=>result.status==='rejected');
       if(failed?.status==='rejected')throw failed.reason;
       await Promise.allSettled([value.serial]);
-      value.state.phase=error?'error':'disconnected';value.state.error=error?.message;value.state.turnId=null;
+      value.state.phase=error?'error':'disconnected';value.state.queuePaused=!!value.state.queue?.length;value.state.error=error?.message;value.state.turnId=null;
       if(this.live.get(value.session.id)===value)this.live.delete(value.session.id);this.publish(value);this.store.finish(value.run.id,error?'failed':'exited',null,error?.message??null,'',0,100,30);this.changed();
     })();
     value.ending=ending.catch(failure=>{value.ending=undefined;value.stopping=false;value.state.phase='error';value.state.error='ACP 进程清理未完成，请重试停止：'+String(failure);this.publish(value);throw failure;});return value.ending;

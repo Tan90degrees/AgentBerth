@@ -625,6 +625,16 @@ ipcMain.handle('berth:restart', async event => {
   catch (error) { if (!connection?.connected) { connection = null; emit({ event: 'connection', data: { connected: false, error: String(error) } }); } throw error; }
 });
 
+ipcMain.handle('berth:saveAcpMarkdown',async(event,title:unknown,markdown:unknown)=>{
+  trusted(event);
+  if(event.sender!==window?.webContents||typeof title!=='string'||title.length>100||typeof markdown!=='string'||Buffer.byteLength(markdown)>160*1024*1024)throw new Error('ACP 导出请求无效或内容过大');
+  const name=title.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'')||'ACP';
+  const result=await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender)!,{title:'导出 ACP 会话',defaultPath:name+'.md',filters:[{name:'Markdown',extensions:['md']}]});
+  if(result.canceled||!result.filePath)return null;
+  const {writeFile}=await import('node:fs/promises');
+  await writeFile(result.filePath,markdown,{mode:0o600});
+  return result.filePath;
+});
 ipcMain.handle('berth:exportPluginKit', async event => {
   trusted(event);
   const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { title: '选择插件开发目录的保存位置', properties: ['openDirectory', 'createDirectory'] });

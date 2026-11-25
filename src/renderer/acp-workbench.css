@@ -1,0 +1,23 @@
+.acp-input-stack{min-width:0}
+.acp-attachment-list,.acp-review-tabs,.acp-history-filters,.acp-registry-actions{display:flex;gap:.45rem;flex-wrap:wrap;align-items:center}
+.acp-attachment-list button{max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acp-command-menu{max-height:15rem;overflow:auto}
+.acp-command-menu>input{width:100%}
+.acp-queue{margin:.35rem .75rem;max-height:10rem;overflow:auto}
+.acp-queue-item{display:flex;gap:.4rem;align-items:center;padding:.25rem 0}
+.acp-queue-item span,.acp-queue-item input{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acp-permission-detail{width:100%;overflow-wrap:anywhere}
+.acp-permission-detail code{display:block}
+.acp-permission-detail pre{white-space:pre-wrap;max-height:8rem;overflow:auto}
+.acp-review-files,.acp-review-lines{display:grid;gap:.22rem;overflow:auto;max-height:13rem;margin:.4rem 0}
+.acp-review-lines{max-height:20rem}
+.acp-review-lines button,.acp-review-files button{text-align:left;min-width:0}
+.acp-review-lines button{white-space:pre-wrap;overflow-wrap:anywhere}
+.acp-review-tabs button[aria-pressed=true],.acp-review-files button[aria-pressed=true],.acp-review-lines button[aria-pressed=true]{outline:2px solid var(--accent);outline-offset:-2px}
+.acp-history-list,.acp-registry-list{display:grid;gap:.5rem;max-height:55vh;overflow:auto;padding:0;list-style:none}
+.acp-history-list li,.acp-registry-list li{min-width:0;overflow-wrap:anywhere}
+.acp-history-list header,.acp-registry-list header{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center}
+.acp-history-list header strong,.acp-registry-list header strong{flex:1}
+.acp-history-list small,.acp-registry-list small{display:block}
+.acp-registry-list p{margin:.3rem 0}
+.acp-capabilities{display:flex;flex-wrap:wrap;gap:.3rem}

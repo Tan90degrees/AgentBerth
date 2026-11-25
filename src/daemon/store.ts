@@ -1,3 +1,4 @@
+import { acpMcpServersSchema, type AcpMcpServer } from '../shared/acp-workbench';
 import { sshConnectionSchema, type SshConnectionConfig, type SshConnection } from '../shared/protocol';
 import { release } from 'node:os';
 import { windowsPtyFor } from '../shared/desktop';
@@ -99,6 +100,7 @@ export class Store {
     this.db.exec('PRAGMA user_version = 9');
     this.db.exec(`CREATE TABLE IF NOT EXISTS acp_sessions(sessionId TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS acp_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS acp_mcp_overrides(agentId TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS acp_events_session ON acp_events(sessionId,sequence);
       CREATE TABLE IF NOT EXISTS acp_turns(id TEXT PRIMARY KEY,sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,state TEXT NOT NULL);
       UPDATE acp_turns SET state='interrupted' WHERE state='running';`);
@@ -408,6 +410,14 @@ export class Store {
   agents(): AgentDefinition[] {
     return this.db.prepare('SELECT id, value FROM agents ORDER BY rowid').all().map(row => ({ id: String(row.id), ...agentDefinitionSchema.parse(JSON.parse(String(row.value))) }));
   }
+  acpMcpServers(agentId:string):AcpMcpServer[]{
+    const agent=this.agent(agentId);
+    const row=this.db.prepare('SELECT value FROM acp_mcp_overrides WHERE agentId=?').get(agentId);
+    return row?acpMcpServersSchema.parse(JSON.parse(String(row.value))):agent.acp?.mcpServers??[];
+  }
+  saveAcpMcpServers(agentId:string,servers:AcpMcpServer[]):void{
+    this.db.prepare('INSERT INTO acp_mcp_overrides VALUES (?,?) ON CONFLICT(agentId) DO UPDATE SET value=excluded.value').run(agentId,JSON.stringify(acpMcpServersSchema.parse(servers)));
+  }
   acpState(sessionId:string):Record<string,any>{this.session(sessionId);const row=this.db.prepare('SELECT value FROM acp_sessions WHERE sessionId=?').get(sessionId);return row?JSON.parse(String(row.value)):{};}
   saveAcpState(sessionId:string,value:Record<string,unknown>):void{this.session(sessionId);this.db.prepare('INSERT INTO acp_sessions VALUES (?,?) ON CONFLICT(sessionId) DO UPDATE SET value=excluded.value').run(sessionId,JSON.stringify(value));}
   appendAcp(sessionId:string,turnId:string|null,kind:AcpEvent['kind'],text:string,data?:Record<string,unknown>):AcpEvent{
@@ -415,6 +425,19 @@ export class Store {
     const result=this.db.prepare('INSERT INTO acp_events(id,sessionId,value) VALUES (?,?,?)').run(value.id,sessionId,JSON.stringify(value));
     this.db.prepare('DELETE FROM acp_events WHERE sessionId=? AND sequence < COALESCE((SELECT sequence FROM acp_events WHERE sessionId=? ORDER BY sequence DESC LIMIT 1 OFFSET 4999),0)').run(sessionId,sessionId);
     return {...value,sequence:Number(result.lastInsertRowid)};
+  }
+  importAcpEvents(sessionId:string,events:Pick<AcpEvent,'kind'|'text'|'data'>[]):AcpEvent[]{
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const saved=this.acpState(sessionId);
+      const imported=saved.importPending?events.map(event=>this.appendAcp(sessionId,null,event.kind,event.text,event.data)):[];
+      this.saveAcpState(sessionId,{...saved,importPending:false});
+      this.db.exec('COMMIT');
+      return imported;
+    }catch(error){
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   acpEvents(sessionId:string,{before,after,limit=100}:{before?:number;after?:number;limit?:number}={}):{events:AcpEvent[];before:number|null;hasMore:boolean}{
     this.session(sessionId);const rows=this.db.prepare(`SELECT sequence,value FROM acp_events WHERE sessionId=? AND sequence ${after!==undefined?'>':'<'} ? ORDER BY sequence ${after!==undefined?'ASC':'DESC'} LIMIT ?`).all(sessionId,after??before??Number.MAX_SAFE_INTEGER,limit+1);
@@ -441,6 +464,7 @@ export class Store {
     if (this.settings().defaultAgent === id) throw new Error('请先更换默认 Agent，再删除此类型');
     if (this.db.prepare('SELECT id FROM sessions WHERE agent = ? LIMIT 1').get(id)) throw new Error('此类型仍被会话使用，请先修改或删除这些会话');
     this.db.prepare('DELETE FROM native_histories WHERE agent = ?').run(id);
+    this.db.prepare('DELETE FROM acp_mcp_overrides WHERE agentId = ?').run(id);
     this.db.prepare('DELETE FROM agents WHERE id = ?').run(id);
   }
   private sessionCommand(agent: Agent, command: string,service=false,remote?:RemoteConfig|null): string {

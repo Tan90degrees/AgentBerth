@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { acpMcpServersSchema, type AcpMessage, type AcpUsage } from './acp-workbench';
 
 const line=z.string().max(4096).refine(value=>!/[\r\n\x00]/.test(value),'须为单行文本');
 export const ACP_STARTUP_TIMEOUT_MS=180000;
@@ -7,6 +8,9 @@ export const acpConfigSchema=z.object({
   executable:line.refine(value=>!!value.trim(),'请填写 ACP 启动程序'),
   startupTimeoutMs:z.number().int().min(5000).max(ACP_MAX_STARTUP_TIMEOUT_MS).optional(),
   args:z.array(line).max(64).default([]),
+  mcpServers:acpMcpServersSchema.optional(),
+  registryId:z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
+  registryVersion:z.string().max(80).optional(),
   env:z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),line).default({}),
 }).strict();
 export type AcpConfig=z.infer<typeof acpConfigSchema>;
@@ -19,6 +23,7 @@ export interface AcpSnapshot {
   configOptions?:AcpOption[];modes?:{currentModeId:string;availableModes:{id:string;name:string;description?:string}[]};
   authMethods?:{id:string;name:string;description?:string}[];permissions:AcpPermission[];elicitations?:import('./acp-elicitation').AcpElicitation[];
   availableCommands?:{name:string;description:string;input?:{hint:string}}[];
+  usage?:AcpUsage; queue?:AcpMessage[]; queuePaused?:boolean;
   lastTurnStatus?:'completed'|'cancelled'|'interrupted';
   events:AcpEvent[];before:number|null;hasMore:boolean;
 }
