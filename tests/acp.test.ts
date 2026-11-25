@@ -35,6 +35,15 @@ test('ACP sends once, streams structured output, switches models and restores th
   const log=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(log.filter(item=>item.method==='prompt').length,2);assert.equal(log.filter(item=>item.method==='load').length,1);
 });
 
+test('ACP combined Unicode text and excerpts fail validation before exceeding the RPC frame',async()=>{
+  const {requestSchema}=await import('../src/shared/protocol');
+  const raw={id:randomUUID(),method:'acpSubmit',params:{sessionId:randomUUID(),message:{requestId:randomUUID(),text:'中'.repeat(40000),attachments:[] as {type:string;path:string;text:string}[]}}};
+  assert.equal(requestSchema.safeParse(raw).success,true);
+  raw.params.message.attachments.push({type:'file',path:'材料.md',text:'文'.repeat(4000)});
+  const rejected=requestSchema.safeParse(raw);
+  assert.equal(rejected.success,false);
+  assert.match(String(rejected.error),/消息与引用片段合计过长/);
+});
 test('ACP workbench sends scoped files and images, forwards supported MCP and records usage',async t=>{
   const f=await fixture(t,['--workbench']);
   await writeFile(path.join(f.root,'上下文.txt'),'example');

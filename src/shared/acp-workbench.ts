@@ -15,7 +15,9 @@ export const acpMessageSchema = z.object({
   requestId: uuid,
   text: z.string().trim().max(40000),
   attachments: z.array(acpAttachmentSchema).max(8).optional(),
-}).strict().refine(value => !!value.text || !!value.attachments?.length, '请填写消息或添加附件');
+}).strict().refine(value => !!value.text || !!value.attachments?.length, '请填写消息或添加附件')
+  // Validate the encoded size before Electron forwards it to the daemon.
+  .refine(value => new TextEncoder().encode(JSON.stringify(value)).length <= 124 * 1024, '消息与引用片段合计过长，请减少片段或分条发送');
 export type AcpMessage = z.infer<typeof acpMessageSchema>;
 
 export const acpImageTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
