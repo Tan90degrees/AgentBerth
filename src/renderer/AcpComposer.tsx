@@ -57,7 +57,8 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
   const running=snapshot?.phase==='running'||snapshot?.phase==='permission';
   const supportsImages=enhanced&&imagesLoaded&&acpCapability(snapshot?.capabilities,'promptCapabilities','image');
   const attachmentCount=draft.files.length+images.length;
-  const canSend=ready&&(!enhanced||imagesLoaded)&&!pending&&!!(draft.text.trim()||attachmentCount)&&(snapshot?.phase==='ready'||enhanced&&running);
+  const canEdit=ready&&(!enhanced||imagesLoaded)&&!pending&&snapshot?.phase!=='disconnected'&&snapshot?.phase!=='error';
+  const canSend=canEdit&&!!(draft.text.trim()||attachmentCount)&&(snapshot?.phase==='ready'||enhanced&&running);
   useEffect(()=>{
     let current=true;
     void readImages(session.id).then(result=>{if(current)setImages(result);}).catch(()=>{}).finally(()=>{if(current)setImagesLoaded(true);});
@@ -167,7 +168,7 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
         {draft.files.map((file,index)=><button type="button" key={index} title={file.path} disabled={pending} aria-label={'移除文件 '+file.path} onClick={()=>setDraft(previous=>({...previous,requestId:undefined,files:previous.files.filter((_,i)=>i!==index)}))}>{file.path}{file.text?' · 片段':''} ×</button>)}
         {images.map(image=><button type="button" key={image.id} disabled={pending} aria-label={'移除图片 '+image.file.name} onClick={()=>{setImages(previous=>previous.filter(item=>item!==image));setDraft(previous=>({...previous,requestId:undefined}));}}>{image.file.name||'剪贴板图片'} ×</button>)}
       </div>}
-      <textarea ref={input} aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={draft.text} maxLength={40000} disabled={pending} onPaste={event=>{const files=[...event.clipboardData.files];if(supportsImages&&files.length){event.preventDefault();addImages(files);}}} onChange={event=>{
+      <textarea ref={input} aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={draft.text} maxLength={40000} disabled={!canEdit} onPaste={event=>{const files=[...event.clipboardData.files];if(supportsImages&&files.length){event.preventDefault();addImages(files);}}} onChange={event=>{
         const text=event.target.value;editText(text);
         const mention=enhanced?/(?:^|\s)@([^\s@]*)$/.exec(text):null;
         if(mention){setPicker(true);setQuery(mention[1]);}else if(picker)setPicker(false);

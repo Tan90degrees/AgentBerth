@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import {once} from 'node:events';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,readFile,rm,writeFile,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,realpath,rm,writeFile,symlink} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -100,7 +100,9 @@ test('ACP history archives safely and imports native sessions only from the sele
   const outsideLocalJournal=await transport.call('session/new',{cwd:f.root,mcpServers:[]});
   await transport.stop();
   const native=await f.connection.rpc<any>('acpNativeHistory',scope);
-  assert.equal(native.sessions.length,2);assert.ok(native.sessions.every((item:any)=>item.cwd===f.root));
+  assert.equal(native.sessions.length,2);
+  const canonical=await realpath(f.root);
+  assert.ok(native.sessions.every((item:any)=>path.relative(canonical,item.cwd)===''));
   await assert.rejects(f.connection.rpc('acpNativeHistory',{...scope,nativeId:'unrelated'}),/先刷新/);
   const imported=await f.connection.rpc<{imported:string}>('acpNativeHistory',{...scope,nativeId:outsideLocalJournal.sessionId});
   await f.connection.rpc('start',{sessionId:imported.imported,resume:true,cols:100,rows:30});

@@ -11,6 +11,7 @@ import { acpCapability, type AcpHistoryEntry, type AcpMessage, type AcpNativeSes
 import { AcpAttachments } from './acp-attachments';
 import type { z } from 'zod';
 import path from 'node:path';
+import { realpath } from 'node:fs/promises';
 import {validateElicitationPatterns} from './elicitation-patterns';
 
 type Metadata=Omit<AcpSnapshot,'events'|'before'|'hasMore'>;
@@ -182,11 +183,20 @@ export class AcpSessions {
       const capabilities=bounded(info.agentCapabilities)??{};
       if(info.protocolVersion!==1||!acpCapability(capabilities,'sessionCapabilities','list'))throw new Error('此 Agent 未声明列出原生会话的能力');
       const result=await transport.call('session/list',{cwd,...(cursor?{cursor}:{})});
-      const normalize=(value:string)=>process.platform==='win32'?path.resolve(value).toLowerCase():path.resolve(value);
-      const sessions:AcpNativeSession[]=Array.isArray(result.sessions)?result.sessions.slice(0,100).flatMap((entry:any)=>{
-        if(typeof entry?.sessionId!=='string'||!entry.sessionId||entry.sessionId.length>500||typeof entry.cwd!=='string'||!path.isAbsolute(entry.cwd)||normalize(entry.cwd)!==normalize(cwd))return [];
-        return [{sessionId:entry.sessionId,cwd,title:String(entry.title||entry.sessionId).slice(0,100),updatedAt:typeof entry.updatedAt==='string'?entry.updatedAt.slice(0,80):undefined}];
-      }):[];
+      const canonical=await realpath(cwd);
+      const samePath=(left:string,right:string)=>path.relative(left,right)==='';
+      const candidates=Array.isArray(result.sessions)?result.sessions.slice(0,100):[];
+      const sessions=(await Promise.all(candidates.map(async(entry:any):Promise<AcpNativeSession|null>=>{
+        if(typeof entry?.sessionId!=='string'||!entry.sessionId||entry.sessionId.length>500||typeof entry.cwd!=='string'||!path.isAbsolute(entry.cwd))return null;
+        if(!samePath(entry.cwd,cwd)&&!samePath(entry.cwd,canonical)){
+          // Windows short names and junctions may identify the same directory.
+          // A reported path on another volume or network share is never opened.
+          if(process.platform==='win32'&&!samePath(path.parse(entry.cwd).root,path.parse(canonical).root))return null;
+          const resolved=await realpath(entry.cwd).catch(()=>null);
+          if(!resolved||!samePath(resolved,canonical))return null;
+        }
+        return {sessionId:entry.sessionId,cwd:canonical,title:String(entry.title||entry.sessionId).slice(0,100),updatedAt:typeof entry.updatedAt==='string'?entry.updatedAt.slice(0,80):undefined};
+      }))).filter((entry):entry is AcpNativeSession=>entry!==null);
       const known=cursor&&cached&&cached.expires>Date.now()?cached.sessions:new Map<string,AcpNativeSession>();
       for(const session of sessions)if(known.size<2000)known.set(session.sessionId,session);
       if(this.nativeLists.size>=24)this.nativeLists.delete(this.nativeLists.keys().next().value!);
