@@ -429,9 +429,9 @@ export function App({sshWindow=false}: {sshWindow?: boolean}) {
     const value = menuProject, target = { projectId: value.id }, hasRunning = state.sessions.some(item => item.projectId === value.id && active(item));
     menuItems.push(
       { label: '新建会话', disabled: manageDisabled, action: () => { newSession(value.id); opener.current = treeMenu!.opener; } },
-      { label: '新建 ACP 对话', disabled: manageDisabled, action: () => { newAcpSession(value.id); opener.current = treeMenu!.opener; } },
       { label: '重命名项目', disabled: manageDisabled, action: () => menuModal('renameProject', target, { value: value.name }) },
       { label: '编辑项目', disabled: manageDisabled, action: () => { editProject(value); opener.current = treeMenu!.opener; } },
+      { label: '新建 ACP 对话', disabled: manageDisabled, action: () => { newAcpSession(value.id); opener.current = treeMenu!.opener; } },
       { label: '在文件管理器中打开', separator: true, action: () => openProjectFolder(value) },
       { label: 'Git 管理', disabled: !connected || state.apiVersion < 12, action: () => { openGit(value); } },
       { label: '复制项目路径', action: () => void copyText(value.path, '项目路径') },
