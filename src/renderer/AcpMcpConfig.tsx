@@ -14,7 +14,7 @@ export function AcpMcpConfig({agent,onClose,opener}:{agent:AgentDefinition;onClo
     }).catch(error=>{if(alive)setError(String(error));});
     return ()=>{alive=false;};
   },[agent.id]);
-  return <Dialog title={agent.name+' · MCP'} onClose={onClose} returnFocus={opener} error={error} busy={saving} dirty={initial!==undefined&&value!==initial}>
+  return <Dialog variant="acp" title={agent.name+' · MCP'} onClose={onClose} returnFocus={opener} error={error} busy={saving} dirty={initial!==undefined&&value!==initial}>
     <label>转发给普通 ACP 对话的服务<textarea aria-label="MCP 服务 JSON" rows={10} spellCheck={false} disabled={initial===undefined||saving} value={value} onChange={event=>setValue(event.target.value)}/></label>
     <div className="acp-registry-actions">{(['stdio','http','sse'] as const).map(type=><button key={type} type="button" disabled={initial===undefined||saving} onClick={()=>{
       try{

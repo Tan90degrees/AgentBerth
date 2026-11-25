@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { AcpSnapshot } from '../shared/acp';
-import type { Method, ProjectFile, Session } from '../shared/protocol';
+import type { Method, ProjectFile, ProjectFilePage, Session } from '../shared/protocol';
 import { ACP_IMAGE_LIMIT, acpCapability, acpImageTypes, type AcpAttachment, type AcpMessage } from '../shared/acp-workbench';
+import { AcpEmpty, AcpIcon } from './AcpUi';
 import { AsyncButton } from './AsyncButton';
 
 type FileAttachment = Extract<AcpAttachment, {type:'file'}>;
@@ -51,8 +52,12 @@ export function attachToAcp(sessionId:string, attachment:FileAttachment) {
 
 export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call}:{session:Session;snapshot:AcpSnapshot|null;ready:boolean;enhanced:boolean;onError:(value:string)=>void;onSent:()=>void;call:(method:Method,params?:Record<string,unknown>)=>Promise<unknown>}){
   const [draft,setDraft]=useState(()=>loadDraft(session.id)),[images,setImages]=useState<ImageAttachment[]>([]),[imagesLoaded,setImagesLoaded]=useState(false);
-  const [pending,setPending]=useState(false),[picker,setPicker]=useState(false),[query,setQuery]=useState(''),[matches,setMatches]=useState<ProjectFile[]>([]);
+  const [pending,setPending]=useState(false),[picker,setPicker]=useState<'mention'|'button'|null>(null),[query,setQuery]=useState(''),[matches,setMatches]=useState<ProjectFile[]>([]);
   const pendingRef=useRef(false),fileInput=useRef<HTMLInputElement>(null),input=useRef<HTMLTextAreaElement>(null),uploaded=useRef(new Set<string>());
+  const [pickState,setPickState]=useState<'loading'|'ready'|'error'>('loading'),[highlight,setHighlight]=useState(0);
+  const [queueOpen,setQueueOpen]=useState(false),[dragging,setDragging]=useState(false);
+  const form=useRef<HTMLFormElement>(null),searchInput=useRef<HTMLInputElement>(null),fileTrigger=useRef<HTMLButtonElement>(null);
+  const mentionRange=useRef<{start:number;end:number}|null>(null);
   const [editing,setEditing]=useState<AcpMessage|null>(null);
   const running=snapshot?.phase==='running'||snapshot?.phase==='permission';
   const supportsImages=enhanced&&imagesLoaded&&acpCapability(snapshot?.capabilities,'promptCapabilities','image');
@@ -75,8 +80,11 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
     }catch{/* Keep the current draft in memory when storage is full. */}
   },[session.id,draft]);
   const attach=(attachment:FileAttachment)=>{
-    setDraft(previous=>previous.files.length+images.length>=8?previous:{...previous,requestId:undefined,files:[...previous.files.filter(item=>item.path!==attachment.path||item.text!==attachment.text),attachment]});
-    input.current?.focus();
+    setDraft(previous=>{
+      if(previous.files.some(file=>file.path===attachment.path&&file.text===attachment.text)||previous.files.length+images.length>=8)return previous;
+      return {...previous,requestId:undefined,files:[...previous.files,attachment]};
+    });
+    requestAnimationFrame(()=>input.current?.focus());
   };
   useEffect(()=>{
     if(!enhanced)return;
@@ -88,16 +96,36 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
     return ()=>window.removeEventListener('berth:acp-attach',listener);
   },[session.id,enhanced,images.length]);
   useEffect(()=>{
-    if(!picker||!ready||!query.trim()){setMatches([]);return;}
+    if(!picker||!ready)return;
     let current=true;
-    setMatches([]);
+    setMatches([]);setHighlight(0);setPickState('loading');
+    const scope={projectId:session.projectId,worktreePath:session.worktreePath??null};
+    const term=query.trim();
     const timer=setTimeout(()=>{
-      void window.berth.rpc<{matches:ProjectFile[]}>('findProjectFiles',{projectId:session.projectId,worktreePath:session.worktreePath??null,query:query.trim()})
-        .then(result=>{if(current)setMatches(result.matches.filter(file=>file.kind==='file'&&!file.unavailable).slice(0,30));})
-        .catch(error=>{if(current)onError(String(error));});
-    },150);
+      const listing=term
+        ? window.berth.rpc<{matches:ProjectFile[]}>('findProjectFiles',{...scope,query:term}).then(result=>result.matches)
+        : window.berth.rpc<ProjectFilePage>('projectFiles',{...scope,limit:150}).then(result=>result.entries.filter(file=>!file.ignored));
+      void listing.then(files=>{
+        if(!current)return;
+        setMatches(files.filter(file=>file.kind==='file'&&!file.unavailable).slice(0,30));setPickState('ready');
+      }).catch(()=>{if(current)setPickState('error');});
+    },term?150:0);
     return ()=>{current=false;clearTimeout(timer);};
   },[query,picker,ready,session.projectId,session.worktreePath]);
+  useEffect(()=>{
+    if(picker==='button')searchInput.current?.focus();
+    if(!picker)return;
+    const outside=(event:PointerEvent)=>{if(!form.current?.contains(event.target as Node))closePicker();};
+    document.addEventListener('pointerdown',outside);
+    return ()=>document.removeEventListener('pointerdown',outside);
+  },[picker]);
+  useEffect(()=>{if(snapshot?.queuePaused)setQueueOpen(true);},[snapshot?.queuePaused]);
+  useEffect(()=>{
+    form.current?.querySelector('.acp-picker-row[data-current="true"]')?.scrollIntoView({block:'nearest'});
+  },[highlight]);
+  function closePicker(){
+    setPicker(null);setQuery('');setMatches([]);mentionRange.current=null;
+  }
   const editText=(text:string)=>setDraft(value=>({...value,text,requestId:undefined}));
   const addImages=(files:Iterable<File>)=>{
     if(!supportsImages)return;
@@ -111,7 +139,7 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
   };
   async function send(){
     if(pendingRef.current||!(draft.text.trim()||attachmentCount))return;
-    if(picker&&matches.length){choose(matches[0].path);return;}
+    if(picker)return;
     if(!canSend){
       onError(!ready||snapshot?.phase==='connecting'?'Agent 尚未就绪，草稿已保留':'当前会话无法发送，草稿已保留');
       return;
@@ -147,37 +175,89 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
     finally{pendingRef.current=false;setPending(false);}
   }
   function choose(path:string){
-    const next=draft.text.replace(/(^|\s)@[^\s@]*$/,'$1');
-    setDraft(previous=>({...previous,text:next,requestId:undefined}));
-    attach({type:'file',path});setPicker(false);setQuery('');
+    const range=mentionRange.current;
+    if(attachmentCount>=8&&!draft.files.some(file=>file.path===path&&!file.text)){onError('一条消息最多添加 8 个附件');return;}
+    if(picker==='mention'&&range){
+      setDraft(previous=>{
+        const before=previous.text.slice(0,range.start),after=previous.text.slice(range.end);
+        return {...previous,text:before+(before.endsWith(' ')&&after.startsWith(' ')?after.slice(1):after),requestId:undefined};
+      });
+      requestAnimationFrame(()=>input.current?.setSelectionRange(range.start,range.start));
+    }
+    attach({type:'file',path});closePicker();
   }
+  const commands=(!picker&&draft.text.startsWith('/')&&!/\s/.test(draft.text)?snapshot?.availableCommands??[]:[])
+    .filter(command=>('/'+command.name).startsWith(draft.text)).slice(0,8);
+  const selectCommand=(name:string)=>{editText('/'+name+' ');input.current?.focus();};
   const queue=snapshot?.queue??[];
+  const pickerKey=(event:KeyboardEvent)=>{
+    if(event.nativeEvent.isComposing)return false;
+    const count=picker?matches.length:commands.length;
+    if(event.key==='Escape'&&picker){
+      event.preventDefault();
+      if(picker==='button')fileTrigger.current?.focus();else input.current?.focus();
+      closePicker();return true;
+    }
+    if((picker||count)&&['ArrowDown','ArrowUp','Enter'].includes(event.key)&&!event.shiftKey){
+      event.preventDefault();
+      if(!count)return true;
+      if(event.key==='ArrowDown'||event.key==='ArrowUp')setHighlight(position=>(Math.min(position,count-1)+(event.key==='ArrowDown'?1:count-1))%count);
+      else if(picker)choose(matches[Math.min(highlight,count-1)].path);
+      else selectCommand(commands[Math.min(highlight,count-1)].name);
+      return true;
+    }
+    return false;
+  };
+  const pickerId='acp-picker-'+session.id;
   return <div className="acp-input-stack">
-    {!!queue.length&&<details className="acp-queue" open={snapshot?.queuePaused||undefined}>
-      <summary>{snapshot?.queuePaused?'队列已暂停':'待发送'} · {queue.length}</summary>
-      {queue.map(item=><div className="acp-queue-item" key={item.requestId}>
-        {editing?.requestId===item.requestId?<><input aria-label="编辑排队消息" maxLength={40000} value={editing.text} onChange={event=>setEditing({...editing,text:event.target.value})}/><AsyncButton onError={onError} onAction={async()=>{await call('acpQueue',{action:'edit',requestId:item.requestId,text:editing.text});setEditing(null);}}>保存</AsyncButton><button onClick={()=>setEditing(null)}>取消</button></>
-          :<><span title={item.text}>{item.text||'附件'}{item.attachments?.length? ` · ${item.attachments.length} 个附件`:''}</span><button disabled={!ready} onClick={()=>setEditing(item)}>编辑</button><AsyncButton disabled={!ready} onError={onError} onAction={()=>call('acpQueue',{action:'remove',requestId:item.requestId})}>撤回</AsyncButton></>}
-      </div>)}
-      {snapshot?.queuePaused&&<AsyncButton disabled={!ready||snapshot.phase!=='ready'} onError={onError} onAction={()=>call('acpQueue',{action:'resume'})}>继续发送队列</AsyncButton>}
-    </details>}
-    <form className="acp-composer" onSubmit={event=>{event.preventDefault();void send();}} onDragOver={event=>{if(supportsImages)event.preventDefault();}} onDrop={event=>{if(supportsImages&&event.dataTransfer.files.length){event.preventDefault();addImages(event.dataTransfer.files);}}}>
-      {picker&&<div className="acp-command-menu"><input aria-label="搜索要引用的工作区文件" value={query} onChange={event=>setQuery(event.target.value)} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setPicker(false);input.current?.focus();}if(event.key==='Enter'&&!event.nativeEvent.isComposing){event.preventDefault();if(matches[0])choose(matches[0].path);}}}/>{matches.map(file=><button type="button" key={file.path} onClick={()=>choose(file.path)}><strong>{file.name}</strong><span>{file.path}</span></button>)}</div>}
-      {!picker&&draft.text.startsWith('/')&&!draft.text.includes(' ')&&!!snapshot?.availableCommands?.length&&<div className="acp-command-menu" aria-label="Agent 命令">{snapshot.availableCommands.filter(command=>('/'+command.name).startsWith(draft.text)).slice(0,8).map(command=><button type="button" key={command.name} onClick={()=>{editText('/'+command.name+' ');input.current?.focus();}}><strong>/{command.name}</strong><span>{command.description}</span></button>)}</div>}
-      {!!attachmentCount&&<div className="acp-attachment-list" aria-label="消息附件">
-        {draft.files.map((file,index)=><button type="button" key={index} title={file.path} disabled={pending} aria-label={'移除文件 '+file.path} onClick={()=>setDraft(previous=>({...previous,requestId:undefined,files:previous.files.filter((_,i)=>i!==index)}))}>{file.path}{file.text?' · 片段':''} ×</button>)}
-        {images.map(image=><button type="button" key={image.id} disabled={pending} aria-label={'移除图片 '+image.file.name} onClick={()=>{setImages(previous=>previous.filter(item=>item!==image));setDraft(previous=>({...previous,requestId:undefined}));}}>{image.file.name||'剪贴板图片'} ×</button>)}
+    {!!queue.length&&<section className="acp-queue" data-open={queueOpen} aria-label="待发送消息">
+      <button className="acp-queue-toggle" type="button" aria-expanded={queueOpen} aria-controls={'acp-queue-'+session.id} onClick={()=>setQueueOpen(!queueOpen)}>
+        <AcpIcon name="history"/><strong>{snapshot?.queuePaused?'队列已暂停':'待发送'}</strong><span>{queue.length}</span><AcpIcon name="chevron"/>
+      </button>
+      <div className="acp-queue-reveal" id={'acp-queue-'+session.id} inert={!queueOpen}><div className="acp-queue-items">
+        {queue.map(item=><div className="acp-queue-item" key={item.requestId}>
+          {editing?.requestId===item.requestId?<><textarea aria-label="编辑排队消息" rows={2} maxLength={40000} value={editing.text} onChange={event=>setEditing({...editing,text:event.target.value})}/><AsyncButton className="subtle" onError={onError} onAction={async()=>{await call('acpQueue',{action:'edit',requestId:item.requestId,text:editing.text});setEditing(null);}}>保存</AsyncButton><button type="button" className="subtle" onClick={()=>setEditing(null)}>取消</button></>
+            :<><span title={item.text}>{item.text||'附件'}{item.attachments?.length?` · ${item.attachments.length} 个附件`:''}</span><button type="button" className="subtle" disabled={!ready} onClick={()=>setEditing(item)}>编辑</button><AsyncButton className="subtle" disabled={!ready} onError={onError} onAction={()=>call('acpQueue',{action:'remove',requestId:item.requestId})}>撤回</AsyncButton></>}
+        </div>)}
+        {snapshot?.queuePaused&&<AsyncButton className="subtle" disabled={!ready||snapshot.phase!=='ready'} onError={onError} onAction={()=>call('acpQueue',{action:'resume'})}>继续发送队列</AsyncButton>}
+      </div></div>
+    </section>}
+    <form ref={form} className="acp-composer" data-dragging={dragging||undefined} onSubmit={event=>{event.preventDefault();void send();}}
+      onDragOver={event=>{if(supportsImages&&event.dataTransfer.types.includes('Files')){event.preventDefault();setDragging(true);}}}
+      onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setDragging(false);}}
+      onDrop={event=>{setDragging(false);if(supportsImages&&event.dataTransfer.files.length){event.preventDefault();addImages(event.dataTransfer.files);}}}>
+      {picker?<div className="acp-command-menu acp-picker" id={pickerId} aria-label="工作区文件" data-acp-motion>
+        <label className="acp-picker-search"><AcpIcon name="search"/><input ref={searchInput} aria-label="搜索要引用的工作区文件" placeholder="搜索工作区文件" value={query} onChange={event=>{setQuery(event.target.value);setHighlight(0);}} onKeyDown={pickerKey}/></label>
+        <div className="acp-picker-results">
+          {matches.map((file,index)=><button className="acp-picker-row" data-current={highlight===index} type="button" key={file.path} onMouseMove={()=>setHighlight(index)} onClick={()=>choose(file.path)}><AcpIcon name="file"/><span><strong>{file.name}</strong>{file.path!==file.name&&<small>{file.path}</small>}</span></button>)}
+          {!matches.length&&<AcpEmpty icon="file" busy={pickState==='loading'}>{pickState==='loading'?'正在读取文件…':pickState==='error'?'读取工作区失败':query.trim()?'没有匹配的文件':'根目录没有可引用的文件'}</AcpEmpty>}
+        </div>
+      </div>:!!commands.length&&<div className="acp-command-menu acp-picker" aria-label="Agent 命令" data-acp-motion>
+        <div className="acp-picker-results">{commands.map((command,index)=><button className="acp-picker-row" data-current={highlight===index} type="button" key={command.name} onMouseMove={()=>setHighlight(index)} onClick={()=>selectCommand(command.name)}><AcpIcon name="terminal"/><span><strong>/{command.name}</strong><small>{command.description}</small></span></button>)}</div>
       </div>}
-      <textarea ref={input} aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={draft.text} maxLength={40000} disabled={!canEdit} onPaste={event=>{const files=[...event.clipboardData.files];if(supportsImages&&files.length){event.preventDefault();addImages(files);}}} onChange={event=>{
-        const text=event.target.value;editText(text);
-        const mention=enhanced?/(?:^|\s)@([^\s@]*)$/.exec(text):null;
-        if(mention){setPicker(true);setQuery(mention[1]);}else if(picker)setPicker(false);
-      }} onKeyDown={event=>{if(event.key==='Escape'&&picker){event.preventDefault();setPicker(false);}else if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();void send();}}}/>
+      {!!attachmentCount&&<div className="acp-attachment-list acp-draft-attachments" aria-label="消息附件">
+        {draft.files.map((file,index)=><button type="button" key={file.path+'#'+index} title={file.path} disabled={pending} aria-label={'移除文件 '+file.path} onClick={()=>setDraft(previous=>({...previous,requestId:undefined,files:previous.files.filter((_,i)=>i!==index)}))}><AcpIcon name="file"/><span>{file.path.split(/[\\/]/).at(-1)}{file.text?' · 片段':''}</span><AcpIcon name="close"/></button>)}
+        {images.map(image=><button type="button" key={image.id} disabled={pending} aria-label={'移除图片 '+image.file.name} onClick={()=>{setImages(previous=>previous.filter(item=>item!==image));setDraft(previous=>({...previous,requestId:undefined}));}}><AcpIcon name="image"/><span>{image.file.name||'剪贴板图片'}</span><AcpIcon name="close"/></button>)}
+      </div>}
+      <textarea ref={input} aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={draft.text} maxLength={40000} disabled={!canEdit}
+        onPaste={event=>{const files=[...event.clipboardData.files];if(supportsImages&&files.length){event.preventDefault();addImages(files);}}}
+        onChange={event=>{
+          const {value,selectionStart}=event.target;editText(value);setHighlight(0);
+          const mention=enhanced?/(?:^|\s)@([^\s@]*)$/.exec(value.slice(0,selectionStart)):null;
+          if(mention){mentionRange.current={start:selectionStart-mention[1].length-1,end:selectionStart};setPicker('mention');setQuery(mention[1]);}
+          else if(picker)closePicker();
+        }} onKeyDown={event=>{
+          if(!pickerKey(event)&&event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();void send();}
+        }}/>
       <footer>
-        {enhanced&&<button type="button" className="subtle" disabled={!ready||pending} onClick={()=>{setPicker(!picker);setQuery('');}}>引用文件</button>}
-        {supportsImages&&<><button type="button" className="subtle" disabled={pending} onClick={()=>fileInput.current?.click()}>添加图片</button><input ref={fileInput} type="file" hidden multiple accept={acpImageTypes.join(',')} onChange={event=>{addImages(event.target.files??[]);event.target.value='';}}/></>}
-        {running&&<AsyncButton className="subtle" disabled={!ready} onError={onError} onAction={()=>call('acpCancel')}>停止任务</AsyncButton>}
-        <button className="primary" disabled={!canSend}>{running&&enhanced?'加入队列':'发送'}</button>
+        <div className="acp-composer-tools">
+          {enhanced&&<button ref={fileTrigger} type="button" className="subtle acp-icon-action" aria-expanded={!!picker} aria-controls={picker?pickerId:undefined} disabled={!ready||pending} onClick={()=>{if(picker){closePicker();input.current?.focus();}else{setQuery('');setPicker('button');}}}><AcpIcon name="file"/>引用文件</button>}
+          {supportsImages&&<><button type="button" className="subtle acp-icon-action" disabled={pending} onClick={()=>fileInput.current?.click()}><AcpIcon name="image"/>添加图片</button><input ref={fileInput} type="file" hidden multiple accept={acpImageTypes.join(',')} onChange={event=>{addImages(event.target.files??[]);event.target.value='';}}/></>}
+        </div>
+        <div className="acp-composer-actions">
+          {running&&<AsyncButton className="subtle acp-icon-action" disabled={!ready} onError={onError} onAction={()=>call('acpCancel')}><AcpIcon name="stop"/>停止任务</AsyncButton>}
+          <button type="submit" className="primary acp-icon-action" disabled={!canSend||!!picker}><AcpIcon name="send"/>{running&&enhanced?'加入队列':'发送'}</button>
+        </div>
       </footer>
     </form>
   </div>;
