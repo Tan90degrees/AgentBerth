@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { AcpSnapshot } from '../shared/acp';
 import type { Method, ProjectFile, ProjectFilePage, Session } from '../shared/protocol';
-import { ACP_IMAGE_LIMIT, acpCapability, acpImageTypes, type AcpAttachment, type AcpMessage } from '../shared/acp-workbench';
+import { ACP_MEDIA_LIMIT, acpCapability, acpAudioTypes, acpImageTypes, type AcpAttachment, type AcpMessage } from '../shared/acp-workbench';
 import { AcpEmpty, AcpIcon } from './AcpUi';
 import { AsyncButton } from './AsyncButton';
 
@@ -50,7 +50,7 @@ export function attachToAcp(sessionId:string, attachment:FileAttachment) {
   window.dispatchEvent(new CustomEvent('berth:acp-attach',{detail:{sessionId,attachment}}));
 }
 
-export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call}:{session:Session;snapshot:AcpSnapshot|null;ready:boolean;enhanced:boolean;onError:(value:string)=>void;onSent:()=>void;call:(method:Method,params?:Record<string,unknown>)=>Promise<unknown>}){
+export function AcpComposer({session,snapshot,ready,enhanced,richMedia,onError,onSent,call}:{session:Session;snapshot:AcpSnapshot|null;ready:boolean;enhanced:boolean;richMedia:boolean;onError:(value:string)=>void;onSent:()=>void;call:(method:Method,params?:Record<string,unknown>)=>Promise<unknown>}){
   const [draft,setDraft]=useState(()=>loadDraft(session.id)),[images,setImages]=useState<ImageAttachment[]>([]),[imagesLoaded,setImagesLoaded]=useState(false);
   const [pending,setPending]=useState(false),[picker,setPicker]=useState<'mention'|'button'|null>(null),[query,setQuery]=useState(''),[matches,setMatches]=useState<ProjectFile[]>([]);
   const pendingRef=useRef(false),fileInput=useRef<HTMLInputElement>(null),input=useRef<HTMLTextAreaElement>(null),uploaded=useRef(new Set<string>());
@@ -61,6 +61,9 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
   const [editing,setEditing]=useState<AcpMessage|null>(null);
   const running=snapshot?.phase==='running'||snapshot?.phase==='permission';
   const supportsImages=enhanced&&imagesLoaded&&acpCapability(snapshot?.capabilities,'promptCapabilities','image');
+  const supportsAudio=richMedia&&imagesLoaded&&acpCapability(snapshot?.capabilities,'promptCapabilities','audio');
+  const supportsEmbedded=richMedia&&acpCapability(snapshot?.capabilities,'promptCapabilities','embeddedContext');
+  const mediaTypes:string[]=[...(supportsImages?acpImageTypes:[]),...(supportsAudio?acpAudioTypes:[])];
   const attachmentCount=draft.files.length+images.length;
   const canEdit=ready&&(!enhanced||imagesLoaded)&&!pending&&snapshot?.phase!=='disconnected'&&snapshot?.phase!=='error';
   const canSend=canEdit&&!!(draft.text.trim()||attachmentCount)&&(snapshot?.phase==='ready'||enhanced&&running);
@@ -127,11 +130,11 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
     setPicker(null);setQuery('');setMatches([]);mentionRange.current=null;
   }
   const editText=(text:string)=>setDraft(value=>({...value,text,requestId:undefined}));
-  const addImages=(files:Iterable<File>)=>{
-    if(!supportsImages)return;
+  const addMedia=(files:Iterable<File>)=>{
+    if(!mediaTypes.length)return;
     const added:ImageAttachment[]=[];
     for(const file of files){
-      if(!acpImageTypes.some(type=>type===file.type)||file.size<=0||file.size>ACP_IMAGE_LIMIT){onError('请选择 2 MiB 以内的 PNG、JPEG、WebP 或 GIF 图片');continue;}
+      if(!mediaTypes.includes(file.type)||file.size<=0||file.size>ACP_MEDIA_LIMIT){onError('请选择 Agent 支持的、2 MiB 以内的图片或音频');continue;}
       if(attachmentCount+added.length>=8){onError('一条消息最多添加 8 个附件');break;}
       added.push({id:crypto.randomUUID(),file});
     }
@@ -151,8 +154,9 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
     const attachments:AcpAttachment[]=[...draft.files];
     try{
       if(enhanced){
-        if(images.length&&!supportsImages)throw new Error('当前 Agent 不支持草稿中的图片');
-        if(images.reduce((total,item)=>total+item.file.size,0)>4*1024*1024)throw new Error('单条消息的图片合计最多 4 MiB');
+        if(draft.files.some(file=>file.embed)&&!supportsEmbedded)throw new Error('当前 Agent 不支持内嵌文本，请改为文件引用');
+        if(images.some(item=>!mediaTypes.includes(item.file.type)))throw new Error('当前 Agent 不支持草稿中的媒体附件');
+        if(images.reduce((total,item)=>total+item.file.size,0)>4*1024*1024)throw new Error('单条消息的媒体附件合计最多 4 MiB');
         for(const image of images){
           if(!uploaded.current.has(image.id)){
             const bytes=new Uint8Array(await image.file.arrayBuffer());
@@ -163,7 +167,7 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
             }
             uploaded.current.add(image.id);
           }
-          attachments.push({type:'image',id:image.id,name:image.file.name.slice(0,200)||'剪贴板图片'});
+          attachments.push({type:image.file.type.startsWith('audio/')?'audio':'image',id:image.id,name:image.file.name.slice(0,200)||'媒体附件'});
         }
         await call('acpSubmit',{message:{requestId,text,attachments},queue:running});
       }else await call('acpSend',{requestId,text});
@@ -225,7 +229,7 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
     <form ref={form} className="acp-composer" data-dragging={dragging||undefined} onSubmit={event=>{event.preventDefault();void send();}}
       onDragOver={event=>{if(supportsImages&&event.dataTransfer.types.includes('Files')){event.preventDefault();setDragging(true);}}}
       onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setDragging(false);}}
-      onDrop={event=>{setDragging(false);if(supportsImages&&event.dataTransfer.files.length){event.preventDefault();addImages(event.dataTransfer.files);}}}>
+      onDrop={event=>{setDragging(false);if(mediaTypes.length&&event.dataTransfer.files.length){event.preventDefault();addMedia(event.dataTransfer.files);}}}>
       {picker?<div className="acp-command-menu acp-picker" id={pickerId} aria-label="工作区文件" data-acp-motion>
         <label className="acp-picker-search"><AcpIcon name="search"/><input ref={searchInput} aria-label="搜索要引用的工作区文件" placeholder="搜索工作区文件" value={query} onChange={event=>{setQuery(event.target.value);setHighlight(0);}} onKeyDown={pickerKey}/></label>
         <div className="acp-picker-results">
@@ -236,11 +240,11 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
         <div className="acp-picker-results">{commands.map((command,index)=><button className="acp-picker-row" data-current={highlight===index} type="button" key={command.name} onMouseMove={()=>setHighlight(index)} onClick={()=>selectCommand(command.name)}><AcpIcon name="terminal"/><span><strong>/{command.name}</strong><small>{command.description}</small></span></button>)}</div>
       </div>}
       {!!attachmentCount&&<div className="acp-attachment-list acp-draft-attachments" aria-label="消息附件">
-        {draft.files.map((file,index)=><button type="button" key={file.path+'#'+index} title={file.path} disabled={pending} aria-label={'移除文件 '+file.path} onClick={()=>setDraft(previous=>({...previous,requestId:undefined,files:previous.files.filter((_,i)=>i!==index)}))}><AcpIcon name="file"/><span>{file.path.split(/[\\/]/).at(-1)}{file.text?' · 片段':''}</span><AcpIcon name="close"/></button>)}
-        {images.map(image=><button type="button" key={image.id} disabled={pending} aria-label={'移除图片 '+image.file.name} onClick={()=>{setImages(previous=>previous.filter(item=>item!==image));setDraft(previous=>({...previous,requestId:undefined}));}}><AcpIcon name="image"/><span>{image.file.name||'剪贴板图片'}</span><AcpIcon name="close"/></button>)}
+        {draft.files.map((file,index)=><span className="acp-file-attachment" key={file.path+'#'+index}><button type="button" title={file.path} disabled={pending} aria-label={'移除文件 '+file.path} onClick={()=>setDraft(previous=>({...previous,requestId:undefined,files:previous.files.filter((_,i)=>i!==index)}))}><AcpIcon name="file"/><span>{file.path.split(/[\\/]/).at(-1)}{file.embed?' · 内嵌':file.text?' · 片段':''}</span><AcpIcon name="close"/></button>{supportsEmbedded&&!file.text&&<button type="button" className="subtle" aria-pressed={file.embed===true} disabled={pending} onClick={()=>setDraft(previous=>({...previous,requestId:undefined,files:previous.files.map((item,i)=>i===index?{...item,embed:item.embed?undefined:true}:item)}))}>{file.embed?'改为引用':'内嵌正文'}</button>}</span>)}
+        {images.map(image=><button type="button" key={image.id} disabled={pending} aria-label={'移除附件 '+image.file.name} onClick={()=>{setImages(previous=>previous.filter(item=>item!==image));setDraft(previous=>({...previous,requestId:undefined}));}}><AcpIcon name={image.file.type.startsWith('audio/')?'file':'image'}/><span>{image.file.name||'媒体附件'}</span><AcpIcon name="close"/></button>)}
       </div>}
       <textarea ref={input} aria-label="发送给 Agent 的消息" placeholder="描述任务…" value={draft.text} maxLength={40000} disabled={!canEdit}
-        onPaste={event=>{const files=[...event.clipboardData.files];if(supportsImages&&files.length){event.preventDefault();addImages(files);}}}
+        onPaste={event=>{const files=[...event.clipboardData.files];if(mediaTypes.length&&files.length){event.preventDefault();addMedia(files);}}}
         onChange={event=>{
           const {value,selectionStart}=event.target;editText(value);setHighlight(0);
           const mention=enhanced?/(?:^|\s)@([^\s@]*)$/.exec(value.slice(0,selectionStart)):null;
@@ -252,7 +256,7 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
       <footer>
         <div className="acp-composer-tools">
           {enhanced&&<button ref={fileTrigger} type="button" className="subtle acp-icon-action" aria-expanded={!!picker} aria-controls={picker?pickerId:undefined} disabled={!ready||pending} onClick={()=>{if(picker){closePicker();input.current?.focus();}else{setQuery('');setPicker('button');}}}><AcpIcon name="file"/>引用文件</button>}
-          {supportsImages&&<><button type="button" className="subtle acp-icon-action" disabled={pending} onClick={()=>fileInput.current?.click()}><AcpIcon name="image"/>添加图片</button><input ref={fileInput} type="file" hidden multiple accept={acpImageTypes.join(',')} onChange={event=>{addImages(event.target.files??[]);event.target.value='';}}/></>}
+          {!!mediaTypes.length&&<><button type="button" className="subtle acp-icon-action" disabled={pending} onClick={()=>fileInput.current?.click()}><AcpIcon name="image"/>{supportsImages&&supportsAudio?'添加图片 / 音频':supportsAudio?'添加音频':'添加图片'}</button><input ref={fileInput} type="file" hidden multiple accept={mediaTypes.join(',')} onChange={event=>{addMedia(event.target.files??[]);event.target.value='';}}/></>}
         </div>
         <div className="acp-composer-actions">
           {running&&<AsyncButton className="subtle acp-icon-action" disabled={!ready} onError={onError} onAction={()=>call('acpCancel')}><AcpIcon name="stop"/>停止任务</AsyncButton>}

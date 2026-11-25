@@ -9,20 +9,25 @@ export const acpConfigSchema=z.object({
   startupTimeoutMs:z.number().int().min(5000).max(ACP_MAX_STARTUP_TIMEOUT_MS).optional(),
   args:z.array(line).max(64).default([]),
   mcpServers:acpMcpServersSchema.optional(),
+  additionalDirectories:z.array(line).max(16).optional(),
+  systemPrompt:z.object({mode:z.enum(['append','override']),text:z.string().trim().min(1).max(12000)}).strict().optional(),
   registryId:z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/).optional(),
   registryVersion:z.string().max(80).optional(),
   env:z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),line).default({}),
 }).strict();
 export type AcpConfig=z.infer<typeof acpConfigSchema>;
-export interface AcpEvent {sequence:number;id:string;sessionId:string;turnId:string|null;kind:'user'|'assistant'|'thought'|'tool'|'plan'|'notice'|'error'|'permission'|'elicitation'|'turn'|'terminal';text:string;data?:Record<string,unknown>;createdAt:string}
-export interface AcpOption {id:string;name:string;type:string;category?:string;currentValue?:string;options?:{value?:string;name?:string;group?:string;options?:{value:string;name:string}[]}[]}
-export interface AcpPermission {id:string;title:string;options:{optionId:string;name:string;kind:string}[];toolCall?:Record<string,unknown>}
+export interface AcpEvent {sequence:number;id:string;sessionId:string;turnId:string|null;kind:'user'|'assistant'|'thought'|'tool'|'plan'|'notice'|'error'|'permission'|'elicitation'|'turn'|'terminal'|'subagent'|'session-message'|'compaction';text:string;data?:Record<string,unknown>;createdAt:string}
+export interface AcpOption {id:string;name:string;type:string;category?:string;currentValue?:string|boolean;options?:{value?:string;name?:string;group?:string;options?:{value:string;name:string}[]}[]}
+export interface AcpPermission {id:string;childSessionId?:string;title:string;options:{optionId:string;name:string;kind:string}[];toolCall?:Record<string,unknown>}
+export interface AcpNotice {severity:string;title:string;description?:string}
+export interface AcpSessionInfo {title?:string|null;updatedAt?:string|null}
 export interface AcpSnapshot {
   sessionId:string;nativeSessionId:string|null;phase:'disconnected'|'connecting'|'ready'|'running'|'permission'|'error';
   turnId:string|null;error?:string;agentInfo?:Record<string,unknown>;capabilities?:Record<string,unknown>;
   configOptions?:AcpOption[];modes?:{currentModeId:string;availableModes:{id:string;name:string;description?:string}[]};
-  authMethods?:{id:string;name:string;description?:string}[];permissions:AcpPermission[];elicitations?:import('./acp-elicitation').AcpElicitation[];
+  authMethods?:{id:string;name:string;description?:string;type?:'terminal';args?:string[];env?:Record<string,string>}[];authTerminalId?:string;permissions:AcpPermission[];elicitations?:import('./acp-elicitation').AcpElicitation[];
   availableCommands?:{name:string;description:string;input?:{hint:string}}[];
+  sessionInfo?:AcpSessionInfo; canLogout?:boolean; urlInteractions?:{id:string;hostname:string}[];
   usage?:AcpUsage; queue?:AcpMessage[]; queuePaused?:boolean;
   lastTurnStatus?:'completed'|'cancelled'|'interrupted';
   events:AcpEvent[];before:number|null;hasMore:boolean;

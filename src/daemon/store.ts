@@ -10,7 +10,7 @@ import type { RemoteTransfer, RemoteConfig, RemoteAction, Agent, AgentDefinition
 import { API_VERSION, DEFAULT_SETTINGS, settingsSchema, agentDefinitionSchema, isCustomAgent } from '../shared/protocol';
 import { restartPlanSchema, type RestartEntry } from './recovery';
 import type {ManagedSessions,SessionOwner} from '../shared/protocol';
-import type { AcpEvent } from '../shared/acp';
+import type { AcpEvent, AcpTerminal } from '../shared/acp';
 
 const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, nativeSessionId: null });
 
@@ -18,7 +18,7 @@ const emptyHistory = (): History => ({ messages: [], warnings: [], path: null, n
 // the form" approximation: ids, native-session links and run records survive
 // an undo. Order matters when restoring because several tables have foreign
 // keys into projects/sessions.
-const UNDO_TABLES = ['projects', 'sessions', 'runs', 'session_owners', 'native_histories', 'remote_actions', 'remote_requests', 'acp_sessions', 'acp_events', 'acp_turns'] as const;
+const UNDO_TABLES = ['projects', 'sessions', 'runs', 'session_owners', 'native_histories', 'remote_actions', 'remote_requests', 'acp_sessions', 'acp_events', 'acp_turns', 'acp_media'] as const;
 type UndoTable = typeof UNDO_TABLES[number];
 type Row = Record<string, unknown>;
 interface DeletionPayload { tables: Partial<Record<UndoTable, Row[]>>; runIds: string[] }
@@ -103,6 +103,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS acp_mcp_overrides(agentId TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS acp_events_session ON acp_events(sessionId,sequence);
       CREATE TABLE IF NOT EXISTS acp_turns(id TEXT PRIMARY KEY,sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,state TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS acp_media(sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,id TEXT NOT NULL,mimeType TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(sessionId,id));
       UPDATE acp_turns SET state='interrupted' WHERE state='running';`);
     for (const table of ['remote_actions', 'remote_requests']) for (const row of this.db.prepare(`SELECT id,value FROM ${table}`).all()) { const a = JSON.parse(String(row.value)); if (a.status === 'running') this.db.prepare(`UPDATE ${table} SET value=? WHERE id=?`).run(JSON.stringify({ ...a, status: 'unknown', endedAt: new Date().toISOString() }), row.id); }
     // A new daemon cannot reattach a PTY owned by a previous process.
@@ -298,7 +299,7 @@ export class Store {
       tables.projects = this.rows('SELECT * FROM projects WHERE id = ?', id);
       tables.native_histories = this.rows('SELECT * FROM native_histories WHERE projectId = ?', id);
     }
-    for (const table of ['remote_actions', 'remote_requests', 'acp_sessions', 'acp_events', 'acp_turns'] as UndoTable[])
+    for (const table of ['remote_actions', 'remote_requests', 'acp_sessions', 'acp_events', 'acp_turns', 'acp_media'] as UndoTable[])
       tables[table] = this.rows(`SELECT * FROM ${table} WHERE sessionId ${bySession}`, id);
     const runIds = (tables.runs ?? []).map(row => String(row.id));
     return { tables, runIds };
@@ -423,7 +424,6 @@ export class Store {
   appendAcp(sessionId:string,turnId:string|null,kind:AcpEvent['kind'],text:string,data?:Record<string,unknown>):AcpEvent{
     const value={id:randomUUID(),sessionId,turnId,kind,text:text.slice(0,8192),...(data?{data}:{}),createdAt:new Date().toISOString()};
     const result=this.db.prepare('INSERT INTO acp_events(id,sessionId,value) VALUES (?,?,?)').run(value.id,sessionId,JSON.stringify(value));
-    this.db.prepare('DELETE FROM acp_events WHERE sessionId=? AND sequence < COALESCE((SELECT sequence FROM acp_events WHERE sessionId=? ORDER BY sequence DESC LIMIT 1 OFFSET 4999),0)').run(sessionId,sessionId);
     return {...value,sequence:Number(result.lastInsertRowid)};
   }
   importAcpEvents(sessionId:string,events:Pick<AcpEvent,'kind'|'text'|'data'>[]):AcpEvent[]{
@@ -439,9 +439,25 @@ export class Store {
       throw error;
     }
   }
+  acpTerminal(sessionId:string,terminalId:string):AcpTerminal|undefined{
+    const row=this.db.prepare("SELECT value FROM acp_events WHERE sessionId=? AND json_extract(value,'$.kind')='terminal' AND json_extract(value,'$.data.terminalId')=? ORDER BY sequence DESC LIMIT 1").get(sessionId,terminalId);
+    return row?JSON.parse(String(row.value)).data:undefined;
+  }
   acpEvents(sessionId:string,{before,after,limit=100}:{before?:number;after?:number;limit?:number}={}):{events:AcpEvent[];before:number|null;hasMore:boolean}{
     this.session(sessionId);const rows=this.db.prepare(`SELECT sequence,value FROM acp_events WHERE sessionId=? AND sequence ${after!==undefined?'>':'<'} ? ORDER BY sequence ${after!==undefined?'ASC':'DESC'} LIMIT ?`).all(sessionId,after??before??Number.MAX_SAFE_INTEGER,limit+1);
     const hasMore=rows.length>limit,items=rows.slice(0,limit).map(row=>({...JSON.parse(String(row.value)),sequence:Number(row.sequence)}));if(after===undefined)items.reverse();return {events:items,before:items[0]?.sequence??null,hasMore};
+  }
+  saveAcpMedia(sessionId:string,id:string,mimeType:string,data:string):boolean{
+    if(this.db.prepare('SELECT 1 FROM acp_media WHERE sessionId=? AND id=?').get(sessionId,id))return true;
+    const reserved=Number(this.db.prepare('SELECT COALESCE(SUM(length(data)),0) AS bytes FROM acp_media WHERE sessionId=?').get(sessionId)!.bytes);
+    if(reserved+data.length>32*1024*1024)return false;
+    this.db.prepare('INSERT INTO acp_media(sessionId,id,mimeType,data) VALUES (?,?,?,?)').run(sessionId,id,mimeType,data);
+    return true;
+  }
+  acpMedia(sessionId:string,id:string,offset:number){
+    const row=this.db.prepare('SELECT mimeType,length(data) AS total,substr(data,?,65536) AS data FROM acp_media WHERE sessionId=? AND id=?').get(offset+1,sessionId,id);
+    if(!row||offset>=Number(row.total))throw new Error('附件不存在或已超出保存范围');
+    return {mimeType:String(row.mimeType),total:Number(row.total),data:String(row.data)};
   }
   acpTurn(id:string):{sessionId:string;state:string}|null{return this.db.prepare('SELECT sessionId,state FROM acp_turns WHERE id=?').get(id) as {sessionId:string;state:string}|undefined??null;}
   beginAcpTurn(sessionId:string,id:string):void{this.db.prepare('INSERT INTO acp_turns VALUES (?,?,?)').run(id,sessionId,'running');}

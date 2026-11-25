@@ -123,7 +123,7 @@ export class DaemonServer {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
     this.store = new Store(dataDirectory);
     this.copies=new IsolatedWorkspaces(dataDirectory);
-    this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
+    this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed(),this.spawnPty);
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
       builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:id==='notes-wiki'&&view==='wiki'?notesWikiView:undefined,

@@ -27,7 +27,7 @@ export const superagentView=String.raw`
   function phaseName(task){if(task.cleanupPending)return task.phase==='cancelled'?'已取消 · 待停止':task.phase==='completed'?'已结束 · 待停止':'内部会话待停止';if(task.endedWithoutReview&&task.phase==='completed')return '已结束 · 未验收';if(task.attention&&['planning','working'].includes(task.phase))return task.waitingFor==='answer'?'等待你的回答':'等待会话授权';if(task.rejected)return '已拒绝';if(task.phase!=='needs_attention')return names[task.phase];const wait=task.waitingFor||(!task.approved?'review':task.question?'answer':task.stage==='worker'?'review':'format');return wait==='answer'?'等待你的回答':wait==='format'?'协调结果待确认':task.stage==='worker'?'等待验收':'等待批准';}
   let selected=new URLSearchParams(location.search).get('task'),current=null,fetching=false,state=null,replyRequest=null,replyTask=null,submitting=false,responseRequest=null;const taskDrafts=new Map(),bulkSelection=new Set();let bulkBusy=false;let boardOpen=false,pipelineEditing=null,pipelineVersion=null,pipelineSaving=false,receiptsPipeline=null,viewEpoch=0;let inboxOpen=false,taskPage=0,refreshAgain=false,refreshFinished=Promise.resolve(),searchTimer,replyDirty=false,replyBase='',currentInternalRunning=false;
   function closeTaskMenus(){document.querySelectorAll('.task-menu[open]').forEach(function(menu){menu.open=false});}
-  function leaveView(){viewEpoch++;closeTaskMenus();document.querySelector('.task-confirm')?.close('cancel');error('');}
+  function leaveView(){viewEpoch++;progressPending=false;closeTaskMenus();document.querySelector('.task-confirm')?.close('cancel');error('');}
   function selectTask(id){leaveView();boardOpen=false;inboxOpen=false;selected=id;$('tickets').querySelectorAll('[data-ticket-id]').forEach(function(node){node.classList.toggle('selected',node.dataset.ticketId===id)});void detail().catch(error);}
   document.addEventListener('click',function(event){if(!event.target.closest('.task-menu'))closeTaskMenus();});
   document.addEventListener('keydown',function(event){if(event.key==='Escape')closeTaskMenus();});
@@ -54,7 +54,29 @@ export const superagentView=String.raw`
     if(atBottom&&!olderRequest){const top=feed.scrollTop,epoch=viewEpoch;requestAnimationFrame(function(){if(selected===task.id&&epoch===viewEpoch&&!olderRequest&&feed.scrollTop===top){feed.scrollTop=feed.scrollHeight;previousFeedTop=feed.scrollTop;}});}
   }
   function updateComposer(){if(!current)return;const task=current,ended=['completed','cancelled'].includes(task.phase),running=['planning','working'].includes(task.phase),empty=!$('followup').value.trim();$('composerDock').hidden=ended;$('followup').disabled=ended||submitting||!task.approved;$('continueTask').disabled=submitting||ended||!task.approved||empty;$('interruptTask').hidden=!running;$('interruptTask').disabled=submitting||empty;$('continueTask').setAttribute('aria-label',running||task.phase==='queued'?'排队发送':'发送并继续');$('continueTask').textContent=submitting?'正在提交…':running||task.phase==='queued'?'排队发送 ↑':'发送并继续 ↑';$('responseHint').textContent=ended?'任务已结束':task.phase==='interrupted'?'已中断：可保存指令，核对结果后显式重试':running?'Enter 排队 · Shift+Enter 换行':'Enter 发送 · Shift+Enter 换行';}
-  async function detail(){
+  let loadingDetail=null,progressPending=false;
+  function detail(){
+    const id=selected,epoch=viewEpoch;
+    if(loadingDetail?.id===id&&loadingDetail.epoch===epoch)return loadingDetail.promise;
+    const entry={id:id,epoch:epoch,promise:null};
+    entry.promise=readDetail().finally(function(){
+      if(loadingDetail!==entry)return;
+      loadingDetail=null;
+      if(progressPending){
+        progressPending=false;
+        if(selected===id&&viewEpoch===epoch&&document.visibilityState!=='hidden')void detail().catch(function(){});
+      }
+    });
+    loadingDetail=entry;
+    return entry.promise;
+  }
+  window.addEventListener('message',function(event){
+    if(event.source!==parent||event.data?.kind!=='agentberth-superagent-progress'||!Array.isArray(event.data.taskIds)
+      ||document.visibilityState==='hidden'||$('detail').hidden||!selected||!event.data.taskIds.includes(selected))return;
+    if(loadingDetail){progressPending=true;return;}
+    void detail().catch(function(){});
+  });
+  async function readDetail(){
     if(!selected)return;const requested=selected,epoch=viewEpoch,result=await call('get',{id:requested});if(selected!==requested||epoch!==viewEpoch)return;if(current?.id!==requested){closeTaskMenus();document.querySelector('.task-context').open=false;document.querySelector('.audit-section').open=false;document.querySelector('#replyBox details').open=false;}current=result.task;lastDetailResult=result;currentInternalRunning=result.ownedSessions.some(function(session){return ['running','stopping'].includes(session.status)});const task=current,feed=$('taskFeed'),following=loadedTask!==task.id||feed.scrollHeight-feed.scrollTop-feed.clientHeight<80;
     if($('followup').dataset.task!==task.id){$('followup').dataset.task=task.id;$('followup').value=taskDrafts.get(task.id)||'';responseRequest=null;}
     setWorkspaceView('task');$('board').hidden=true;boardOpen=false;$('inbox').hidden=true;inboxOpen=false;$('create').hidden=true;$('sources').hidden=true;$('detail').hidden=false;$('taskTitle').textContent=task.title;$('phase').textContent=phaseName(task);$('phase').dataset.phase=task.phase;$('objectiveText').textContent=task.objective;$('workspace').textContent=task.worktreePath||'当前项目工作区';$('question').hidden=false;renderText($('question'),task.question||'');$('taskError').textContent=task.error||'';

@@ -1,6 +1,7 @@
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 import { pluginNoticeSchema, type ExtensionInfo, type PluginNotice } from '../shared/extensions';
 
+import { getWorkspaceState } from './workspace-state';
 import type { TaskArtifactLocation } from './TaskArtifactPreview';
 
 export type OpenTaskArtifact = (location: TaskArtifactLocation, opener: HTMLElement | null) => void;
@@ -59,6 +60,19 @@ export function HtmlExtensionView({plugin,viewId,onError,initialTaskId,onArtifac
     draftFlush=(async()=>{while(draftWrites.size){const [key,params]=draftWrites.entries().next().value!;draftWrites.delete(key);try{await saveDraft(params);draftFailures.delete(key);if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-draft-saved',key},'*');}catch(error){draftFailures.set(key,String(error));onError('草稿保存失败：'+String(error));}}})().finally(()=>{draftFlush=undefined;});
     return draftFlush;
   };
+  let progressTimer:ReturnType<typeof setTimeout>|undefined;
+  const taskIds=new Set<string>();
+  const offProgress=['superagent','superagent.custom'].includes(plugin.manifest.id)&&viewId==='tasks'?window.berth.onEvent(event=>{
+    if(event.event!=='acp'||(!event.data.state&&!event.data.event))return;
+    const owner=getWorkspaceState().sessions.find(item=>item.id===event.data.sessionId)?.owner;
+    if(owner?.pluginId!==plugin.manifest.id)return;
+    taskIds.add(owner.taskId);
+    progressTimer??=setTimeout(()=>{
+      progressTimer=undefined;
+      if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-superagent-progress',taskIds:[...taskIds]},'*');
+      taskIds.clear();
+    },120);
+  }):undefined;
   const theme=pluginTheme;const observer=new MutationObserver(()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-theme',theme:theme()},'*'));observer.observe(document.documentElement,{attributes:true});const receive=async(event:MessageEvent)=>{
     if(!alive||event.source!==frame.current?.contentWindow)return;
     if (event.data?.kind==='agentberth-superagent-artifact' && openArtifact.current && ['superagent','superagent.custom'].includes(plugin.manifest.id)) {
@@ -94,7 +108,7 @@ export function HtmlExtensionView({plugin,viewId,onError,initialTaskId,onArtifac
     const reject=()=>frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,error:'插件视图请求过多或参数无效'},'*');
     try{if(pending>=8||params!==undefined&&(!params||typeof params!=='object'||Array.isArray(params))||JSON.stringify(params??{}).length>65536){reject();return;}}catch{reject();return;}pending++;
     try{const result=await window.berth.extensions({action:'call',id:plugin.manifest.id,command,params:params??{}});if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,result},'*');}catch(error){if(alive)frame.current?.contentWindow?.postMessage({kind:'agentberth-plugin-result',id,error:String(error)},'*');}finally{pending--;}
-  };window.addEventListener('message',receive);return()=>{alive=false;observer.disconnect();window.removeEventListener('message',receive);};},[plugin.manifest.id]);
+  };window.addEventListener('message',receive);return()=>{alive=false;offProgress?.();clearTimeout(progressTimer);observer.disconnect();window.removeEventListener('message',receive);};},[plugin.manifest.id,viewId]);
   const src=`agentberth-plugin://view/${plugin.manifest.id}/${viewId}?generation=${plugin.generation}`+(initialTaskId?'&task='+encodeURIComponent(initialTaskId):'');
   return <iframe className="extension-view" ref={frame} title={plugin.manifest.views.find(v=>v.id===viewId)?.title??plugin.manifest.name} sandbox={'allow-scripts allow-forms'+(plugin.manifest.id==='notes-wiki'?' allow-downloads':'')} src={src}/>;
 }

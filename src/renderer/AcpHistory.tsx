@@ -7,7 +7,7 @@ import { AsyncButton } from './AsyncButton';
 import { Dialog } from './Dialog';
 import { WorktreePicker } from './WorktreeManager';
 
-type NativePage = {sessions:AcpNativeSession[];nextCursor?:string;resumable:boolean};
+type NativePage = {sessions:AcpNativeSession[];nextCursor?:string;resumable:boolean;deletable?:boolean};
 const phases:Record<string,string>={disconnected:'未连接',connecting:'连接中',ready:'已就绪',running:'执行中',permission:'待处理',error:'需处理'};
 
 export function AcpHistory({projects,agents,projectId,onOpen,onClose,onArchive,opener}:{projects:Project[];agents:AgentDefinition[];projectId:string;onOpen:(projectId:string,sessionId:string)=>void;onClose:()=>void;onArchive:(sessionId:string,archived:boolean)=>void;opener:HTMLElement|null}){
@@ -42,6 +42,15 @@ export function AcpHistory({projects,agents,projectId,onOpen,onClose,onArchive,o
       const result=await window.berth.rpc<{imported:string;created?:boolean}>('acpNativeHistory',{projectId:nativeProject,agentId:nativeAgent,worktreePath,nativeId});
       if(result.created)await window.berth.rpc('start',{sessionId:result.imported,resume:true,cols:100,rows:30});
       onOpen(nativeProject,result.imported);onClose();
+    }finally{setBusy(false);}
+  };
+  const removeNative=async(item:AcpNativeSession)=>{
+    if(!window.confirm('从 Agent 原生历史删除「'+item.title+'」？此操作无法撤销，工作台已保存的记录会保留。'))return;
+    setBusy(true);
+    try{
+      await window.berth.rpc('acpNativeHistory',{projectId:nativeProject,agentId:nativeAgent,worktreePath,nativeId:item.sessionId,remove:true});
+      setNativePage(previous=>previous?{...previous,sessions:previous.sessions.filter(session=>session.sessionId!==item.sessionId)}:previous);
+      await refresh();
     }finally{setBusy(false);}
   };
   const exportSession=async(entry:AcpHistoryEntry)=>{
@@ -88,6 +97,7 @@ export function AcpHistory({projects,agents,projectId,onOpen,onClose,onArchive,o
           <div className="acp-list-icon"><AcpIcon name="chat"/></div>
           <div className="acp-list-main"><strong>{item.title}</strong><small title={item.sessionId}>{item.sessionId}</small></div>
           <AsyncButton className="subtle" disabled={!nativePage.resumable||busy} onError={setError} onAction={()=>importSession(item.sessionId)}>导入并打开</AsyncButton>
+          {nativePage.deletable&&<details className="acp-row-actions"><summary className="acp-icon-action acp-square" aria-label={'管理 '+item.title}><AcpIcon name="more"/></summary><div><AsyncButton className="subtle" disabled={busy} onError={setError} onAction={()=>removeNative(item)}>删除原生会话</AsyncButton></div></details>}
         </li>)}</ul>
         {nativePage?.nextCursor&&<AsyncButton disabled={busy} onError={setError} onAction={()=>loadNative(nativePage.nextCursor)}>加载更多</AsyncButton>}
         {nativePage&&!nativePage.sessions.length&&<AcpEmpty icon="history">当前目录没有可导入会话</AcpEmpty>}

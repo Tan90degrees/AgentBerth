@@ -3,7 +3,7 @@ import type { DaemonServer, Client } from '../daemon/server';
 import type { Request } from '../shared/protocol';
 import {discoverAcpAgents,readAcpRegistry,prepareAcpRegistryAgent} from '../daemon/acp-registry';
 import {directory} from '../daemon/paths';
-export const methods=['acpHistory','acpArchive','acpDiscover','acpMcpConfig','acpRegistry','acpRegistryPrepare','acpNativeHistory','acpSubmit','acpQueue','acpImage','acpSnapshot','acpSend','acpCancel','acpPermission','acpElicitation','acpConfigure','acpAuthenticate','acpProbe','acpOptions','acpTerminal'] as const;
+export const methods=['acpHistory','acpArchive','acpDiscover','acpMcpConfig','acpRegistry','acpRegistryPrepare','acpNativeHistory','acpSubmit','acpQueue','acpImage','acpSnapshot','acpSend','acpCancel','acpPermission','acpElicitation','acpConfigure','acpAuthenticate','acpAuthTerminal','acpLogout','acpProbe','acpOptions','acpTerminal','acpMedia'] as const;
 export function mount(ctx:Context,server:DaemonServer){
   const host=server.acpCorePort();
   server.registerCoreRoutes(ctx,methods,async(request:Request,_client:Client)=>{
@@ -21,7 +21,7 @@ export function mount(ctx:Context,server:DaemonServer){
       return host.store.acpMcpServers(agentId);
     }
     if(request.method==='acpNativeHistory'){
-      const {agentId,projectId,worktreePath,cursor,nativeId}=request.params;
+      const {agentId,projectId,worktreePath,cursor,nativeId,remove}=request.params;
       const agent=host.store.agent(agentId),project=host.store.project(projectId);
       if(!agent.acp||project.remoteWorkspace)throw new Error('请选择本机项目与 ACP Agent');
       host.requireProjectAvailable(projectId);
@@ -29,7 +29,7 @@ export function mount(ctx:Context,server:DaemonServer){
       const cwd=await host.resolveWorkspace(project.id,root,worktreePath);
       host.requireProjectAvailable(projectId);
       if(host.worktreeBusy.has(projectId))throw new Error('Worktree 正在变更，请稍后重试');
-      return host.acp.nativeHistory(agent,cwd,projectId,worktreePath?cwd:null,cursor,nativeId);
+      return host.acp.nativeHistory(agent,cwd,projectId,worktreePath?cwd:null,cursor,nativeId,remove);
     }
     if(request.method==='acpProbe')return host.acp.probe(request.params,server.dataDirectory);
     if(request.method==='acpOptions'){
@@ -48,17 +48,23 @@ export function mount(ctx:Context,server:DaemonServer){
       case 'acpSubmit':return host.acp.submit(id,request.params.message,request.params.queue);
 
       case 'acpSnapshot':return host.acp.snapshot(id,request.params);
+      case 'acpMedia':return host.store.acpMedia(id,request.params.mediaId,request.params.offset);
       case 'acpTerminal':return host.acp.terminal(id,request.params.terminalId);
       case 'acpSend':{
         const previous=host.store.acpTurn(request.params.requestId);
         if(previous){if(previous.sessionId!==id)throw new Error('请求 ID 已属于另一会话');return {turnId:request.params.requestId,state:previous.state,duplicate:true};}
         await host.ensureStarted(id);return host.acp.send(id,request.params.requestId,request.params.text);
       }
-      case 'acpCancel':return host.acp.cancel(id);
+      case 'acpCancel':return host.acp.cancel(id,request.params.childSessionId);
       case 'acpPermission':return host.acp.permission(id,request.params.permissionId,request.params.optionId);
       case 'acpElicitation':return host.acp.elicitation(id,request.params.requestId,request.params.action,request.params.content);
       case 'acpConfigure':return host.acp.configure(id,request.params.configId,request.params.value);
-      case 'acpAuthenticate':return host.acp.authenticate(id,request.params.methodId);
+      case 'acpLogout':return host.acp.logout(id);
+      case 'acpAuthenticate':return host.acp.authenticate(id,request.params.methodId,request.params.terminalApproved);
+      case 'acpAuthTerminal':{
+        const {terminalId,action,input,cols,rows}=request.params;
+        return host.acp.authTerminal(id,terminalId,action,input,cols,rows);
+      }
       default:throw new Error('ACP 接口无效');
     }
   });

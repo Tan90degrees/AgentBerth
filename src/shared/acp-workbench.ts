@@ -1,13 +1,15 @@
 import { z } from 'zod';
 
 export const ACP_WORKBENCH_API_VERSION = 68;
-export const ACP_IMAGE_LIMIT = 2 * 1024 * 1024;
+export const ACP_STREAM_API_VERSION = 69;
+export const ACP_MEDIA_LIMIT = 2 * 1024 * 1024;
 const uuid = z.string().uuid();
 const relativePath = z.string().min(1).max(1024).refine(value => !/[\x00-\x1f]/.test(value));
 
 export const acpAttachmentSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('file'), path: relativePath, text: z.string().min(1).max(4000).optional() }).strict(),
+  z.object({ type: z.literal('file'), path: relativePath, text: z.string().min(1).max(4000).optional(), embed: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('image'), id: uuid, name: z.string().min(1).max(200) }).strict(),
+  z.object({ type: z.literal('audio'), id: uuid, name: z.string().min(1).max(200) }).strict(),
 ]);
 export type AcpAttachment = z.infer<typeof acpAttachmentSchema>;
 
@@ -21,9 +23,11 @@ export const acpMessageSchema = z.object({
 export type AcpMessage = z.infer<typeof acpMessageSchema>;
 
 export const acpImageTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
+export const acpAudioTypes = ['audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/flac'] as const;
+export const acpMediaTypes = [...acpImageTypes, ...acpAudioTypes] as const;
 export const acpImageChunkSchema = z.object({
-  sessionId: uuid, imageId: uuid, mimeType: z.enum(acpImageTypes),
-  offset: z.number().int().min(0).max(ACP_IMAGE_LIMIT),
+  sessionId: uuid, imageId: uuid, mimeType: z.enum(acpMediaTypes),
+  offset: z.number().int().min(0).max(ACP_MEDIA_LIMIT),
   data: z.string().min(4).max(65536).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
   last: z.boolean(),
 }).strict();

@@ -44,7 +44,7 @@ export class DaemonConnection {
     if (this.pending.size >= 128) return Promise.reject(new Error('请求过多，请稍后重试'));
     const id = randomUUID();
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, ['start','acpSend','acpSubmit','acpProbe','acpNativeHistory','acpRegistryPrepare','acpOptions','acpAuthenticate','extensions'].includes(method) ? ACP_MAX_STARTUP_TIMEOUT_MS+60000 : method === 'gitOperation' ? 600000 : method.startsWith('git') ? 60000 : ['remoteOpen', 'remoteManage', 'remoteAgentClose', 'serviceAction', 'stop', 'shutdown', 'remoteReconnect'].includes(method) ? 60000 : ['remoteWait','remoteCommand','remoteReadOutput','remoteTransferStatus'].includes(method) ? 35000 : 15000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('后台响应超时')); }, ['start','acpSend','acpSubmit','acpProbe','acpNativeHistory','acpRegistryPrepare','acpOptions','acpAuthenticate','extensions'].includes(method) ? ACP_MAX_STARTUP_TIMEOUT_MS+60000 : method === 'gitOperation' ? 600000 : method.startsWith('git') ? 60000 : ['remoteOpen', 'remoteManage', 'remoteAgentClose', 'serviceAction', 'stop', 'shutdown', 'remoteReconnect','acpLogout','acpAuthTerminal'].includes(method) ? 60000 : ['remoteWait','remoteCommand','remoteReadOutput','remoteTransferStatus'].includes(method) ? 35000 : 15000);
       this.pending.set(id, { resolve: value => resolve(value as T), reject, timer });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
@@ -142,7 +142,7 @@ export async function stopIdleDaemon(directory: string): Promise<void> {
 
 async function assertCompatibleDaemon(candidate: DaemonConnection): Promise<void> {
   const { apiVersion } = await candidate.rpc<State>('state');
-  if (apiVersion !== API_VERSION && !(Number.isInteger(apiVersion) && apiVersion >= 44 && apiVersion <= 67)) {
+  if (apiVersion !== API_VERSION && !(Number.isInteger(apiVersion) && apiVersion >= 44 && apiVersion < API_VERSION)) {
     throw new DaemonRpcError('运行中的后台协议与当前版本不兼容，请从托盘完整退出旧版后重新打开。工作区数据会保留。', 'BACKEND_UPGRADE_REQUIRED');
   }
 }

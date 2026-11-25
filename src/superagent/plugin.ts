@@ -159,7 +159,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   };
   const result=async(sessionId:string,turnId:string):Promise<{snapshot:AcpSnapshot;text:string;ended:boolean;policyDenied:boolean;turnSucceeded:boolean}>=>{
     let after=0,text='',snapshot:AcpSnapshot,policyDenied=false,turnSucceeded=false;let pages=0;
-    do{snapshot=await host<AcpSnapshot>('acpSnapshot',{sessionId,after,limit:200});for(const event of snapshot.events){after=Math.max(after,event.sequence);if(event.turnId!==turnId)continue;if(event.kind==='assistant')text+=event.text;if(event.data?.policy==='superagent-tool-denied')policyDenied=true;if(event.kind==='turn'&&event.data?.stopReason==='end_turn')turnSucceeded=true;}if(text.length>64000)throw new Error('Agent 决策输出过长，请在会话中缩短结果后显式重试');if(++pages>25)throw new Error('会话日志过多，请在会话中确认任务结果');}while(snapshot.hasMore);
+    do{snapshot=await host<AcpSnapshot>('acpSnapshot',{sessionId,after,limit:200});for(const event of snapshot.events){after=Math.max(after,event.sequence);if(event.turnId!==turnId)continue;if(event.kind==='assistant'&&!event.data?.childSessionId)text+=event.text;if(event.data?.policy==='superagent-tool-denied')policyDenied=true;if(event.kind==='turn'&&event.data?.stopReason==='end_turn')turnSucceeded=true;}if(text.length>64000)throw new Error('Agent 决策输出过长，请在会话中缩短结果后显式重试');if(++pages>25)throw new Error('会话日志过多，请在会话中确认任务结果');}while(snapshot.hasMore);
     return {snapshot,text,policyDenied,turnSucceeded,ended:snapshot.turnId!==turnId&&snapshot.phase!=='running'&&snapshot.phase!=='permission'&&snapshot.phase!=='connecting'};
   };
   const applyModel=async(ticket:Ticket,role:'coordinator'|'worker')=>{
@@ -358,10 +358,20 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     const sessionId=task.stage==='worker'?task.workerSession:task.coordinatorSession;
     if(state.sessions.some(session=>session.id===sessionId))try{
       const view=await host<AcpSnapshot>('acpSnapshot',{sessionId,limit:40}),events=new Map<string,{id:string;sequence:number;kind:string;text:string;status?:string;at:string}>();
-      for(const event of view.events){if(!['tool','permission','elicitation','notice','error','turn','plan'].includes(event.kind))continue;const key=event.kind==='tool'?String(event.data?.toolCallId??event.id):event.id;events.set(key,{id:key,sequence:event.sequence,kind:event.kind,text:fit(String(event.data?.title??events.get(key)?.text??event.text),600),...(event.kind==='tool'?{status:String(event.data?.status??'pending')}:{}),at:event.createdAt});}
+      for(const event of view.events){
+        if(!['tool','permission','elicitation','notice','error','turn','plan','compaction','subagent','session-message','terminal'].includes(event.kind))continue;
+        const data=event.data;
+        const identifier=data?.toolCallId??data?.planId??data?.compactionId??data?.subagentId??data?.messageId;
+        const key=identifier?JSON.stringify([event.kind,data?.childSessionId,identifier]):event.id;
+        if(data?.removed===true){events.delete(key);continue;}
+        const titles:Record<string,string>={plan:'执行计划',compaction:'整理上下文',subagent:'子代理','session-message':'协作消息',terminal:'终端运行记录'};
+        const status=typeof data?.status==='string'?data.status:events.get(key)?.status;
+        const text=String(data?.title??titles[event.kind]??events.get(key)?.text??event.text);
+        events.set(key,{id:key,sequence:event.sequence,kind:event.kind,text:fit(text,600),status,at:event.createdAt});
+      }
       interactions={sessionId,permissions:view.permissions.map(({id,title})=>({id,title})),elicitations:(view.elicitations??[]).map(({id,message})=>({id,message:fit(message,300)}))};
       execution={sessionId,phase:view.phase,permissions:view.permissions.length,questions:view.elicitations?.length??0,lastEventAt:view.events.at(-1)?.createdAt,events:[...events.values()].sort((a,b)=>a.sequence-b.sequence).slice(-8),hasEarlier:view.hasMore||events.size>8,error:view.error?.slice(0,300)};
-      if(['planning','working'].includes(task.phase)){const raw=view.events.filter(event=>event.turnId===view.turnId&&event.kind==='assistant').map(event=>event.text).join(''),report=decision(raw);live={text:fit(typeof report?.summary==='string'?report.summary:typeof report?.reason==='string'?report.reason:/^(?:\s*\{|\s*```json)/.test(raw)?'':raw,4000),tool:view.events.filter(event=>event.turnId===view.turnId&&event.kind==='tool').at(-1)?.text.slice(0,160)??''};}
+      if(['planning','working'].includes(task.phase)){const raw=view.events.filter(event=>event.turnId===view.turnId&&event.kind==='assistant'&&!event.data?.childSessionId).map(event=>event.text).join(''),report=decision(raw);live={text:fit(typeof report?.summary==='string'?report.summary:typeof report?.reason==='string'?report.reason:/^(?:\s*\{|\s*```json)/.test(raw)?'':raw,4000),tool:view.events.filter(event=>event.turnId===view.turnId&&event.kind==='tool').at(-1)?.text.slice(0,160)??''};}
     }catch(error){execution={phase:'error',permissions:0,events:[],hasEarlier:false,error:String(error).slice(0,300)};}
     const ownedSessions=state.sessions.filter(session=>session.owner?.pluginId===api.id&&session.owner.taskId===task.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||a.id.localeCompare(b.id));
     const sourceInfo=task.source?sources.snapshot().find(source=>source.id===task.source!.id):undefined;
