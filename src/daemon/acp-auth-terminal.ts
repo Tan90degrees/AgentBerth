@@ -1,5 +1,6 @@
 import type {IPty} from 'node-pty';
 import {terminateTree} from './processes';
+import {protectWindowsPty} from './windows-pty';
 
 /** This PTY is intentionally separate from the recoverable session terminal. */
 export class AcpAuthTerminal {
@@ -8,28 +9,40 @@ export class AcpAuthTerminal {
   private terminated?:Promise<void>;
   private output='';
   private sequence=0;
+  private windowsReleased=false;
 
-  constructor(private pty:IPty,readonly id:string,emit:(sequence:number,output:string)=>void,exited:(success:boolean,exitCode:number)=>void){
+  constructor(private pty:IPty,readonly id:string,emit:(sequence:number,output:string)=>void,exited:(success:boolean,exitCode:number)=>void,failed:(error:unknown)=>void){
+    try{protectWindowsPty(pty,failed);}catch(error){this.releaseWindowsPty();throw error;}
     pty.onData(output=>{
+      if(!this.active)return;
       this.output=(this.output+output).slice(-64*1024);
       emit(++this.sequence,output);
     });
     pty.onExit(({exitCode,signal})=>{
       this.active=false;
       this.output='';
-      if(!this.stopping)exited(exitCode===0&&!signal,exitCode);
+      queueMicrotask(()=>{
+        this.releaseWindowsPty();
+        if(!this.stopping)exited(exitCode===0&&!signal,exitCode);
+      });
     });
+  }
+
+  private releaseWindowsPty(){
+    if(process.platform!=='win32'||this.windowsReleased)return;
+    this.windowsReleased=true;
+    try{this.pty.kill();}catch{/* The process or pipe can already be closed. */}
   }
 
   read(){return {sequence:this.sequence,output:this.output};}
   write(text:string){if(this.active&&!this.stopping)this.pty.write(text);}
   resize(cols:number,rows:number){if(this.active&&!this.stopping)this.pty.resize(cols,rows);}
   stop():Promise<void>{
-    if(!this.active)return Promise.resolve();
     this.stopping=true;
+    if(!this.active){this.releaseWindowsPty();return Promise.resolve();}
     return this.terminated??=terminateTree(this.pty,()=>this.active).then(()=>{
       this.active=false;this.output='';
-      if(process.platform==='win32'){try{this.pty.kill();}catch{/* The exit callback may have closed ConPTY. */}}
+      this.releaseWindowsPty();
     }).catch(error=>{this.terminated=undefined;throw error;});
   }
 }

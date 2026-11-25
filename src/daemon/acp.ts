@@ -187,7 +187,11 @@ export class AcpSessions {
         const pty=this.spawnPty(file,args,{cwd:value.cwd,cols:80,rows:24,name:'xterm-256color',useConptyDll:process.platform==='win32',env:{...terminalEnvironment(file),...config.env,...method.env}});
         value.authTerminal=new AcpAuthTerminal(pty,terminalId,(sequence,output)=>{
           this.emit({event:'acp',data:{sessionId:id,authOutput:{terminalId,sequence,output}}});
-        },(success,code)=>{void this.authTerminalExited(value,terminalId,success,code);});
+        },(success,code)=>{void this.authTerminalExited(value,terminalId,success,code);},()=>{
+          if(value.authTerminal?.id!==terminalId||value.stopping)return;
+          value.state.error='登录终端连接中断，请取消后重试';
+          this.publish(value);
+        });
         value.state.authTerminalId=terminalId;
         value.state.error=undefined;
         this.publish(value);
