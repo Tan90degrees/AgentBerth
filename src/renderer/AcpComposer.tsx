@@ -109,8 +109,12 @@ export function AcpComposer({session,snapshot,ready,enhanced,onError,onSent,call
     if(added.length){setImages(previous=>[...previous,...added]);setDraft(previous=>({...previous,requestId:undefined}));}
   };
   async function send(){
-    if(!canSend||pendingRef.current)return;
+    if(pendingRef.current||!(draft.text.trim()||attachmentCount))return;
     if(picker&&matches.length){choose(matches[0].path);return;}
+    if(!canSend){
+      onError(!ready||snapshot?.phase==='connecting'?'Agent 尚未就绪，草稿已保留':'当前会话无法发送，草稿已保留');
+      return;
+    }
     pendingRef.current=true;setPending(true);
     const requestId=draft.requestId??crypto.randomUUID();
     setDraft(previous=>({...previous,requestId}));

@@ -38,7 +38,7 @@ try{
   const branch=page.locator(`.project-branch[data-project-id="${project.id}"]`);await branch.locator('.project-item').click();await branch.getByRole('button',{name:'项目操作 ACP project',exact:true}).click();await page.getByRole('menuitem',{name:'新建会话',exact:true}).click();
   const create=page.getByRole('dialog',{name:'新建项目会话',exact:true});await create.getByRole('button',{name:'ACP 对话',exact:true}).click();await create.getByLabel('Agent 类型',{exact:true}).selectOption(agent.id);await create.getByLabel('会话名称',{exact:true}).fill('ACP conversation');await create.getByRole('button',{name:'创建并启动',exact:true}).click();await create.waitFor({state:'hidden'});
   const conversation=page.getByRole('region',{name:'ACP 对话',exact:true});await conversation.waitFor();const session=(await rpc('state')).sessions.find(s=>s.title==='ACP conversation');assert.ok(session);
-  const message=conversation.getByLabel('发送给 Agent 的消息',{exact:true});const send=async text=>{await conversation.getByRole('button',{name:'发送',exact:true}).waitFor();await message.fill(text);await message.press('Enter');};await send('hello');await conversation.getByText('hello from small',{exact:true}).waitFor();
+  const message=conversation.getByLabel('发送给 Agent 的消息',{exact:true});const send=async text=>{await message.fill(text);await conversation.getByRole('button',{name:'发送',exact:true}).and(conversation.locator('button:enabled')).waitFor();await message.press('Enter');};await send('hello');await conversation.getByText('hello from small',{exact:true}).waitFor();
   await message.fill('参考 @base');
   await conversation.getByRole('button',{name:/base\.txt/}).click();
   await conversation.getByRole('button',{name:'移除文件 base.txt',exact:true}).waitFor();
