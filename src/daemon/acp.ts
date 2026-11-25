@@ -86,9 +86,8 @@ export class AcpSessions {
       const transport=await AcpTransport.open(definition.acp,cwd,(method,params,signal)=>this.clientRequest(value,method,params,signal),(method,params)=>this.notification(value,method,params),error=>{void this.ended(value,error).catch(()=>{});});value.transport=transport;
       if(value.stopping||this.closed){await transport.stop();throw new Error('ACP 连接已取消');}
       if(transport.pid){this.store.setPid(run.id,transport.pid);run.pid=transport.pid;}
-      const config=definition.acp;
-      const terminalAuth=!!this.spawnPty&&!session.owner&&literalAuthProgram((await acpCommand(config.executable,config.args)).file);
-      const info=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{auth:{terminal:terminalAuth},fs:{readTextFile:true,writeTextFile:true},terminal:session.owner?.kind!=='superagent',elicitation:{form:{},...(session.owner?.kind==='superagent'?{}:{url:{}})},session:{notices:{},compaction:{},configOptions:{boolean:{}}},plan:{},subagents:{}},clientInfo:{name:'agentberth',title:'AgentBerth',version:'0.21.0'}});
+      const terminalAuth=!!this.spawnPty&&!session.owner&&literalAuthProgram(transport.child.spawnfile);
+      const info=await transport.call('initialize',{protocolVersion:1,clientCapabilities:{auth:{terminal:terminalAuth},fs:{readTextFile:true,writeTextFile:true},terminal:session.owner?.kind!=='superagent',elicitation:{form:{},url:{}},session:{notices:{},compaction:{},configOptions:{boolean:{}}},plan:{},subagents:{}},clientInfo:{name:'agentberth',title:'AgentBerth',version:'0.21.0'}});
       if(info.protocolVersion!==1)throw new Error('Agent 未协商兼容的 ACP v1 协议');
       value.state.agentInfo=bounded(info.agentInfo);value.state.capabilities=bounded(info.agentCapabilities)??{};value.state.canLogout=acpCapability(value.state.capabilities,'auth','logout');
       value.state.authMethods=Array.isArray(info.authMethods)?info.authMethods.slice(0,20).flatMap((item:unknown)=>{
@@ -542,7 +541,7 @@ export class AcpSessions {
       let request:AcpElicitation;
       try{
         const id='question-'+randomUUID();
-        if(params.mode==='url'&&value.session.owner?.kind!=='superagent'){
+        if(params.mode==='url'){
           request=elicitationUrl(id,params);
           const opaqueId=request.url!.elicitationId;
           if(value.urlInteractions.has(opaqueId)||[...value.elicitations.values()].some(item=>item.value.url?.elicitationId===opaqueId))throw new Error('Agent 网页请求 ID 重复');

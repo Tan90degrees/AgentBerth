@@ -17,13 +17,13 @@ import type {AcpSnapshot} from '../src/shared/acp';
 
 const executable=process.execPath,fixtureFile=path.resolve('tests/fixtures/acp-agent.cjs');
 async function until<T>(read:()=>Promise<T>,predicate:(value:T)=>boolean,ms=15000){const end=Date.now()+ms;let value:T;do{value=await read();if(predicate(value))return value;await new Promise(resolve=>setTimeout(resolve,30));}while(Date.now()<end);throw new Error('Condition timed out: '+JSON.stringify(value));}
-async function fixture(t:any,args:string[]=[],context=false){
+async function fixture(t:any,args:string[]=[],context=false,program=executable){
   const dir=await mkdtemp(path.join(os.tmpdir(),'berth-acp-')),root=path.join(dir,'project'),data=path.join(dir,'data');await mkdir(root);await mkdir(path.join(dir,'agent'));
   const events:import('../src/shared/protocol').ServerEvent[]=[];
   const server=new DaemonServer(data),connection=await DaemonConnection.open(await server.listen(),event=>events.push(event));
   const extra=path.join(dir,'explicit-context');
   if(context)await mkdir(extra);
-  const config={name:'Fixture ACP',command:executable,acp:{executable,args:[fixtureFile,path.join(dir,'agent'),...args],env:{ELECTRON_RUN_AS_NODE:'1'},...(context?{additionalDirectories:[extra],systemPrompt:{mode:'override',text:'Use the selected workspace'}}:{})}};
+  const config={name:'Fixture ACP',command:program,acp:{executable:program,args:[fixtureFile,path.join(dir,'agent'),...args],env:{ELECTRON_RUN_AS_NODE:'1'},...(context?{additionalDirectories:[extra],systemPrompt:{mode:'override',text:'Use the selected workspace'}}:{})}};
   const agent=await connection.rpc<AgentDefinition>('createAgent',config),project=await connection.rpc<any>('createProject',{name:'ACP project',path:root});
   const session=await connection.rpc<Session>('createSession',{projectId:project.id,title:'ACP conversation',agent:agent.id,command:''});
   t.after(async()=>{connection.close();await server.close();await rm(dir,{recursive:true,force:true,maxRetries:8,retryDelay:100});});
@@ -385,7 +385,8 @@ test('ACP v1 logout and scoped native deletion leave the workstation records int
 });
 
 test('ACP v1 terminal authentication is explicit, uses literal args and reconnects after a zero exit',async t=>{
-  const f=await fixture(t,['--terminal-auth']),params={sessionId:f.session.id};
+  // The login process must be a console-subsystem executable on Windows.
+  const f=await fixture(t,['--terminal-auth'],false,await resolveExecutable('node')),params={sessionId:f.session.id};
   await f.connection.rpc('start',{...params,cols:100,rows:30});
   assert.equal((await f.snapshot()).authMethods?.[0].type,'terminal');
   const request={...params,methodId:'login-terminal'};

@@ -150,7 +150,7 @@ export function AcpConversation({session,connected,onOpenFile,task,enhanced=fals
       </div>}
     </header>
     <div className="acp-thread">
-    <div className="acp-messages" ref={scroll} style={{overflowAnchor:'none'}} onWheel={event=>{if(event.deltaY<0&&(scroll.current?.scrollTop??0)<80)void loadOlder();}} onScroll={()=>{const box=scroll.current!,up=box.scrollTop<previousTop.current;previousTop.current=box.scrollTop;bottom.current=box.scrollHeight-box.scrollTop-box.clientHeight<64;setFollowing(bottom.current);if(up&&box.scrollTop<80)void loadOlder();}}>
+    <div className="acp-messages" ref={scroll} onLoadCapture={()=>{if(bottom.current&&scroll.current){scroll.current.scrollTop=scroll.current.scrollHeight;previousTop.current=scroll.current.scrollTop;}}} style={{overflowAnchor:'none'}} onWheel={event=>{if(event.deltaY<0&&(scroll.current?.scrollTop??0)<80)void loadOlder();}} onScroll={()=>{const box=scroll.current!,up=box.scrollTop<previousTop.current;previousTop.current=box.scrollTop;bottom.current=box.scrollHeight-box.scrollTop-box.clientHeight<64;setFollowing(bottom.current);if(up&&box.scrollTop<80)void loadOlder();}}>
       {!!snapshot?.events.length&&<p className="history-load-status" role="status">{loadingOlder?'正在加载更早消息…':hasOlder?'向上滚动查看更早消息':'已到对话开头'}</p>}
       {!snapshot&&initialLoading&&<AcpEmpty icon="chat" busy>正在读取对话…</AcpEmpty>}
       {!snapshot&&!initialLoading&&<div className="acp-welcome"><h2>{connected?'暂时无法读取对话':'后台连接已断开'}</h2>{/* 尚未发送的草稿会保留。 */}</div>}

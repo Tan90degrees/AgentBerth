@@ -18,6 +18,7 @@ import {pipelineStore,pipelineInputs,type SourcePolicy,type SourcePipeline,type 
 import type {AcpElicitation,ElicitationContent} from '../shared/acp-elicitation';
 import type {AcpPermission} from '../shared/acp';
 import {toolState} from '../shared/acp-presentation';
+import {acpStreamBlocks} from '../shared/acp-stream';
 
 type Phase='queued'|'planning'|'working'|'needs_attention'|'completed'|'cancelled'|'interrupted';
 export interface Ticket {
@@ -354,7 +355,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
     for(const field of ['objective','summary','question','error'] as const){const text=task[field];if(text){task[field]=fit(text,field==='objective'||field==='summary'?8000:4000);if(task[field]!==text){omitted.push(field);task[field]+='\n[内容已精简，可打开会话或使用 read 读取完整内容]';}}}
     const latestReply=db.prepare("SELECT value FROM source_outbox WHERE json_extract(value,'$.ticketId')=? ORDER BY rowid DESC LIMIT 1").get(task.id);
     let live:{text:string;tool:string}|null=null,execution:{sessionId?:string;phase:string;permissions:number;questions?:number;lastEventAt?:string;events:{id:string;sequence:number;kind:string;text:string;status?:string;at:string}[];hasEarlier:boolean;error?:string}|null=null;
-    let interactions:{sessionId:string;permissions:Pick<AcpPermission,'id'|'title'>[];elicitations:Pick<AcpElicitation,'id'|'message'>[]}|null=null;
+    let interactions:{sessionId:string;permissions:Pick<AcpPermission,'id'|'title'>[];elicitations:(Pick<AcpElicitation,'id'|'message'>&{external?:boolean})[]}|null=null;
     const sessionId=task.stage==='worker'?task.workerSession:task.coordinatorSession;
     if(state.sessions.some(session=>session.id===sessionId))try{
       const view=await host<AcpSnapshot>('acpSnapshot',{sessionId,limit:40}),events=new Map<string,{id:string;sequence:number;kind:string;text:string;status?:string;at:string}>();
@@ -369,7 +370,7 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
         const text=String(data?.title??titles[event.kind]??events.get(key)?.text??event.text);
         events.set(key,{id:key,sequence:event.sequence,kind:event.kind,text:fit(text,600),status,at:event.createdAt});
       }
-      interactions={sessionId,permissions:view.permissions.map(({id,title})=>({id,title})),elicitations:(view.elicitations??[]).map(({id,message})=>({id,message:fit(message,300)}))};
+      interactions={sessionId,permissions:view.permissions.map(({id,title})=>({id,title})),elicitations:(view.elicitations??[]).map(({id,message,url})=>url?{id,message:'Agent 请求打开网页',external:true}:{id,message:fit(message,300)})};
       execution={sessionId,phase:view.phase,permissions:view.permissions.length,questions:view.elicitations?.length??0,lastEventAt:view.events.at(-1)?.createdAt,events:[...events.values()].sort((a,b)=>a.sequence-b.sequence).slice(-8),hasEarlier:view.hasMore||events.size>8,error:view.error?.slice(0,300)};
       if(['planning','working'].includes(task.phase)){const raw=view.events.filter(event=>event.turnId===view.turnId&&event.kind==='assistant'&&!event.data?.childSessionId).map(event=>event.text).join(''),report=decision(raw);live={text:fit(typeof report?.summary==='string'?report.summary:typeof report?.reason==='string'?report.reason:/^(?:\s*\{|\s*```json)/.test(raw)?'':raw,4000),tool:view.events.filter(event=>event.turnId===view.turnId&&event.kind==='tool').at(-1)?.text.slice(0,160)??''};}
     }catch(error){execution={phase:'error',permissions:0,events:[],hasEarlier:false,error:String(error).slice(0,300)};}
@@ -391,19 +392,42 @@ export function apply(ctx:Context,config:Record<string,string|number|boolean>){
   api.command({mcp:false,name:'respond',description:'Answer a current task-owned ACP question or permission without resending the task.',inputSchema:{...object,properties:{id,sessionId:id,requestId:{type:'string',minLength:1,maxLength:200},kind:{type:'string',enum:['elicitation','permission']},action:{type:'string',enum:['accept','decline','cancel']},optionId:{type:['string','null'],maxLength:500},content:{type:'object'}},required:['id','sessionId','requestId','kind']}},async p=>{
     const ticket=get(String(p.id)),sessionId=String(p.sessionId);if(!['planning','working'].includes(ticket.phase)||![ticket.coordinatorSession,ticket.workerSession].includes(sessionId))throw new Error('任务已切换阶段，请核对当前请求');
     const state=await host<State>('state');if(!state.sessions.some(session=>session.id===sessionId&&session.owner?.pluginId===api.id&&session.owner.taskId===ticket.id))throw new Error('会话不属于此任务');
+    if(p.kind==='elicitation'){
+      const view=await host<AcpSnapshot>('acpSnapshot',{sessionId,limit:1});
+      if(view.elicitations?.some(item=>item.id===p.requestId&&item.url))throw new Error('请打开内部会话核对网页请求');
+    }
     const result=p.kind==='permission'?await host('acpPermission',{sessionId,permissionId:p.requestId,optionId:p.optionId??null}):await host('acpElicitation',{sessionId,requestId:p.requestId,action:p.action,content:p.content as ElicitationContent});
     audit(ticket.id,'input',p.kind==='permission'?'用户处理内部会话授权':'用户回答内部会话提问');return result;
   });
   api.command({mcp:false,name:'interaction',description:'Read one current task-owned question or permission, including all options.',inputSchema:{...object,properties:{id,sessionId:id,requestId:{type:'string',minLength:1,maxLength:200},kind:{type:'string',enum:['elicitation','permission']}},required:['id','sessionId','requestId','kind']}},async p=>{
     const ticket=get(String(p.id)),sessionId=String(p.sessionId);if(![ticket.coordinatorSession,ticket.workerSession].includes(sessionId))throw new Error('会话不属于当前任务阶段');
     const state=await host<State>('state');if(!state.sessions.some(session=>session.id===sessionId&&session.owner?.pluginId===api.id&&session.owner.taskId===ticket.id))throw new Error('会话不属于此任务');
-    const view=await host<AcpSnapshot>('acpSnapshot',{sessionId,limit:1}),request=(p.kind==='permission'?view.permissions:view.elicitations??[]).find(item=>item.id===p.requestId);if(!request)throw new Error('交互请求已结束，请核对当前任务');return request;
+    const view=await host<AcpSnapshot>('acpSnapshot',{sessionId,limit:1}),request=(p.kind==='permission'?view.permissions:view.elicitations??[]).find(item=>item.id===p.requestId);if(!request)throw new Error('交互请求已结束，请核对当前任务');
+    if('url' in request&&request.url)throw new Error('请打开内部会话核对网页请求');
+    return request;
   });
   api.command({mcp:false,name:'execution_detail',description:'Read structured data for one saved task-owned execution event without running a tool.',inputSchema:{...object,properties:{id,sessionId:id,sequence:{type:'integer',minimum:1}},required:['id','sessionId','sequence']}},async p=>{
     const ticket=get(String(p.id)),state=await host<State>('state'),sessionId=String(p.sessionId);if(!state.sessions.some(session=>session.id===sessionId&&session.owner?.pluginId===api.id&&session.owner.taskId===ticket.id))throw new Error('会话不属于此任务');
     const view=await host<AcpSnapshot>('acpSnapshot',{sessionId,before:Number(p.sequence)+1,limit:200}),event=view.events.find(item=>item.sequence===p.sequence);if(!event)throw new Error('执行记录不存在，请重新读取');
-    const data=event.kind==='tool'?toolState(view.events.filter(item=>item.kind==='tool'&&item.turnId===event.turnId&&item.data?.toolCallId===event.data?.toolCallId)):event.data;
-    return {kind:event.kind,text:event.text,data};
+    const scope=view.events.filter(item=>item.kind===event.kind&&item.data?.rootSessionId===event.data?.rootSessionId&&item.data?.childSessionId===event.data?.childSessionId);
+    if(event.kind==='tool'){
+      const events=scope.filter(item=>item.turnId===event.turnId&&item.data?.toolCallId===event.data?.toolCallId);
+      return {kind:event.kind,text:event.text,data:toolState(events)};
+    }
+    if(event.kind==='compaction'||event.kind==='session-message'){
+      const key=event.kind==='compaction'?'compactionId':'messageId',field=event.kind==='compaction'?'summary':'blocks';
+      const events=scope.filter(item=>item.data?.[key]===event.data?.[key]);
+      return {kind:event.kind,text:event.text,data:{...Object.assign({},...events.map(item=>item.data)),[field]:acpStreamBlocks(events,field)}};
+    }
+    if(event.kind==='subagent'){
+      const events=scope.filter(item=>item.data?.subagentId===event.data?.subagentId);
+      return {kind:event.kind,text:event.text,data:Object.assign({},...events.map(item=>item.data))};
+    }
+    if(event.kind==='plan'&&event.data?.format==='markdown'){
+      const text=scope.filter(item=>item.data?.revision===event.data?.revision).map(item=>item.text).join('');
+      return {kind:event.kind,text,data:event.data};
+    }
+    return {kind:event.kind,text:event.text,data:event.data};
   });
   const deleteTask=async(p:Record<string,unknown>)=>{
     const ticket=get(String(p.id),true);if(ticket.deletedAt)return {deleted:true,duplicate:true};if(acting.has(ticket.id))throw new Error('任务操作正在提交，请稍候');acting.add(ticket.id);

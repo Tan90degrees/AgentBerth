@@ -4,7 +4,13 @@ let sessions={};try{sessions=JSON.parse(fs.readFileSync(database,'utf8'));}catch
 const modern=process.argv.includes('--v1'),terminalAuth=process.argv.includes('--terminal-auth'),login=path.join(directory,'login');
 if(process.argv.includes('--login')){
   process.stdout.write('FIXTURE_LOGIN> ');
-  process.stdin.once('data',value=>{if(String(value).trim()==='accept'){fs.writeFileSync(login,'ok');process.exit(0);}process.exit(1);});
+  const input=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
+  input.on('line',value=>{
+    if(value.trim()!=='accept')return;
+    fs.writeFileSync(login,'ok');
+    input.close();
+    process.exit(0);
+  });
 } else {
 let authenticated=!process.argv.includes('--auth')&&(!terminalAuth||fs.existsSync(login)),booleanOption=false,model='small',mode='build',sequence=0,pending=new Map(),turns=new Map();
 const send=(value,flushed)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\n',flushed);
@@ -18,6 +24,10 @@ const metadata=()=>({...(!process.argv.includes('--config-modes')?{modes:{curren
 const call=(method,params)=>new Promise((resolve,reject)=>{const id='client-'+ ++sequence;pending.set(id,{resolve,reject});send({id,method,params});});
 const permission=(sessionId,toolCall={toolCallId:'file-write',title:'Write note.txt',kind:'edit',status:'pending'})=>call('session/request_permission',{sessionId,toolCall,options:[{optionId:'allow',kind:'allow_once',name:'允许一次'},{optionId:'reject',kind:'reject_once',name:'拒绝'}]});
 async function prompt(message){const p=message.params,content=p.prompt.map(item=>item.text??'').join(''),sessionId=p.sessionId;record({method:'prompt',sessionId,model,text:content,...(process.argv.includes('--workbench')||modern?{blocks:p.prompt.map(({type,name,uri,mimeType,resource})=>({type,name,uri,mimeType,resource}))}:{})});
+  if(content.includes('acp-url-task')&&content.includes('你是 Superagent 的协调者')){
+    const outcome=await call('elicitation/create',{mode:'url',sessionId,elicitationId:'task-url',url:'https://example.invalid/authorize?state=fixture-token',message:'Authorize in browser'});
+    record({method:'task-url-result',outcome});
+  }
   if(content==='v1 stream'){
     const chunk=(source,messageId,value)=>update(source,{sessionUpdate:'agent_message_chunk',messageId,content:{type:'text',text:value}});
     chunk(sessionId,'one','first ');

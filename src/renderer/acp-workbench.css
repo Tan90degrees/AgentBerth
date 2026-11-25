@@ -406,3 +406,6 @@
 .acp-child-info>div{min-width:0}
 .acp-child-info dt{color:var(--text-muted)}
 .acp-child-info dd{margin:0;overflow-wrap:anywhere}
+.acp-messages>.acp-stream-card + .acp-stream-card{margin-top:8px}
+.acp-stream-body>.conversation-message{margin-bottom:0}
+@media(prefers-reduced-motion:no-preference){.acp-stream-card[open]>.acp-stream-body{animation:acp-fade var(--acp-motion) var(--acp-ease)}}

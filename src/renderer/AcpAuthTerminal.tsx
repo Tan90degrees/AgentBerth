@@ -23,8 +23,9 @@ export function AcpAuthTerminal({sessionId,terminalId,onError}:{sessionId:string
     });
     void rpc('read').then(value=>{if(alive){write(value as {sequence:number;output:string});for(const item of buffer)write(item);buffer.length=0;}})
       .catch(error=>{if(alive)onError(String(error));});
+    let writes=Promise.resolve();
     const input=terminal.onData(text=>{
-      void (async()=>{for(const part of inputChunks(text)){if(!alive)break;await rpc('write',{input:part});}})()
+      writes=writes.then(async()=>{for(const part of inputChunks(text)){if(!alive)break;await rpc('write',{input:part});}})
         .catch(error=>{if(alive)onError(String(error));});
     });
     const size=terminal.onResize(({cols,rows})=>{void rpc('resize',{cols:Math.max(2,Math.min(500,cols)),rows:Math.max(2,Math.min(250,rows))}).catch(()=>{});});
