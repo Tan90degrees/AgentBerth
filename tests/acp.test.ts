@@ -279,6 +279,6 @@ test('Registry binary uses digest verification and never extracts archive paths 
   const before=await readdir(dir);
   await assert.rejects(installAcpBinary(dir,{...getRecipe(),sha256:'0'.repeat(64)}),/SHA-256/);
   archive=zipSync({'../escape.exe':contents,'agent.exe':contents});
-  await assert.rejects(installAcpBinary(dir,getRecipe()),/file name|路径/);
+  await assert.rejects(installAcpBinary(dir,getRecipe()),/file name|invalid relative path|路径/);
   assert.deepEqual(await readdir(dir),before);
 });
