@@ -5,6 +5,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import ssh2 from 'ssh2';
+import { strToU8, zipSync } from 'fflate';
 import { generateSshKeys, testPassword, testUsername, workspaceSshFixture } from './ssh-workspace-fixture.mjs';
 
 await mkdir('dist/tests',{recursive:true});
@@ -16,7 +17,7 @@ await build({stdin:{contents:`
 const {WorkspaceProvision,WorkspaceSshHosts,WorkspaceTargets}=(await import('../dist/tests/workspace-provision.cjs')).default;
 const version=JSON.parse(await readFile('package.json','utf8')).version;
 
-test('SSH workspaces deploy once, use both authentication methods and preserve a remote terminal', {timeout:95000},async t=>{
+test('SSH workspaces deploy once, preserve a remote terminal and install a local plugin package', {timeout:95000},async t=>{
   const root=await mkdtemp(path.join(tmpdir(),'berth-provision-'));
   const home=path.join(root,'remote home'),data=path.join(home,'.local/share/agentberth-server');
   const hostKey=generateSshKeys().privateKey,privateKey=generateSshKeys().privateKey,publicKey=ssh2.utils.parseKey(privateKey);
@@ -82,6 +83,18 @@ test('SSH workspaces deploy once, use both authentication methods and preserve a
     if(attachment.snapshot.includes('PROVISION_CONNECTED'))break;
     await new Promise(resolve=>setTimeout(resolve,50));
   }while(Date.now()<deadline);
+  const pluginFile=path.join(root,'local plugin.zip');
+  await writeFile(pluginFile,zipSync({
+    'agentberth.extension.json':strToU8(JSON.stringify({apiVersion:1,id:'example.ssh-upload',name:'SSH upload fixture',version:'1.0.0'})),
+    'index.cjs':strToU8("exports.apply=ctx=>{ctx.berth.command({name:'ping',description:'Fixture',inputSchema:{type:'object'}},()=>({ready:true}));};"),
+    'asset.bin':new Uint8Array(192*1024),
+  },{level:0}));
+  const plugin=await provision.installExtension(usingKey,pluginFile);
+  assert.equal(plugin.plugins.find(item=>item.manifest.id==='example.ssh-upload')?.status,'active');
+  assert.deepEqual(await usingKey.rpc('extensions',{request:{action:'call',id:'example.ssh-upload',command:'ping'}}),{ready:true});
+  await writeFile(pluginFile,'incomplete ZIP');
+  await assert.rejects(provision.installExtension(usingKey,pluginFile),/ZIP 不完整/);
+  assert.ok(!(await readdir(data)).some(name=>name.startsWith('.plugin-stage-')));
   assert.equal(attachment.run.id,run.id);
   assert.ok(attachment.snapshot.includes('PROVISION_CONNECTED'));
   assert.equal(fingerprints,1);
@@ -99,5 +112,7 @@ test('SSH workspaces deploy once, use both authentication methods and preserve a
   connections.add(restarted);
   assert.deepEqual(restartPhases,['start','connect']);
   assert.notEqual(JSON.parse(await readFile(path.join(data,'runtime.json'),'utf8')).pid,pid);
-  assert.ok((await restarted.rpc('state')).projects.some(item=>item.id===project.id));
+  const saved=await restarted.rpc('state');
+  assert.ok(saved.projects.some(item=>item.id===project.id));
+  assert.equal(saved.extensions.plugins.find(item=>item.manifest.id==='example.ssh-upload')?.status,'active');
 });

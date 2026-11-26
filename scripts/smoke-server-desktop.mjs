@@ -1,16 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { strToU8, zipSync } from 'fflate';
 import { _electron as electron } from 'playwright';
 import { cleanupSmoke } from './smoke-cleanup.mjs';
 
 const root=await mkdtemp(path.join(tmpdir(),'berth-server-desktop-'));
 const data=path.join(root,'server'),local=path.join(root,'local'),profile=path.join(root,'profile'),projectPath=path.join(root,'workspace');
 await mkdir(projectPath);await mkdir('test-results',{recursive:true});
+const pluginFile=path.join(root,'desktop-plugin.zip');
+await writeFile(pluginFile,zipSync({
+  'agentberth.extension.json':strToU8(JSON.stringify({apiVersion:1,id:'example.direct-upload',name:'Direct upload fixture',version:'1.0.0'})),
+  'index.cjs':strToU8("exports.apply=()=>{};"),
+}));
 const portServer=createServer();
 portServer.listen(0,'127.0.0.1');
 await once(portServer,'listening');
@@ -31,6 +37,11 @@ try {
   const args=[path.resolve('.'),'--user-data-dir='+profile,'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader'];
   if(process.getuid?.()===0)args.push('--no-sandbox');
   app=await electron.launch({args,env:{...process.env,AGENTBERTH_DATA_DIR:local},timeout:25000});
+  await app.evaluate(({dialog},file)=>{
+    const open=dialog.showOpenDialog.bind(dialog);
+    dialog.showOpenDialog=(...args)=>args[1]?.title==='安装插件到服务器'
+      ?Promise.resolve({canceled:false,filePaths:[file]}):open(...args);
+  },pluginFile);
   page=await app.firstWindow();
   await page.getByRole('button',{name:'添加第一个项目'}).waitFor();
   daemonPid=JSON.parse(await readFile(path.join(local,'runtime.json'),'utf8')).pid;
@@ -51,6 +62,8 @@ try {
   }
 
   await connect();
+  const installed=await page.evaluate(()=>window.berth.installExtension(false));
+  assert.equal(installed?.plugins.find(item=>item.manifest.id==='example.direct-upload')?.status,'active');
   await page.getByRole('button',{name:'添加第一个项目'}).click();
   const form=page.getByRole('dialog',{name:'添加项目目录'});
   await form.getByLabel('项目目录').fill(projectPath);
@@ -83,7 +96,7 @@ try {
   assert.equal(restored.run.id,run.id);
   assert.ok(restored.snapshot.includes('SERVER_STILL_RUNNING'));
   await rpc('stop',{sessionId:session.id});
-  console.log('Desktop smoke verified workspace isolation, server directories and PTY continuity');
+  console.log('Desktop smoke verified workspace isolation, server directories, plugin upload and PTY continuity');
 } catch(error) {
   if(page&&!page.isClosed())await page.screenshot({path:'test-results/server-failure.png',timeout:2500}).catch(()=>{});
   throw error;

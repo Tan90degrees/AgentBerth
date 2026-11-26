@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { PROTOCOL_VERSION, type ServerEvent } from '../shared/protocol';
 import { serverTokenPattern, type WorkspaceProvisionProgress, type WorkspaceSshEndpoint, type WorkspaceSshProbe } from '../shared/workspace-server';
 import { DaemonConnection } from './connection';
+import { workspaceExtensionSize } from './workspace-extension';
+import type { ExtensionSnapshot } from '../shared/extensions';
 
 export type VerifyWorkspaceHost = (endpoint:WorkspaceSshEndpoint,fingerprint:string,interactive:boolean)=>Promise<boolean>;
 type Architecture=WorkspaceSshProbe['arch'];
@@ -240,17 +242,7 @@ async function deploy(client:Client,inspection:Inspection,id:string,storage:stri
   await run(client,'set -eu\numask 077\n'+stage+'mkdir -p "$HOME/.local/opt"\nmkdir "$stage"');
   try{
     progress('upload');
-    const channel=await sftp(client);
-    try{
-      await new Promise<void>((resolve,reject)=>{
-        const timer=setTimeout(()=>reject(new Error('上传服务器包超时，请检查 SSH 网络后重试')),240_000);
-        channel.fastPut(file,pathOnServer,{concurrency:32,mode:0o600},error=>{
-          clearTimeout(timer);
-          if(error)reject(new Error('上传服务器包失败，请检查 SFTP 权限和服务器磁盘空间',{cause:error}));
-          else resolve();
-        });
-      });
-    }finally{channel.end();}
+    await uploadFile(client,file,pathOnServer,240_000);
     progress('install');
     await run(client,'set -eu\numask 077\n'+stage+
       'cd "$stage"\nprintf "%s  %s\\n" '+hash+' bundle.tar.gz | sha256sum -c -\n'+
@@ -260,9 +252,75 @@ async function deploy(client:Client,inspection:Inspection,id:string,storage:stri
   }finally{await run(client,stage+'rm -rf -- "$stage"').catch(()=>{});}
 }
 
+async function uploadFile(client:Client,file:string,target:string,timeout:number,fileSize?:number){
+  const channel=await sftp(client);
+  try{
+    await new Promise<void>((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error('上传超时，请检查 SSH 网络后重试')),timeout);
+      channel.fastPut(file,target,{concurrency:32,mode:0o600,fileSize},error=>{
+        clearTimeout(timer);
+        if(error)reject(new Error('上传失败，请检查 SFTP 权限和服务器磁盘空间',{cause:error}));
+        else resolve();
+      });
+    });
+  }finally{channel.end();}
+}
+
+// Keep the private upload directory tied to the SSH session. EOF or hangup
+// removes it even when the user switches workspaces before the upload completes.
+function pluginStage(client:Client,name:string):Promise<ClientChannel>{
+  return new Promise((resolve,reject)=>{
+    let channel:ClientChannel|undefined,settled=false,output='';
+    const fail=()=>{
+      if(settled)return;
+      settled=true;clearTimeout(timer);
+      channel?.end();
+      reject(new Error('无法创建服务器插件上传目录'));
+    };
+    const timer=setTimeout(fail,10000);
+    client.exec('sh -s',(error,stream)=>{
+      if(settled){stream?.end();return;}
+      if(error){fail();return;}
+      channel=stream;
+      stream.stderr.resume();
+      stream.on('error',fail);
+      stream.on('close',fail);
+      stream.on('data',(chunk:Buffer)=>{
+        if(settled)return;
+        output+=chunk.toString();
+        if(output.includes('AgentBerth:plugin-ready\n')){
+          settled=true;clearTimeout(timer);resolve(stream);
+        }else if(output.length>4096)fail();
+      });
+      stream.write(`set -eu
+umask 077
+stage="$HOME/.local/share/agentberth-server/${name}"
+{
+  mkdir "$stage"
+  trap 'rm -rf -- "$stage"' EXIT
+  trap 'exit 1' HUP INT TERM
+  printf 'AgentBerth:plugin-ready\\n'
+  IFS= read -r unused || :
+}
+`);
+    });
+  });
+}
+
+async function releasePluginStage(channel:ClientChannel){
+  if(channel.destroyed)return;
+  await new Promise<void>(resolve=>{
+    const finished=()=>{clearTimeout(timer);channel.removeListener('close',finished);resolve();};
+    const timer=setTimeout(()=>{channel.destroy();finished();},5000);
+    channel.once('close',finished);
+    channel.end();
+  });
+}
+
 export class WorkspaceProvision {
   private probe?:{id:string;client:Client;inspection:Inspection;endpoint:WorkspaceSshEndpoint;timer:NodeJS.Timeout};
   private busy=false;
+  private sshConnections=new WeakMap<DaemonConnection,{client:Client;home:string;uploading?:boolean}>();
   constructor(private verify:VerifyWorkspaceHost,private assets:string,private version:string){}
 
   async inspect(endpoint:WorkspaceSshEndpoint):Promise<WorkspaceSshProbe>{
@@ -311,7 +369,7 @@ export class WorkspaceProvision {
       }
       progress('connect');
       const connection=await connectRuntime(client,inspection,emit);
-      connection.onClose(()=>client.end());
+      this.trackConnection(connection,client,inspection.home);
       return {endpoint,connection};
     }catch(error){client.end();throw error;}
     finally{this.busy=false;}
@@ -323,9 +381,30 @@ export class WorkspaceProvision {
       const inspection=await this.readStartup(client);
       if(!inspection.live)throw new Error('服务器服务已停止，请重新探测并启动');
       const connection=await connectRuntime(client,inspection,emit);
-      connection.onClose(()=>client.end());
+      this.trackConnection(connection,client,inspection.home);
       return connection;
     }catch(error){client.end();throw error;}
+  }
+  private trackConnection(connection:DaemonConnection,client:Client,home:string){
+    this.sshConnections.set(connection,{client,home});
+    connection.onClose(()=>{this.sshConnections.delete(connection);client.end();});
+  }
+  async installExtension(connection:DaemonConnection,file:string){
+    const transport=this.sshConnections.get(connection);
+    if(!transport||!connection.connected)throw new Error('SSH 工作区连接已断开');
+    if(transport.uploading)throw new Error('正在上传插件，请稍后重试');
+    transport.uploading=true;
+    let stage:ClientChannel|undefined;
+    try{
+      const size=await workspaceExtensionSize(file),name='.plugin-stage-'+randomUUID();
+      stage=await pluginStage(transport.client,name);
+      const target=transport.home+'/.local/share/agentberth-server/'+name+'/extension.zip';
+      await uploadFile(transport.client,file,target,8*60_000,size);
+      return await connection.rpc<ExtensionSnapshot>('extensions',{request:{action:'install',path:target}});
+    }finally{
+      if(stage)await releasePluginStage(stage);
+      transport.uploading=false;
+    }
   }
   private async readStartup(client:Client){
     let inspection=await inspectWorkspace(client);

@@ -19,6 +19,7 @@ import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
 import { WorkspaceProvision } from './workspace-provision';
+import { uploadWorkspaceExtension } from './workspace-extension';
 import { WorkspaceSshHosts } from './workspace-ssh-hosts';
 import { workspaceSshSettings } from './workspace-ssh-config';
 import { WorkspaceTargets,workspaceCertificate,workspaceKey } from './workspace-target';
@@ -210,6 +211,10 @@ function withDesktopDiagnostics(state:import('../shared/protocol').State){const 
 function publishDesktopDiagnostics(){if(!desktopState)return;const event={event:'state',data:withDesktopDiagnostics(desktopState)};for(const target of [window,sshWindow])if(target&&!target.isDestroyed())target.webContents.send('berth:event',event);}
 function emit(event: ServerEvent) {
   if(event.event==='state'){
+    if(workspaceTargets.active&&event.data.extensions){
+      const extensions={...event.data.extensions,plugins:event.data.extensions.plugins.map(({desktop,...plugin})=>plugin)};
+      event={...event,data:{...event.data,extensions}};
+    }
     const sshWasEnabled=extensionEnabled(extensionSnapshot,'ssh'),sshGeneration=extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation;extensionSnapshot=event.data.extensions;
     pluginBrowser?.reconcile();desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};if(!quitting)void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
     if(!quitting&&(!sshWasEnabled||sshGeneration!==extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation)&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
@@ -605,9 +610,28 @@ ipcMain.handle('berth:pluginBrowser',async(event,raw:unknown)=>{trusted(event);i
 ipcMain.handle('berth:resourcePids',event=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口可读取工作台进程');return {applicationPids:{'deepseek-harness':pluginBrowser?.processIds()??[]}};});
 ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();trusted(event);return connection!.rpc('extensions',{request});});
 ipcMain.handle('berth:installExtension',async(event,development:unknown=false)=>{
-  trusted(event);if(workspaceTargets.active)throw new Error('请将插件包放到服务器后安装');if(typeof development!=='boolean')throw new Error('无效插件安装方式');
-  const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,development?{title:'加载插件开发目录',properties:['openDirectory']}:{title:'安装 AgentBerth 插件包',properties:['openFile'],filters:[{name:'AgentBerth 插件包',extensions:['zip']}]});
-  if(result.canceled)return null;if(!connection)await reconnect();trusted(event);return connection!.rpc('extensions',{request:{action:'install',path:result.filePaths[0],development}});
+  trusted(event);
+  if(quitting||changingWorkspace)throw new Error('请等待工作区切换完成');
+  if(typeof development!=='boolean')throw new Error('无效插件安装方式');
+  if(development&&workspaceTargets.active)throw new Error('远程工作区请选择 ZIP 插件包');
+  const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,
+    development?{title:'加载插件开发目录',properties:['openDirectory']}:
+      {title:workspaceTargets.active?'安装插件到服务器':'安装 AgentBerth 插件包',properties:['openFile'],filters:[{name:'AgentBerth 插件包',extensions:['zip']}]});
+  if(result.canceled)return null;
+  if(connecting)await connecting;
+  if(!connection)await reconnect();
+  trusted(event);
+  if(quitting||changingWorkspace)throw new Error('请等待工作区切换完成');
+  const target=connection!,endpoint=workspaceTargets.active,file=result.filePaths[0];
+  if(!endpoint)return target.rpc('extensions',{request:{action:'install',path:file,development}});
+  if('ssh' in endpoint)return workspaceProvision.installExtension(target,file);
+  if(!desktopState?.server?.extensionUpload)throw new Error('当前服务器不支持通过地址与令牌上传插件，请更新服务端');
+  const cancel=new AbortController();
+  const unsubscribe=target.onClose(()=>cancel.abort());
+  try{
+    await uploadWorkspaceExtension(endpoint,file,cancel.signal);
+    return await target.rpc('extensions',{request:{action:'list'}});
+  }finally{unsubscribe();}
 });
 ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unknown) => {
   if(action!=='state')requireExtension('ssh');

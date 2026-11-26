@@ -8,10 +8,10 @@ const tabs: {id:PluginCenterTab;title:string;description:string}[]=[
   {id:'installed',title:'扩展插件',description:'安装与配置扩展'},
   {id:'agents',title:'Agent 接入',description:'Agent 与 Skills'},
 ];
-export function PluginCenter({tab,onTabChange,projects,currentProjectId,apiVersion,onError,openPluginId,onOpenHandled}:{
+export function PluginCenter({tab,onTabChange,projects,currentProjectId,apiVersion,onError,openPluginId,onOpenHandled,remote=false}:{
   tab:PluginCenterTab;onTabChange:(tab:PluginCenterTab)=>void;
   projects:Project[];currentProjectId?:string;apiVersion:number;
-  onError:(error:string)=>void;openPluginId?:string|null;onOpenHandled?:()=>void;
+  onError:(error:string)=>void;remote?:boolean;openPluginId?:string|null;onOpenHandled?:()=>void;
 }){
   const snapshot=useContext(ExtensionsContext);
   const visible=snapshot?.plugins.filter(p=>tab==='agents'?p.isAgent:!p.isAgent)??[];
@@ -27,7 +27,7 @@ export function PluginCenter({tab,onTabChange,projects,currentProjectId,apiVersi
     <nav className="plugin-center-tabs" aria-label="插件分类">{tabs.map(item=><button type="button" key={item.id} aria-current={tab===item.id?'page':undefined} className={tab===item.id?'selected':''} onClick={()=>onTabChange(item.id)}><strong>{item.title}</strong><small>{item.description}</small></button>)}</nav>
     <div className="plugin-center-content">
       {tab==='agents'&&apiVersion>=44&&<AcpAgents onError={onError} apiVersion={apiVersion}/>}
-      <ExtensionManager snapshot={snapshot} mode={tab==='agents'?'agents':'all'} onError={onError} openId={openPluginId} onOpenHandled={onOpenHandled} projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion}/>
+      <ExtensionManager remote={remote} snapshot={snapshot} mode={tab==='agents'?'agents':'all'} onError={onError} openId={openPluginId} onOpenHandled={onOpenHandled} projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion}/>
     </div>
   </section>;
 }

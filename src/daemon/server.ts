@@ -11,7 +11,8 @@ import type { SshChallenge, SshSecret, TransferEndpoint } from '../shared/protoc
 import { localTransferFs, RemoteTransfers, sftpTransferFs } from './remote-transfer';
 import { createServer as createHttpsServer } from 'node:https';
 import { workspaceDirectories, type WorkspaceServerOptions } from './workspace-server';
-import { WORKSPACE_SERVER_VERSION } from '../shared/workspace-server';
+import { WorkspaceExtensionUpload } from './workspace-extension';
+import { WORKSPACE_EXTENSION_PATH, WORKSPACE_SERVER_VERSION } from '../shared/workspace-server';
 import { createServer, type IncomingMessage } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -174,12 +175,23 @@ export class DaemonServer {
     };
     authorize(this.http,this.token);
     if(workspaceServer&&!workspaceServer.sshOnly){
-      const fallback:Parameters<typeof createServer>[1]=(_request,response)=>{response.writeHead(404);response.end();};
+      const uploads=new WorkspaceExtensionUpload(path.join(dataDirectory,'extension-uploads'),file=>{
+        if(this.closing)throw new Error('后台正在退出，请稍后重试');
+        return this.extensions.install(file);
+      });
+      const handle:Parameters<typeof createServer>[1]=(request,response)=>{
+        if(request.url!==WORKSPACE_EXTENSION_PATH){response.writeHead(404).end();return;}
+        if(!this.authorized(request,workspaceServer.token,WORKSPACE_EXTENSION_PATH)){
+          response.writeHead(401,{Connection:'close'}).end();return;
+        }
+        void uploads.handle(request,response).catch(error=>this.logError(error));
+      };
       this.hosted=workspaceServer.tls
-        ?createHttpsServer({...workspaceServer.tls,minVersion:'TLSv1.2',handshakeTimeout:8000},fallback)
-        :createServer(fallback);
+        ?createHttpsServer({...workspaceServer.tls,minVersion:'TLSv1.2',handshakeTimeout:8000},handle)
+        :createServer(handle);
+      this.hosted.on('checkContinue',handle);
       this.hosted.headersTimeout=10_000;
-      this.hosted.requestTimeout=15_000;
+      this.hosted.requestTimeout=8*60_000;
       authorize(this.hosted,workspaceServer.token);
       const responsive=new WeakSet<WebSocket>();
       this.ws.on('connection',socket=>{responsive.add(socket);socket.on('pong',()=>responsive.add(socket));});
@@ -218,8 +230,8 @@ export class DaemonServer {
     });
   }
 
-  private authorized(request: IncomingMessage,token:string): boolean {
-    if (request.url !== '/rpc' || request.headers.origin) return false;
+  private authorized(request: IncomingMessage,token:string,route='/rpc'): boolean {
+    if (request.url !== route || request.headers.origin) return false;
     const actual = Buffer.from(request.headers.authorization ?? '');
     const expected = Buffer.from(`Bearer ${token}`);
     return actual.length === expected.length && timingSafeEqual(actual, expected);
@@ -258,7 +270,7 @@ export class DaemonServer {
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
   }
-  private snapshot(): State { const state=this.store.state();return {...state,...(this.workspaceServer?{server:{version:WORKSPACE_SERVER_VERSION,hostname:hostname()}}:{}),agentActivities:[...this.acp.activities(state.sessions.filter(session=>!session.owner),state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private snapshot(): State { const state=this.store.state();return {...state,...(this.workspaceServer?{server:{version:WORKSPACE_SERVER_VERSION,hostname:hostname(),...(this.hosted?{extensionUpload:true as const}:{})}}:{}),agentActivities:[...this.acp.activities(state.sessions.filter(session=>!session.owner),state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
   workspaceCorePort() {
     const self=this;
     return {

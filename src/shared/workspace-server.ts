@@ -1,8 +1,9 @@
 export const DEFAULT_WORKSPACE_SERVER_PORT = 7467;
 export const WORKSPACE_SERVER_VERSION = 1;
+export const WORKSPACE_EXTENSION_PATH = '/extension-package';
 export const serverTokenPattern = /^[a-f0-9]{64}$/;
 
-export interface WorkspaceServerInfo { version: number; hostname: string }
+export interface WorkspaceServerInfo { version: number; hostname: string; extensionUpload?: true }
 export interface WorkspaceEndpoint {
   address: string;
   token: string;

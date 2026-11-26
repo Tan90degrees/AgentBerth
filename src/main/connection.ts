@@ -82,7 +82,7 @@ export class DaemonConnection {
     });
   }
   close(silent = false): void { this.silent = silent; this.socket.close(); }
-  onClose(listener:()=>void):void{this.socket.once('close',listener);}
+  onClose(listener:()=>void):()=>void{this.socket.once('close',listener);return ()=>{this.socket.removeListener('close',listener);};}
   get connected(): boolean { return this.socket.readyState === WebSocket.OPEN; }
 }
 

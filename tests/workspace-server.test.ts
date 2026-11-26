@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {once} from 'node:events';
 import {WebSocket} from 'ws';
+import { strToU8, zipSync } from 'fflate';
+import { uploadWorkspaceExtension } from '../src/main/workspace-extension';
 import {DaemonConnection} from '../src/main/connection';
 import {WorkspaceTargets} from '../src/main/workspace-target';
 import {readWorkspaceServerToken,workspaceServerOptions} from '../src/daemon/workspace-server';
@@ -66,7 +68,7 @@ async function until<T>(read:()=>Promise<T>,accept:(value:T)=>boolean){
   throw new Error('Workspace server did not reach expected state', {cause:last});
 }
 
-test('Linux server starts headlessly, authenticates TLS, preserves PTYs after disconnect and reopens its data',linux,async t=>{
+test('Linux server authenticates TLS connections and plugin uploads, preserves PTYs after disconnect and reopens its data',linux,async t=>{
   const root=await mkdtemp(path.join(tmpdir(),'berth-linux-server-')),data=path.join(root,'data'),workspace=path.join(root,'project');
   await mkdir(path.join(workspace,'child'),{recursive:true});
   await mkdir(path.join(root,'fixture'));
@@ -113,6 +115,21 @@ test('Linux server starts headlessly, authenticates TLS, preserves PTYs after di
     const browser=new WebSocket(address+'/rpc',{ca,origin:'https://example.invalid',headers:{Authorization:'Bearer '+token}});
     browser.once('open',()=>{browser.close();resolve();});browser.once('error',reject);
   }),/401/);
+  assert.equal((await connection.rpc<State>('state')).server?.extensionUpload,true);
+  const pluginFile=path.join(root,'local plugin.zip'),signal=new AbortController().signal;
+  await writeFile(pluginFile,zipSync({
+    'agentberth.extension.json':strToU8(JSON.stringify({apiVersion:1,id:'example.tls-upload',name:'TLS upload fixture',version:'1.0.0'})),
+    'index.cjs':strToU8("exports.apply=ctx=>{ctx.berth.command({name:'ping',description:'Fixture',inputSchema:{type:'object'}},()=>({ready:true}));};"),
+    'asset.bin':new Uint8Array(192*1024),
+  },{level:0}));
+  await assert.rejects(uploadWorkspaceExtension({address,ca,token:'0'.repeat(64)},pluginFile,signal),/令牌/);
+  await assert.rejects(uploadWorkspaceExtension({address,token},pluginFile,signal),/self.signed|certificate/i);
+  await uploadWorkspaceExtension({address,ca,token},pluginFile,signal);
+  assert.deepEqual(await connection.rpc('extensions',{request:{action:'call',id:'example.tls-upload',command:'ping'}}),{ready:true});
+  await until(()=>readdir(path.join(data,'extension-uploads')),files=>files.length===0);
+  await writeFile(pluginFile,'incomplete ZIP');
+  await assert.rejects(uploadWorkspaceExtension({address,ca,token},pluginFile,signal),/ZIP 不完整/);
+  await until(()=>readdir(path.join(data,'extension-uploads')),files=>files.length===0);
   const directories=await connection.rpc<WorkspaceDirectoryPage>('workspaceDirectories',{path:workspace});
   assert.ok(directories.directories.some(entry=>entry.name==='child'));
   await assert.rejects(connection.rpc('shutdown'),/Linux 服务/);
