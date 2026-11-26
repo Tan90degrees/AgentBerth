@@ -54,7 +54,9 @@ if test -f "$data/daemon.lock"; then
 fi
 mode=
 if "$entry" --help | grep -q -- --ssh-only; then mode=--ssh-only; fi
-if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+# A user manager without lingering can stop its services at SSH logout.
+if test "$(loginctl show-user "$(id -u)" -p Linger --value 2>/dev/null || true)" = yes &&
+  systemctl --user show-environment >/dev/null 2>&1; then
   if systemctl --user start agentberth-server.service >/dev/null 2>&1; then exit 0; fi
   if test "$mode" = --ssh-only; then
     units="$HOME/.config/systemd/user"
@@ -104,8 +106,12 @@ async function openSsh(endpoint:WorkspaceSshEndpoint,verify:VerifyWorkspaceHost,
     };
     client.on('error',error=>{
       const detail=(error as Error&{level?:string;code?:string});
-      fail(verificationError??new Error(detail.level==='client-authentication'?'SSH 登录失败，请核对账号、密码或密钥':
-        detail.code==='ECONNREFUSED'?'服务器拒绝 SSH 连接，请检查端口':detail.message));
+      const message=detail.level==='client-authentication'?'SSH 登录失败，请核对账号、密码或密钥':
+        detail.code==='ECONNREFUSED'?'服务器拒绝 SSH 连接，请检查端口':
+        detail.code==='ENOTFOUND'||detail.code==='EAI_AGAIN'?'无法解析 SSH 主机名':
+        detail.level==='client-timeout'||detail.code==='ETIMEDOUT'?'SSH 连接超时，请检查地址、端口和网络':
+        detail.message;
+      fail(verificationError??new Error(message));
     });
     client.on('close',()=>fail(verificationError??new Error('SSH 连接已断开')));
     client.once('ready',()=>{if(!settled){settled=true;resolve(client);}});
@@ -301,7 +307,7 @@ export class WorkspaceProvision {
           if(inspection.runtime)break;
           await new Promise(resolve=>setTimeout(resolve,250));
         }while(Date.now()<deadline);
-        if(!inspection.runtime)throw new Error('服务器启动未完成，请查看 ~/.local/share/agentberth-server/service.log 后重试');
+        if(!inspection.runtime)throw new Error('服务器启动未完成，请查看 systemd 用户服务日志或 ~/.local/share/agentberth-server/service.log');
       }
       progress('connect');
       const connection=await connectRuntime(client,inspection,emit);

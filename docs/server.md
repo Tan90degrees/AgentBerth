@@ -10,7 +10,7 @@ Linux 服务器在独立进程中运行工作区、PTY、ACP、文件、Git、Su
 
 桌面安装包内置匹配版本的 Linux x64、ARM64 包和 Node.js 运行时。服务器需使用 glibc，开放 SSH shell、SFTP 和到服务器自身回环地址的 SSH TCP 转发。桌面上传后校验 SHA-256，安装到当前 SSH 用户的 `~/.local/opt/agentberth-server`，数据保存在 `~/.local/share/agentberth-server`。自动部署使用账号权限和 SSH 端口，不需要 sudo、单独开放 AgentBerth 端口或填写服务令牌。服务器上的 Agent CLI 与模型授权由该 SSH 用户配置。
 
-首次启动优先使用 systemd 用户服务 `agentberth-workspace.service`，环境没有可用的用户服务时以后台进程运行，日志在 `~/.local/share/agentberth-server/service.log`。已有兼容服务会直接复用，离线的已有安装会启动。探测读取同一用户标准数据目录中的运行描述符。使用自定义目录的部署可以通过「地址与令牌」连接。
+服务账户已启用 systemd lingering 时优先使用用户服务 `agentberth-workspace.service`。其余环境使用独立后台进程，日志在 `~/.local/share/agentberth-server/service.log`。如果服务器会在 SSH 注销时清理该用户的后台进程，由系统管理员为服务账户启用 lingering。已有兼容服务会直接复用，离线的已有安装会启动。探测读取同一用户标准数据目录中的运行描述符。使用自定义目录的部署可以通过「地址与令牌」连接。
 
 在系统支持安全凭据存储时，可以勾选「记住 SSH 登录并在下次打开时连接」。首次信任的指纹按主机和端口保存。服务器更换 SSH 主机密钥后，先从服务器控制台核验，再处理本机数据目录的 `workspace-ssh-hosts.json` 对应记录。
 

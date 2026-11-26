@@ -818,7 +818,9 @@ ipcMain.handle('berth:workspaceSshKey',async event=>{
 ipcMain.handle('berth:workspaceSsh',async(event,raw:unknown)=>{
   trusted(event);
   if(event.sender!==window?.webContents||quitting)throw new Error('请在主窗口配置 SSH 连接');
-  const request=workspaceSshRequest.parse(raw);
+  const parsed=workspaceSshRequest.safeParse(raw);
+  if(!parsed.success)throw new Error(parsed.error.issues[0]?.message??'SSH 连接配置无效');
+  const request=parsed.data;
   if(request.action==='discard'){workspaceProvision.discard(request.id);return;}
   if(request.action==='probe'){
     if(changingWorkspace||restarting)throw new Error('请等待当前工作区切换完成');
