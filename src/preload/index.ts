@@ -45,6 +45,7 @@ const api: DesktopApi = {
   skills: request => ipcRenderer.invoke('berth:skills', request),
   chooseDirectory: () => ipcRenderer.invoke('berth:directory'),
   chooseTranscript: () => ipcRenderer.invoke('berth:transcript'),
+  saveAcpMarkdown: (title,markdown) => ipcRenderer.invoke('berth:saveAcpMarkdown',title,markdown),
   exportPluginKit: () => ipcRenderer.invoke('berth:exportPluginKit'),
   pluginDevelopmentPrompt: (folder,topic) => ipcRenderer.invoke('berth:pluginPrompt', folder,topic),
   chooseExecutable: kind => ipcRenderer.invoke('berth:executable',kind),

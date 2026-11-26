@@ -5,7 +5,7 @@ export interface ElicitationField {
   minLength?:number;maxLength?:number;minimum?:number;maximum?:number;minItems?:number;maxItems?:number;
 }
 export type ElicitationContent=Record<string,string|number|boolean|string[]>;
-export interface AcpElicitation {id:string;message:string;toolCallId?:string;fields:ElicitationField[];schema?:Record<string,unknown>}
+export interface AcpElicitation {id:string;message:string;childSessionId?:string;toolCallId?:string;fields:ElicitationField[];url?:{href:string;hostname:string;suspicious:boolean;elicitationId:string};schema?:Record<string,unknown>}
 
 /** ACP form elicitation is distinct from permission to execute a tool. */
 export function elicitationForm(id:string,params:Record<string,any>):AcpElicitation{
@@ -32,6 +32,19 @@ export function elicitationForm(id:string,params:Record<string,any>):AcpElicitat
     return field;
   });
   return {id,message:String(params.message??schema.title??'Agent 需要你的回答'),...(typeof params.toolCallId==='string'?{toolCallId:params.toolCallId}:{}),fields,schema};
+}
+
+export function elicitationUrl(id:string,params:Record<string,unknown>):AcpElicitation{
+  if(typeof params.url!=='string'||params.url.length>4096||/[\x00-\x20\x7f]/.test(params.url)
+    ||typeof params.elicitationId!=='string'||!params.elicitationId||params.elicitationId.length>1000)throw new Error('Agent 提供的网页请求无效');
+  const url=new URL(params.url);
+  const loopback=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
+  if(url.username||url.password||!(url.protocol==='https:'||url.protocol==='http:'&&loopback))throw new Error('只允许通过 HTTPS 或本机地址打开 Agent 网页请求');
+  return {
+    id,message:typeof params.message==='string'?params.message.slice(0,4000):'Agent 请求打开网页',fields:[],
+    url:{href:params.url,hostname:url.hostname,suspicious:/(^|\.)xn--/.test(url.hostname)||url.protocol!=='https:',elicitationId:params.elicitationId},
+    ...(typeof params.toolCallId==='string'?{toolCallId:params.toolCallId}:{}),
+  };
 }
 
 export function elicitationError(request:AcpElicitation,content:ElicitationContent):string|null{

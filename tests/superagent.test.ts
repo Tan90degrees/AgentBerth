@@ -465,3 +465,19 @@ test('finishing the first refresh preserves navigation chosen while the task vie
     await until(async()=>reading,Boolean);const document=dom.window.document;assert.equal(document.querySelector<HTMLButtonElement>('#new')!.disabled,true);document.getElementById('sourcesButton')!.click();release();await until(async()=>document.getElementById('pipelineCount')!.textContent,Boolean);await new Promise(resolve=>setTimeout(resolve,30));assert.equal(document.querySelector('main')!.dataset.view,'sources');assert.equal(document.querySelector<HTMLElement>('#sources')!.hidden,false);assert.equal(document.querySelector<HTMLElement>('#board')!.hidden,true);assert.deepEqual(errors,[]);
   }finally{release();dom.window.close();}
 });
+
+test('Superagent routes ACP web requests to their task-owned session without sharing the URL with the iframe',async t=>{
+  const f=await fixture(t),created=await f.create({objective:'acp-url-task: request an out-of-band confirmation'});
+  const waiting=await until(()=>f.call('get',{id:created.id}),value=>value.interactions?.elicitations.some((item:any)=>item.external));
+  const sessionId=waiting.interactions.sessionId,request=waiting.interactions.elicitations.find((item:any)=>item.external);
+  const params={id:created.id,sessionId,requestId:request.id,kind:'elicitation'};
+  assert.ok(!JSON.stringify(waiting).includes('fixture-token'));
+  await assert.rejects(f.call('interaction',params),/核对网页请求/);
+  await assert.rejects(f.call('respond',{...params,action:'accept'}),/核对网页请求/);
+  const snapshot=await f.connection.rpc<AcpSnapshot>('acpSnapshot',{sessionId});
+  assert.equal(snapshot.elicitations?.[0].url?.hostname,'example.invalid');
+  await f.connection.rpc('acpElicitation',{sessionId,requestId:request.id,action:'decline'});
+  const worker=await until(()=>f.worker(created.id),value=>value.permissions.length===1);
+  assert.ok(worker.permissions[0].id);
+  await f.call('action',{id:created.id,action:'cancel'});
+});

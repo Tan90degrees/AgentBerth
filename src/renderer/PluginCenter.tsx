@@ -26,7 +26,7 @@ export function PluginCenter({tab,onTabChange,projects,currentProjectId,apiVersi
     </div></header>
     <nav className="plugin-center-tabs" aria-label="插件分类">{tabs.map(item=><button type="button" key={item.id} aria-current={tab===item.id?'page':undefined} className={tab===item.id?'selected':''} onClick={()=>onTabChange(item.id)}><strong>{item.title}</strong><small>{item.description}</small></button>)}</nav>
     <div className="plugin-center-content">
-      {tab==='agents'&&apiVersion>=44&&<AcpAgents onError={onError}/>}
+      {tab==='agents'&&apiVersion>=44&&<AcpAgents onError={onError} apiVersion={apiVersion}/>}
       <ExtensionManager snapshot={snapshot} mode={tab==='agents'?'agents':'all'} onError={onError} openId={openPluginId} onOpenHandled={onOpenHandled} projects={projects} currentProjectId={currentProjectId} apiVersion={apiVersion}/>
     </div>
   </section>;

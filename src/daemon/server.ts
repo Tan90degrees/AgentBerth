@@ -123,7 +123,7 @@ export class DaemonServer {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
     this.store = new Store(dataDirectory);
     this.copies=new IsolatedWorkspaces(dataDirectory);
-    this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed());
+    this.acp=new AcpSessions(this.store,event=>this.broadcast(event),()=>this.changed(),this.spawnPty);
     this.extensions=new ExtensionRuntime(path.join(dataDirectory,'extensions'),{
       mount:(id,ctx,config)=>this.mountExtension(id,ctx,config),
       builtinView:(id,view)=>id==='superagent'&&view==='tasks'?superagentView:id==='notes-wiki'&&view==='wiki'?notesWikiView:undefined,
@@ -356,7 +356,7 @@ export class DaemonServer {
   }
   isolatedCorePort(){return {copies:this.copies,store:this.store,requireIdle:this.requireIdle.bind(this)};}
   private async resolveWorkspace(projectId:string,projectPath:string,target?:string|null){if(!target)return projectPath;return await this.copies.resolve(projectId,projectPath,target)??this.git.resolveWorktree(projectPath,target);}
-  acpCorePort(){return {acp:this.acp,store:this.store,ensureStarted:(id:string)=>this.startingRuns.get(id)??(this.acp.active(id)?Promise.resolve():this.start(id,true,100,30))};}
+  acpCorePort(){return {acp:this.acp,store:this.store,resolveWorkspace:this.resolveWorkspace.bind(this),requireProjectAvailable:this.requireProjectAvailable.bind(this),worktreeBusy:this.worktreeBusy,ensureStarted:(id:string)=>this.startingRuns.get(id)??(this.acp.active(id)?Promise.resolve():this.start(id,true,100,30))};}
   registerCoreRoutes(ctx:Context,methods:readonly string[],handler:(request:Request,client:Client)=>Promise<unknown>){for(const method of methods)ctx.effect(()=>{if(this.coreRoutes.has(method))throw new Error('核心接口重复：'+method);this.coreRoutes.set(method,handler);return()=>{this.coreRoutes.delete(method);};});}
   private async mountExtension(id:string,ctx:Context,_config:Record<string,unknown>){
     if(id==='deepseek-harness'){mountHarness(ctx,_config,pid=>{this.harnessPid=pid;});return;}

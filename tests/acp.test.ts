@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import {once} from 'node:events';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,readFile,rm,writeFile,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,realpath,rm,writeFile,symlink} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,19 +11,24 @@ import {AcpClientTools} from '../src/daemon/acp-client-tools';
 import {AcpTransport,acpExecutable,acpCommand} from '../src/daemon/acp-transport';
 import {resolveExecutable} from '../src/daemon/executables';
 import type {AgentDefinition,Session,Run,State} from '../src/shared/protocol';
+import {conversationGroups,toolState} from '../src/shared/acp-presentation';
+import {acpStreamBlocks} from '../src/shared/acp-stream';
 import type {AcpSnapshot} from '../src/shared/acp';
 
 const executable=process.execPath,fixtureFile=path.resolve('tests/fixtures/acp-agent.cjs');
 async function until<T>(read:()=>Promise<T>,predicate:(value:T)=>boolean,ms=15000){const end=Date.now()+ms;let value:T;do{value=await read();if(predicate(value))return value;await new Promise(resolve=>setTimeout(resolve,30));}while(Date.now()<end);throw new Error('Condition timed out: '+JSON.stringify(value));}
-async function fixture(t:any,args:string[]=[]){
+async function fixture(t:any,args:string[]=[],context=false,program=executable){
   const dir=await mkdtemp(path.join(os.tmpdir(),'berth-acp-')),root=path.join(dir,'project'),data=path.join(dir,'data');await mkdir(root);await mkdir(path.join(dir,'agent'));
-  const server=new DaemonServer(data),connection=await DaemonConnection.open(await server.listen(),()=>{});
-  const config={name:'Fixture ACP',command:executable,acp:{executable,args:[fixtureFile,path.join(dir,'agent'),...args],env:{ELECTRON_RUN_AS_NODE:'1'}}};
+  const events:import('../src/shared/protocol').ServerEvent[]=[];
+  const server=new DaemonServer(data),connection=await DaemonConnection.open(await server.listen(),event=>events.push(event));
+  const extra=path.join(dir,'explicit-context');
+  if(context)await mkdir(extra);
+  const config={name:'Fixture ACP',command:program,acp:{executable:program,args:[fixtureFile,path.join(dir,'agent'),...args],env:{ELECTRON_RUN_AS_NODE:'1'},...(context?{additionalDirectories:[extra],systemPrompt:{mode:'override',text:'Use the selected workspace'}}:{})}};
   const agent=await connection.rpc<AgentDefinition>('createAgent',config),project=await connection.rpc<any>('createProject',{name:'ACP project',path:root});
   const session=await connection.rpc<Session>('createSession',{projectId:project.id,title:'ACP conversation',agent:agent.id,command:''});
   t.after(async()=>{connection.close();await server.close();await rm(dir,{recursive:true,force:true,maxRetries:8,retryDelay:100});});
   const snapshot=()=>connection.rpc<AcpSnapshot>('acpSnapshot',{sessionId:session.id}),send=(text:string,requestId=randomUUID())=>connection.rpc<any>('acpSend',{sessionId:session.id,requestId,text});
-  return {dir,root,data,server,connection,agent,project,session,snapshot,send};
+  return {dir,root,data,extra,server,events,connection,agent,project,session,snapshot,send};
 }
 test('ACP sends once, streams structured output, switches models and restores the same native session without replay',async t=>{
   const f=await fixture(t),requestId=randomUUID();await f.send('hello',requestId);await f.send('hello',requestId);
@@ -35,6 +40,93 @@ test('ACP sends once, streams structured output, switches models and restores th
   const log=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.equal(log.filter(item=>item.method==='prompt').length,2);assert.equal(log.filter(item=>item.method==='load').length,1);
 });
 
+test('ACP combined Unicode text and excerpts fail validation before exceeding the RPC frame',async()=>{
+  const {requestSchema}=await import('../src/shared/protocol');
+  const raw={id:randomUUID(),method:'acpSubmit',params:{sessionId:randomUUID(),message:{requestId:randomUUID(),text:'中'.repeat(40000),attachments:[] as {type:string;path:string;text:string}[]}}};
+  assert.equal(requestSchema.safeParse(raw).success,true);
+  raw.params.message.attachments.push({type:'file',path:'材料.md',text:'文'.repeat(4000)});
+  const rejected=requestSchema.safeParse(raw);
+  assert.equal(rejected.success,false);
+  assert.match(String(rejected.error),/消息与引用片段合计过长/);
+});
+test('ACP workbench sends scoped files and images, forwards supported MCP and records usage',async t=>{
+  const f=await fixture(t,['--workbench']);
+  await writeFile(path.join(f.root,'上下文.txt'),'example');
+  const params={sessionId:f.session.id};
+  await f.connection.rpc('acpMcpConfig',{agentId:f.agent.id,servers:[
+    {type:'http',name:'supported',url:'https://example.invalid/mcp'},
+    {type:'sse',name:'unsupported',url:'https://example.invalid/events'},
+  ]});
+  await f.connection.rpc('start',{...params,cols:100,rows:30});
+  await assert.rejects(f.connection.rpc('acpMcpConfig',{agentId:f.agent.id,servers:[]}),/先断开/);
+  const imageId=randomUUID();
+  const header=Buffer.from([137,80,78,71,13,10,26,10]);
+  await assert.rejects(f.connection.rpc('acpImage',{...params,imageId,mimeType:'image/png',data:header.toString('base64'),offset:1,last:true}),/中断/);
+  await f.connection.rpc('acpImage',{...params,imageId,mimeType:'image/png',data:header.subarray(0,4).toString('base64'),offset:0,last:false});
+  await f.connection.rpc('acpImage',{...params,imageId,mimeType:'image/png',data:header.subarray(4).toString('base64'),offset:4,last:true});
+  await assert.rejects(f.connection.rpc('acpSubmit',{...params,message:{requestId:randomUUID(),text:'',attachments:[{type:'file',path:'../outside'}]}}),/路径无效/);
+  await f.connection.rpc('acpSubmit',{...params,message:{requestId:randomUUID(),text:'review',attachments:[{type:'file',path:'上下文.txt',text:'example'},{type:'image',id:imageId,name:'preview.png'}]}});
+  const snapshot=await until(f.snapshot,value=>value.phase==='ready'&&!!value.usage);
+  assert.deepEqual(snapshot.usage,{used:240,size:1000,cost:{amount:0.02,currency:'USD'}});
+  assert.ok(snapshot.events.find(event=>event.kind==='user')?.data?.attachments);
+  const log=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(log.find(item=>item.method==='new').mcpServers.map((server:any)=>server.name),['supported']);
+  assert.deepEqual(log.find(item=>item.method==='prompt').blocks.map((block:any)=>block.type),['text','resource_link','text','image']);
+});
+
+test('ACP queue edits and withdrawal work during a turn, stays paused on reconnect, and dispatches exactly once',async t=>{
+  const f=await fixture(t),params={sessionId:f.session.id};
+  await f.send('long');
+  await until(f.snapshot,value=>value.phase==='running');
+  const keep=randomUUID(),remove=randomUUID();
+  const enqueue=(requestId:string,text:string)=>f.connection.rpc('acpSubmit',{...params,message:{requestId,text},queue:true});
+  await enqueue(keep,'original');
+  await enqueue(remove,'withdraw me');
+  await f.connection.rpc('acpQueue',{...params,action:'edit',requestId:keep,text:'edited'});
+  await f.connection.rpc('acpQueue',{...params,action:'remove',requestId:remove});
+  await f.connection.rpc('stop',params);
+  await f.connection.rpc('start',{...params,resume:true,cols:100,rows:30});
+  const paused=await f.snapshot();
+  assert.equal(paused.queuePaused,true);assert.equal(paused.queue?.length,1);
+  assert.equal(paused.queue?.[0].text,'edited');
+  assert.ok(!paused.events.some(event=>event.text==='edited'));
+  await f.connection.rpc('acpQueue',{...params,action:'resume'});
+  const sent=await until(f.snapshot,value=>value.phase==='ready'&&!!value.events.find(item=>item.text==='edited'));
+  assert.equal(sent.events.filter(event=>event.kind==='user'&&event.text==='edited').length,1);
+  assert.equal(sent.queue?.length,0);
+  await enqueue(keep,'edited');
+  assert.equal((await f.snapshot()).events.filter(event=>event.kind==='user'&&event.text==='edited').length,1);
+});
+
+test('ACP history archives safely and imports native sessions only from the selected work directory',async t=>{
+  const f=await fixture(t,['--workbench']);
+  const scope={projectId:f.project.id,agentId:f.agent.id};
+  await f.connection.rpc('start',{sessionId:f.session.id,cols:100,rows:30});
+  await assert.rejects(f.connection.rpc('acpArchive',{sessionId:f.session.id,archived:true}),/先断开/);
+  await f.connection.rpc('stop',{sessionId:f.session.id});
+  await f.connection.rpc('acpArchive',{sessionId:f.session.id,archived:true});
+  const history=await f.connection.rpc<any[]>('acpHistory');
+  assert.equal(history.find(item=>item.sessionId===f.session.id).archived,true);
+  assert.equal(history.find(item=>item.sessionId===f.session.id).resumable,true);
+  const transport=await AcpTransport.open(f.agent.acp!,f.root,async()=>{throw new Error('Unexpected callback');},()=>{},()=>{});
+  t.after(()=>transport.stop());
+  await transport.call('initialize',{protocolVersion:1,clientCapabilities:{}});
+  const outsideLocalJournal=await transport.call('session/new',{cwd:f.root,mcpServers:[]});
+  await transport.stop();
+  const native=await f.connection.rpc<any>('acpNativeHistory',scope);
+  assert.equal(native.sessions.length,2);
+  const canonical=await realpath(f.root);
+  assert.ok(native.sessions.every((item:any)=>path.relative(canonical,item.cwd)===''));
+  await assert.rejects(f.connection.rpc('acpNativeHistory',{...scope,nativeId:'unrelated'}),/先刷新/);
+  const imported=await f.connection.rpc<{imported:string}>('acpNativeHistory',{...scope,nativeId:outsideLocalJournal.sessionId});
+  await f.connection.rpc('start',{sessionId:imported.imported,resume:true,cols:100,rows:30});
+  const get=()=>f.connection.rpc<AcpSnapshot>('acpSnapshot',{sessionId:imported.imported});
+  assert.ok((await get()).events.some(event=>event.text.includes('REMOTE_REPLAY')));
+  await f.connection.rpc('stop',{sessionId:imported.imported});
+  await f.connection.rpc('start',{sessionId:imported.imported,resume:true,cols:100,rows:30});
+  assert.equal((await get()).events.filter(event=>event.kind==='assistant'&&event.text.includes('REMOTE_REPLAY')).length,1);
+  assert.equal((await get()).events.filter(event=>event.kind==='tool'&&event.text.includes('REMOTE_REPLAY_TOOL')).length,1);
+});
 test('ACP answers structured forms on the original request and keeps concurrent permission separate',async t=>{
   const f=await fixture(t);await f.send('elicitation-and-permission');const pending=await until(f.snapshot,value=>value.elicitations?.length===1&&value.permissions.length===1),question=pending.elicitations![0],params={sessionId:f.session.id,requestId:question.id,action:'accept'};
   await assert.rejects(f.connection.rpc('acpElicitation',{...params,content:{strategy:'渐进修改',checks:['unit'],count:2,enabled:false}}),/有效选项/);assert.equal((await f.snapshot()).elicitations?.length,1);
@@ -186,4 +278,138 @@ test('an ACP connection can be cancelled during initialization without submittin
   await until(f.snapshot,value=>value.phase==='connecting');
   await f.connection.rpc('stop',{sessionId:f.session.id});await started;
   assert.equal(f.server.acpCorePort().acp.live.size,0);const state=await f.snapshot();assert.equal(state.nativeSessionId,null);assert.equal(state.events.filter(event=>event.kind==='user').length,0);assert.equal(state.phase,'disconnected');
+});
+
+test('Registry binary uses digest verification and never extracts archive paths outside staging',async t=>{
+  const {installAcpBinary}=await import('../src/daemon/acp-registry-binary');
+  const {zipSync}=await import('fflate');
+  const {createHash}=await import('node:crypto');
+  const {readdir}=await import('node:fs/promises');
+  const dir=await mkdtemp(path.join(os.tmpdir(),'berth-acp-registry-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const contents=Buffer.from('fixture only');
+  let archive=zipSync({'agent.exe':contents});
+  t.mock.method(globalThis,'fetch',async()=>new Response(Buffer.from(archive)));
+  const getRecipe=()=>({url:'https://example.invalid/agent.zip',sha256:createHash('sha256').update(archive).digest('hex'),kind:'zip' as const,command:'agent.exe',args:[]});
+  const command=await installAcpBinary(dir,getRecipe());
+  assert.deepEqual(await readFile(command),contents);
+  const before=await readdir(dir);
+  await assert.rejects(installAcpBinary(dir,{...getRecipe(),sha256:'0'.repeat(64)}),/SHA-256/);
+  archive=zipSync({'../escape.exe':contents,'agent.exe':contents});
+  await assert.rejects(installAcpBinary(dir,getRecipe()),/file name|invalid relative path|路径/);
+  assert.deepEqual(await readdir(dir),before);
+});
+
+test('ACP v1 streams distinct messages, child events, plans, media and context patches in order',async t=>{
+  const f=await fixture(t,['--workbench','--v1']),params={sessionId:f.session.id};
+  await f.send('v1 stream');
+  const live=await until(f.snapshot,value=>value.phase==='running'&&value.events.some(event=>event.data?.messageId==='media'));
+  await assert.rejects(f.connection.rpc('acpCancel',{...params,childSessionId:'unknown'}),/未提供停止/);
+  await f.connection.rpc('acpCancel',{...params,childSessionId:'child'});
+  const groups=conversationGroups(live.events);
+  const messages=groups.filter(group=>group[0].kind==='assistant'&&!group[0].data?.childSessionId);
+  assert.deepEqual(messages.slice(0,2).map(group=>group.map(event=>event.text).join('')),['first continues','second']);
+  assert.equal(groups.filter(group=>group[0].kind==='tool').length,2);
+  assert.equal(toolState(groups.find(group=>group[0].kind==='tool'&&group[0].data?.childSessionId)!).title,'Child tool');
+  assert.ok(!live.events.some(event=>event.text.includes('must not be recorded')));
+  const context=groups.find(group=>group[0].kind==='compaction')!;
+  assert.deepEqual(acpStreamBlocks(context,'summary'),[{type:'text',text:'Final context'}]);
+  assert.deepEqual(acpStreamBlocks(groups.find(group=>group[0].kind==='session-message')!,'blocks'),[{type:'text',text:'new'}]);
+  assert.deepEqual(groups.filter(group=>group[0].kind==='plan').map(group=>group[0].data?.planId),['visible']);
+  assert.equal(live.sessionInfo?.title,'V1 title');
+  assert.ok(f.events.some(event=>event.event==='acp'&&event.data.notice?.title==='Live V1 notice'));
+  assert.ok(!live.events.some(event=>event.text.includes('Live V1 notice')));
+  const media=messages.at(-1)?.[0].data?.content as {mediaId:string};
+  const first=await f.connection.rpc<{data:string;total:number}>('acpMedia',{...params,mediaId:media.mediaId,offset:0});
+  const last=await f.connection.rpc<{data:string;total:number}>('acpMedia',{...params,mediaId:media.mediaId,offset:first.data.length});
+  assert.equal(first.total,128000);
+  assert.deepEqual(Buffer.from(first.data+last.data,'base64'),Buffer.alloc(96000,42));
+  const other=await f.connection.rpc<Session>('createSession',{projectId:f.project.id,title:'Other',agent:f.agent.id,command:''});
+  await assert.rejects(f.connection.rpc('acpMedia',{sessionId:other.id,mediaId:media.mediaId,offset:0}),/附件不存在/);
+  await until(f.snapshot,value=>value.phase==='ready');
+  await f.connection.rpc('acpConfigure',{...params,configId:'reasoning',value:true});
+  assert.equal((await f.snapshot()).configOptions?.find(option=>option.id==='reasoning')?.currentValue,true);
+});
+
+test('ACP v1 negotiates audio and embedded resources and streams terminal output before release',async t=>{
+  const f=await fixture(t,['--workbench','--v1']),params={sessionId:f.session.id};
+  await f.connection.rpc('start',{...params,cols:100,rows:30});
+  await writeFile(path.join(f.root,'material.txt'),'完整正文');
+  const id=randomUUID();
+  await f.connection.rpc('acpImage',{...params,imageId:id,mimeType:'audio/wav',offset:0,data:Buffer.from('RIFF----WAVE').toString('base64'),last:true});
+  await f.connection.rpc('acpSubmit',{...params,message:{requestId:randomUUID(),text:'use attachments',attachments:[{type:'file',path:'material.txt',embed:true},{type:'audio',id,name:'sample.wav'}]}});
+  await until(f.snapshot,value=>value.phase==='ready');
+  await f.send('v1 live terminal');
+  await until(f.snapshot,value=>value.phase==='ready');
+  const updates=f.events.flatMap(event=>event.event==='acp'&&event.data.terminal?[event.data.terminal]:[]);
+  assert.ok(updates.some(item=>item.output==='first'&&!item.released));
+  assert.ok(updates.some(item=>item.output==='firstlast'&&item.released));
+  const calls=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  const blocks=calls.find(item=>item.text==='use attachments').blocks;
+  assert.deepEqual(blocks.map((item:any)=>item.type),['text','resource','audio']);
+  assert.equal(blocks[1].resource.text,'完整正文');
+});
+
+test('ACP v1 closes cancelled callbacks and completes URL interactions without persisting the URL',async t=>{
+  const f=await fixture(t,['--v1']),params={sessionId:f.session.id};
+  await f.send('v1 url');
+  const waiting=await until(f.snapshot,value=>value.elicitations?.length===1),request=waiting.elicitations![0];
+  assert.equal(request.url?.hostname,'example.invalid');
+  await f.connection.rpc('acpElicitation',{...params,requestId:request.id,action:'accept'});
+  const browser=await f.snapshot();assert.equal(browser.urlInteractions?.[0]?.hostname,'example.invalid');
+  const done=await until(f.snapshot,value=>value.phase==='ready'&&!value.urlInteractions?.length);
+  assert.ok(done.events.some(event=>event.text==='网页操作已完成'));
+  assert.ok(!JSON.stringify(done).includes('private-fixture'));
+  await f.send('v1 cancel callback');
+  const permission=await until(f.snapshot,value=>value.permissions.length===1);
+  await until(f.snapshot,value=>value.phase==='ready'&&!value.permissions.length);
+  await assert.rejects(f.connection.rpc('acpPermission',{...params,permissionId:permission.permissions[0].id,optionId:'allow'}),/已结束/);
+  const calls=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(calls.find(item=>item.method==='url-response').outcome,{action:'accept'});
+  assert.equal(calls.find(item=>item.method==='cancelled-callback').code,-32800);
+});
+
+test('ACP v1 logout and scoped native deletion leave the workstation records intact',async t=>{
+  const f=await fixture(t,['--workbench','--v1']),params={sessionId:f.session.id},scope={projectId:f.project.id,agentId:f.agent.id};
+  await f.send('preserve me');
+  const ready=await until(f.snapshot,value=>value.phase==='ready');
+  assert.equal(ready.canLogout,true);
+  const nativeId=ready.nativeSessionId!;
+  assert.equal((await f.connection.rpc<{deletable:boolean}>('acpNativeHistory',scope)).deletable,true);
+  await assert.rejects(f.connection.rpc('acpNativeHistory',{...scope,nativeId,remove:true}),/先断开/);
+  await f.connection.rpc('acpLogout',params);
+  await f.connection.rpc('acpNativeHistory',{...scope,nativeId,remove:true});
+  const saved=await f.snapshot();
+  assert.equal(saved.nativeSessionId,null);
+  assert.ok(saved.events.some(event=>event.kind==='user'&&event.text==='preserve me'));
+});
+
+test('ACP v1 terminal authentication is explicit, uses literal args and reconnects after a zero exit',async t=>{
+  // The login process must be a console-subsystem executable on Windows.
+  const f=await fixture(t,['--terminal-auth'],false,await resolveExecutable('node')),params={sessionId:f.session.id};
+  await f.connection.rpc('start',{...params,cols:100,rows:30});
+  assert.equal((await f.snapshot()).authMethods?.[0].type,'terminal');
+  const request={...params,methodId:'login-terminal'};
+  await assert.rejects(f.connection.rpc('acpAuthenticate',request),/核对/);
+  const {terminalId}=await f.connection.rpc<{terminalId:string}>('acpAuthenticate',{...request,terminalApproved:true});
+  const terminal={...params,terminalId};
+  await until(()=>f.connection.rpc<{output:string}>('acpAuthTerminal',{...terminal,action:'read'}),value=>value.output.includes('FIXTURE_LOGIN>'));
+  await f.connection.rpc('acpAuthTerminal',{...terminal,action:'write',input:'accept\r'});
+  const ready=await until(f.snapshot,value=>value.phase==='ready');
+  assert.ok(ready.nativeSessionId);
+  assert.ok(!JSON.stringify(ready).includes('FIXTURE_LOGIN'));
+});
+
+test('ACP v1 negotiates lifecycle context and scopes child file calls to the declared roots',async t=>{
+  const f=await fixture(t,['--workbench','--v1'],true);
+  await writeFile(path.join(f.root,'private.txt'),'parent only');
+  await writeFile(path.join(f.extra,'extra.txt'),'child context');
+  await f.send('v1 scoped child');
+  const saved=await until(f.snapshot,value=>value.phase==='ready');
+  const reply=saved.events.find(event=>event.kind==='assistant')?.text;
+  assert.deepEqual(JSON.parse(reply!),{value:'child context',rejected:true});
+  const calls=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  const setup=calls.find(item=>item.method==='new');
+  assert.deepEqual(setup.additionalDirectories,[await realpath(f.extra)]);
+  assert.deepEqual(setup.systemPrompt,{mode:'override',content:[{type:'text',text:'Use the selected workspace'}]});
 });

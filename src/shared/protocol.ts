@@ -4,15 +4,15 @@ import { agentSkillsSchema } from './skills';
 import type { AppearanceMode } from './appearance';
 import type { UiPalette } from './ui-palettes';
 import { extensionRequestSchema, type ExtensionSnapshot, type ExtensionRequest } from './extensions';
-import { acpConfigSchema, type AcpSnapshot, type AcpEvent } from './acp';
-import { HOST_METRICS_API_VERSION } from './accelerator';
+import { acpConfigSchema, type AcpSnapshot, type AcpEvent, type AcpTerminal, type AcpNotice } from './acp';
+import { ACP_STREAM_API_VERSION, acpImageChunkSchema, acpMessageSchema, acpMcpServersSchema } from './acp-workbench';
 
 const copyEntrySchema=z.object({hash:z.string().regex(/^[a-f0-9]{64}$/),size:z.number().int().min(0),mode:z.number().int().min(0).max(511)}).nullable();
 const copyChangeSchema=z.object({path:z.string().min(1).max(1024),kind:z.enum(['added','modified','deleted','blocked']),before:copyEntrySchema,after:copyEntrySchema,conflict:z.boolean(),reason:z.string().max(2000).optional()}).strict();
 const copyOptionsSchema=z.object({excludes:z.array(z.string().min(1).max(300)).max(128).default(DEFAULT_COPY_EXCLUDES),maxBytes:z.number().int().min(1024*1024).max(128*1024**3).default(8*1024**3),skipLinks:z.boolean().default(false)}).strict();
 const copyRequestSchema=z.object({action:z.enum(['list','status','scan','create','reset','changes','preview','apply','export','delete','job','cancel']),projectId:z.string().uuid().optional(),workspaceId:z.string().regex(/^[a-f0-9]{32}$/).optional(),jobId:z.string().uuid().optional(),name:z.string().max(100).optional(),owner:z.string().max(200).optional(),options:copyOptionsSchema.default({excludes:DEFAULT_COPY_EXCLUDES,maxBytes:8*1024**3,skipLinks:false}),token:z.string().uuid().optional(),skipLinks:z.boolean().default(false),path:z.string().max(1024).optional(),changes:z.array(copyChangeSchema).min(1).max(32).optional(),offset:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(50).default(50)}).strict().superRefine((value,ctx)=>{const missing=(key:string)=>ctx.addIssue({code:'custom',message:'缺少参数：'+key,path:[key]});if(['job','cancel'].includes(value.action)){if(!value.jobId)missing('jobId');}else if(value.action!=='list'){if(!value.projectId)missing('projectId');if(!value.workspaceId)missing('workspaceId');}if(['create','reset'].includes(value.action)&&!value.token)missing('token');if(value.action==='preview'&&!value.path)missing('path');if(value.action==='apply'&&!value.changes?.length)missing('changes');});
 export const PROTOCOL_VERSION = 1;
-export const API_VERSION = HOST_METRICS_API_VERSION;
+export const API_VERSION = ACP_STREAM_API_VERSION;
 export const DEFAULT_TERMINAL_LIMIT = 16;
 export const TERMINAL_LIMIT_MAX = 128;
 export const builtinAgentSchema = z.enum(['shell', 'codex', 'claude', 'opencode', 'pi', 'custom']);
@@ -144,11 +144,24 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('state'), params: z.object({}).strict() }),
   z.object({id,method:z.literal('acpSnapshot'),params:z.object({sessionId:id,before:z.number().int().positive().optional(),after:z.number().int().nonnegative().optional(),limit:z.number().int().min(1).max(200).default(100)}).strict()}),
   z.object({id,method:z.literal('acpSend'),params:z.object({sessionId:id,requestId:id,text:z.string().trim().min(1).max(40000)}).strict()}),
-  z.object({id,method:z.literal('acpCancel'),params:z.object({sessionId:id}).strict()}),
+  z.object({id,method:z.literal('acpSubmit'),params:z.object({sessionId:id,message:acpMessageSchema,queue:z.boolean().default(false)}).strict()}),
+  z.object({id,method:z.literal('acpQueue'),params:z.object({sessionId:id,action:z.enum(['remove','edit','resume']),requestId:id.optional(),text:z.string().trim().max(40000).optional()}).strict()}),
+  z.object({id,method:z.literal('acpImage'),params:acpImageChunkSchema}),
+  z.object({id,method:z.literal('acpHistory'),params:z.object({}).strict()}),
+  z.object({id,method:z.literal('acpArchive'),params:z.object({sessionId:id,archived:z.boolean()}).strict()}),
+  z.object({id,method:z.literal('acpDiscover'),params:z.object({}).strict()}),
+  z.object({id,method:z.literal('acpMcpConfig'),params:z.object({agentId:z.string().min(1).max(200),servers:acpMcpServersSchema.optional()}).strict()}),
+  z.object({id,method:z.literal('acpRegistry'),params:z.object({}).strict()}),
+  z.object({id,method:z.literal('acpRegistryPrepare'),params:z.object({registryId:z.string().min(1).max(100),version:z.string().min(1).max(80)}).strict()}),
+  z.object({id,method:z.literal('acpNativeHistory'),params:z.object({agentId:z.string().min(1).max(200),projectId:id,worktreePath:z.string().max(4096).nullable().default(null),cursor:z.string().max(1000).optional(),nativeId:z.string().min(1).max(500).optional(),remove:z.literal(true).optional()}).strict().refine(value=>!value.remove||!!value.nativeId)}),
+  z.object({id,method:z.literal('acpAuthTerminal'),params:z.object({sessionId:id,terminalId:id,action:z.enum(['read','write','resize','cancel']),input:z.string().max(32768).optional(),cols:z.number().int().min(2).max(500).optional(),rows:z.number().int().min(2).max(250).optional()}).strict()}),
+  z.object({id,method:z.literal('acpLogout'),params:z.object({sessionId:id}).strict()}),
+  z.object({id,method:z.literal('acpMedia'),params:z.object({sessionId:id,mediaId:z.string().regex(/^[a-f0-9]{64}$/),offset:z.number().int().min(0).max(8*1024*1024).multipleOf(4)}).strict()}),
+  z.object({id,method:z.literal('acpCancel'),params:z.object({sessionId:id,childSessionId:z.string().min(1).max(1000).optional()}).strict()}),
   z.object({id,method:z.literal('acpPermission'),params:z.object({sessionId:id,permissionId:z.string().min(1).max(200),optionId:z.string().max(500).nullable()}).strict()}),
   z.object({id,method:z.literal('acpElicitation'),params:z.object({sessionId:id,requestId:z.string().min(1).max(200),action:z.enum(['accept','decline','cancel']),content:z.record(z.string(),z.union([z.string().max(40000),z.number().finite(),z.boolean(),z.array(z.string().max(40000)).max(200)])).optional()}).strict()}),
-  z.object({id,method:z.literal('acpConfigure'),params:z.object({sessionId:id,configId:z.string().min(1).max(200),value:z.string().max(1000)}).strict()}),
-  z.object({id,method:z.literal('acpAuthenticate'),params:z.object({sessionId:id,methodId:z.string().min(1).max(500)}).strict()}),
+  z.object({id,method:z.literal('acpConfigure'),params:z.object({sessionId:id,configId:z.string().min(1).max(200),value:z.union([z.string().max(1000),z.boolean()])}).strict()}),
+  z.object({id,method:z.literal('acpAuthenticate'),params:z.object({sessionId:id,methodId:z.string().min(1).max(1000),terminalApproved:z.literal(true).optional()}).strict()}),
   z.object({id,method:z.literal('acpProbe'),params:acpConfigSchema}),
   z.object({id,method:z.literal('acpOptions'),params:z.object({agentId:z.string().min(1).max(200),projectId:id}).strict()}),
   z.object({id,method:z.literal('acpTerminal'),params:z.object({sessionId:id,terminalId:z.string().min(1).max(200)}).strict()}),
@@ -252,7 +265,7 @@ export interface McpMetrics {since:string;total:number;succeeded:number;failed:n
 export interface RemoteCommandOutput { search?:OutputSearchResult; text: string; nextCursor: number; earliestCursor: number | null; truncated: boolean; hasMore: boolean; available: boolean; format: 'terminal'; mode?:'summary'|'page'; omitted?:boolean; cacheLost?:boolean; totalBytes?:number;totalLines?:number;returnedBytes?:number }
 export interface RemoteCommandResult extends RemoteAction { output: RemoteCommandOutput; info: RemoteInfo; elapsedMs: number; requestMs?: number }
 export type ServerEvent =
-  | {event:'acp';data:{sessionId:string;event?:AcpEvent;state?:Omit<AcpSnapshot,'events'|'before'|'hasMore'>}}
+  | {event:'acp';data:{sessionId:string;event?:AcpEvent;notice?:AcpNotice;terminal?:AcpTerminal;authOutput?:{terminalId:string;sequence:number;output:string};state?:Omit<AcpSnapshot,'events'|'before'|'hasMore'>}}
   | {event:'mcpMetrics';data:McpMetrics}
   | { event: 'terminalActivity'; data: { sessionId: string; runId: string; seq: number } }
   | { event: 'sshChallenge'; data: SshChallenge }
@@ -291,6 +304,7 @@ export interface DesktopApi {
   chooseDirectory(): Promise<string | null>;
   chooseTranscript(): Promise<string | null>;
   chooseExecutable(kind?:'acp'): Promise<string | null>;
+  saveAcpMarkdown(title:string,markdown:string): Promise<string|null>;
   exportPluginKit(): Promise<string | null>;
   pluginDevelopmentPrompt(folder?: string,topic?:'superagent-source'): Promise<string>;
   copyText(text: string): Promise<void>;
