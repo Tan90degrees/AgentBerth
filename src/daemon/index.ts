@@ -1,10 +1,25 @@
 import { mkdirSync, openSync, readFileSync, rmSync, writeFileSync, closeSync } from 'node:fs';
 import path from 'node:path';
+import { parseArgs } from 'node:util';
+import { readWorkspaceServerToken, workspaceServerOptions, type WorkspaceServerOptions } from './workspace-server';
 import { DaemonServer } from './server';
 import { RunLog } from './logs';
 
-const dataDirectory = process.argv[2];
+const hosted = process.argv[2] === '--server';
+const args = hosted ? parseArgs({ args: process.argv.slice(3), options: {
+  'data-dir': { type:'string' }, bind:{type:'string'}, port:{type:'string'},
+  'tls-cert':{type:'string'}, 'tls-key':{type:'string'}, token:{type:'boolean'}, help:{type:'boolean'},
+} }).values : undefined;
+if(hosted&&process.platform!=='linux')throw new Error('服务器版需要 Linux');
+if(args?.help){
+  console.log('AgentBerth Server\n  --data-dir <absolute path> [--bind <IP>] [--port <port>] [--tls-cert <PEM> --tls-key <PEM>]\n  --data-dir <absolute path> --token    输出已有服务器令牌');
+  process.exit(0);
+}
+const dataDirectory = hosted ? args?.['data-dir'] : process.argv[2];
+
 if (!dataDirectory || !path.isAbsolute(dataDirectory)) throw new Error('An absolute data directory is required');
+if(args?.token){console.log(readWorkspaceServerToken(dataDirectory));process.exit(0);}
+if(hosted)process.umask(0o077);
 mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
 // Monitor for evidence without suppressing unexpected fatal exceptions or
 // continuing a potentially inconsistent daemon. Never log environment/input.
@@ -45,7 +60,11 @@ catch (error) { reportStartupError(error); }
 writeFileSync(descriptor, String(process.pid));
 rmSync(startupError, { force: true });
 let server: DaemonServer;
-try { server = new DaemonServer(dataDirectory, () => { void shutdown(); }); }
+let mode:WorkspaceServerOptions|undefined;
+try {
+  if(args)mode=workspaceServerOptions(dataDirectory,args as Record<string,string|undefined>);
+  server = new DaemonServer(dataDirectory, () => { void shutdown(); },undefined,undefined,mode);
+}
 catch (error) { reportStartupError(error, descriptor); }
 let quitting = false;
 async function shutdown() {
@@ -58,4 +77,6 @@ async function shutdown() {
 }
 process.on('SIGTERM', () => { void shutdown(); });
 process.on('SIGINT', () => { void shutdown(); });
-void server.listen().catch(error => reportStartupError(error, descriptor));
+void server.listen().then(()=>{
+  if(mode)console.log(`AgentBerth Server listening at ${mode.tls?'wss':'ws'}://${mode.host.includes(':')?'['+mode.host+']':mode.host}:${mode.port}`);
+}).catch(error => reportStartupError(error, descriptor));

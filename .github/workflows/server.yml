@@ -1,0 +1,70 @@
+name: Linux server packages
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentberth-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Package and test Linux server (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install build dependencies
+        run: npm ci --ignore-scripts --prefer-offline --no-audit --no-fund
+      - name: Build headless Linux package
+        run: npm run dist:server
+      - name: Verify release archive and workspace connections
+        run: |
+          cd release
+          sha256sum -c AgentBerth-Server-*-linux-*.tar.gz.sha256
+          tar -xzf AgentBerth-Server-*-linux-*.tar.gz
+          cd ..
+          node scripts/test-server.mjs release/agentberth-server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgentBerth-Server-Linux-${{ matrix.arch }}
+          path: |
+            release/AgentBerth-Server-*.tar.gz
+            release/AgentBerth-Server-*.tar.gz.sha256
+          if-no-files-found: error
+  desktop:
+    name: Desktop to Linux server
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-dependencies
+      - name: Build AgentBerth
+        run: npm run typecheck && npm run build
+      - name: Verify workspace switching and persistent server sessions
+        run: xvfb-run -a node scripts/smoke-server-desktop.mjs
+        timeout-minutes: 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-server-desktop
+          path: test-results/server-*.png
+          if-no-files-found: ignore

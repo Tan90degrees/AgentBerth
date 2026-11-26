@@ -9,11 +9,14 @@ import { piLaunchCommand, piResumeCommand, piSessionFile, readPiHistory } from '
 import { SshTerminal } from './ssh-terminal';
 import type { SshChallenge, SshSecret, TransferEndpoint } from '../shared/protocol';
 import { localTransferFs, RemoteTransfers, sftpTransferFs } from './remote-transfer';
+import { createServer as createHttpsServer } from 'node:https';
+import { workspaceDirectories, type WorkspaceServerOptions } from './workspace-server';
+import { WORKSPACE_SERVER_VERSION } from '../shared/workspace-server';
 import { createServer, type IncomingMessage } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { release } from 'node:os';
+import { hostname, release } from 'node:os';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -98,6 +101,8 @@ export class DaemonServer {
   private gitBusy = new Set<string>();
   private worktreeBusy = new Set<string>();
   private http = createServer((_req, res) => { res.writeHead(404); res.end(); });
+  private hosted?: ReturnType<typeof createServer>;
+  private heartbeat?: NodeJS.Timeout;
   private ws = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
   private clients = new Map<WebSocket, Client>();
   private pendingWork = 0;
@@ -119,7 +124,7 @@ export class DaemonServer {
   private recoveryPending = new Map<string, RestartEntry>();
   private restoredRuns = new Map<string, {previousRunId:string|null;runId:string}>();
 
-  constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery) {
+  constructor(readonly dataDirectory: string, private onShutdown: () => void = () => {}, private spawnPty: typeof pty.spawn = pty.spawn, nativeDiscovery?: NativeDiscovery, private workspaceServer?:WorkspaceServerOptions) {
     if (nativeDiscovery) this.nativeDiscovery = nativeDiscovery;
     this.store = new Store(dataDirectory);
     this.copies=new IsolatedWorkspaces(dataDirectory);
@@ -161,10 +166,31 @@ export class DaemonServer {
       try { this.pruneLogs(); } catch (error) { this.logError(error); }
     }, 60_000);
     this.pruneTimer.unref();
-    this.http.on('upgrade', (request, socket, head) => {
-      if (!this.authorized(request)) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
-      this.ws.handleUpgrade(request, socket, head, ws => this.ws.emit('connection', ws, request));
-    });
+    const authorize=(server:ReturnType<typeof createServer>,token:string)=>{
+      server.on('upgrade',(request,socket,head)=>{
+        if(!this.authorized(request,token)){socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n',()=>socket.destroy());return;}
+        this.ws.handleUpgrade(request,socket,head,ws=>this.ws.emit('connection',ws,request));
+      });
+    };
+    authorize(this.http,this.token);
+    if(workspaceServer){
+      const fallback:Parameters<typeof createServer>[1]=(_request,response)=>{response.writeHead(404);response.end();};
+      this.hosted=workspaceServer.tls
+        ?createHttpsServer({...workspaceServer.tls,minVersion:'TLSv1.2',handshakeTimeout:8000},fallback)
+        :createServer(fallback);
+      this.hosted.headersTimeout=10_000;
+      this.hosted.requestTimeout=15_000;
+      authorize(this.hosted,workspaceServer.token);
+      const responsive=new WeakSet<WebSocket>();
+      this.ws.on('connection',socket=>{responsive.add(socket);socket.on('pong',()=>responsive.add(socket));});
+      this.heartbeat=setInterval(()=>{
+        for(const socket of this.clients.keys()){
+          if(!responsive.has(socket)){socket.terminate();continue;}
+          if(socket.readyState===WebSocket.OPEN){responsive.delete(socket);socket.ping();}
+        }
+      },30_000);
+      this.heartbeat.unref();
+    }
     this.ws.on('connection', socket => {
       const client: Client = { id: randomUUID(), disposing: false, subscriptions: new Set(), activity: new Map(), pending: 0, abort: new AbortController() };
       this.clients.set(socket, client);
@@ -192,10 +218,10 @@ export class DaemonServer {
     });
   }
 
-  private authorized(request: IncomingMessage): boolean {
+  private authorized(request: IncomingMessage,token:string): boolean {
     if (request.url !== '/rpc' || request.headers.origin) return false;
     const actual = Buffer.from(request.headers.authorization ?? '');
-    const expected = Buffer.from(`Bearer ${this.token}`);
+    const expected = Buffer.from(`Bearer ${token}`);
     return actual.length === expected.length && timingSafeEqual(actual, expected);
   }
   private send(socket: WebSocket, message: unknown, sent?: () => void): void {
@@ -232,7 +258,7 @@ export class DaemonServer {
     for (const client of this.clients.values()) for (const id of client.activity.keys()) if (!valid.has(id)) client.activity.delete(id);
     this.broadcast({ event: 'state', data: state });
   }
-  private snapshot(): State { const state=this.store.state();return {...state,agentActivities:[...this.acp.activities(state.sessions.filter(session=>!session.owner),state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
+  private snapshot(): State { const state=this.store.state();return {...state,...(this.workspaceServer?{server:{version:WORKSPACE_SERVER_VERSION,hostname:hostname()}}:{}),agentActivities:[...this.acp.activities(state.sessions.filter(session=>!session.owner),state.agents??[]),...(this.extensions?.activities()??[])],extensions:this.extensions?.snapshot(),agents:state.agents?.filter(a=>!a.sourceId?.startsWith('ext.')||this.extensionAgents.has(a.id)), ...(this.recoveryReport ? {recovery:this.recoveryReport} : {})}; }
   workspaceCorePort() {
     const self=this;
     return {
@@ -439,10 +465,13 @@ export class DaemonServer {
 
   async listen(): Promise<RuntimeInfo> {
     await this.extensions.ready;
-    await new Promise<void>((resolve, reject) => {
-      this.http.once('error', reject);
-      this.http.listen(0, '127.0.0.1', () => { this.http.removeListener('error', reject); resolve(); });
+    const listen=(server:ReturnType<typeof createServer>,port:number,host:string)=>new Promise<void>((resolve,reject)=>{
+      server.once('error',reject);
+      server.listen(port,host,()=>{server.removeListener('error',reject);resolve();});
     });
+    if(this.hosted&&this.workspaceServer)await listen(this.hosted,this.workspaceServer.port,this.workspaceServer.host);
+    try{await listen(this.http,0,'127.0.0.1');}
+    catch(error){this.hosted?.close();throw error;}
     const address = this.http.address();
     if (!address || typeof address === 'string') throw new Error('无法启动本地后台服务');
     const runtime = { version: PROTOCOL_VERSION, pid: process.pid, port: address.port, token: this.token };
@@ -527,6 +556,11 @@ export class DaemonServer {
     if(connected)remote.activity.assertAgent(client);else remote.activity.assertManage(client);
   }
   private async dispatch(request: Request, client: Client): Promise<unknown> {
+    if(this.workspaceServer&&['shutdown','shutdownIdle'].includes(request.method))throw new Error('请通过 Linux 服务管理服务器进程');
+    if(request.method==='workspaceDirectories'){
+      if(!this.workspaceServer)throw new Error('当前后台未启用服务器目录浏览');
+      return workspaceDirectories(request.params.path);
+    }
     if (this.closing&&!['state','stop','shutdown'].includes(request.method)) throw new Error('后台正在退出，请重试退出或停止仍在清理的会话');
     if(request.method==='extensions'){
       const p=request.params.request;
@@ -1062,7 +1096,7 @@ export class DaemonServer {
       const deadline=setTimeout(()=>{for(const socket of this.clients.keys())socket.terminate();},1000);
       this.ws.close(()=>{clearTimeout(deadline);resolve();});
     });
-    await new Promise<void>(resolve => this.http.close(() => resolve()));
+    await Promise.all([this.http,this.hosted].flatMap(server=>server?[new Promise<void>(resolve=>{server.close(()=>resolve());server.closeAllConnections();})]:[]));
     rmSync(path.join(this.dataDirectory, 'runtime.json'), { force: true });
     this.store.close();
   }

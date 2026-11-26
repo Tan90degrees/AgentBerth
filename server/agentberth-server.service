@@ -1,0 +1,14 @@
+[Unit]
+Description=AgentBerth workspace server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/opt/agentberth-server/bin/agentberth-server --data-dir %h/.local/share/agentberth-server
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=90
+UMask=0077
+
+[Install]
+WantedBy=default.target

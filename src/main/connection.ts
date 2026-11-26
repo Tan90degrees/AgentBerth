@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { PROTOCOL_VERSION, API_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
+import { WORKSPACE_SERVER_VERSION, workspaceServerAddress, serverTokenPattern, type WorkspaceEndpoint } from '../shared/workspace-server';
 import type { RemoteErrorDetails } from '../shared/remote-errors';
 
 export class DaemonRpcError extends Error {
@@ -14,7 +15,17 @@ export class DaemonRpcError extends Error {
 export class DaemonConnection {
   private silent = false;
   private pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-  constructor(private socket: WebSocket, private onEvent: (event: ServerEvent) => void) {
+  constructor(private socket: WebSocket, private onEvent: (event: ServerEvent) => void, hosted=false) {
+    let ping:NodeJS.Timeout|undefined;
+    if(hosted){
+      let pong=true;
+      socket.on('pong',()=>{pong=true;});
+      ping=setInterval(()=>{
+        if(!pong){socket.terminate();return;}
+        if(socket.readyState===WebSocket.OPEN){pong=false;socket.ping();}
+      },15_000);
+      ping.unref();
+    }
     socket.on('message', bytes => {
       let message: Response | ServerEvent;
       try { message = JSON.parse(bytes.toString()); } catch { socket.close(); return; }
@@ -25,18 +36,36 @@ export class DaemonConnection {
       if (message.error) pending.reject(new DaemonRpcError(message.error,message.errorCode,message.errorDetails)); else pending.resolve(message.result);
     });
     socket.on('close', () => {
+      clearInterval(ping);
       for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error('后台连接已断开')); }
       this.pending.clear();
       if (!this.silent) this.onEvent({ event: 'connection', data: { connected: false } });
     });
     socket.on('error', () => {});
   }
-  static open(runtime: RuntimeInfo, onEvent: (event: ServerEvent) => void): Promise<DaemonConnection> {
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(`ws://127.0.0.1:${runtime.port}/rpc`, { headers: { Authorization: `Bearer ${runtime.token}` }, handshakeTimeout: 1000 });
-      const error = (reason: Error) => { socket.terminate(); reject(reason); };
-      socket.once('error', error);
-      socket.once('open', () => { socket.removeListener('error', error); resolve(new DaemonConnection(socket, onEvent)); });
+  static open(runtime: RuntimeInfo,onEvent: (event: ServerEvent) => void): Promise<DaemonConnection>{
+    return this.openSocket('ws://127.0.0.1:'+runtime.port+'/rpc',runtime.token,onEvent);
+  }
+  static async openWorkspace(endpoint:WorkspaceEndpoint,onEvent:(event:ServerEvent)=>void){
+    const address=workspaceServerAddress(endpoint.address);
+    if(!serverTokenPattern.test(endpoint.token))throw new Error('服务器令牌格式无效');
+    const connection=await this.openSocket(address+'/rpc',endpoint.token,onEvent,endpoint.ca,true);
+    try{
+      const state=await connection.rpc<State>('state');
+      if(state.server?.version!==WORKSPACE_SERVER_VERSION||state.apiVersion!==API_VERSION)
+        throw new Error('服务器协议版本与桌面版不兼容，请使用同版本的 AgentBerth');
+      return connection;
+    }catch(error){connection.close(true);throw error;}
+  }
+  private static openSocket(url:string,token:string,onEvent:(event:ServerEvent)=>void,ca?:string,hosted=false):Promise<DaemonConnection>{
+    return new Promise((resolve,reject)=>{
+      const socket=new WebSocket(url,{headers:{Authorization:'Bearer '+token},
+        handshakeTimeout:hosted?8000:1000,followRedirects:false,
+        ...(hosted?{rejectUnauthorized:true,ca,maxPayload:32*1024*1024,perMessageDeflate:false}:{}),
+      });
+      const error=(reason:Error)=>{socket.terminate();reject(reason);};
+      socket.once('error',error);
+      socket.once('open',()=>{socket.removeListener('error',error);resolve(new DaemonConnection(socket,onEvent,hosted));});
     });
   }
   rpc<T = unknown>(method: Method, params: Record<string, unknown> = {}): Promise<T> {

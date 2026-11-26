@@ -2874,3 +2874,16 @@ textarea:focus-visible {
 .workbench-output-indicator{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:var(--success)}
 @container workbench-header (max-width:700px){.workbench-header .workbench-control-label,.workbench-header .status-label{display:none}.workbench-header .topbar-status{gap:4px}.workbench-header .git-branch{max-width:110px}.workbench-header .git-branch>small{display:none}}
 @container workbench-header (max-width:360px){.workbench-header .git-branch{max-width:70px}.workbench-header .workbench-control{padding-inline:5px;gap:4px}}
+
+.workspace-target-control{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:126px;min-height:28px;padding:3px 7px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text-secondary)}
+.workspace-target-control svg{flex:none}
+.workspace-target-control span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workspace-target-control:hover{background:var(--hover);color:var(--text)}
+.workspace-target-control:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.workspace-target-actions,.workspace-certificate,.workspace-directory-picker header,.workspace-directory-footer{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.workspace-directory-picker{display:grid;gap:8px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-muted);min-width:0}
+.workspace-directory-picker header code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workspace-directory-footer{justify-content:flex-end}
+.workspace-directory-footer span{color:var(--text-secondary);font-size:var(--fs-xs)}
+.workspace-directory-list{display:grid;gap:3px;max-height:160px;overflow:auto}
+.workspace-directory-list button{text-align:left;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
