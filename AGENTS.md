@@ -27,7 +27,7 @@ AgentBerth（泊栈）是按项目目录组织的本地 Agent 工作台，集中
 | `src/superagent/`、`src/wiki/` | Superagent 任务管道与 Wiki 素材、模型、审阅和存储 |
 | `src/mcp/`、`src/integrations/`、`src/pet-hook/` | MCP、外部 Agent 接入与桌宠 Hook |
 | `tests/`、`scripts/smoke-*.mjs` | 行为与集成测试、真实 Electron 窗口回归 |
-| `.github/workflows/ci.yml` | Linux / Windows 验证、安装器、打包程序与发布门禁 |
+| `.github/workflows/ci.yml`、`.github/workflows/server.yml` | Linux / Windows 验证、Linux 服务器包、Windows 安装器与发布门禁 |
 
 优先搜索相关符号和调用链，避免只改 UI 而遗漏 preload、RPC、后台或持久化。文档可能保留旧版描述；接口、脚本及版本以当前代码和锁文件为准，发现影响本次工作的过时说明时同步修正。
 
@@ -48,6 +48,7 @@ AgentBerth（泊栈）是按项目目录组织的本地 Agent 工作台，集中
 | 常用桌面回归集合 | `npm run test:desktop` |
 | Windows 安装器及 ZIP 构建 | `npm run dist:win` |
 | 已构建 Windows 程序回归 | `npm run test:packaged` |
+| Linux 服务器包构建及 SSH 部署回归 | `npm run dist:server`、`node --test scripts/test-server-provision.mjs` |
 
 - 聚焦测试入口仅接受实际存在的 `tests/*.test.ts`，不是 `.tsx` 或任意目录。`.test.mjs` 脚本测试按 `package.json` 中的入口运行。
 - 单独执行桌面脚本前先 `npm run build`，例如 `node scripts/smoke-services.mjs`。Linux 无显示器环境使用 `xvfb-run -a node scripts/smoke-services.mjs`；Windows 直接执行对应脚本。
@@ -85,7 +86,8 @@ AgentBerth（泊栈）是按项目目录组织的本地 Agent 工作台，集中
 - ACP Registry 仅从官方稳定目录获取条目，用户确认后执行固定版本的安装；二进制先完成校验并在私有目录安全展开。更新保留本机会话、原生关联和独立 MCP 设置，不中断运行中的会话。普通 ACP 的 MCP 服务按 Agent 显式配置并按传输能力发送；Superagent 托管任务保留独立工具边界。
 - ACP 结构化提问通过协商的 `elicitation/create` 表单能力处理，单选、多选、多题及基本类型字段保留原始值；回答只结算原请求，不能通过重发 prompt 或伪造授权实现。授权与回答分开呈现、分别校验，任务内直接操作检查插件、任务及会话归属。取消、退出和 Agent 连接断线清理待答请求，迟到回答不能作用于新尝试。Agent 提供的正则校验在有时限的 worker 中执行，不能阻塞界面或后台；未知字段类型明确报错，不自动接受。提问/授权详情按需读取，避免多个待处理请求超过任务摘要的返回预算。
 - ACP v1 stdio 增量按原生会话和消息 ID 归并，计划、子代理、协作消息和上下文整理按实体应用更新与清除。实时通知只进入统一通知区。Superagent 网页请求只在原生会话中核对并由用户打开，任务 iframe 不接收网页地址。终端输出通过会话事件推送，释放后可读取记录。媒体分片按会话校验，登录终端独立运行，输出不写入历史。Windows 登录终端自然退出和取消都释放 ConPTY 输出线程及管道。声明过的能力才对接原生删除、退出登录、网页提问和子代理停止，重连不重放未确认的用户操作。附加工作区经用户配置并按能力传递，子代理只能使用父会话已授权的目录。后台 API 69 同时保留 API 68 会话连接兼容性。
-- Linux 服务器版和桌面本机后台共用会话与文件 RPC。服务器外部非回环监听须配置 TLS，桌面只允许验证证书的 WSS 和本机回环隧道。服务器访问令牌须与本机运行描述符隔离。工作区切换必须隔离渲染器存储、桌宠与 SSH 凭据，并确保旧窗口的延迟请求不会发到新连接。断开桌面不得停止服务器任务，服务生命周期由 Linux 管理。
+- Linux 服务器版与本机后台共用会话与文件 RPC。桌面先验证 SSH 主机指纹再认证，通过 SFTP 上传与桌面版本及服务器架构匹配的部署包，在用户目录校验和安装。探测复用兼容的运行实例，只有明确选择部署或启动才改变服务器状态。自动部署只用回环 RPC 和 SSH 转发；手动连接仍使用证书验证的 WSS 或本机回环隧道。SSH 私钥和服务器令牌留在受信任边界内，持久化的 SSH 登录凭据使用系统安全存储。
+- 工作区切换隔离渲染器存储、桌宠与 SSH 凭据，已关闭窗口的延迟请求不得发到新连接。断开桌面不得停止服务器任务，服务生命周期由 Linux 管理。Windows 安装器与 ZIP 从同一次 CI 的 Linux x64、ARM64 构建加入已校验的服务包和对应 Node.js 许可证。修改部署链路时验证新账号安装、探测已有服务、SSH 重连与终端不中断。
 - 系统操作使用可执行文件与参数数组，不能把用户路径、分支名或文件名拼接成 shell 命令。覆盖 Windows 空格/中文路径、Linux 路径与取消、超时、进程树清理。
 - 远程资源采集仅允许已注册的桌面 SSH 提供端调用，复用 SSH 凭据与已确认的主机指纹。只发送固定只读查询，不创建 PTY、不暴露到 MCP、不传递远端进程列表。Linux 主机 CPU 使用相邻采样的计数差，内存使用 MemTotal 减去 MemAvailable；仅有主机指标的节点也可监控。采集超时、连接配置变化或后台退出时关闭采集通道。
 - 插件只能以宿主确认的插件身份调用能力。HTML 桥接检查消息来源，不信任 iframe 自报的插件 ID；原生 Web 页保持隔离，不注入宿主权限。

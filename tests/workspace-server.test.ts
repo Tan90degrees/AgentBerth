@@ -34,7 +34,7 @@ test('workspace target storage separates remembered credentials from session-onl
   assert.ok(!(await readFile(file,'utf8')).includes(token));
   assert.ok(!JSON.stringify(target.state()).includes(token));
   const restored=new WorkspaceTargets(file,vault);restored.load();
-  assert.equal(restored.active?.token,token);
+  assert.equal(restored.active&&'token' in restored.active&&restored.active.token,token);
   assert.throws(()=>restored.endpoint('wss://another.example.com'),/令牌/);
   restored.select(undefined);
   const local=new WorkspaceTargets(file,vault);local.load();

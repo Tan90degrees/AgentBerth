@@ -55,6 +55,13 @@ const api: DesktopApi = {
   openProject: folder => ipcRenderer.invoke('berth:openProject', folder),
   reconnect: () => ipcRenderer.invoke('berth:reconnect'),
   quitDesktop: () => ipcRenderer.invoke('berth:quitDesktop'),
+  workspaceSsh: request=>ipcRenderer.invoke('berth:workspaceSsh',request),
+  chooseWorkspaceSshKey:()=>ipcRenderer.invoke('berth:workspaceSshKey'),
+  onWorkspaceProvision:listener=>{
+    const callback=(_event:Electron.IpcRendererEvent,phase:import('../shared/workspace-server').WorkspaceProvisionProgress)=>listener(phase);
+    ipcRenderer.on('berth:workspaceProvisionProgress',callback);
+    return ()=>ipcRenderer.removeListener('berth:workspaceProvisionProgress',callback);
+  },
   workspaceTarget: request=>ipcRenderer.invoke('berth:workspaceTarget',request),
   restartBackend: () => ipcRenderer.invoke('berth:restart'),
 };

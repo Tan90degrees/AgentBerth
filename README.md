@@ -6,7 +6,7 @@
 
 ## Linux 服务器版
 
-在 Linux x64 或 arm64 上运行 AgentBerth 后台，再从桌面右上角连接服务器。工作区、终端和 Agent 会话在服务端运行。部署、SSH 隧道、TLS 与 systemd 配置见 [Linux 服务器部署](docs/server.md)。
+从桌面右上角打开「工作区连接」，输入 Linux 服务器的 IP、SSH 用户名和密码，或选择本机 SSH 私钥。桌面探测 x64 / ARM64 服务器，按需部署或启动服务，再通过 SSH 进入远程工作区。工作区、终端和 Agent 会话在服务端运行。部署与高级配置见 [Linux 服务器部署](docs/server.md)。
 
 ## 当前能力
 

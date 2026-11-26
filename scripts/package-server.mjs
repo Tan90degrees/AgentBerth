@@ -25,6 +25,12 @@ try {
   copyFileSync('package-lock.json',path.join(packageRoot,'package-lock.json'));
   copyFileSync('server/agentberth-server',path.join(packageRoot,'bin/agentberth-server'));
   chmodSync(path.join(packageRoot,'bin/agentberth-server'),0o755);
+  const nodeLicense=process.env.AGENTBERTH_SERVER_NODE_LICENSE;
+  if(nodeLicense){
+    copyFileSync(process.execPath,path.join(packageRoot,'bin/node'));
+    chmodSync(path.join(packageRoot,'bin/node'),0o755);
+    copyFileSync(nodeLicense,path.join(packageRoot,'LICENSE.node'));
+  }
   copyFileSync('server/agentberth-server.service',path.join(packageRoot,'agentberth-server.service'));
   copyFileSync('docs/server.md',path.join(packageRoot,'README.md'));
   copyFileSync('LICENSE',path.join(packageRoot,'LICENSE'));

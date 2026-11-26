@@ -8,11 +8,11 @@ import { RunLog } from './logs';
 const hosted = process.argv[2] === '--server';
 const args = hosted ? parseArgs({ args: process.argv.slice(3), options: {
   'data-dir': { type:'string' }, bind:{type:'string'}, port:{type:'string'},
-  'tls-cert':{type:'string'}, 'tls-key':{type:'string'}, token:{type:'boolean'}, help:{type:'boolean'},
+  'ssh-only':{type:'boolean'}, 'tls-cert':{type:'string'}, 'tls-key':{type:'string'}, token:{type:'boolean'}, help:{type:'boolean'},
 } }).values : undefined;
 if(hosted&&process.platform!=='linux')throw new Error('服务器版需要 Linux');
 if(args?.help){
-  console.log('AgentBerth Server\n  --data-dir <absolute path> [--bind <IP>] [--port <port>] [--tls-cert <PEM> --tls-key <PEM>]\n  --data-dir <absolute path> --token    输出已有服务器令牌');
+  console.log('AgentBerth Server\n  --data-dir <absolute path> [--bind <IP>] [--port <port>] [--tls-cert <PEM> --tls-key <PEM>] 或 --ssh-only\n  --data-dir <absolute path> --token    输出已有服务器令牌');
   process.exit(0);
 }
 const dataDirectory = hosted ? args?.['data-dir'] : process.argv[2];
@@ -62,7 +62,7 @@ rmSync(startupError, { force: true });
 let server: DaemonServer;
 let mode:WorkspaceServerOptions|undefined;
 try {
-  if(args)mode=workspaceServerOptions(dataDirectory,args as Record<string,string|undefined>);
+  if(args)mode=workspaceServerOptions(dataDirectory,args);
   server = new DaemonServer(dataDirectory, () => { void shutdown(); },undefined,undefined,mode);
 }
 catch (error) { reportStartupError(error, descriptor); }
@@ -78,5 +78,6 @@ async function shutdown() {
 process.on('SIGTERM', () => { void shutdown(); });
 process.on('SIGINT', () => { void shutdown(); });
 void server.listen().then(()=>{
-  if(mode)console.log(`AgentBerth Server listening at ${mode.tls?'wss':'ws'}://${mode.host.includes(':')?'['+mode.host+']':mode.host}:${mode.port}`);
+  if(mode?.sshOnly)console.log('AgentBerth Server ready for SSH');
+  else if(mode)console.log(`AgentBerth Server listening at ${mode.tls?'wss':'ws'}://${mode.host.includes(':')?'['+mode.host+']':mode.host}:${mode.port}`);
 }).catch(error => reportStartupError(error, descriptor));

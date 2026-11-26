@@ -39,10 +39,11 @@ try {
   async function connect(){
     await page.getByRole('button',{name:'切换工作区'}).click();
     const dialog=page.getByRole('dialog',{name:'工作区连接'});
+    await dialog.getByRole('button',{name:'地址与令牌'}).click();
     await dialog.getByLabel('服务器地址').fill(address);
     await dialog.getByLabel('服务器令牌').fill(token);
     const next=app.waitForEvent('window');
-    await dialog.getByRole('button',{name:'连接服务器'}).click();
+    await dialog.getByRole('button',{name:'连接服务器'}).click().catch(error=>{if(!page.isClosed())throw error;});
     page=await next;
     await page.getByRole('button',{name:'切换工作区'}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get('server'),address);
@@ -67,7 +68,7 @@ try {
   await page.screenshot({path:'test-results/server-remote-workspace.png',animations:'disabled'});
   await page.getByRole('button',{name:'切换工作区'}).click();
   const localWindow=app.waitForEvent('window');
-  await page.getByRole('button',{name:'返回本机',exact:true}).click();
+  await page.getByRole('button',{name:'返回本机',exact:true}).click().catch(error=>{if(!page.isClosed())throw error;});
   page=await localWindow;
   await page.getByRole('button',{name:'添加第一个项目'}).waitFor();
   assert.equal((await rpc('state')).server,undefined);

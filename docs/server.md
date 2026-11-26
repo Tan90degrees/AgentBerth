@@ -2,9 +2,23 @@
 
 Linux 服务器在独立进程中运行工作区、PTY、ACP、文件、Git、Superagent 和 Wiki。使用同版本的 AgentBerth 桌面客户端连接。退出桌面或网络断开后，服务端运行中的会话仍由服务器持有。
 
-## 安装与启动
+## 在桌面版自动部署
 
-下载对应架构的 `AgentBerth-Server-*-linux-x64.tar.gz` 或 `AgentBerth-Server-*-linux-arm64.tar.gz` 和 SHA-256 校验文件。运行环境使用带 glibc 的 Linux 和 Node.js 24。建议以专用普通用户运行。将 Agent 运行时及模型配置放在该用户的服务端环境。
+1. 在桌面右上角打开「工作区连接」，选择「SSH」。
+2. 输入服务器 IP 或主机名、SSH 端口和用户名。选择密码或本机 SSH 私钥，按需填写私钥口令。首次连接时核对服务器的 SHA-256 主机指纹。
+3. 点击「探测服务器」。按探测结果选择「进入工作区」「启动并进入」或「部署并进入」。
+
+桌面安装包内置匹配版本的 Linux x64、ARM64 包和 Node.js 运行时。服务器需使用 glibc，开放 SSH shell、SFTP 和到服务器自身回环地址的 SSH TCP 转发。桌面上传后校验 SHA-256，安装到当前 SSH 用户的 `~/.local/opt/agentberth-server`，数据保存在 `~/.local/share/agentberth-server`。自动部署使用账号权限和 SSH 端口，不需要 sudo、单独开放 AgentBerth 端口或填写服务令牌。服务器上的 Agent CLI 与模型授权由该 SSH 用户配置。
+
+首次启动优先使用 systemd 用户服务 `agentberth-workspace.service`，环境没有可用的用户服务时以后台进程运行，日志在 `~/.local/share/agentberth-server/service.log`。已有兼容服务会直接复用，离线的已有安装会启动。探测读取同一用户标准数据目录中的运行描述符。使用自定义目录的部署可以通过「地址与令牌」连接。
+
+在系统支持安全凭据存储时，可以勾选「记住 SSH 登录并在下次打开时连接」。首次信任的指纹按主机和端口保存。服务器更换 SSH 主机密钥后，先从服务器控制台核验，再处理本机数据目录的 `workspace-ssh-hosts.json` 对应记录。
+
+切换时，本机和服务器各自保留草稿、项目选择和 SSH 凭据。新建项目可直接浏览服务器目录。远程工作区的 Agent 启动程序、项目目录和工作区内 SSH 连接的密钥路径使用服务器上的值。
+
+## 手动安装与启动
+
+下载对应架构的 `AgentBerth-Server-*-linux-x64.tar.gz` 或 `AgentBerth-Server-*-linux-arm64.tar.gz` 和 SHA-256 校验文件。预构建包包含 Node.js 24。使用 `npm run dist:server` 从源码构建且未打包 Node.js 时，服务器需要从 PATH 提供 Node.js 24。建议以专用普通用户运行。将 Agent 运行时及模型配置放在该用户的服务端环境。
 
 ```bash
 sha256sum -c AgentBerth-Server-*-linux-*.tar.gz.sha256
@@ -19,11 +33,9 @@ tar -xzf AgentBerth-Server-*-linux-*.tar.gz -C "$HOME/.local/opt"
 "$HOME/.local/opt/agentberth-server/bin/agentberth-server" --data-dir "$HOME/.local/share/agentberth-server" --token
 ```
 
-## 桌面连接
+## 地址与令牌
 
-点击桌面右上角的工作区按钮，填写地址和令牌。勾选「记住令牌并在下次打开时连接」会使用操作系统的安全凭据存储。切换时，桌面分别保存本机和服务器的草稿、项目选择和 SSH 凭据。新建项目可浏览服务器目录。Agent 启动程序、项目目录和 SSH 密钥路径使用服务器上的值。
-
-选择下面任一接入方式。
+在桌面「工作区连接」的「地址与令牌」页填写地址和令牌。需要自动重连时，可通过操作系统的安全凭据存储保存令牌。
 
 - **SSH 隧道**。服务器保留默认监听。在桌面机器执行 `ssh -N -L 17467:127.0.0.1:7467 user@server`，在 AgentBerth 中填写 `ws://127.0.0.1:17467`。
 - **直接 TLS**。启动时添加 `--bind 0.0.0.0 --port 7467 --tls-cert /path/fullchain.pem --tls-key /path/privkey.pem`，在桌面填写 `wss://server.example.com:7467`。如果使用私有 CA，向桌面提供受信任的 PEM CA 证书。证书的主机名须与填写的地址匹配。

@@ -2887,3 +2887,13 @@ textarea:focus-visible {
 .workspace-directory-footer span{color:var(--text-secondary);font-size:var(--fs-xs)}
 .workspace-directory-list{display:grid;gap:3px;max-height:160px;overflow:auto}
 .workspace-directory-list button{text-align:left;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.workspace-connection-modes{display:flex;gap:4px;margin:0 0 12px;padding:3px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.workspace-connection-modes button{flex:1;padding:5px 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-secondary)}
+.workspace-connection-modes button[aria-pressed=true]{background:var(--hover);border-color:var(--border);color:var(--text)}
+.workspace-ssh-address,.workspace-key-file{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:8px}
+.workspace-key-file{grid-template-columns:minmax(0,1fr) auto;align-items:end}
+.workspace-ssh-address label,.workspace-key-file label{min-width:0}
+.workspace-key-file button{min-height:30px}
+.workspace-ssh-probe{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);overflow-wrap:anywhere}
+.workspace-ssh-probe span{color:var(--text-secondary);min-width:0}

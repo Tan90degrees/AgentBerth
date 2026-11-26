@@ -1,4 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+if [ -x "$root/bin/node" ]; then
+  exec "$root/bin/node" "$root/dist/daemon.cjs" --server "$@"
+fi
 exec node "$root/dist/daemon.cjs" --server "$@"

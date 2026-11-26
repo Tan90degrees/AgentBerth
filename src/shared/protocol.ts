@@ -314,6 +314,9 @@ export interface DesktopApi {
   openProject(path: string): Promise<void>;
   reconnect(): Promise<void>;
   quitDesktop(): Promise<void>;
+  workspaceSsh(request:import('./workspace-server').WorkspaceSshAction):Promise<import('./workspace-server').WorkspaceSshProbe|import('./workspace-server').WorkspaceTarget|undefined>;
+  chooseWorkspaceSshKey():Promise<string|null>;
+  onWorkspaceProvision(listener:(progress:import('./workspace-server').WorkspaceProvisionProgress)=>void):()=>void;
   workspaceTarget(request: import('./workspace-server').WorkspaceTargetAction): Promise<import('./workspace-server').WorkspaceTarget | string | null>;
   restartBackend(): Promise<void>;
 }

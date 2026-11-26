@@ -18,8 +18,11 @@ import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
+import { WorkspaceProvision } from './workspace-provision';
+import { WorkspaceSshHosts } from './workspace-ssh-hosts';
+import { workspaceSshSettings } from './workspace-ssh-config';
 import { WorkspaceTargets,workspaceCertificate,workspaceKey } from './workspace-target';
-import type { WorkspaceEndpoint } from '../shared/workspace-server';
+import type { WorkspaceConnection, WorkspaceProvisionProgress } from '../shared/workspace-server';
 import { z } from 'zod';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, nativeImage, nativeTheme, safeStorage, shell, Tray, protocol,net } from 'electron';
 import path from 'node:path';
@@ -90,6 +93,19 @@ const desktopExtensions=new DesktopExtensions({
   ssh:ctx=>{ctx.effect(()=>()=>{sshWindow?.destroy();sshWindow=null;publishSshWindow();});},
 },error=>console.error('桌面插件启动失败：',error),async(method,params={})=>{if(!connection?.connected)throw new Error('后台未连接');const request=requestSchema.parse({id:randomUUID(),method,params});return connection.rpc(request.method,request.params);});
 const workspaceTargets=new WorkspaceTargets(path.join(dataDirectory,'workspace-server.json'),safeStorage);
+const workspaceSshHosts=new WorkspaceSshHosts(path.join(dataDirectory,'workspace-ssh-hosts.json'),async(target,fingerprint)=>{
+  if(!window||quitting)return false;
+  const {host,port}=target.ssh;
+  const result=await dialog.showMessageBox(window,{type:'question',title:'确认 SSH 主机指纹',
+    message:host+':'+port,detail:'请与服务器管理员或服务器控制台核对指纹。\n'+fingerprint,
+    buttons:['取消','信任并继续'],defaultId:0,cancelId:0,noLink:true});
+  return result.response===1;
+});
+const workspaceProvision=new WorkspaceProvision(
+  (target,fingerprint,interactive)=>workspaceSshHosts.verify(target,fingerprint,interactive),
+  app.isPackaged?path.join(resourceRoot,'server-deploy'):path.join(resourceRoot,'release'),
+  app.getVersion(),
+);
 const vaults=new Map<string,SshVault>();
 function workspaceSshVault(){
   const key=workspaceKey(workspaceTargets.active?.address);
@@ -125,7 +141,7 @@ else {
       if (!workspaceTargets.active&&state.apiVersion >= 40 && extensionEnabled(state.extensions,'workspace')) await connection!.rpc('restoreWorkspace');
     } catch (error) {
       emit({event:'connection',data:{connected:false,error:String(error)}});
-      if(workspaceTargets.active&&!/401|证书|不兼容/.test(String(error)))scheduleWorkspaceReconnect();
+      if(workspaceTargets.active&&canRetryWorkspace(error))scheduleWorkspaceReconnect();
     }
   });
 }
@@ -144,6 +160,7 @@ function quitDesktopOnly(): void {
   // broken database, daemon lock, or an in-flight backend startup.
   quitReady = true;
   quitting = true;
+  workspaceProvision.discard();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   tray?.destroy(); tray = null;
   app.exit(0);
@@ -151,6 +168,7 @@ function quitDesktopOnly(): void {
 function quitApplication(): Promise<void> {
   if (exitPromise) return exitPromise;
   quitting = true;
+  workspaceProvision.discard();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   tray?.setToolTip('AgentBerth · 正在停止终端并退出');
   exitPromise = (async () => {
@@ -220,24 +238,27 @@ function emit(event: ServerEvent) {
     scheduleWorkspaceReconnect();
   }
 }
+function canRetryWorkspace(error:unknown){
+  return !/401|证书|不兼容|SSH 主机|SSH 登录失败|服务器服务已停止/.test(String(error));
+}
 function scheduleWorkspaceReconnect(){
   if(reconnectTimer||quitting||restarting||changingWorkspace)return;
   reconnectTimer=setTimeout(()=>{
     reconnectTimer=null;
     void reconnect().catch(error=>{
       emit({event:'connection',data:{connected:false,error:String(error)}});
-      if(workspaceTargets.active&&!/401|证书|不兼容/.test(String(error))){
+      if(workspaceTargets.active&&canRetryWorkspace(error)){
         reconnectDelay=Math.min(30000,reconnectDelay*2);
         scheduleWorkspaceReconnect();
       }
     });
   },reconnectDelay);
 }
-async function openWorkspace(endpoint?:WorkspaceEndpoint){
+async function openWorkspace(endpoint?:WorkspaceConnection){
   let candidate:DaemonConnection|undefined;
   const listener=(event:ServerEvent)=>{if(candidate===connection)emit(event);};
   candidate=endpoint
-    ?await DaemonConnection.openWorkspace(endpoint,listener)
+    ?('ssh' in endpoint?await workspaceProvision.reconnect(endpoint,listener):await DaemonConnection.openWorkspace(endpoint,listener))
     :await connectDaemon(dataDirectory,path.join(__dirname,'daemon.cjs'),process.execPath,listener);
   return candidate;
 }
@@ -262,13 +283,19 @@ async function connectWorkspace(){
     connectedWorkspace(state);
   }catch(error){candidate.close(true);throw error;}
 }
-async function switchWorkspace(endpoint:WorkspaceEndpoint|undefined,remember=false,forget=false){
+async function switchWorkspace(endpoint:WorkspaceConnection|undefined,remember=false,forget=false,
+    ssh?:{id:string;progress:(value:WorkspaceProvisionProgress)=>void}){
   if(changingWorkspace||restarting||quitting)throw new Error('当前正在切换或退出，请稍后重试');
   changingWorkspace=true;
   let candidate:DaemonConnection|undefined;
   try{
     await connecting?.catch(()=>{});
-    candidate=await openWorkspace(endpoint);
+    workspaceTargets.checkRemember(remember);
+    if(ssh){
+      let routed:DaemonConnection|undefined;
+      const activated=await workspaceProvision.activate(ssh.id,event=>{if(routed===connection)emit(event);},ssh.progress);
+      endpoint=activated.endpoint;routed=candidate=activated.connection;
+    }else candidate=await openWorkspace(endpoint);
     const state=await prepareWorkspace(candidate);
     if(!candidate.connected||quitting)throw new Error('后台连接已断开');
     workspaceTargets.select(endpoint,remember,forget);
@@ -772,8 +799,37 @@ ipcMain.handle('berth:workspaceTarget',async(event,raw:unknown)=>{
     if(statSync(file).size>65536)throw new Error('CA 证书文件过大');
     return workspaceCertificate(readFileSync(file,'utf8'))??null;
   }
-  if(request.action==='local')return switchWorkspace(undefined,false,request.forget);
+  if(request.action==='local'){workspaceProvision.discard();return switchWorkspace(undefined,false,request.forget);}
+  workspaceProvision.discard();
   return switchWorkspace(workspaceTargets.endpoint(request.address,request.token,request.ca),request.remember);
+});
+
+const workspaceSshRequest=z.discriminatedUnion('action',[
+  z.object({action:z.literal('probe'),settings:workspaceSshSettings,password:z.string().max(4096).optional(),passphrase:z.string().max(4096).optional()}).strict(),
+  z.object({action:z.literal('activate'),id:z.uuid(),remember:z.boolean()}).strict(),
+  z.object({action:z.literal('discard'),id:z.uuid()}).strict(),
+]);
+ipcMain.handle('berth:workspaceSshKey',async event=>{
+  trusted(event);
+  if(event.sender!==window?.webContents)throw new Error('请在主窗口配置 SSH 连接');
+  const result=await dialog.showOpenDialog(window!,{title:'选择 SSH 私钥',properties:['openFile']});
+  return result.canceled?null:result.filePaths[0];
+});
+ipcMain.handle('berth:workspaceSsh',async(event,raw:unknown)=>{
+  trusted(event);
+  if(event.sender!==window?.webContents||quitting)throw new Error('请在主窗口配置 SSH 连接');
+  const request=workspaceSshRequest.parse(raw);
+  if(request.action==='discard'){workspaceProvision.discard(request.id);return;}
+  if(request.action==='probe'){
+    if(changingWorkspace||restarting)throw new Error('请等待当前工作区切换完成');
+    const target=workspaceTargets.sshEndpoint(request.settings,request.password,request.passphrase);
+    const result=await workspaceProvision.inspect(target);
+    if(event.sender.isDestroyed()||quitting){workspaceProvision.discard(result.id);return;}
+    return result;
+  }
+  return switchWorkspace(undefined,request.remember,false,{id:request.id,progress:phase=>{
+    if(!event.sender.isDestroyed())event.sender.send('berth:workspaceProvisionProgress',phase);
+  }});
 });
 
 ipcMain.handle('berth:appInfo', event => {

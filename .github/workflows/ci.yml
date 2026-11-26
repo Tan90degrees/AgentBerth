@@ -217,8 +217,11 @@ jobs:
             test-results/*.png
             test-results/services-diagnostics/
           if-no-files-found: ignore
+  linux-server:
+    uses: ./.github/workflows/server.yml
   windows-package:
     name: Windows x64 installer and ZIP
+    needs: linux-server
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -235,6 +238,11 @@ jobs:
           key: windows-builder-v1-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
       - name: Check types and setup scripts
         run: npm run typecheck && npm run test:scripts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: AgentBerth-Server-Linux-*
+          path: deploy-assets
+          merge-multiple: true
       - name: Build installer and unpack-and-run ZIP
         id: package
         run: npm run dist:win -- --config.electronDist=node_modules/electron/dist
@@ -242,6 +250,16 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      - name: Verify packaged SSH deployment resources
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          foreach ($arch in 'x64', 'arm64') {
+            $base = "release/win-unpacked/resources/server-deploy/AgentBerth-Server-$version-linux-$arch.tar.gz"
+            $expected = ((Get-Content "$base.sha256" -Raw).Trim() -split '\s+')[0]
+            $actual = (Get-FileHash $base -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "Embedded Linux $arch deployment archive failed validation" }
+          }
       - name: Test installer progress, cancellation and upgrade
         id: installer-smoke
         run: ./scripts/test-installer.ps1

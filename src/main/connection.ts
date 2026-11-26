@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import type { Duplex } from 'node:stream';
 import { WebSocket } from 'ws';
 import { PROTOCOL_VERSION, API_VERSION, type Method, type Response, type RuntimeInfo, type ServerEvent, type State } from '../shared/protocol';
 import { WORKSPACE_SERVER_VERSION, workspaceServerAddress, serverTokenPattern, type WorkspaceEndpoint } from '../shared/workspace-server';
@@ -46,10 +47,10 @@ export class DaemonConnection {
   static open(runtime: RuntimeInfo,onEvent: (event: ServerEvent) => void): Promise<DaemonConnection>{
     return this.openSocket('ws://127.0.0.1:'+runtime.port+'/rpc',runtime.token,onEvent);
   }
-  static async openWorkspace(endpoint:WorkspaceEndpoint,onEvent:(event:ServerEvent)=>void){
+  static async openWorkspace(endpoint:WorkspaceEndpoint,onEvent:(event:ServerEvent)=>void, tunnel?:Duplex){
     const address=workspaceServerAddress(endpoint.address);
     if(!serverTokenPattern.test(endpoint.token))throw new Error('服务器令牌格式无效');
-    const connection=await this.openSocket(address+'/rpc',endpoint.token,onEvent,endpoint.ca,true);
+    const connection=await this.openSocket(address+'/rpc',endpoint.token,onEvent,endpoint.ca,true,tunnel);
     try{
       const state=await connection.rpc<State>('state');
       if(state.server?.version!==WORKSPACE_SERVER_VERSION||state.apiVersion!==API_VERSION)
@@ -57,15 +58,17 @@ export class DaemonConnection {
       return connection;
     }catch(error){connection.close(true);throw error;}
   }
-  private static openSocket(url:string,token:string,onEvent:(event:ServerEvent)=>void,ca?:string,hosted=false):Promise<DaemonConnection>{
+  private static openSocket(url:string,token:string,onEvent:(event:ServerEvent)=>void,ca?:string,hosted=false,tunnel?:Duplex):Promise<DaemonConnection>{
     return new Promise((resolve,reject)=>{
       const socket=new WebSocket(url,{headers:{Authorization:'Bearer '+token},
-        handshakeTimeout:hosted?8000:1000,followRedirects:false,
+        handshakeTimeout:tunnel?undefined:hosted?8000:1000,followRedirects:false,
+        ...(tunnel?{createConnection:()=>tunnel}:{}),
         ...(hosted?{rejectUnauthorized:true,ca,maxPayload:32*1024*1024,perMessageDeflate:false}:{}),
       });
-      const error=(reason:Error)=>{socket.terminate();reject(reason);};
+      const timer=tunnel?setTimeout(()=>socket.terminate(),8000):undefined;
+      const error=(reason:Error)=>{clearTimeout(timer);socket.terminate();reject(reason);};
       socket.once('error',error);
-      socket.once('open',()=>{socket.removeListener('error',error);resolve(new DaemonConnection(socket,onEvent,hosted));});
+      socket.once('open',()=>{clearTimeout(timer);socket.removeListener('error',error);resolve(new DaemonConnection(socket,onEvent,hosted));});
     });
   }
   rpc<T = unknown>(method: Method, params: Record<string, unknown> = {}): Promise<T> {
@@ -79,6 +82,7 @@ export class DaemonConnection {
     });
   }
   close(silent = false): void { this.silent = silent; this.socket.close(); }
+  onClose(listener:()=>void):void{this.socket.once('close',listener);}
   get connected(): boolean { return this.socket.readyState === WebSocket.OPEN; }
 }
 

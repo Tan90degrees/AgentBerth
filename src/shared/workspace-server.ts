@@ -8,11 +8,38 @@ export interface WorkspaceEndpoint {
   token: string;
   ca?: string;
 }
+export interface WorkspaceSshSettings {
+  host: string;
+  port: number;
+  username: string;
+  authentication: 'password' | 'key';
+  keyPath?: string;
+}
+export interface WorkspaceSshEndpoint {
+  address: string;
+  ssh: WorkspaceSshSettings;
+  password?: string;
+  passphrase?: string;
+}
+export type WorkspaceConnection = WorkspaceEndpoint | WorkspaceSshEndpoint;
+export interface WorkspaceSshProbe {
+  id: string;
+  status: 'running' | 'installed' | 'missing';
+  arch: 'x64' | 'arm64';
+  hostname: string;
+}
+export type WorkspaceProvisionProgress = 'upload' | 'install' | 'start' | 'connect';
+export type WorkspaceSshAction =
+  | { action:'probe'; settings:WorkspaceSshSettings; password?:string; passphrase?:string }
+  | { action:'activate'; id:string; remember:boolean }
+  | { action:'discard'; id:string };
 export interface WorkspaceTarget {
   address?: string;
   recentAddress?: string;
   savedToken: boolean;
   hasCertificate: boolean;
+  ssh?: WorkspaceSshSettings;
+  savedSsh?: boolean;
 }
 export type WorkspaceTargetAction =
   | { action: 'state' }

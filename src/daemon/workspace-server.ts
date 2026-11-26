@@ -10,6 +10,7 @@ export interface WorkspaceServerOptions {
   host: string;
   port: number;
   token: string;
+  sshOnly?: boolean;
   tls?: { key: Buffer; cert: Buffer };
 }
 
@@ -26,7 +27,9 @@ export function readWorkspaceServerToken(dataDirectory: string, create = false):
   return token;
 }
 
-export function workspaceServerOptions(dataDirectory: string, options: Record<string, string | undefined>): WorkspaceServerOptions {
+export function workspaceServerOptions(dataDirectory: string, options: {bind?:string;port?:string;'tls-cert'?:string;'tls-key'?:string;'ssh-only'?:boolean}): WorkspaceServerOptions {
+  const sshOnly=options['ssh-only']===true;
+  if(sshOnly&&(options.bind!==undefined||options.port!==undefined||options['tls-key']||options['tls-cert']))throw new Error('SSH 模式使用后台回环监听，不能指定独立监听参数');
   const host = options.bind ?? '127.0.0.1';
   const number = options.port ?? String(DEFAULT_WORKSPACE_SERVER_PORT);
   const port = Number(number);
@@ -37,7 +40,7 @@ export function workspaceServerOptions(dataDirectory: string, options: Record<st
   if (!cert && host !== '127.0.0.1' && host !== '::1')
     throw new Error('使用非回环地址监听时必须配置 TLS 证书与私钥');
   const tls = cert && key ? { cert: readFileSync(cert), key: readFileSync(key) } : undefined;
-  return { host, port, tls, token: readWorkspaceServerToken(dataDirectory, true) };
+  return { host, port, tls, sshOnly, token: readWorkspaceServerToken(dataDirectory, true) };
 }
 
 export async function workspaceDirectories(input?: string): Promise<WorkspaceDirectoryPage> {

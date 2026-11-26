@@ -105,6 +105,11 @@
     },
     "extraResources": [
       {
+        "from": "deploy-assets",
+        "to": "server-deploy",
+        "filter": ["*.tar.gz", "*.tar.gz.sha256"]
+      },
+      {
         "from": "docs",
         "to": "docs"
       },

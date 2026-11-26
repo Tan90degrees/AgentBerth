@@ -173,7 +173,7 @@ export class DaemonServer {
       });
     };
     authorize(this.http,this.token);
-    if(workspaceServer){
+    if(workspaceServer&&!workspaceServer.sshOnly){
       const fallback:Parameters<typeof createServer>[1]=(_request,response)=>{response.writeHead(404);response.end();};
       this.hosted=workspaceServer.tls
         ?createHttpsServer({...workspaceServer.tls,minVersion:'TLSv1.2',handshakeTimeout:8000},fallback)
