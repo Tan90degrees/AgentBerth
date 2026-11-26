@@ -252,16 +252,24 @@ async function deploy(client:Client,inspection:Inspection,id:string,storage:stri
   }finally{await run(client,stage+'rm -rf -- "$stage"').catch(()=>{});}
 }
 
-async function uploadFile(client:Client,file:string,target:string,timeout:number,fileSize?:number){
+async function uploadFile(client:Client,file:string,target:string,timeout:number,fileSize?:number,signal?:AbortSignal){
   const channel=await sftp(client);
   try{
+    signal?.throwIfAborted();
     await new Promise<void>((resolve,reject)=>{
-      const timer=setTimeout(()=>reject(new Error('上传超时，请检查 SSH 网络后重试')),timeout);
-      channel.fastPut(file,target,{concurrency:32,mode:0o600,fileSize},error=>{
+      const finish=(error?:Error)=>{
         clearTimeout(timer);
-        if(error)reject(new Error('上传失败，请检查 SFTP 权限和服务器磁盘空间',{cause:error}));
-        else resolve();
-      });
+        signal?.removeEventListener('abort',aborted);
+        channel.removeListener('close',closed);
+        if(error)reject(error);else resolve();
+      };
+      const closed=()=>finish(new Error('SFTP 上传通道已断开'));
+      const aborted=()=>finish(new Error('工作区连接已断开，插件上传已取消'));
+      const timer=setTimeout(()=>finish(new Error('上传超时，请检查 SSH 网络后重试')),timeout);
+      signal?.addEventListener('abort',aborted,{once:true});
+      channel.once('close',closed);
+      channel.fastPut(file,target,{concurrency:32,mode:0o600,fileSize},error=>
+        finish(error?new Error('上传失败，请检查 SFTP 权限和服务器磁盘空间',{cause:error}):undefined));
     });
   }finally{channel.end();}
 }
@@ -394,14 +402,17 @@ export class WorkspaceProvision {
     if(!transport||!connection.connected)throw new Error('SSH 工作区连接已断开');
     if(transport.uploading)throw new Error('正在上传插件，请稍后重试');
     transport.uploading=true;
+    const cancel=new AbortController();
+    const unsubscribe=connection.onClose(()=>cancel.abort(new Error('工作区连接已断开，插件上传已取消')));
     let stage:ClientChannel|undefined;
     try{
       const size=await workspaceExtensionSize(file),name='.plugin-stage-'+randomUUID();
       stage=await pluginStage(transport.client,name);
       const target=transport.home+'/.local/share/agentberth-server/'+name+'/extension.zip';
-      await uploadFile(transport.client,file,target,8*60_000,size);
+      await uploadFile(transport.client,file,target,8*60_000,size,cancel.signal);
       return await connection.rpc<ExtensionSnapshot>('extensions',{request:{action:'install',path:target}});
     }finally{
+      unsubscribe();
       if(stage)await releasePluginStage(stage);
       transport.uploading=false;
     }

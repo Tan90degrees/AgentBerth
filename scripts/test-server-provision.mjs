@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
@@ -115,4 +115,21 @@ test('SSH workspaces deploy once, preserve a remote terminal and install a local
   const saved=await restarted.rpc('state');
   assert.ok(saved.projects.some(item=>item.id===project.id));
   assert.equal(saved.extensions.plugins.find(item=>item.manifest.id==='example.ssh-upload')?.status,'active');
+  const file=await open(pluginFile,'w');
+  await file.truncate(64*1024*1024);
+  await file.close();
+  const pending=provision.installExtension(restarted,pluginFile).then(()=>null,error=>error);
+  const stages=async()=>(await readdir(data)).filter(name=>name.startsWith('.plugin-stage-'));
+  const waitForStage=async(present)=>{
+    const deadline=Date.now()+8000;
+    while(Date.now()<deadline){
+      if(((await stages()).length>0)===present)return;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    assert.fail(present?'Plugin upload staging was not created':'Interrupted upload staging was not removed');
+  };
+  await waitForStage(true);
+  restarted.close(true);
+  await waitForStage(false);
+  assert.ok(await pending instanceof Error);
 });
