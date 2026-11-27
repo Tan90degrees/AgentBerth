@@ -63,8 +63,8 @@ try{
   await conversation.locator('.acp-picker-row').filter({hasText:'fixture-review'}).click();
   await conversation.locator('.acp-picker-row').filter({hasText:'SKILL.md'}).click();
   await conversation.getByRole('button',{name:'移除文件 .agents/skills/fixture-review/SKILL.md',exact:true}).waitFor();
-  await message.press('Enter');
-  await conversation.locator('.conversation-message.user').getByRole('button',{name:'SKILL.md',exact:true}).waitFor();
+  await conversation.getByRole('button',{name:'发送',exact:true}).click();
+  await conversation.locator('.conversation-message.user').getByRole('button',{name:'.agents/skills/fixture-review/SKILL.md',exact:true}).waitFor();
   await waitForRpc(sessionId=>window.berth.rpc('acpSnapshot',{sessionId}).then(state=>state.phase==='ready'&&state.events.some(event=>event.kind==='assistant'&&event.text.includes('Review checklist from the selected Skill.'))),session.id);
   await page.evaluate(()=>{localStorage.setItem('berth.appearance','dark');window.dispatchEvent(new StorageEvent('storage',{key:'berth.appearance'}));});
   for(const label of ['ACP 模型','ACP 会话模式']){
