@@ -65,7 +65,9 @@ try{
   await conversation.getByRole('button',{name:'移除文件 .agents/skills/fixture-review/SKILL.md',exact:true}).waitFor();
   await conversation.getByRole('button',{name:'发送',exact:true}).click();
   await conversation.locator('.conversation-message.user').getByRole('button',{name:'.agents/skills/fixture-review/SKILL.md',exact:true}).waitFor();
-  await waitForRpc(sessionId=>window.berth.rpc('acpSnapshot',{sessionId}).then(state=>state.phase==='ready'&&state.events.some(event=>event.kind==='assistant'&&event.text.includes('Review checklist from the selected Skill.'))),session.id);
+  await waitForRpc(sessionId=>window.berth.rpc('acpSnapshot',{sessionId}).then(state=>state.phase==='ready'&&state.events.some(event=>event.kind==='user'&&event.data?.attachments?.some(item=>item.path==='.agents/skills/fixture-review/SKILL.md'))),session.id);
+  const skillCalls=(await readFile(path.join(fixture,'calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.ok(skillCalls.some(item=>item.method==='prompt'&&item.text.includes('Review checklist from the selected Skill.')),'Fixture received the Skill body in the ACP prompt');
   await page.evaluate(()=>{localStorage.setItem('berth.appearance','dark');window.dispatchEvent(new StorageEvent('storage',{key:'berth.appearance'}));});
   for(const label of ['ACP 模型','ACP 会话模式']){
     const select=conversation.getByLabel(label,{exact:true});
@@ -79,6 +81,7 @@ try{
     }),label+' uses the workbench palette for the picker');
     await select.press('Escape');
   }
+  console.log('ACP smoke verified nested Skill references, transmitted contents and dark model/mode menus');
   await conversation.getByRole('button',{name:'对话历史',exact:true}).click();
   const acpHistory=page.getByRole('dialog',{name:'ACP 会话历史',exact:true});
   await acpHistory.getByLabel('搜索 ACP 会话').fill('ACP conversation');
