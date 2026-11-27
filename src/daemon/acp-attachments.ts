@@ -1,8 +1,9 @@
+import { constants } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import type { z } from 'zod';
 import { ACP_MEDIA_LIMIT, type AcpAttachment, type acpImageChunkSchema } from '../shared/acp-workbench';
-import { projectFilePath } from './files';
+import { MAX_TEXT_BYTES, projectFilePath } from './files';
 
 type MediaChunk = z.infer<typeof acpImageChunkSchema>;
 type Media = { mimeType: string; bytes: number; chunks: Buffer[]; completed: boolean };
@@ -11,6 +12,25 @@ type PromptBlock =
   | { type: 'resource_link'; uri: string; name: string }
   | { type: 'image'|'audio'; mimeType: string; data: string }
   | { type: 'resource'; resource: {uri:string;mimeType:string;text:string} };
+
+async function readWorkspaceText(file:string,limit:number):Promise<string>{
+  const handle=await open(file,constants.O_RDONLY|constants.O_NONBLOCK);
+  try{
+    const info=await handle.stat();
+    if(!info.isFile()||info.size>limit)throw new Error('请选择不超过 '+limit/1024+' KiB 的 UTF-8 文本文件');
+    const buffer=Buffer.alloc(info.size+1);
+    let length=0;
+    while(length<buffer.length){
+      const {bytesRead}=await handle.read(buffer,length,buffer.length-length,length);
+      if(!bytesRead)break;
+      length+=bytesRead;
+    }
+    const bytes=buffer.subarray(0,length);
+    if(length!==info.size)throw new Error('读取时文件大小发生变化，请重试');
+    if(!bytes.includes(0))try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{/* Report a consistent error for binary files. */}
+    throw new Error('请选择 UTF-8 文本文件');
+  }finally{await handle.close();}
+}
 
 export class AcpAttachments {
   private readonly uploads = new Map<string, Media>();
@@ -63,22 +83,23 @@ export class AcpAttachments {
         const file = await projectFilePath(cwd, attachment.path);
         if (!(await stat(file.absolute)).isFile()) throw new Error('请选择当前工作区中的文件');
         const uri=pathToFileURL(file.absolute).href;
-        if(attachment.embed){
-          if(!supported('embeddedContext'))throw new Error('当前 Agent 未开放内嵌资源输入');
-          const limit=256*1024;
-          const handle=await open(file.absolute,'r');
-          try{
-            const stat=await handle.stat();
-            if(!stat.isFile()||stat.size>limit)throw new Error('请选择不超过 256 KiB 的 UTF-8 文本文件');
-            const buffer=Buffer.alloc(stat.size+1);
-            const {bytesRead}=await handle.read(buffer,0,buffer.length,0);
-            if(bytesRead>stat.size||buffer.subarray(0,bytesRead).includes(0))throw new Error('文件已变化或不是文本文件');
-            const text=new TextDecoder('utf-8',{fatal:true}).decode(buffer.subarray(0,bytesRead));
-            prompt.push({type:'resource',resource:{uri,mimeType:'text/plain',text}});
-          }finally{await handle.close();}
+        const location='工作区文件 '+JSON.stringify(file.relative)+'\n绝对路径 '+JSON.stringify(file.absolute);
+        let contents:string|undefined;
+        if(attachment.embed)contents=await readWorkspaceText(file.absolute,MAX_TEXT_BYTES);
+        else if(!attachment.text&&/(?:^|\/)SKILL\.md$/i.test(file.relative)){
+          contents=await readWorkspaceText(file.absolute,MAX_TEXT_BYTES).catch(()=>undefined);
+        }
+        if(contents!==undefined){
+          if(supported('embeddedContext')){
+            const mimeType=/\.(md|markdown)$/i.test(file.relative)?'text/markdown':'text/plain';
+            prompt.push({type:'resource',resource:{uri,mimeType,text:contents}});
+          }else{
+            prompt.push({type:'text',text:location+'\n文件正文开始\n'+contents+'\n文件正文结束'});
+          }
         }else{
           prompt.push({type:'resource_link',uri,name:file.relative});
-          if(attachment.text)prompt.push({type:'text',text:file.relative+'\n'+attachment.text});
+          // The structured link and its readable path are part of the same reference.
+          prompt.push({type:'text',text:location+(attachment.text?'\n选择的片段\n'+attachment.text:'')});
         }
       }
     }

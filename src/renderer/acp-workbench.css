@@ -409,3 +409,41 @@
 .acp-messages>.acp-stream-card + .acp-stream-card{margin-top:8px}
 .acp-stream-body>.conversation-message{margin-bottom:0}
 @media(prefers-reduced-motion:no-preference){.acp-stream-card[open]>.acp-stream-body{animation:acp-fade var(--acp-motion) var(--acp-ease)}}
+
+.acp-picker-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.acp-picker-folder button { width: 28px; height: 28px; border-radius: 5px; }
+.acp-picker-folder span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.acp-toolbar-options select option { background: var(--surface); color: var(--text); }
+
+@supports (appearance: base-select) {
+  .acp-toolbar-options select,
+  .acp-toolbar-options select::picker(select) { appearance: base-select; }
+  .acp-toolbar-options select::picker(select) {
+    max-width: min(390px, 85vw);
+    max-height: min(320px, 55vh);
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 7px 22px var(--shadow-color);
+  }
+  .acp-toolbar-options select option {
+    min-height: 30px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    overflow-wrap: anywhere;
+  }
+  .acp-toolbar-options select option:is(:hover, :focus-visible, :checked) { background: var(--hover); }
+  .acp-toolbar-options select::picker-icon { color: var(--text-secondary); }
+}

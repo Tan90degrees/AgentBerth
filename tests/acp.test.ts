@@ -8,6 +8,7 @@ import path from 'node:path';
 import {DaemonServer} from '../src/daemon/server';
 import {DaemonConnection,connectDaemon} from '../src/main/connection';
 import {AcpClientTools} from '../src/daemon/acp-client-tools';
+import {AcpAttachments} from '../src/daemon/acp-attachments';
 import {AcpTransport,acpExecutable,acpCommand} from '../src/daemon/acp-transport';
 import {resolveExecutable} from '../src/daemon/executables';
 import type {AgentDefinition,Session,Run,State} from '../src/shared/protocol';
@@ -72,6 +73,57 @@ test('ACP workbench sends scoped files and images, forwards supported MCP and re
   const log=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
   assert.deepEqual(log.find(item=>item.method==='new').mcpServers.map((server:any)=>server.name),['supported']);
   assert.deepEqual(log.find(item=>item.method==='prompt').blocks.map((block:any)=>block.type),['text','resource_link','text','image']);
+});
+
+test('ACP forwards workspace paths and SKILL.md contents to agents without embedded context',async t=>{
+  const f=await fixture(t,['--workbench']);
+  const relative='.agents/skills/review tools/SKILL.md',skill=path.join(f.root,relative);
+  await mkdir(path.dirname(skill),{recursive:true});
+  await writeFile(skill,'---\nname: review-tools\ndescription: Review fixtures\n---\nUse the sample review checklist.');
+  await writeFile(path.join(f.root,'notes.txt'),'Explicitly included notes');
+  await writeFile(path.join(f.root,'plain.txt'),'Path only contents');
+  const params={sessionId:f.session.id};
+  await f.connection.rpc('start',{...params,cols:80,rows:24});
+  const snapshot=await f.snapshot();
+  assert.ok(snapshot.workspaceFileText);
+  assert.equal((snapshot.capabilities?.promptCapabilities as {embeddedContext?:boolean})?.embeddedContext,undefined);
+  const scope={projectId:f.project.id};
+  const search=await f.connection.rpc<{matches:{path:string;kind:string}[]}>('findProjectFiles',{...scope,query:'.agents/skills'});
+  assert.equal(search.matches[0]?.kind,'directory');
+  const entries=await f.connection.rpc<{entries:{path:string}[]}>('projectFiles',{...scope,path:'.agents/skills/review tools'});
+  assert.ok(entries.entries.some(file=>file.path===relative));
+  await f.connection.rpc('acpSubmit',{...params,message:{requestId:randomUUID(),text:'Use these files',attachments:[
+    {type:'file',path:relative},{type:'file',path:'notes.txt',embed:true},{type:'file',path:'plain.txt'},
+  ]}});
+  await until(f.snapshot,value=>value.phase==='ready'&&value.events.some(event=>event.kind==='assistant'));
+  const calls=(await readFile(path.join(f.dir,'agent','calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  const prompt=calls.find(item=>item.method==='prompt');
+  assert.deepEqual(prompt.blocks.map((block:{type:string})=>block.type),['text','text','text','resource_link','text']);
+  assert.ok(prompt.text.includes(relative));
+  assert.ok(prompt.text.includes(JSON.stringify(await realpath(skill))));
+  assert.ok(prompt.text.includes('Use the sample review checklist.'));
+  assert.ok(prompt.text.includes('Explicitly included notes'));
+  assert.ok(prompt.text.includes('绝对路径 '+JSON.stringify(await realpath(path.join(f.root,'plain.txt')))));
+  assert.ok(!prompt.text.includes('Path only contents'));
+  assert.ok(!(await f.snapshot()).events.find(event=>event.kind==='user')?.text.includes('checklist'));
+});
+
+test('ACP uses negotiated resource blocks and falls back to links for oversized or binary Skills',async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'berth-acp-resource-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const skill={type:'file' as const,path:'SKILL.md'};
+  const attachments=new AcpAttachments();
+  await writeFile(path.join(root,skill.path),'Skill body\n');
+  const native=await attachments.prompt(root,'',[skill],type=>type==='embeddedContext');
+  assert.deepEqual(native.map(item=>item.type),['resource']);
+  const block=native[0];
+  if(block.type!=='resource')assert.fail('Expected embedded resource');
+  assert.equal(block.resource.mimeType,'text/markdown');
+  assert.equal(block.resource.text,'Skill body\n');
+  await writeFile(path.join(root,skill.path),'x'.repeat(257*1024));
+  assert.deepEqual((await attachments.prompt(root,'',[skill],()=>false)).map(item=>item.type),['resource_link','text']);
+  await writeFile(path.join(root,skill.path),Buffer.from([0,255,0]));
+  await assert.rejects(attachments.prompt(root,'',[{...skill,embed:true}],()=>false),/UTF-8/);
 });
 
 test('ACP queue edits and withdrawal work during a turn, stays paused on reconnect, and dispatches exactly once',async t=>{
