@@ -10,7 +10,9 @@ import { cleanupSmoke } from './smoke-cleanup.mjs';
 const execute=promisify(execFile),packaged=process.argv.includes('--packaged');
 if(packaged&&process.platform!=='win32')throw new Error('Packaged ACP smoke requires Windows');
 const folder=await mkdtemp(path.join(os.tmpdir(),'berth-acp-smoke-')),root=path.join(folder,'project'),fixture=path.join(folder,'agent');
-await mkdir(root);await mkdir(fixture);await mkdir('test-results',{recursive:true});
+await mkdir(root);await mkdir(fixture);
+const skillDir=path.join(root,'.agents','skills','fixture-review');
+await mkdir(skillDir,{recursive:true});await writeFile(path.join(skillDir,'SKILL.md'),'Review checklist from the selected Skill.');await mkdir('test-results',{recursive:true});
 const git=async(...args)=>execute('git',['-c','commit.gpgsign=false','-C',root,...args],{windowsHide:true});
 await git('init','--initial-branch=main');await git('config','user.name','ACP smoke');await git('config','user.email','smoke@example.invalid');await writeFile(path.join(root,'base.txt'),'base');await git('add','.');await git('commit','-m','initial');
 let app,daemonPid,failure;const errors=[];
@@ -55,6 +57,31 @@ try{
   await conversation.getByRole('button',{name:'移除文件 base.txt',exact:true}).waitFor();
   await message.press('Enter');
   await conversation.locator('.conversation-message.user').getByRole('button',{name:'base.txt',exact:true}).waitFor();
+  await reference.click();
+  await fileSearch.fill('.agents/skills');
+  await conversation.locator('.acp-picker-row').filter({hasText:'.agents/skills'}).click();
+  await conversation.locator('.acp-picker-row').filter({hasText:'fixture-review'}).click();
+  await conversation.locator('.acp-picker-row').filter({hasText:'SKILL.md'}).click();
+  await conversation.getByRole('button',{name:'移除文件 .agents/skills/fixture-review/SKILL.md',exact:true}).waitFor();
+  await conversation.getByRole('button',{name:'发送',exact:true}).click();
+  await conversation.locator('.conversation-message.user').getByRole('button',{name:'.agents/skills/fixture-review/SKILL.md',exact:true}).waitFor();
+  await waitForRpc(sessionId=>window.berth.rpc('acpSnapshot',{sessionId}).then(state=>state.phase==='ready'&&state.events.some(event=>event.kind==='user'&&event.data?.attachments?.some(item=>item.path==='.agents/skills/fixture-review/SKILL.md'))),session.id);
+  const skillCalls=(await readFile(path.join(fixture,'calls.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.ok(skillCalls.some(item=>item.method==='prompt'&&item.text.includes('Review checklist from the selected Skill.')),'Fixture received the Skill body in the ACP prompt');
+  await page.evaluate(()=>{localStorage.setItem('berth.appearance','dark');window.dispatchEvent(new StorageEvent('storage',{key:'berth.appearance'}));});
+  for(const label of ['ACP 模型','ACP 会话模式']){
+    const select=conversation.getByLabel(label,{exact:true});
+    await select.click();
+    await conversation.locator('select:open').waitFor();
+    assert.ok(await select.evaluate(element=>{
+      const probe=document.createElement('span');
+      probe.style.background='var(--surface)';element.parentElement.append(probe);
+      const surface=getComputedStyle(probe).backgroundColor;probe.remove();
+      return getComputedStyle(element).appearance==='base-select'&&getComputedStyle(element,'::picker(select)').backgroundColor===surface;
+    }),label+' uses the workbench palette for the picker');
+    await select.press('Escape');
+  }
+  console.log('ACP smoke verified nested Skill references, transmitted contents and dark model/mode menus');
   await conversation.getByRole('button',{name:'对话历史',exact:true}).click();
   const acpHistory=page.getByRole('dialog',{name:'ACP 会话历史',exact:true});
   await acpHistory.getByLabel('搜索 ACP 会话').fill('ACP conversation');

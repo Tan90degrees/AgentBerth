@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export const EXTENSION_ARCHIVE_MAX_BYTES=256*1024*1024;
+
 export const extensionId = z.string().regex(/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/).max(100);
 export const extensionIconSchema=z.enum(['puzzle','terminal','brain','paw','workflow','code','chart','database','globe','sparkles','message','book','image','search','plug']);
 export type ExtensionIcon=z.infer<typeof extensionIconSchema>;

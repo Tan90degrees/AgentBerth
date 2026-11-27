@@ -10,15 +10,15 @@ import type { Project } from '../shared/protocol';
 export const ExtensionsContext=createContext<ExtensionSnapshot|undefined>(undefined);
 export const useExtension=(id:string)=>extensionEnabled(useContext(ExtensionsContext),id);
 
-export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandled,projects=[],currentProjectId,apiVersion=0}:{
+export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandled,projects=[],currentProjectId,apiVersion=0,remote=false}:{
   snapshot?:ExtensionSnapshot;onError:(error:string)=>void;mode?:'all'|'agents';
   openId?:string|null;onOpenHandled?:()=>void;
-  projects?:Project[];currentProjectId?:string;apiVersion?:number;
+  remote?:boolean;projects?:Project[];currentProjectId?:string;apiVersion?:number;
 }){
   const [current,setCurrent]=useState(snapshot),[busy,setBusy]=useState(''),[query,setQuery]=useState(''),[editing,setEditing]=useState<string|null>(null),[draft,setDraft]=useState<ExtensionConfig>({}),[message,setMessage]=useState(''),[configError,setConfigError]=useState('');
   const opener=useRef<HTMLElement|null>(null);
   useEffect(()=>setCurrent(snapshot),[snapshot]);
-  const perform=async(id:string,action:()=>Promise<ExtensionSnapshot|null>)=>{setBusy(id);setMessage('');onError('');try{const next=await action();if(next){setCurrent(next);setEditing(null);setMessage('插件已更新，即时生效');}}catch(error){onError(String(error));}finally{setBusy('');}};
+  const perform=async(id:string,action:()=>Promise<ExtensionSnapshot|null>)=>{setBusy(id);setMessage('');onError('');try{const next=await action();if(next){setCurrent(next);setEditing(null);setMessage(id==='$install'?'插件包已安装':'插件已更新，即时生效');}}catch(error){onError(String(error).replace(/^Error invoking remote method '[^']+': Error: /,''));}finally{setBusy('');}};
   const exportKit=async()=>{setBusy('$kit');try{const folder=await window.berth.exportPluginKit();if(folder){await window.berth.copyText(await window.berth.pluginDevelopmentPrompt(folder));setMessage('开发套件已导出，开发指令已复制：'+folder);}}catch(error){onError(String(error));}finally{setBusy('');}};
   const plugins=current?.plugins.filter(plugin=>mode==='agents'?plugin.isAgent:!plugin.isAgent)??[];
   const configured=current?.plugins.find(plugin=>plugin.manifest.id===editing);
@@ -33,8 +33,8 @@ export function ExtensionManager({snapshot,onError,mode='all',openId,onOpenHandl
   const saveConfig=async()=>{if(!configured)return;setBusy(configured.manifest.id);onError('');try{const next=await window.berth.extensions({action:'configure',id:configured.manifest.id,config:draft});setCurrent(next);setEditing(null);setMessage('插件配置已保存，即时生效');}catch(error){setConfigError(String(error));}finally{setBusy('');}};
   if(!current)return <p>插件后台未连接</p>;
   return <section className="extension-manager" aria-label="插件管理">
-    <header><div><h2>{mode==='agents'?'Agent 接入':'扩展插件'}</h2>{/* {mode==='agents'?'管理 Agent 接入与 Skills。':'安装、配置和管理扩展。'} */}</div><div className="extension-actions"><button type="button" className="extension-button primary" disabled={!!busy} onClick={()=>void perform('$install',()=>window.berth.installExtension(false))}>{mode==='agents'?'安装 Agent 插件':'安装扩展插件'}</button><button type="button" className="extension-button subtle" disabled={!!busy} onClick={()=>void perform('$develop',()=>window.berth.installExtension(true))}>加载开发目录</button></div></header>
-    <p className="form-hint">插件可运行本机代码，请安装可信来源。</p>
+    <header><div><h2>{mode==='agents'?'Agent 接入':'扩展插件'}</h2>{/* {mode==='agents'?'管理 Agent 接入与 Skills。':'安装、配置和管理扩展。'} */}</div><div className="extension-actions"><button type="button" className="extension-button primary" disabled={!!busy} aria-busy={busy==='$install'} onClick={()=>void perform('$install',()=>window.berth.installExtension(false))}>{busy==='$install'?(remote?'正在上传并安装…':'正在安装…'):mode==='agents'?'安装 Agent 插件':'安装扩展插件'}</button>{!remote&&<button type="button" className="extension-button subtle" disabled={!!busy} onClick={()=>void perform('$develop',()=>window.berth.installExtension(true))}>加载开发目录</button>}</div></header>
+    <p className="form-hint">插件可在{remote?'服务器':'本机'}运行代码，请选择可信来源。</p>
     <div className="extension-utilities"><input aria-label="搜索插件" placeholder={mode==='agents'?'搜索 Agent 名称或插件 ID':'搜索扩展功能或插件 ID'} value={query} onChange={event=>setQuery(event.target.value)}/></div>
     {message&&<p role="status">{message}</p>}
     {current.warnings?.map(warning=><p className="form-error" key={warning}>{warning}</p>)}

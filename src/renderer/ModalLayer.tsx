@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { AcpIcon } from './AcpUi';
+import { WorkspaceDirectoryPicker } from './WorkspaceDirectoryPicker';
 import { Dialog } from './Dialog';
 import { RemoteFields } from './RemoteTerminal';
 import { TerminalFields } from './TerminalFields';
@@ -43,6 +44,7 @@ export function ModalLayer(props: ModalLayerProps) {
   const kind = request.kind;
   const [values, setValues] = useState(() => modalFormInitial(kind, request.initial));
   const patch = (next: Partial<typeof values>) => setValues(previous => ({ ...previous, ...next }));
+  const [directoryOpen,setDirectoryOpen]=useState(false);
   const { name, folder, title, agent, command, terminal, startNow, remote, worktreePath, service, nativeId } = values;
   const supportsAcp = features.agents && !!state.agents?.some(item=>item.acp);
   const isAcp = !!state.agents?.find(item=>item.id===agent)?.acp;
@@ -66,6 +68,7 @@ export function ModalLayer(props: ModalLayerProps) {
   const common = { dirty: dirtyForm, error, returnFocus, busy, onClose };
 
   async function selectFolder() {
+    if(state.server){setDirectoryOpen(value=>!value);return;}
     try {
       const value = await window.berth.chooseDirectory();
       if (value) patch({ folder: value, ...(name ? {} : { name: value.split(/[\\/]/).filter(Boolean).at(-1) ?? '项目' }) });
@@ -76,7 +79,7 @@ export function ModalLayer(props: ModalLayerProps) {
 
   if (kind === 'renameSession' || kind === 'renameProject') return <Dialog {...common} title={kind === 'renameSession' ? '重命名会话' : '重命名项目'}><form onSubmit={event => submit(event, () => props.onSubmitRename(kind, kind === 'renameSession' ? title : name))}><label>{kind === 'renameSession' ? '会话名称' : '项目名称'}<input aria-label={kind === 'renameSession' ? '会话名称' : '项目名称'} autoFocus required maxLength={100} value={kind === 'renameSession' ? title : name} onChange={event => patch(kind === 'renameSession' ? { title: event.target.value } : { name: event.target.value })} /></label><footer>{cancelButton}<button className="primary" disabled={busy}>保存名称</button></footer></form></Dialog>;
 
-  if (kind === 'project' || kind === 'editProject') return <Dialog {...common} title={kind === 'project' ? '添加项目目录' : '编辑项目'}><form onSubmit={event => submit(event, () => props.onSubmitProject({ name, folder }))}><label>项目名称（可选）<input aria-label="项目名称" autoFocus maxLength={100} value={name} onChange={event => patch({ name: event.target.value })} placeholder="留空按目录自动命名" /></label><label>项目目录<div className="input-with-button"><input aria-label="项目目录" required disabled={kind === 'editProject' && actionProjectSessions.some(active)} value={folder} onChange={event => patch({ folder: event.target.value })} placeholder={state.platform === 'win32' ? 'D:\\Projects\\my-project' : '/home/user/projects/my-project'} /><button type="button" className="subtle" disabled={kind === 'editProject' && actionProjectSessions.some(active)} onClick={() => void selectFolder()}>选择目录</button></div></label>{kind === 'editProject' && folder !== actionProject?.path && <p className="form-hint">更换目录将解除原生会话关联。</p>}<footer>{cancelButton}<button className="primary" disabled={busy}>{busy ? '正在提交…' : kind === 'project' ? '添加项目' : '保存项目'}</button></footer></form></Dialog>;
+  if (kind === 'project' || kind === 'editProject') return <Dialog {...common} title={kind === 'project' ? '添加项目目录' : '编辑项目'}><form onSubmit={event => submit(event, () => props.onSubmitProject({ name, folder }))}><label>项目名称（可选）<input aria-label="项目名称" autoFocus maxLength={100} value={name} onChange={event => patch({ name: event.target.value })} placeholder="留空按目录自动命名" /></label><label>{state.server?'服务器项目目录':'项目目录'}<div className="input-with-button"><input aria-label="项目目录" required disabled={kind === 'editProject' && actionProjectSessions.some(active)} value={folder} onChange={event => patch({ folder: event.target.value })} placeholder={state.platform === 'win32' ? 'D:\\Projects\\my-project' : '/home/user/projects/my-project'} /><button type="button" className="subtle" disabled={kind === 'editProject' && actionProjectSessions.some(active)} onClick={() => void selectFolder()}>选择目录</button></div></label>{directoryOpen&&<WorkspaceDirectoryPicker initial={folder} onClose={()=>setDirectoryOpen(false)} onSelect={folder=>{patch({folder});setDirectoryOpen(false);}}/>}{kind === 'editProject' && folder !== actionProject?.path && <p className="form-hint">更换目录将解除原生会话关联。</p>}<footer>{cancelButton}<button className="primary" disabled={busy}>{busy ? '正在提交…' : kind === 'project' ? '添加项目' : '保存项目'}</button></footer></form></Dialog>;
 
   if (kind === 'session' || kind === 'editSession') {
     const creating=kind==='session',locked=!creating&&!!actionSession&&active(actionSession);

@@ -73,7 +73,7 @@ export class AcpSessions {
   snapshot(id:string,pagination:{before?:number;after?:number;limit?:number}={}):AcpSnapshot{
     const saved=this.store.acpState(id),value=this.live.get(id);
     const state:Metadata=value?{...value.state,permissions:[...value.permissions.values()].map(p=>p.value),elicitations:[...value.elicitations.values()].map(({value:{schema,...request}})=>request)}:{sessionId:id,nativeSessionId:saved.nativeSessionId??null,phase:'disconnected',turnId:null,permissions:[],elicitations:[],error:saved.error,agentInfo:saved.agentInfo,capabilities:saved.capabilities,configOptions:saved.configOptions,modes:saved.modes,authMethods:saved.authMethods,availableCommands:saved.availableCommands,lastTurnStatus:saved.lastTurnStatus,sessionInfo:saved.sessionInfo,usage:saved.usage,queue:saved.queue,queuePaused:!!saved.queue?.length,...(saved.phase==='running'||saved.phase==='permission'?{error:'上次操作因后台退出而中断；结果未知，不会自动重放'}:{})};
-    return {...state,...this.store.acpEvents(id,pagination)};
+    return {...state,workspaceFileText:true,...this.store.acpEvents(id,pagination)};
   }
   async start(session:Session,definition:AgentDefinition,cwd:string,cols:number,rows:number):Promise<Run>{
     if(this.closed)throw new Error('ACP 后台正在退出');if(this.live.has(session.id))throw new Error('ACP 会话已连接');if(!definition.acp)throw new Error('此 Agent 未配置 ACP');

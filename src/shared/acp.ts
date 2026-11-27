@@ -24,6 +24,7 @@ export interface AcpSessionInfo {title?:string|null;updatedAt?:string|null}
 export interface AcpSnapshot {
   sessionId:string;nativeSessionId:string|null;phase:'disconnected'|'connecting'|'ready'|'running'|'permission'|'error';
   turnId:string|null;error?:string;agentInfo?:Record<string,unknown>;capabilities?:Record<string,unknown>;
+  workspaceFileText?:true;
   configOptions?:AcpOption[];modes?:{currentModeId:string;availableModes:{id:string;name:string;description?:string}[]};
   authMethods?:{id:string;name:string;description?:string;type?:'terminal';args?:string[];env?:Record<string,string>}[];authTerminalId?:string;permissions:AcpPermission[];elicitations?:import('./acp-elicitation').AcpElicitation[];
   availableCommands?:{name:string;description:string;input?:{hint:string}}[];

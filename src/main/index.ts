@@ -18,13 +18,20 @@ import { builtinSkillProviders, skillRequestSchema } from '../shared/skills';
 import { SshVault } from './ssh-vault';
 import { sshConnectionSchema, sshSecretSchema, type SshChallenge, type SshWindowState } from '../shared/protocol';
 import { TerminalSubscriptions } from './terminal-subscriptions';
+import { WorkspaceProvision } from './workspace-provision';
+import { uploadWorkspaceExtension } from './workspace-extension';
+import { WorkspaceSshHosts } from './workspace-ssh-hosts';
+import { workspaceSshSettings } from './workspace-ssh-config';
+import { WorkspaceTargets,workspaceCertificate,workspaceKey } from './workspace-target';
+import type { WorkspaceConnection, WorkspaceProvisionProgress } from '../shared/workspace-server';
+import { z } from 'zod';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, nativeImage, nativeTheme, safeStorage, shell, Tray, protocol,net } from 'electron';
 import path from 'node:path';
 import { release } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { connectDaemon, shutdownDaemon, stopIdleDaemon, type DaemonConnection } from './connection';
+import { connectDaemon, shutdownDaemon, stopIdleDaemon, DaemonConnection } from './connection';
 import { requestSchema, type Method, type ServerEvent } from '../shared/protocol';
 import { exportPluginKit, developmentPrompt } from './plugin-files';
 import { externalWebUrl, MAX_CLIPBOARD_TEXT, MAX_PASTE_TEXT } from '../shared/desktop';
@@ -58,10 +65,17 @@ let quitReady = false;
 let exitPromise: Promise<void> | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let restarting = false;
-const terminalSubscriptions = new TerminalSubscriptions(async (method, sessionId) => {
-  if (!connection) throw new Error('后台连接已断开');
-  return connection.rpc(method, { sessionId });
-});
+let changingWorkspace = false;
+let reconnectDelay=2000;
+const registeredPluginSchemes=new WeakSet<Electron.Session>();
+let workspaceGeneration=0;
+function createTerminalSubscriptions(generation:number){
+  return new TerminalSubscriptions(async(method,sessionId)=>{
+    if(!connection||generation!==workspaceGeneration)throw new Error('终端所属工作区已切换');
+    return connection.rpc(method,{sessionId});
+  });
+}
+let terminalSubscriptions=createTerminalSubscriptions(workspaceGeneration);
 const resourceRoot = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
 const iconFile = path.join(resourceRoot, 'assets', process.platform === 'win32' ? 'app.ico' : 'app.png');
 if (!app.commandLine.hasSwitch('user-data-dir')) { const profile = path.join(app.getPath('appData'),'AgentBerth'); mkdirSync(profile, { recursive: true }); app.setPath('userData', profile); }
@@ -76,10 +90,31 @@ const petMonitor = new PetMonitor(async connectionId => {
 }, publishPet);
 const requireExtension=(id:string)=>{if(!extensionEnabled(extensionSnapshot,id))throw new Error('此功能插件未启用，请在设置 → 插件中启用');};
 const desktopExtensions=new DesktopExtensions({
-  pet:ctx=>mountPetDesktop(ctx,{dataDirectory,createHooks:()=>new PetHooks(dataDirectory,hook=>{const accepted=pet.accept(hook);if(accepted&&hook.provider&&hook.nativeSessionId&&hook.cwd&&connection?.connected)void connection.rpc('nativeSessionDetected',{sessionId:hook.sessionId,runId:hook.runId,provider:hook.provider,nativeSessionId:hook.nativeSessionId,cwd:hook.cwd}).catch(()=>{});return accepted;}),setHooks:value=>{petHooks=value;},enabled:()=>pet.preferences.enabled,open:openPetWindow,publish:publishPet,destroy:()=>{petWindow?.destroy();petWindow=null;}}),
+  pet:ctx=>mountPetDesktop(ctx,{dataDirectory,createHooks:()=>new PetHooks(dataDirectory,hook=>{if(workspaceTargets.active)return false;const accepted=pet.accept(hook);if(accepted&&hook.provider&&hook.nativeSessionId&&hook.cwd&&connection?.connected)void connection.rpc('nativeSessionDetected',{sessionId:hook.sessionId,runId:hook.runId,provider:hook.provider,nativeSessionId:hook.nativeSessionId,cwd:hook.cwd}).catch(()=>{});return accepted;}),setHooks:value=>{petHooks=value;},enabled:()=>pet.preferences.enabled,open:openPetWindow,publish:publishPet,destroy:()=>{petWindow?.destroy();petWindow=null;}}),
   ssh:ctx=>{ctx.effect(()=>()=>{sshWindow?.destroy();sshWindow=null;publishSshWindow();});},
 },error=>console.error('桌面插件启动失败：',error),async(method,params={})=>{if(!connection?.connected)throw new Error('后台未连接');const request=requestSchema.parse({id:randomUUID(),method,params});return connection.rpc(request.method,request.params);});
-const sshVault = new SshVault(path.join(dataDirectory,'ssh-secrets.json'), safeStorage);
+const workspaceTargets=new WorkspaceTargets(path.join(dataDirectory,'workspace-server.json'),safeStorage);
+const workspaceSshHosts=new WorkspaceSshHosts(path.join(dataDirectory,'workspace-ssh-hosts.json'),async(target,fingerprint)=>{
+  if(!window||quitting)return false;
+  const {host,port}=target.ssh;
+  const result=await dialog.showMessageBox(window,{type:'question',title:'确认 SSH 主机指纹',
+    message:host+':'+port,detail:'请与服务器管理员或服务器控制台核对指纹。\n'+fingerprint,
+    buttons:['取消','信任并继续'],defaultId:0,cancelId:0,noLink:true});
+  return result.response===1;
+});
+const workspaceProvision=new WorkspaceProvision(
+  (target,fingerprint,interactive)=>workspaceSshHosts.verify(target,fingerprint,interactive),
+  app.isPackaged?path.join(resourceRoot,'server-deploy'):path.join(resourceRoot,'release'),
+  app.getVersion(),
+);
+const vaults=new Map<string,SshVault>();
+function workspaceSshVault(){
+  const key=workspaceKey(workspaceTargets.active?.address);
+  let vault=vaults.get(key);
+  if(!vault){vault=new SshVault(path.join(dataDirectory,key?'ssh-secrets-'+key+'.json':'ssh-secrets.json'),safeStorage);vaults.set(key,vault);}
+  return vault;
+}
+function workspacePartition(){return workspaceTargets.active?'persist:agentberth-server-'+workspaceKey(workspaceTargets.active.address):undefined;}
 if (!path.isAbsolute(dataDirectory)) throw new Error('AGENTBERTH_DATA_DIR must be an absolute path');
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -93,7 +128,7 @@ else {
     if (process.platform === 'win32') app.setAppUserModelId('dev.agentberth.desktop');
     pet = new PetState(path.join(dataDirectory, 'pet'), publishPet);
     pet.loadImages(petStatuses);
-    protocol.handle('agentberth-plugin',async request=>{try{const url=new URL(request.url),parts=url.pathname.split('/').filter(Boolean);if(request.method!=='GET'||url.hostname!=='view'||parts.length!==2||!connection?.connected)return new Response('View unavailable',{status:404});const [id,view]=parts;const parsed=extensionRequestSchema.parse({action:'view',id,view});const html=await connection.rpc<string>('extensions',{request:parsed});return new Response(extensionDocument(html),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"}});}catch{return new Response('插件视图加载失败，请检查插件状态并重新打开',{status:404});}});
+    workspaceTargets.load();
     createWindow();
     const icon = nativeImage.createFromPath(iconFile);
     if (icon.isEmpty()) throw new Error('应用图标资源未正确打包');
@@ -104,8 +139,11 @@ else {
     try {
       await reconnect();
       const state = await connection!.rpc<import('../shared/protocol').State>('state');
-      if (state.apiVersion >= 40 && extensionEnabled(state.extensions,'workspace')) await connection!.rpc('restoreWorkspace');
-    } catch (error) { emit({ event: 'connection', data: { connected: false, error: String(error) } }); }
+      if (!workspaceTargets.active&&state.apiVersion >= 40 && extensionEnabled(state.extensions,'workspace')) await connection!.rpc('restoreWorkspace');
+    } catch (error) {
+      emit({event:'connection',data:{connected:false,error:String(error)}});
+      if(workspaceTargets.active&&canRetryWorkspace(error))scheduleWorkspaceReconnect();
+    }
   });
 }
 
@@ -114,7 +152,7 @@ function refreshTrayMenu(){tray?.setContextMenu(Menu.buildFromTemplate([
   ...(extensionEnabled(extensionSnapshot,'pet')?[{label:'显示桌宠',click:()=>{pet.save({...pet.preferences,enabled:true});void openPetWindow().catch(console.error);}}]:[]),
   {type:'separator'},
   {label:'仅退出界面（后台任务继续运行）',click:quitDesktopOnly},
-  {label:'退出 AgentBerth（停止终端，下次恢复）',click:()=>app.quit()},
+  {label:workspaceTargets.active?'退出 AgentBerth（服务器任务继续运行）':'退出 AgentBerth（停止终端，下次恢复）',click:()=>app.quit()},
 ]));}
 function refreshWindow(target = window) { if (connection?.connected && !quitting && target && !target.isDestroyed()) target.webContents.send('berth:event', { event: 'connection', data: { connected: true } }); }
 function showWindow() { if (!window) createWindow(); if (window?.isMinimized()) window.restore(); window?.show(); window?.focus(); }
@@ -123,6 +161,7 @@ function quitDesktopOnly(): void {
   // broken database, daemon lock, or an in-flight backend startup.
   quitReady = true;
   quitting = true;
+  workspaceProvision.discard();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   tray?.destroy(); tray = null;
   app.exit(0);
@@ -130,12 +169,13 @@ function quitDesktopOnly(): void {
 function quitApplication(): Promise<void> {
   if (exitPromise) return exitPromise;
   quitting = true;
+  workspaceProvision.discard();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   tray?.setToolTip('AgentBerth · 正在停止终端并退出');
   exitPromise = (async () => {
     await desktopExtensions.close();
     if (connecting) await connecting.catch(() => {});
-    await shutdownDaemon(dataDirectory, true);
+    if(!workspaceTargets.active)await shutdownDaemon(dataDirectory,true);
     connection?.close(true); connection = null;
     quitReady = true; tray?.destroy(); tray = null;
     // All owned workers and the daemon are gone; renderer/debugger unload must not delay explicit quit.
@@ -151,7 +191,7 @@ function quitApplication(): Promise<void> {
   return exitPromise;
 }
 async function answerSshChallenge(challenge: SshChallenge): Promise<void> {
-  const provider = connection;
+  const provider = connection, sshVault=workspaceSshVault();
   if (!provider) return;
   try {
     if (challenge.kind === 'credentials') {
@@ -171,6 +211,10 @@ function withDesktopDiagnostics(state:import('../shared/protocol').State){const 
 function publishDesktopDiagnostics(){if(!desktopState)return;const event={event:'state',data:withDesktopDiagnostics(desktopState)};for(const target of [window,sshWindow])if(target&&!target.isDestroyed())target.webContents.send('berth:event',event);}
 function emit(event: ServerEvent) {
   if(event.event==='state'){
+    if(workspaceTargets.active&&event.data.extensions){
+      const extensions={...event.data.extensions,plugins:event.data.extensions.plugins.map(({desktop,...plugin})=>plugin)};
+      event={...event,data:{...event.data,extensions}};
+    }
     const sshWasEnabled=extensionEnabled(extensionSnapshot,'ssh'),sshGeneration=extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation;extensionSnapshot=event.data.extensions;
     pluginBrowser?.reconcile();desktopState=event.data;event={...event,data:withDesktopDiagnostics(event.data)};if(!quitting)void desktopExtensions.update(extensionSnapshot).then(publishDesktopDiagnostics,error=>{console.error(error);publishDesktopDiagnostics();});refreshTrayMenu();
     if(!quitting&&(!sshWasEnabled||sshGeneration!==extensionSnapshot?.plugins.find(plugin=>plugin.manifest.id==='ssh')?.generation)&&extensionEnabled(extensionSnapshot,'ssh')&&connection?.connected)void registerSshProvider().catch(console.error);
@@ -196,39 +240,112 @@ function emit(event: ServerEvent) {
   }
   if (event.event === 'connection' && !event.data.connected && !event.data.error && !quitting && !restarting && !exitPromise) {
     connection = null;
-    if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; void reconnect().catch(error => emit({ event: 'connection', data: { connected: false, error: String(error) } })); }, 2000);
+    scheduleWorkspaceReconnect();
   }
 }
-async function connectWorkspace(): Promise<void> {
-  const candidate = await connectDaemon(dataDirectory, path.join(__dirname, 'daemon.cjs'), process.execPath, emit);
-  connection = candidate;
-  try {
-    await registerSshProvider();
-    await syncTerminalAppearance();
-    const state = await candidate.rpc<import('../shared/protocol').State>('state');
-    emit({ event: 'connection', data: { connected: true } });
-    emit({ event: 'state', data: state });
-    void refreshAcceleratorNodes().catch(() => {});
-  } catch (error) {
-    if (connection === candidate) connection = null;
-    candidate.close(true);
-    throw error;
+function canRetryWorkspace(error:unknown){
+  return !/401|证书|不兼容|SSH 主机|SSH 登录失败|服务器服务已停止/.test(String(error));
+}
+function scheduleWorkspaceReconnect(){
+  if(reconnectTimer||quitting||restarting||changingWorkspace)return;
+  reconnectTimer=setTimeout(()=>{
+    reconnectTimer=null;
+    void reconnect().catch(error=>{
+      emit({event:'connection',data:{connected:false,error:String(error)}});
+      if(workspaceTargets.active&&canRetryWorkspace(error)){
+        reconnectDelay=Math.min(30000,reconnectDelay*2);
+        scheduleWorkspaceReconnect();
+      }
+    });
+  },reconnectDelay);
+}
+async function openWorkspace(endpoint?:WorkspaceConnection){
+  let candidate:DaemonConnection|undefined;
+  const listener=(event:ServerEvent)=>{if(candidate===connection)emit(event);};
+  candidate=endpoint
+    ?('ssh' in endpoint?await workspaceProvision.reconnect(endpoint,listener):await DaemonConnection.openWorkspace(endpoint,listener))
+    :await connectDaemon(dataDirectory,path.join(__dirname,'daemon.cjs'),process.execPath,listener);
+  return candidate;
+}
+async function prepareWorkspace(candidate:DaemonConnection){
+  const state=await candidate.rpc<import('../shared/protocol').State>('state');
+  if(state.apiVersion>=22&&extensionEnabled(state.extensions,'ssh'))await candidate.rpc('registerSshProvider');
+  await terminalAppearanceSync.sync(candidate,terminalColorScheme,terminalPaletteFamily);
+  return state;
+}
+function connectedWorkspace(state:import('../shared/protocol').State){
+  reconnectDelay=2000;
+  emit({event:'connection',data:{connected:true}});
+  emit({event:'state',data:state});
+  void refreshAcceleratorNodes().catch(()=>{});
+}
+async function connectWorkspace(){
+  const candidate=await openWorkspace(workspaceTargets.active);
+  try{
+    const state=await prepareWorkspace(candidate);
+    if(!candidate.connected)throw new Error('后台连接已断开');
+    connection=candidate;
+    connectedWorkspace(state);
+  }catch(error){candidate.close(true);throw error;}
+}
+async function switchWorkspace(endpoint:WorkspaceConnection|undefined,remember=false,forget=false,
+    ssh?:{id:string;progress:(value:WorkspaceProvisionProgress)=>void}){
+  if(changingWorkspace||restarting||quitting)throw new Error('当前正在切换或退出，请稍后重试');
+  changingWorkspace=true;
+  let candidate:DaemonConnection|undefined;
+  try{
+    await connecting?.catch(()=>{});
+    workspaceTargets.checkRemember(remember);
+    if(ssh){
+      let routed:DaemonConnection|undefined;
+      const activated=await workspaceProvision.activate(ssh.id,event=>{if(routed===connection)emit(event);},ssh.progress);
+      endpoint=activated.endpoint;routed=candidate=activated.connection;
+    }else candidate=await openWorkspace(endpoint);
+    const state=await prepareWorkspace(candidate);
+    if(!candidate.connected||quitting)throw new Error('后台连接已断开');
+    workspaceTargets.select(endpoint,remember,forget);
+    if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+    connection?.close(true);
+    terminalSubscriptions=createTerminalSubscriptions(++workspaceGeneration);
+    const previous=window,detached=sshWindow;
+    window=null;sshWindow=null;sshWindowSession='';
+    detached?.destroy();previous?.destroy();
+    pluginBrowser?.dispose();pluginBrowser=null;
+    acceleratorNodes=[];
+    pet?.connection(false);
+    desktopState=undefined;extensionSnapshot=undefined;
+    connection=candidate;candidate=undefined;
+    createWindow();
+    connectedWorkspace(state);
+    return workspaceTargets.state();
+  }finally{
+    candidate?.close(true);
+    changingWorkspace=false;
+    if(!connection?.connected&&workspaceTargets.active)scheduleWorkspaceReconnect();
   }
 }
 async function reconnect(): Promise<void> {
   if (quitting) throw new Error('正在停止终端并退出');
   if (connecting) return connecting;
+  if(changingWorkspace)throw new Error('正在切换工作区');
   connecting = connectWorkspace().finally(() => { connecting = null; });
   return connecting;
 }
+function registerPluginScheme(session:Electron.Session){
+  if(registeredPluginSchemes.has(session))return;
+  registeredPluginSchemes.add(session);
+  session.protocol.handle('agentberth-plugin',async request=>{try{const url=new URL(request.url),parts=url.pathname.split('/').filter(Boolean);if(request.method!=='GET'||url.hostname!=='view'||parts.length!==2||!connection?.connected)return new Response('View unavailable',{status:404});const [id,view]=parts;const parsed=extensionRequestSchema.parse({action:'view',id,view});const html=await connection.rpc<string>('extensions',{request:parsed});return new Response(extensionDocument(html),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"}});}catch{return new Response('插件视图加载失败，请检查插件状态并重新打开',{status:404});}});
+}
 function secureWindow(target: BrowserWindow, detached = false) {
-  if(!detached){pluginBrowser?.dispose();pluginBrowser=new PluginBrowser(target,()=>extensionSnapshot,async(id,command)=>{if(!connection?.connected)throw new Error('后台连接已断开');return connection.rpc('extensions',{request:{action:'call',id,command,params:{action:'status'}}});});}
+  registerPluginScheme(target.webContents.session);
+  if(!detached){pluginBrowser?.dispose();pluginBrowser=workspaceTargets.active?null:new PluginBrowser(target,()=>extensionSnapshot,async(id,command)=>{if(!connection?.connected)throw new Error('后台连接已断开');return connection.rpc('extensions',{request:{action:'call',id,command,params:{action:'status'}}});});}
   target.setMenuBarVisibility(false);
   target.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   target.webContents.on('will-navigate', event => { event.preventDefault(); });
   target.webContents.on('will-frame-navigate',event=>{if(!event.isMainFrame&&!['about:blank','about:srcdoc'].includes(event.url)&&!event.url.startsWith('agentberth-plugin://view/'))event.preventDefault();});
   const owner = target.webContents.id;
-  target.webContents.on('destroyed', () => terminalSubscriptions.release(owner));
+  const subscriptions=terminalSubscriptions;
+  target.webContents.on('destroyed',()=>subscriptions.release(owner));
   target.on('restore', () => refreshWindow(target));
   // Hidden windows receive activity only. Reattach from the authoritative
   // snapshot when shown, so output produced while minimized is never lost.
@@ -239,7 +356,7 @@ function secureWindow(target: BrowserWindow, detached = false) {
       void connection.rpc('state').then(data => { if (!target.isDestroyed()) target.webContents.send('berth:event', { event: 'state', data }); }).catch(() => {});
     }
   });
-  const query: Record<string,string> = {};
+  const query: Record<string,string> = workspaceTargets.active?{server:workspaceTargets.active.address}:{};
   if (detached) query.view = 'ssh';
   if (themedTitleBar) query.titleBar = String(titleBarHeight);
   const developmentUrl = process.env.AGENTBERTH_DEV_URL;
@@ -407,6 +524,7 @@ ipcMain.handle('berth:pet', async (event, raw: unknown) => {
     case 'hookGuide': return petGuide();
     case 'installHook': {
       trusted(event);
+      if(workspaceTargets.active)throw new Error('请在服务器上配置 Agent Hook');
       let project: string | undefined;
       if (request.projectId) {
         if (connecting) await connecting;
@@ -469,7 +587,7 @@ function publishSshWindow() {
 }
 async function openSshWindow() {
   if (sshWindow && !sshWindow.isDestroyed()) { if (sshWindow.isMinimized()) sshWindow.restore(); sshWindow.show(); sshWindow.focus(); return; }
-  const target = new BrowserWindow({ width: 1100, height: 700, minWidth: 640, minHeight: 360, title: 'AgentBerth · SSH', icon: iconFile, show: false, ...workspaceWindowAppearance(), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const target = new BrowserWindow({ width: 1100, height: 700, minWidth: 640, minHeight: 360, title: 'AgentBerth · SSH', icon: iconFile, show: false, ...workspaceWindowAppearance(), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, partition:workspacePartition() } });
   sshWindow = target;
   publishSshWindow();
   target.once('ready-to-show', () => { if (!quitting) { target.show(); target.focus(); } });
@@ -478,7 +596,7 @@ async function openSshWindow() {
   catch (error) { if (!target.isDestroyed()) target.destroy(); throw error; }
 }
 function createWindow() {
-  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, show: false, ...workspaceWindowAppearance(), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 700, title: 'AgentBerth · 泊栈', icon: iconFile, show: false, ...workspaceWindowAppearance(), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, partition:workspacePartition() } });
   window.once('ready-to-show',()=>{if(!quitting)window?.show();});
   window.on('close', event => { if (!quitReady) { event.preventDefault(); window?.hide(); } });
   window.on('closed', () => { window = null; });
@@ -490,11 +608,30 @@ function trusted(event: Electron.IpcMainInvokeEvent): void {
 }
 ipcMain.handle('berth:pluginBrowser',async(event,raw:unknown)=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口支持原生 Web 视图');return pluginBrowser?.request(pluginBrowserRequestSchema.parse(raw));});
 ipcMain.handle('berth:resourcePids',event=>{trusted(event);if(event.sender!==window?.webContents)throw new Error('仅主窗口可读取工作台进程');return {applicationPids:{'deepseek-harness':pluginBrowser?.processIds()??[]}};});
-ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();return connection!.rpc('extensions',{request});});
+ipcMain.handle('berth:extensions',async(event,raw:unknown)=>{trusted(event);const request=extensionRequestSchema.parse(raw);if(!connection)await reconnect();trusted(event);return connection!.rpc('extensions',{request});});
 ipcMain.handle('berth:installExtension',async(event,development:unknown=false)=>{
-  trusted(event);if(typeof development!=='boolean')throw new Error('无效插件安装方式');
-  const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,development?{title:'加载插件开发目录',properties:['openDirectory']}:{title:'安装 AgentBerth 插件包',properties:['openFile'],filters:[{name:'AgentBerth 插件包',extensions:['zip']}]});
-  if(result.canceled)return null;if(!connection)await reconnect();return connection!.rpc('extensions',{request:{action:'install',path:result.filePaths[0],development}});
+  trusted(event);
+  if(quitting||changingWorkspace)throw new Error('请等待工作区切换完成');
+  if(typeof development!=='boolean')throw new Error('无效插件安装方式');
+  if(development&&workspaceTargets.active)throw new Error('远程工作区请选择 ZIP 插件包');
+  const result=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,
+    development?{title:'加载插件开发目录',properties:['openDirectory']}:
+      {title:workspaceTargets.active?'安装插件到服务器':'安装 AgentBerth 插件包',properties:['openFile'],filters:[{name:'AgentBerth 插件包',extensions:['zip']}]});
+  if(result.canceled)return null;
+  if(connecting)await connecting;
+  if(!connection)await reconnect();
+  trusted(event);
+  if(quitting||changingWorkspace)throw new Error('请等待工作区切换完成');
+  const target=connection!,endpoint=workspaceTargets.active,file=result.filePaths[0];
+  if(!endpoint)return target.rpc('extensions',{request:{action:'install',path:file,development}});
+  if('ssh' in endpoint)return workspaceProvision.installExtension(target,file);
+  if(!desktopState?.server?.extensionUpload)throw new Error('当前服务器不支持通过地址与令牌上传插件，请更新服务端');
+  const cancel=new AbortController();
+  const unsubscribe=target.onClose(()=>cancel.abort());
+  try{
+    await uploadWorkspaceExtension(endpoint,file,cancel.signal);
+    return await target.rpc('extensions',{request:{action:'list'}});
+  }finally{unsubscribe();}
 });
 ipcMain.handle('berth:sshWindow', async (event, action: unknown, sessionId: unknown) => {
   if(action!=='state')requireExtension('ssh');
@@ -513,7 +650,9 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
   const request = requestSchema.safeParse({ id: randomUUID(), method, params });
   if (!request.success) throw new Error('请求参数无效');
   if (connecting) await connecting;
-  if (!connection) await reconnect();
+  if(!connection)await reconnect();
+  trusted(event);
+  const targetConnection=connection!;
   if (method === 'attach') return terminalSubscriptions.attach(event.sender.id, String(params.sessionId), () => !event.sender.isDestroyed());
   if (method === 'detach') return terminalSubscriptions.detach(event.sender.id, String(params.sessionId));
   if ((method === 'resize' || method === 'input') && remoteSessionIds.has(String(params.sessionId))) {
@@ -521,10 +660,10 @@ ipcMain.handle('berth:rpc', async (event, method: Method, params: Record<string,
     // Ignore already queued work from the previous viewport during a handoff.
     if (!target || event.sender !== target.webContents) return null;
   }
-  if(method==='resources'){const resourceParams=request.data.params as {applicationPids:Record<string,number[]>};return connection!.rpc(method,{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128),applicationPids:resourceParams.applicationPids});}
-  if(method==='remoteTransferCancel')return connection!.rpc(method,{...request.data.params,owner:'user'});
+  if(method==='resources'){const resourceParams=request.data.params as {applicationPids:Record<string,number[]>};return targetConnection.rpc(method,workspaceTargets.active?{appPids:[],applicationPids:{}}:{appPids:[...new Set([process.pid,...app.getAppMetrics().map(item=>item.pid)])].filter(pid=>Number.isSafeInteger(pid)&&pid>0).slice(0,128),applicationPids:resourceParams.applicationPids});}
+  if(method==='remoteTransferCancel')return targetConnection.rpc(method,{...request.data.params,owner:'user'});
   if(method==='start'||method==='serviceAction')await syncTerminalAppearance();
-  return connection!.rpc(method, request.data.params);
+  return targetConnection.rpc(method, request.data.params);
 });
 ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {
   requireExtension('ssh');
@@ -532,8 +671,10 @@ ipcMain.handle('berth:openSshConnection', async (event, alias: unknown) => {
   if (quitting || typeof alias !== 'string' || !alias || alias.length > 100) throw new Error('SSH 连接别名无效');
   if (connecting) await connecting;
   if (!connection) await reconnect();
+  trusted(event);
+  const target=connection!;
   await syncTerminalAppearance();
-  return connection!.rpc('remoteOpen', {alias, owner:'user'});
+  return target.rpc('remoteOpen', {alias, owner:'user'});
 });
 ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, connectionId: unknown, rawSecret: unknown, remember: unknown) => {
   requireExtension('ssh');
@@ -541,8 +682,10 @@ ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, conn
   const config = sshConnectionSchema.safeParse(rawConfig), secret = sshSecretSchema.safeParse(rawSecret ?? {});
   if (!config.success || !secret.success || (connectionId !== undefined && (typeof connectionId !== 'string' || !/^[a-f0-9-]{36}$/.test(connectionId))) || typeof remember !== 'boolean') throw new Error('SSH 连接配置无效');
   if (!connection) await reconnect();
+  trusted(event);
+  const target=connection!,sshVault=workspaceSshVault();
   const id = typeof connectionId === 'string' ? connectionId : randomUUID();
-  const profiles = await connection!.rpc<import('../shared/protocol').SshConnection[]>('sshConnections');
+  const profiles = await target.rpc<import('../shared/protocol').SshConnection[]>('sshConnections');
   const previousProfile = profiles.find(profile => profile.id === id);
   const sameIdentity = previousProfile && previousProfile.hostname === config.data.hostname && previousProfile.port === config.data.port && previousProfile.username === config.data.username && previousProfile.authentication === config.data.authentication && previousProfile.privateKeyPath === config.data.privateKeyPath;
   const previous = sameIdentity ? sshVault.get(id) : {};
@@ -551,7 +694,7 @@ ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, conn
   // Write secrets only after the daemon has accepted the public configuration.
   // Validate secure persistence before changing an existing public profile.
   if (remember && Object.values(credentials).some(Boolean) && (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'))) throw new Error('系统安全凭据存储不可用，请取消记住密码');
-  const profile = await connection!.rpc('saveSshConnection', {connectionId: id, config: config.data});
+  const profile = await target.rpc('saveSshConnection', {connectionId: id, config: config.data});
   sshVault.save(id, config.data.authentication === 'password' ? { password: credentials.password } : config.data.authentication === 'key' ? { passphrase: credentials.passphrase } : {}, remember);
   void refreshAcceleratorNodes().then(() => petMonitor.reset(id)).catch(() => {});
   return profile;
@@ -559,16 +702,19 @@ ipcMain.handle('berth:saveSshConnection', async (event, rawConfig: unknown, conn
 ipcMain.handle('berth:deleteSshConnection', async (event, connectionId: unknown) => {
   trusted(event); if (typeof connectionId !== 'string') throw new Error('连接无效');
   if (!connection) await reconnect();
-  await connection!.rpc('deleteSshConnection',{connectionId}); sshVault.delete(connectionId);
+  trusted(event);
+  const target=connection!,vault=workspaceSshVault();
+  await target.rpc('deleteSshConnection',{connectionId});vault.delete(connectionId);
+  if(target!==connection)return;
   if (pet?.preferences.monitorNodeIds.includes(connectionId)) await savePetPreferences({ ...pet.preferences, monitorNodeIds: pet.preferences.monitorNodeIds.filter(id => id !== connectionId) });
   void refreshAcceleratorNodes().catch(() => {});
 });
-ipcMain.handle('berth:sshKey', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:sshKey', async event => { trusted(event); if(workspaceTargets.active)return null; const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, {title:'选择 SSH 私钥文件',properties:['openFile']}); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:appearance',async(event,mode:unknown,resolved:unknown,palette:unknown)=>{trusted(event);requireExtension('appearance');if(palette!==undefined&&uiPalette(palette)!==palette)throw new Error('无效配色');if(typeof mode!=='string'||!['system','light','dark'].includes(mode))throw new Error('无效主题');if(resolved!==undefined&&resolved!=='dark'&&resolved!=='light')throw new Error('无效主题');terminalPaletteFamily=uiPalette(palette);nativeTheme.themeSource=mode as 'system'|'light'|'dark';terminalColorScheme=mode==='system'?(resolved as ResolvedAppearance|undefined)??(nativeTheme.shouldUseDarkColors?'dark':'light'):mode as ResolvedAppearance;syncWindowAppearance();await syncTerminalAppearance();});
 nativeTheme.on('updated',()=>{const next:ResolvedAppearance=nativeTheme.shouldUseDarkColors?'dark':'light';if(next!==observedNativeScheme){observedNativeScheme=next;terminalColorScheme=next;}syncWindowAppearance();void syncTerminalAppearance().catch(console.error);});
 ipcMain.handle('berth:mcpConfig', (event, provider: unknown = 'claude') => {
   requireExtension('ssh');
-  trusted(event); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');
+  trusted(event); if(workspaceTargets.active)throw new Error('请在服务器上生成 MCP 配置'); if (provider !== 'claude' && provider !== 'opencode') throw new Error('不支持的 Agent 类型');
   const args = [app.isPackaged ? path.join(process.resourcesPath, 'mcp', 'mcp.cjs') : path.join(__dirname, 'mcp.cjs'), dataDirectory];
   return JSON.stringify(provider === 'opencode' ? { mcp: { agentberth: { type: 'local', command: [process.execPath, ...args], environment: { ELECTRON_RUN_AS_NODE: '1' }, enabled: true } } } : { mcpServers: { agentberth: { command: process.execPath, args, env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2);
 });
@@ -576,6 +722,7 @@ const skillManager = new SkillManager();
 ipcMain.handle('berth:skills', async (event, input: unknown) => {
   requireExtension('agents');
   trusted(event);
+  if(workspaceTargets.active)throw new Error('请在服务器终端管理 Agent Skills');
   const request = skillRequestSchema.parse(input);
   if(['codex','claude','opencode','pi'].includes(request.location.agentId))requireExtension('agent.'+request.location.agentId);
   let projectPath: string | undefined;
@@ -595,9 +742,9 @@ ipcMain.handle('berth:skills', async (event, input: unknown) => {
   if (integration) skills = { ...skills, user: path.join(integrationRoot(integration), 'skills') };
   return skillManager.run(skillRoot(skills, projectPath), request);
 });
-ipcMain.handle('berth:directory', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:transcript', async event => { trusted(event); const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl', 'json'] }] }); return result.canceled ? null : result.filePaths[0]; });
-ipcMain.handle('berth:executable', async (event,kind?:unknown) => { trusted(event); if(kind!==undefined&&kind!=='acp')throw new Error('文件类型无效');const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: kind==='acp'?'ACP 程序或脚本':'终端程序', extensions: kind==='acp'?['exe','com','cmd','bat','ps1']:['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:directory', async event => { trusted(event); if(workspaceTargets.active)return null; const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:transcript', async event => { trusted(event); if(workspaceTargets.active)return null; const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], filters: [{ name: 'Agent 对话记录', extensions: ['jsonl', 'json'] }] }); return result.canceled ? null : result.filePaths[0]; });
+ipcMain.handle('berth:executable', async (event,kind?:unknown) => { trusted(event); if(workspaceTargets.active)return null; if(kind!==undefined&&kind!=='acp')throw new Error('文件类型无效');const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!, { properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: kind==='acp'?'ACP 程序或脚本':'终端程序', extensions: kind==='acp'?['exe','com','cmd','bat','ps1']:['exe'] }] } : {}) }); return result.canceled ? null : result.filePaths[0]; });
 ipcMain.handle('berth:copy', async (event, text: string) => { trusted(event); if (typeof text !== 'string' || text.length > MAX_CLIPBOARD_TEXT) throw new Error('复制内容过长或格式无效'); await clipboard.writeText(text); });
 ipcMain.handle('berth:clipboard', async event => { trusted(event); const text = await clipboard.readText(); if (text.length > MAX_PASTE_TEXT) throw new Error('剪贴板文字过长，请分段粘贴（每次最多 65536 个字符）'); return text; });
 ipcMain.handle('berth:external', async (event, url: string) => { trusted(event); await shell.openExternal(externalWebUrl(url)); });
@@ -605,6 +752,8 @@ ipcMain.handle('berth:openProject', async (event, folder: string) => {
   trusted(event);
   if (!connection) await reconnect();
   const state = await connection!.rpc<any>('state');
+  trusted(event);
+  if(workspaceTargets.active)throw new Error('请在工作台文件面板查看服务器项目');
   if (!state.projects.some((project: any) => project.path === folder)) throw new Error('只能打开已登记的项目目录');
   const error = await shell.openPath(folder);
   if (error) throw new Error(error);
@@ -613,6 +762,7 @@ ipcMain.handle('berth:reconnect', async event => { trusted(event); if (!connecti
 ipcMain.handle('berth:quitDesktop', event => { trusted(event); quitDesktopOnly(); });
 ipcMain.handle('berth:restart', async event => {
   trusted(event);
+  if(workspaceTargets.active||changingWorkspace)throw new Error('请通过 Linux 服务管理服务器进程');
   if (connecting) await connecting;
   restarting = true;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -652,6 +802,60 @@ ipcMain.handle('berth:pluginPrompt', async (event, folder?: string,topic?:unknow
     ...['agentberth.extension.json','index.cjs'].map(name=>name+'\n```'+(name.endsWith('.json')?'json':'js')+'\n'+readFileSync(path.join(resourceRoot,'examples','superagent-source-local',name),'utf8')+'\n```'),
   ].join('\n\n').replace(/\r\n?/g,'\n');
   return developmentPrompt(readFileSync(path.join(resourceRoot, 'docs', 'CORDIS_PLUGIN_DEVELOPMENT.md'), 'utf8'), folder);
+});
+
+const workspaceTargetRequest=z.discriminatedUnion('action',[
+  z.object({action:z.literal('state')}).strict(),
+  z.object({action:z.literal('certificate')}).strict(),
+  z.object({action:z.literal('local'),forget:z.boolean().optional()}).strict(),
+  z.object({action:z.literal('connect'),address:z.string().max(2048),token:z.string().max(128).optional(),ca:z.string().max(65536).optional(),remember:z.boolean()}).strict(),
+]);
+ipcMain.handle('berth:workspaceTarget',async(event,raw:unknown)=>{
+  trusted(event);
+  if(event.sender!==window?.webContents)throw new Error('请在主窗口切换工作区');
+  const request=workspaceTargetRequest.parse(raw);
+  if(request.action==='state')return workspaceTargets.state();
+  if(request.action==='certificate'){
+    const result=await dialog.showOpenDialog(window!,{title:'选择服务器 CA 证书',properties:['openFile'],filters:[{name:'PEM 证书',extensions:['pem','crt','cer']}]});
+    if(result.canceled)return null;
+    trusted(event);
+    const file=result.filePaths[0];
+    if(statSync(file).size>65536)throw new Error('CA 证书文件过大');
+    return workspaceCertificate(readFileSync(file,'utf8'))??null;
+  }
+  if(request.action==='local'){workspaceProvision.discard();return switchWorkspace(undefined,false,request.forget);}
+  workspaceProvision.discard();
+  return switchWorkspace(workspaceTargets.endpoint(request.address,request.token,request.ca),request.remember);
+});
+
+const workspaceSshRequest=z.discriminatedUnion('action',[
+  z.object({action:z.literal('probe'),settings:workspaceSshSettings,password:z.string().max(4096).optional(),passphrase:z.string().max(4096).optional()}).strict(),
+  z.object({action:z.literal('activate'),id:z.uuid(),remember:z.boolean()}).strict(),
+  z.object({action:z.literal('discard'),id:z.uuid()}).strict(),
+]);
+ipcMain.handle('berth:workspaceSshKey',async event=>{
+  trusted(event);
+  if(event.sender!==window?.webContents)throw new Error('请在主窗口配置 SSH 连接');
+  const result=await dialog.showOpenDialog(window!,{title:'选择 SSH 私钥',properties:['openFile']});
+  return result.canceled?null:result.filePaths[0];
+});
+ipcMain.handle('berth:workspaceSsh',async(event,raw:unknown)=>{
+  trusted(event);
+  if(event.sender!==window?.webContents||quitting)throw new Error('请在主窗口配置 SSH 连接');
+  const parsed=workspaceSshRequest.safeParse(raw);
+  if(!parsed.success)throw new Error(parsed.error.issues[0]?.message??'SSH 连接配置无效');
+  const request=parsed.data;
+  if(request.action==='discard'){workspaceProvision.discard(request.id);return;}
+  if(request.action==='probe'){
+    if(changingWorkspace||restarting)throw new Error('请等待当前工作区切换完成');
+    const target=workspaceTargets.sshEndpoint(request.settings,request.password,request.passphrase);
+    const result=await workspaceProvision.inspect(target);
+    if(event.sender.isDestroyed()||quitting){workspaceProvision.discard(result.id);return;}
+    return result;
+  }
+  return switchWorkspace(undefined,request.remember,false,{id:request.id,progress:phase=>{
+    if(!event.sender.isDestroyed())event.sender.send('berth:workspaceProvisionProgress',phase);
+  }});
 });
 
 ipcMain.handle('berth:appInfo', event => {

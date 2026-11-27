@@ -189,6 +189,7 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ id, method: z.literal('deleteAgent'), params: z.object({ agentId: agentSchema }).strict() }),
   z.object({ id, method: z.literal('probeAgentPlugin'), params: agentDefinitionSchema }),
   z.object({ id, method: z.literal('checkAgentPlugin'), params: z.object({ agentId: agentSchema }).strict() }),
+  z.object({ id, method: z.literal('workspaceDirectories'), params: z.object({ path: z.string().min(1).max(4096).refine(value => !/[\x00-\x1f]/.test(value)).optional() }).strict() }),
   z.object({ id, method: z.literal('shutdownIdle'), params: z.object({}).strict() }),
   z.object({ id, method: z.literal('shutdown'), params: z.object({ restoreOnOpen: z.boolean().default(false) }).strict() }),
   z.object({ id, method: z.literal('restoreWorkspace'), params: z.object({}).strict() }),
@@ -246,7 +247,7 @@ export interface SessionOwner {kind:'superagent';pluginId:string;taskId:string;p
 export interface Session { service?:boolean; owner?:SessionOwner; remote?: RemoteConfig | null; worktreePath?: string | null; id: string; projectId: string; title: string; agent: Agent; command: string; terminal: TerminalConfig | null; createdAt: string; updatedAt: string; nativeSessionId: string | null; transcriptPath: string | null; latestRun: Run | null }
 export interface WindowsPty { backend: 'conpty' | 'winpty'; buildNumber: number }
 export interface WorkspaceRecovery { id: string; status: 'restoring' | 'completed'; total: number; restored: number; resumed: number; skipped: number; errors: {sessionId: string; title: string; message: string}[] }
-export interface State { agentActivities?:import('./pet').AgentActivity[];extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
+export interface State { server?:import('./workspace-server').WorkspaceServerInfo; agentActivities?:import('./pet').AgentActivity[];extensions?:ExtensionSnapshot; recovery?: WorkspaceRecovery; projects: Project[]; sessions: Session[]; agents?: AgentDefinition[]; maxActiveTerminals: number; maxSshTerminals: number; platform: string; windowsPty?: WindowsPty; settings: Settings; apiVersion: number }
 export interface HistoryMessage { role: 'user' | 'assistant'; text: string; timestamp: string | null }
 export interface History { messages: HistoryMessage[]; nativeSessionId: string | null; path: string | null; warnings: string[] }
 export interface NativeHistoryItem { nativeSessionId: string; title: string; updatedAt: string | null; path: string | null }
@@ -313,5 +314,9 @@ export interface DesktopApi {
   openProject(path: string): Promise<void>;
   reconnect(): Promise<void>;
   quitDesktop(): Promise<void>;
+  workspaceSsh(request:import('./workspace-server').WorkspaceSshAction):Promise<import('./workspace-server').WorkspaceSshProbe|import('./workspace-server').WorkspaceTarget|undefined>;
+  chooseWorkspaceSshKey():Promise<string|null>;
+  onWorkspaceProvision(listener:(progress:import('./workspace-server').WorkspaceProvisionProgress)=>void):()=>void;
+  workspaceTarget(request: import('./workspace-server').WorkspaceTargetAction): Promise<import('./workspace-server').WorkspaceTarget | string | null>;
   restartBackend(): Promise<void>;
 }
